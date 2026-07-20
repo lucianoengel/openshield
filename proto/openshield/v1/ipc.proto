@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+import "openshield/v1/classification.proto";
+
+// IPC between the privileged agent and the unprivileged parser worker.
+//
+// The privileged process holds CAP_SYS_ADMIN and answers fanotify permission
+// events. It NEVER parses attacker-controlled bytes (D13) — and, stronger than
+// that, it never holds their content at all.
+//
+// So the response carries detector types, confidences and counts. It does NOT
+// carry matched text. LocalClassification, which does hold matched content,
+// never leaves the worker. If matched content is ever needed as local evidence
+// it goes to encrypted local storage from the worker directly, never through
+// the process holding CAP_SYS_ADMIN.
+
+message ClassifyRequest {
+  string request_id = 1;
+  string event_id = 2;
+  // What to classify. The worker opens this itself, with its own (unprivileged)
+  // credentials — the privileged process does not read the file and hand bytes
+  // over, because that would put attacker-controlled content in its address
+  // space, which is the thing being prevented.
+  oneof subject {
+    string path = 3;
+    bytes file_handle = 4;
+  }
+  // Hard ceiling on bytes the worker may read. A decompression bomb must hit a
+  // limit rather than exhaust memory.
+  uint64 max_bytes = 5;
+}
+
+message DetectorHit {
+  DetectorType detector_type = 1;
+  double confidence = 2;
+  uint32 count = 3;
+}
+
+message ClassifyResponse {
+  string request_id = 1;
+  string event_id = 2;
+  repeated DetectorHit hits = 3;
+  // Set when the worker could not classify. An error is not "nothing found":
+  // conflating them would let a crashing parser read as a clean file.
+  string error = 4;
+  bool truncated = 5;
+}

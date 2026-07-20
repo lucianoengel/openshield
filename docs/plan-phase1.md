@@ -79,7 +79,7 @@ NO CODE. Written design of peer-baseline UEBA as an Analytics module against the
 
 Documented capability matrix (which events unprivileged via FAN_REPORT_FID; is content readable or is CAP_DAC_READ_SEARCH required); clear statement of what the SHIPPED agent needs. Sandbox limits inform the dev loop only, never the product.
 
-#### T-006 · Agent skeleton, privilege-split from commit one (D13)
+#### T-006 · Agent skeleton, privilege-split from commit one (D13) · **done**
 `~8h` · depends: T-002, T-005
 
 Two processes. TESTABLE: privileged binary is a separate Go module with an import ALLOWLIST excluding encoding/*, compress/*, archive/* and any parser pkg - CI fails build via 'go list -deps' diff if a disallowed import appears; plus a runtime strace/seccomp-audit test asserting no read() beyond dirent/metadata syscalls. Unprivileged worker does all parsing, returns verdicts over IPC.

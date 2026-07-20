@@ -17,6 +17,7 @@ test:
 # Architectural boundaries that the compiler cannot express on its own.
 check:
 	./scripts/check-core-deps.sh
+	./scripts/check-agent-deps.sh
 
 # Regenerate Go types from the proto sources. Generated output is committed so
 # a plain `go build` works without a protoc toolchain; `proto-check` guards

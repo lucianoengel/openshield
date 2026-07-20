@@ -74,6 +74,8 @@ an owner call · **scoped** = settled but with a named condition that could narr
 | **D13** | **Privilege-split agent; untrusted parsing in an unprivileged sandboxed worker.** Root + `CAP_SYS_ADMIN` + parsing attacker-controlled PDFs is the textbook way to make an org *less* secure — cf. ClamAV **CVE-2025-20260**, a PDF-parser heap overflow to RCE. The privileged process never decodes attacker-controlled bytes. Decompression-bomb limits before any parser runs. | firm |
 | **D15** | **Hub uses ed25519 per-author signing**, keys pinned at install, metadata cached with expiry and **fail-closed when stale**. Content-hash-against-index (CrowdSec's model) answers "did I download what the index said", not "who may publish" — and packs execute at high privilege on every endpoint, making this a fleet-wide root-equivalent supply chain. **Offline revocation is fundamentally unsolved**: the propagation window equals the sync interval. Document it; do not imply otherwise. | firm (design deferred) |
 
+| **D29** | **The privilege split is two BINARIES, not one binary with a flag.** A single binary carries the parsers in its dependency graph regardless of which code path runs, which makes the import check — the only mechanism keeping this boundary real — prove nothing. Also stronger than D13 as written: the privileged process never *holds* attacker-controlled content, not merely never parses it. The worker opens files with its own unprivileged credentials and returns detector types, confidences and counts; `LocalClassification`, which holds matched text, never leaves the worker. Enforced by `scripts/check-agent-deps.sh`. | firm |
+
 ## Project and governance
 
 | # | Decision | Status |
