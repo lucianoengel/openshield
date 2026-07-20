@@ -96,50 +96,22 @@ This is a real constraint, not a soft one, and it drives scope:
   grant**, which matters in a patent-dense field with well-funded incumbents. A vendor may
   host it as closed SaaS — accepted, and consistent with the stated intent.
 
-## UEBA / behavioural analytics — both modes, gated (D23, 2026-07-20)
-The brief lists "Peer Analysis", which silently contradicts *"the server coordinates, does not
-compute"*. Resolved by supporting **both** baselining modes with different homes:
+## UEBA / behavioural analytics
 
-- **Self-baseline** (you vs your own history) — computed **locally on the endpoint**. On by
-  default. Fully consistent with the local-first principle.
-- **Peer-baseline** (you vs role/department peers) — an **optional server-side Analytics
-  module** consuming the existing event stream. **Off by default**, installed per deployment,
-  with its own consent/DPIA gate. Requires the server to hold per-user behavioural profiles,
-  which is the shape works councils veto and DPAs fine over — so the *default* is the privacy
-  statement, even though the deployer (not the author) bears controller liability.
+**→ [`docs/decisions.md`](docs/decisions.md) D23.** Both modes, gated: self-baseline local
+and on by default; peer-baseline an optional server-side Analytics module, off by default.
+Phase-1 cost is one field (stable pseudonymous user ID). Peer-UEBA doubles as the *hard*
+architectural fitness case — design on paper (T-004) before building anything.
 
-**Phase 1 consequence: exactly one field** — a stable *pseudonymous* user ID in the event
-schema, so peer analysis stays possible later without a migration. Nothing else is built.
+## Threat model
 
-**Peer-UEBA is also the "hard" architectural fitness case** (review A1): stateful, aggregating,
-cross-entity, needing persisted baselines rather than per-event verdicts — it breaks every
-assumption the DLP-shaped pipeline makes, unlike an S3 connector which is isomorphic to what
-already exists. **Design it on paper before building anything.** If it expresses cleanly as an
-Analytics module with no core changes, the 10-year bet is real; if it forces core changes, that
-is discovered in week one on paper rather than year three in code.
+**→ [`docs/threat-model.md`](docs/threat-model.md).** The short version: this stops the
+careless insider. It does not stop anyone with root on their own machine, nor a compromised
+host. Honest goal is tamper-*detection*, not prevention (D16).
 
-## Threat model — what this product can and cannot promise
-**Added 2026-07-20 after red-team review. This was the brief's largest unstated assumption.**
-
-| Adversary | Stoppable by a host agent? |
-|---|---|
-| Careless insider, no intent | **Yes** — this is the design centre |
-| Malicious insider, no local admin | **Partially** — only on hooked paths |
-| Malicious insider **with root on their own machine** | **No** |
-| External attacker who has compromised the host | **No** |
-
-Anyone with root can `systemctl stop`/`mask` the agent, boot a live USB, mount the disk
-elsewhere, exfil from a VM, or block egress so nothing ever syncs. There is no fix that does
-not require distrusting the OS the agent depends on. **The honest goal is tamper-*detection*
-(heartbeat / dead-man's-switch / "agent last seen"), never tamper-prevention** (D16).
-
-**Consequence for the dogfood plan:** the owner has root on his own fleet, so dogfooding is the
-bottom-half case. It validates the pipeline, classifier, plumbing and operability bar — it
-**cannot** validate the product as a control. Expected, not a failure.
-
-**README must claim:** local-first visibility, friction for careless insiders, a tamper-evident
-trail. **Must not claim:** prevention of exfiltration, tamper-proofing, or efficacy against
-motivated actors. The first researcher who runs `systemctl stop` will disprove anything stronger.
+**Consequence for the dogfood plan:** the owner has root on his own fleet, so dogfooding
+validates the pipeline, classifier, plumbing and operability bar — it cannot validate the
+product as a control. Expected, not a failure.
 
 ## Stakeholders & decision-maker
 Luciano Engel — sole owner, architect and sign-off. No external stakeholders yet.
@@ -168,23 +140,18 @@ this decision record. **Settled stack** — the brief's proposal, as amended by 
 | Deployment       | **Podman** Compose; K8s optional | no Docker on this host |
 
 ## Stack limitations / known pain
-- ~~Two-language split~~ — **resolved by D8.** One language means one shared policy engine, so
-  the "same policy, two implementations, one answer" correctness risk no longer exists. This
-  was the single biggest risk in the original design and it was deleted rather than solved.
-- ~~Policy IR portability~~ — **resolved with it.** OPA/Rego runs natively in Go; no CEL, no
-  WASM, no custom IR. WASM stays relevant only for sandboxing untrusted Hub packs (Phase 3+).
-- **Remaining hot-path risk (D19, open until T-002):** GC pauses and scheduler jitter inside a
-  live fanotify permission window. Worst failure mode in the system — a stalled responder parks
-  processes in `TASK_UNINTERRUPTIBLE`. Measurement decides; unverified is the failure.
-- **Classification accuracy is the hard problem** — Presidio benchmarks ~22.7% precision on
-  person names. Policy must consume confidence, never a clean boolean (D4).
-- ~~Windows kernel work~~ — **deferred out of MVP** (needs EV code signing + a Windows test
-  environment, neither of which exists here, and the owner's fleet is Linux). Retained as a
-  design constraint only: the Connector/Enforcer interfaces must not bake in Linux assumptions.
-- **Air-gap + Hub** are in tension: a community hub implies distribution, update and
-  signature-verification design that works fully offline.
-- NATS JetStream must satisfy the stated replay/audit/long-retention requirement, or the
-  event log needs a separate durable tier.
+
+**→ [`docs/decisions.md`](docs/decisions.md).** The two biggest risks in the original brief
+were *deleted rather than solved*: the two-language split (D8) and policy-IR portability (D6).
+
+Remaining, in priority order:
+- **D19 / T-002 — GC pauses in the fanotify permission window.** The last decision resting on
+  measurement rather than argument. Worst failure mode in the system: a stalled responder parks
+  processes in `TASK_UNINTERRUPTIBLE`.
+- **Classification accuracy** (~22.7% precision on person names) — Policy must consume
+  confidence, never a boolean (D4).
+- **Air-gap vs Hub** are in tension: offline revocation is unsolved (D15), only bounded.
+- **Maintenance economics** — the thing that actually killed the predecessors (D7).
 
 ## Environments
 - Dev: this host (Linux, rootless Podman — **not** Docker) + dev pod when tooling is missing.

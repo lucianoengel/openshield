@@ -8,13 +8,13 @@ context: |
   New capabilities arrive as new Event producers, Classifiers, Policies and Enforcers.
   A change that requires editing the core is a design failure, not a feature.
 
-  Stack: Go (agent AND backend — single language, decision D8). OPA/Rego native for policy.
-  PostgreSQL is the system of record AND the hash-chained audit ledger. NATS JetStream is a
-  BUS ONLY (bounded retention is not a system of record). Protobuf + gRPC. Podman, not Docker.
-  Linux-first; Windows/macOS deferred. Apache-2.0. Repo: github.com/lucianoengel/openshield.
+  CANONICAL DECISIONS: docs/decisions.md. Read it before proposing anything. Reference
+  decisions BY NUMBER; never restate them — restatement is what drifts out of sync.
+  Stack, phasing and scope all live there (summary: Go everywhere, OPA/Rego native, Postgres
+  is the system of record, JetStream is a bus only, Linux-first, Phase 1 is observe-only).
 
-  PHASE 1 IS OBSERVE-AND-AUDIT ONLY. Decisions are recorded, not enforced. Enforcement lands
-  in Phase 2, once the classifier's real false-positive rate is known.
+  The constraints below are repeated inline ONLY because they are guardrails that must hold
+  even if this file is the sole context available. Everything else: read the register.
 
   HONESTY CONSTRAINTS — these are load-bearing, not style preferences. Three adversarial
   review rounds established that the original brief promised things it cannot deliver:
@@ -49,11 +49,9 @@ context: |
     - Keep the core small. Prior OSS DLP died of maintenance economics, not bad detection
       (MyDLP acquired, OpenDLP abandoned, Apache Metron retired). Ambition is the failure mode.
 
-  CANONICAL DECISIONS: docs/decisions.md — the single source of truth for D-numbers.
-  Reference decisions BY NUMBER; never restate them (restatement is what drifts).
-  Rationale: docs/research-scouting-r1.md (D1-D9), docs/research-review-r1.md (D10-D23 + findings),
-  intake.md (brief, threat model, definition of done), docs/plan-phase1.md (29 tickets).
-  READ THOSE before proposing anything that contradicts a D-number.
+  Rationale (append-only historical records, never rewritten):
+  docs/research-scouting-r1.md (D1-D9), docs/research-review-r1.md (D10-D23 + findings).
+  docs/threat-model.md — what this stops and what defeats it. docs/plan-phase1.md — 29 tickets.
 
 rules:
   proposal:
