@@ -46,11 +46,25 @@ If that model isn't one you want to contribute to, that's a reasonable position.
   Types, CI checks and boundary tests survive; conventions don't.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 
-## Spec-driven development
+## How work is tracked
+
+Three documents, three jobs, deliberately no overlap — an earlier setup kept two sources of
+truth for the roadmap and they disagreed within a day:
+
+| Job | Home |
+|---|---|
+| **Why** — decisions and rationale | [`docs/decisions.md`](docs/decisions.md) |
+| **What / when** — roadmap and sequencing | [`docs/plan-phase1.md`](docs/plan-phase1.md) |
+| **How / now** — active work | `openspec/changes/` |
 
 This project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec). Substantial changes start
-as a proposal under `openspec/changes/` before implementation. `openspec/config.yaml` carries
-the project context and the rules generated artifacts must follow.
+as a proposal under `openspec/changes/` before implementation, referencing their ticket ID from
+the roadmap. `openspec/config.yaml` carries the project context and the rules generated
+artifacts must follow.
+
+Not everything becomes a change. Spikes and measurements are throwaway code answering a
+question; mechanical infrastructure has no design space worth specifying. Capability work — the
+things with long-lived contracts — gets a change.
 
 ## Reporting vulnerabilities
 

@@ -1,6 +1,6 @@
 # OpenShield — Round-1 Adversarial Review
 
-**Date:** 2026-07-20 · **Inputs:** intake.md, docs/research-scouting-r1.md
+**Date:** 2026-07-20 · **Inputs:** brief.md, docs/research-scouting-r1.md
 **Reviewers (4, independent, instructed to attack not praise):** senior architecture ·
 applied cryptography · red team / threat model · privacy law + OSS sustainability
 
@@ -307,11 +307,11 @@ policy control plane (a local policy file is enough for a fleet of one) · full 
 coverage · any breadth beyond one event type.
 
 **Add:** the fail-open watchdog PoC (D18) · named audit-storage decision (D12) · a hard second
-fitness case (A1) · reconciliation of intake.md against D1-D22.
+fitness case (A1) · reconciliation of brief.md against D1-D22.
 
 ## Process finding
 
-`intake.md` still described a Rust agent and `ClipboardCopied` in its definition of done after
+[`brief.md`](brief.md) still described a Rust agent and `ClipboardCopied` in its definition of done after
 D8 and D2 superseded both. For a project whose doctrine is "decide the hard-to-change things
 first," letting the source-of-truth doc drift is a process bug. Reconciled 2026-07-20.
 

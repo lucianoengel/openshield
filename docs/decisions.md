@@ -4,7 +4,7 @@
 decisions *by number* rather than restating them. If a decision changes, it changes here first.
 
 Why this exists: D1-D23 were previously scattered across six documents, each paraphrasing them
-slightly differently. `intake.md` drifted out of sync twice as a result — still describing a
+slightly differently. [`brief.md`](brief.md) drifted out of sync twice as a result — still describing a
 Rust agent after D8 had made the project all-Go. Restatement is what rots; references don't.
 
 Rationale lives in the research reports, which are **append-only historical records** and are

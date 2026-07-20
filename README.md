@@ -58,13 +58,13 @@ Read [`docs/threat-model.md`](docs/threat-model.md) before drawing conclusions a
 
 | Path | What |
 |---|---|
-| [`docs/decisions.md`](docs/decisions.md) | **Canonical decision register (D1-D23).** Single source of truth. |
+| [`docs/decisions.md`](docs/decisions.md) | **Canonical decision register (D1-D23).** Single source of truth for *why*. |
 | [`docs/threat-model.md`](docs/threat-model.md) | What this stops, and what defeats it. |
-| [`docs/plan-phase1.md`](docs/plan-phase1.md) | Phase 1 plan — 29 tickets, ~123 agent-hours. |
+| [`docs/brief.md`](docs/brief.md) | Why this exists, what "done" means, the stack. |
+| [`docs/plan-phase1.md`](docs/plan-phase1.md) | Roadmap — 29 tickets, ~122 agent-hours. Source of truth for *what* and *when*. |
 | [`docs/research-scouting-r1.md`](docs/research-scouting-r1.md) | Round-1 research: kernel hooks, policy engines, prior art. |
 | [`docs/research-review-r1.md`](docs/research-review-r1.md) | Four adversarial reviews: architecture, cryptography, red team, law. |
-| `openspec/` | Spec-driven development workspace. |
-| `intake.md`, `case.md`, `tickets.*` | Working process files. |
+| `openspec/` | Active work. Source of truth for *how* and *now*. |
 
 Research reports are **append-only historical records** — they capture what was known at the
 time and are never rewritten. Living documents reference decisions by number instead of
