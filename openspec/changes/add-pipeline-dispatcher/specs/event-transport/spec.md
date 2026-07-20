@@ -47,7 +47,8 @@ Recording the gap explicitly prevents the interface from being mistaken for the 
 
 ### Requirement: Replay reproduces the recorded Decision
 Given the recorded Event and the pipeline configuration that produced a Decision, re-running the
-pipeline SHALL produce an equal Decision.
+pipeline MUST produce an equal Decision. The comparison MUST exclude non-deterministic fields by
+an explicit list.
 
 Replay is what makes the audit trail an investigation tool rather than a log. If a recorded
 decision cannot be reproduced, "every decision should be explainable" is unfounded.
