@@ -1,8 +1,8 @@
 ## 1. Schema and migrations
 
-- [ ] 1.1 Forward-only migration runner; versioned, applied in order, recorded in a
+- [x] 1.1 Forward-only migration runner; versioned, applied in order, recorded in a
       `schema_migrations` table
-- [ ] 1.2 Initial migration: entries table with decision payload, chain hash, previous hash,
+- [x] 1.2 Initial migration: entries table with decision payload, chain hash, previous hash,
       signature, sequence, and the columns later phases need — retention class, purpose,
       pseudonymous subject, `context_version`
 - [ ] 1.3 **Test**: the initial migration creates every required column. A migration omitting
@@ -10,9 +10,9 @@
 
 ## 2. Hash chain
 
-- [ ] 2.1 Entry hashing over a canonical serialization (field order must be stable, or the same
+- [x] 2.1 Entry hashing over a canonical serialization (field order must be stable, or the same
       entry hashes differently on different runs)
-- [ ] 2.2 `Append` links each entry to its predecessor; genesis value recorded explicitly
+- [x] 2.2 `Append` links each entry to its predecessor; genesis value recorded explicitly
 - [ ] 2.3 **Attack test**: edit an entry in place → verification fails and names the first
       broken entry
 - [ ] 2.4 **Attack test**: delete a middle entry → verification fails at the following entry
@@ -20,24 +20,24 @@
 
 ## 3. Forward integrity
 
-- [ ] 3.1 Key ratchet `K_{n+1} = H(K_n)`; sign each entry with the current key; overwrite the
+- [x] 3.1 Key ratchet `K_{n+1} = H(K_n)`; sign each entry with the current key; overwrite the
       prior key after use
 - [ ] 3.2 **Attack test**: given the key in force at entry N, attempt to forge a valid signature
       for an entry before N. Must fail. This is the test that proves forward integrity rather
       than assuming it
-- [ ] 3.3 Document honestly in code that key destruction in Go is best-effort — the GC may
+- [x] 3.3 Document honestly in code that key destruction in Go is best-effort — the GC may
       retain copies. State the residual risk rather than implying erasure
 
 ## 4. Verification
 
-- [ ] 4.1 `Verify` returns a structured result: validated range, first break index, anchor state
+- [x] 4.1 `Verify` returns a structured result: validated range, first break index, anchor state
 - [ ] 4.2 **Test**: a consistent chain with no anchor reports completeness as UNVERIFIED, not as
       success. A bare boolean would let a caller report a guarantee nobody has
 - [ ] 4.3 **Test**: a truncated chain reports absence rather than success
 
 ## 5. Wiring
 
-- [ ] 5.1 `core.Ledger` interface; `internal/store/postgres` implements it
+- [x] 5.1 `core.Ledger` interface; `internal/store/postgres` implements it
 - [ ] 5.2 Extend `scripts/check-core-deps.sh` so `internal/core` cannot import a database driver;
       verify by adding the import and observing the failure
 - [ ] 5.3 Dispatcher `OnOutcome` appends to the ledger; a failed append returns an error and is

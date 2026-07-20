@@ -17,24 +17,58 @@ attacker must rewrite the tail rather than a single row.
 - **WHEN** an entry is deleted from the middle of the chain
 - **THEN** verification fails at the following entry
 
-### Requirement: The signing key is ratcheted forward and the old key destroyed
-The ledger MUST evolve its signing key and destroy the previous key, so that a key recovered at
-time T cannot produce a valid signature for any entry written before T.
+### Requirement: Signing keys evolve forward and prior private keys are destroyed
+The ledger MUST sign entries with an evolving asymmetric keypair, publishing each successor
+public key signed by its predecessor, and MUST destroy each private key when it evolves — so
+that key material recovered at time T cannot produce a valid signature for any entry written
+before T.
 
-Without this, forward integrity is not achieved: an attacker who compromises the host obtains
-the current key and can rewrite the entire history consistently, chain and all. The hash chain
-alone only forces them to rewrite the tail — key evolution is what makes the tail they can
-rewrite start at the moment of compromise.
+The hash chain alone only forces an attacker to rewrite the tail. Key evolution is what makes
+the tail they can rewrite begin at the moment of compromise.
 
-#### Scenario: A recovered key cannot forge earlier entries
-- **WHEN** an attacker obtains the signing key in force at entry N
+#### Scenario: Compromised key material cannot forge earlier entries
+- **WHEN** an attacker obtains **everything the agent process holds** at entry N — the current
+  private key, the public-key chain, and any file the agent can read
 - **THEN** they can produce valid signatures for entries N and later
 - **AND** they cannot produce a valid signature for any entry before N
-- **AND** a test demonstrates this by attempting exactly that forgery with the later key
+- **AND** the test MUST model the attacker taking the whole process state, not a convenient
+  subset: an earlier version of this test handed the attacker a derived key while the
+  implementation retained a master seed, so it passed against an implementation that provided
+  no forward integrity at all
 
-#### Scenario: The previous key is unrecoverable after ratcheting
-- **WHEN** the key evolves
-- **THEN** the prior key is not derivable from the current key or from any stored material
+#### Scenario: The prior private key is unrecoverable after evolution
+- **WHEN** the keypair evolves
+- **THEN** the prior private key is not derivable from the current private key, the public-key
+  chain, or any material the agent retains
+
+### Requirement: Verification requires no secret
+Verifying the ledger MUST require only public material — the anchor public key and the chain of
+signed successor public keys. No secret capable of producing valid entries may be required to
+verify.
+
+A symmetric scheme fails this: verification needs the seed, and the seed forges. That would make
+the only party able to verify the log the same party able to fake it — concentrating fleet-wide
+forgery in the control plane, preventing an endpoint from verifying its own log, and collapsing
+entirely on a single-node air-gapped deployment where no second trust domain exists.
+
+#### Scenario: An independent party verifies without any forging capability
+- **WHEN** a verifier is given the ledger and the anchor public key, and nothing else
+- **THEN** verification succeeds on an untampered chain and fails on a tampered one
+- **AND** a test performs verification with no access to any private key, so a regression that
+  reintroduced a secret-dependent path would fail to compile or run
+
+#### Scenario: No forging key exists on the control plane
+- **WHEN** the control plane's stored material for an agent is inspected
+- **THEN** it contains no key capable of producing a valid ledger entry for that agent
+
+### Requirement: The compromise window is the epoch and is stated where operators see it
+Epoch length MUST be documented as a security parameter wherever an operator configures it,
+because everything within the current epoch is forgeable by whoever compromises the host. Key
+evolution may occur per epoch rather than per entry.
+
+#### Scenario: Epoch length is documented as a security parameter
+- **WHEN** the configuration surface for epoch length is read
+- **THEN** it states that the epoch bounds how much recent history a host compromise can rewrite
 
 ### Requirement: The tamper-evidence claim states what it does not cover
 Documentation and any user-facing surface MUST describe the ledger as tamper-**evident** with

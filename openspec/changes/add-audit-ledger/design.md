@@ -23,7 +23,7 @@ chain reconciliation.
 ### Hash chain plus key evolution, not either alone
 
 **Chosen:** each entry commits to its predecessor's hash, and each entry is signed with a key
-that ratchets forward, the prior key being destroyed.
+that evolves forward, the prior key being destroyed.
 
 Neither half is sufficient, and the reason is worth stating because a hash chain alone looks
 convincing:
@@ -36,12 +36,54 @@ convincing:
 Together, the tail an attacker can rewrite begins at the moment of compromise. That is the whole
 security claim, and it is a claim about the *past* only.
 
-**Scheme:** Schneier-Kelsey style ratcheting — `K_{n+1} = H(K_n)`, `K_n` destroyed after use.
-Chosen over Ma-Tsudik forward-secure sequential aggregate signatures because the aggregate
-property (constant-size proof over many entries) buys compactness this project does not need,
-at the cost of a construction that is harder to implement correctly and much harder for the
-maintainer to review. Given the maintainer does not write code, "reviewable" is a security
-property here, not a preference.
+**Scheme: forward-secure SIGNATURES via evolving Ed25519 keypairs.**
+
+The agent generates `KP_0` and publishes `PK_0` as the anchor. To evolve it generates `KP_n+1`,
+signs `PK_n+1` with `SK_n`, then destroys `SK_n`. Entries are signed with the current private
+key; verification walks the public-key chain from the anchor.
+
+**This reverses an earlier decision in this same design, and the reason is worth recording.**
+
+The first version specified Schneier-Kelsey symmetric ratcheting — `K_{n+1} = H(K_n)`, HMAC per
+entry — chosen for simplicity and reviewability. It was implemented, and the implementation was
+subtly wrong in a way its tests did not catch: the ledger retained the *seed* for the process
+lifetime and derived each key with `KeyAt(seed, n)`, so the ratchet type that destroys keys was
+never actually used. An attacker compromising the host obtained the seed and could forge all
+history. Forward integrity was claimed and absent.
+
+Fixing that bug exposed the real problem, which is structural rather than an implementation slip:
+
+> **With a symmetric scheme, verification requires the seed — and the seed is a forging key.
+> The only party who can verify the log is a party who can forge it.**
+
+For this project specifically that is close to self-defeating:
+
+- The control plane would hold every agent's seed, concentrating fleet-wide forgery in one box.
+- The endpoint could not verify its own log (T-010's CLI would need the forging key).
+- A **single-node air-gapped deployment cannot split the trust domain at all** — there is no
+  second domain — so the guarantee evaporates in precisely the deployment shape the project
+  advertises as air-gap friendly.
+- No third-party verification: an auditor could only check the log by being handed the ability
+  to fake it.
+
+Asymmetric forward-secure signatures remove the forging key entirely. Verification needs only
+public material, so the endpoint, an auditor or a regulator can all check the chain, and T-019's
+anchoring becomes cheaper because the anchored value is public.
+
+**Costs, stated plainly.** Ed25519 signing is ~50µs against HMAC's ~1µs — irrelevant here,
+because append happens *after* a Decision rather than inside the permission window. The real
+cost is complexity: keypair chain storage and epoch rollover, against D7's warning that
+maintenance burden is what killed the predecessors. Bounded by evolving per **epoch** rather
+than per entry (the compromise window becomes the epoch length) and by `crypto/ed25519` being
+standard library, so no dependency is added.
+
+**Rejected: Ma-Tsudik forward-secure sequential aggregate signatures.** The aggregate property
+buys constant-size proofs over many entries, which this project does not need, at the cost of a
+construction that is much harder to review. Reviewability remains a security property here.
+
+**Rejected: TESLA-style delayed key disclosure.** A reverse hash chain (`K_n = H(K_n+1)`) gives
+public verifiability, but disclosing `K_n` reveals every *earlier* key — the exact opposite of
+forward integrity. Recorded because it is a plausible-looking wrong turn.
 
 ### Verification returns a structured result, never a boolean
 
@@ -79,10 +121,16 @@ the reasons T-024 matters more than its ticket size suggests.
 - **A subtly wrong chain passes casual tests.** → Verification is tested against *specific*
   attacks — edit, delete, reorder, truncate, and forging an early entry with a later key —
   rather than by round-tripping a valid chain.
-- **Key material handling is the weak point.** Destroying the prior key means overwriting it in
-  memory, which Go's GC makes best-effort rather than guaranteed. → Documented honestly rather
-  than claimed; the realistic protection is that the window is short, and a root attacker
-  reading agent memory has already won on other fronts.
+- **Key material handling is the weak point.** Destroying the prior private key means
+  overwriting it in memory, which Go's GC makes best-effort rather than guaranteed. → Documented
+  honestly rather than claimed; the realistic protection is that the window is short, and a root
+  attacker reading agent memory has already won on other fronts.
+- **Epoch length is a direct security parameter.** Everything within the current epoch is
+  forgeable by whoever compromises the host. → Must be configurable and its meaning documented
+  where an operator will see it, not buried in code.
+- **A test can encode an assumption the implementation contradicts.** The forward-integrity test
+  passed against a *derived* key while the real attacker got the seed. → The replacement test
+  must model the attacker taking everything the process holds, not a convenient subset.
 - **Requiring a database contradicts "offline-capable".** → True and unresolved until T-024.
   Recorded here rather than left for someone to discover.
 - **Forward integrity is unverifiable by an outside party without anchors.** → Precisely why the
@@ -96,9 +144,13 @@ CI dependency check.
 
 ## Open Questions
 
-1. **Where does the ratcheting key live at rest?** A file with restrictive permissions is the
-   obvious answer and is weak against the root attacker who is already assumed to win. Deferred
-   to T-012's sandbox hardening.
+1. **Where does the current private key live at rest?** A file with restrictive permissions is
+   the obvious answer and is weak against the root attacker already assumed to win. Deferred to
+   T-012's sandbox hardening. Note this is now a smaller problem than before: the key at rest
+   compromises only the current epoch forward, not all history.
+4. **How is `PK_0` distributed so verification is meaningful?** A verifier who takes the anchor
+   from the same host that could have rewritten it gains little. This is the same gap T-019
+   closes for the chain root, and the two should probably share a mechanism.
 2. **Chain-per-agent or chain-per-host?** Per-agent is simpler and matches the per-agent sequence
    numbers in the event contract. Revisit if an agent is ever restarted with a new identity.
 3. **What does verification do about a legitimate gap** — an agent offline for a week? Currently

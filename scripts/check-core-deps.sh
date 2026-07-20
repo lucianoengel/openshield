@@ -7,7 +7,9 @@
 # trip does not fit. Stating that in a comment would not keep it true; this does.
 set -euo pipefail
 
-BANNED_RE='nats-io|grpc|net/http|golang.org/x/net'
+# Databases join brokers and network transports: a storage dependency inside
+# core would invite blocking work into the permission window.
+BANNED_RE='nats-io|grpc|net/http|golang.org/x/net|jackc/pgx|database/sql|lib/pq'
 deps="$(go list -deps ./internal/core 2>/dev/null || true)"
 
 if [ -z "$deps" ]; then
@@ -24,4 +26,4 @@ if hits="$(echo "$deps" | grep -E "$BANNED_RE" || true)"; [ -n "$hits" ]; then
   exit 1
 fi
 
-echo "ok: internal/core has no broker or network transport dependency"
+echo "ok: internal/core has no broker, network transport or database dependency"
