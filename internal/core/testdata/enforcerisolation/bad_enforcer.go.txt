@@ -1,0 +1,34 @@
+// This package MUST NOT COMPILE.
+//
+// It is the proof for the enforcer-isolation requirement. The claim is that an
+// enforcer *cannot* see classifier internals — and the only faithful test of
+// "cannot" is a compilation that cannot succeed. A lint rule would test "does
+// not today"; a comment would test nothing.
+//
+// Stored as .txt so the normal build ignores it; compile_test.go copies it into
+// a temp module and asserts the build fails with the expected error.
+package enforcerisolation
+
+import (
+	"context"
+
+	"github.com/lucianoengel/openshield/internal/core"
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+)
+
+// leakyEnforcer tries to receive classifier output alongside the Decision.
+type leakyEnforcer struct{}
+
+func (leakyEnforcer) Capabilities() []corev1.Action {
+	return []corev1.Action{corev1.Action_ACTION_ALERT}
+}
+
+// Enforce takes the Classification — exactly what the contract forbids.
+func (leakyEnforcer) Enforce(ctx context.Context, d *corev1.Decision, c *corev1.LocalClassification) error {
+	_ = c.GetMatches()[0].GetMatchedText() // the leak this design prevents
+	return nil
+}
+
+// This assertion is what fails: leakyEnforcer does not satisfy core.Enforcer,
+// because Enforcer.Enforce accepts a Decision and nothing else.
+var _ core.Enforcer = (*leakyEnforcer)(nil)

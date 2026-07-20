@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+import "google/protobuf/timestamp.proto";
+
+// Purpose declares why an Event was collected. Purpose limitation that depends
+// on discipline is not purpose limitation, so this is a schema field and the
+// policy engine refuses cross-purpose evaluation (D20).
+enum Purpose {
+  PURPOSE_UNSPECIFIED = 0;
+  PURPOSE_DLP = 1;
+  PURPOSE_INSIDER_RISK = 2;
+  PURPOSE_COMPLIANCE_AUDIT = 3;
+}
+
+enum EventKind {
+  EVENT_KIND_UNSPECIFIED = 0;
+  EVENT_KIND_FILE_OPENED = 1;
+  EVENT_KIND_FILE_MODIFIED = 2;
+  EVENT_KIND_FILE_CREATED = 3;
+  EVENT_KIND_USB_INSERTED = 4;
+}
+
+// Subject identifies WHO, pseudonymously. The mapping to a real identity lives
+// outside the event stream behind an audited lookup — the event stream is the
+// most widely copied, retained and queried artefact in the system (D23).
+message Subject {
+  string pseudonymous_id = 1;
+}
+
+// ParentAndName is fanotify's DFID_NAME shape: a parent-directory handle plus a
+// filename. The name costs no capability; a name is not a path.
+message ParentAndName {
+  bytes parent_handle = 1;
+  string name = 2;
+}
+
+// FilesystemSubject carries the three identity forms T-005 measured. Which one
+// arrives follows from the coverage mode the agent selects, not from chance.
+// See docs/spike-t005-fanotify.md.
+message FilesystemSubject {
+  oneof identity {
+    // Classic mode: kernel supplies an fd, path follows from readlink.
+    string resolved_path = 1;
+    // FID mode (FAN_MARK_FILESYSTEM): opaque; resolving needs CAP_DAC_READ_SEARCH.
+    bytes file_handle = 2;
+    // DFID_NAME mode: parent handle + filename.
+    ParentAndName parent_and_name = 3;
+  }
+}
+
+message UsbSubject {
+  string vendor_id = 1;
+  string product_id = 2;
+  string serial_pseudonym = 3;
+}
+
+// Event is what a producer emits. It carries metadata and references only —
+// never file content (D10).
+message Event {
+  string event_id = 1;
+  string agent_id = 2;
+  string connector_id = 3;
+  // Monotonic per agent. Gaps must be detectable: an audit trail that cannot
+  // reveal suppression is not evidentiary.
+  uint64 sequence = 4;
+  google.protobuf.Timestamp observed_at = 5;
+  Subject subject = 6;
+  Purpose purpose = 7;
+  EventKind kind = 8;
+
+  oneof target {
+    FilesystemSubject filesystem = 9;
+    UsbSubject usb = 10;
+  }
+}

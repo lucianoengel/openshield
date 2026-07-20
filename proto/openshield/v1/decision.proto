@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+import "google/protobuf/timestamp.proto";
+
+// Action is CLOSED and TYPED. Not a string, not a struct carrying parameters.
+//
+// The threat is specific: a compromised control plane distributing a policy
+// whose action is "upload this file to a URL" — at the enforcement point,
+// indistinguishable from the platform's own telemetry. A closed enum makes that
+// unexpressible rather than merely forbidden (D14). This is what makes "the
+// server coordinates, it does not control" architectural rather than
+// aspirational.
+//
+// Adding a member here must also edit schema_test.go. That speed bump is
+// deliberate: this is the most security-sensitive field in the system.
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_ALLOW = 1;
+  ACTION_ALERT = 2;
+  ACTION_BLOCK = 3;
+  ACTION_QUARANTINE_LOCAL = 4;
+  ACTION_ENCRYPT_LOCAL = 5;
+}
+
+// Decision is what the policy engine emits and the ONLY thing an enforcer sees.
+//
+// It is explainable to an investigator (reason, policy identity) and opaque
+// about detection (no classifier ID, no pattern, no model, no matched content).
+// Both properties matter: investigators need to know why, enforcers must not.
+message Decision {
+  string decision_id = 1;
+  string event_id = 2;
+  Action action = 3;
+  // Confidence, not certainty. Classification is noisy by nature; a contract
+  // that modelled decisions as certain would push that noise silently into
+  // enforcement (D4). Range [0.0, 1.0], mandatory — there is no implicit 1.0.
+  double confidence = 4;
+  string reason = 5;
+  string policy_id = 6;
+  string policy_version = 7;
+  google.protobuf.Timestamp decided_at = 8;
+}

@@ -40,17 +40,48 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
-  # Placeholder for the checks that enforce this project's invariants by mechanism
-  # rather than discipline. Each is a ticket; none is implemented yet.
-  #
-  #   T-006  import allowlist: the privileged agent process must not depend on
+  proto:
+    # Generated code is committed so contributors need no protoc. This proves it
+    # still matches its sources — hand-edited generated code is otherwise
+    # invisible until something behaves strangely.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+      - name: generated code is current
+        run: make proto-check
+
+  invariants:
+    # The contract tests are ordinary `go test`, run above on all platforms.
+    # This job exists to name them, because a green check labelled "test" does
+    # not communicate that these specific properties are being enforced.
+    #
+    #   TestActionEnumIsClosed                    the action set stays closed (D14)
+    #   TestDecisionCarriesNoParameters           no action parameters can be smuggled in
+    #   TestClassificationSummaryFieldSetIsExact  only four fields may cross the host boundary
+    #   TestClassificationSummaryLeaksNothing     no secret or digest of it reaches the wire
+    #   TestEnforcerIsolationFailsToCompile       an enforcer CANNOT see classifier internals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: contract and privacy invariants
+        run: go test -run 'TestAction|TestDecision|TestClassification|TestEvent|TestFilesystem|TestEnforcerIsolation|TestPhase1' -v ./internal/core/
+
+  # Still to come, each its own ticket:
+  #   T-006  import allowlist: the privileged agent must not depend on
   #          encoding/*, compress/*, archive/* or any parser package
-  #   T-014  architectural fitness: adding a Connector produces zero diffs in
-  #          internal/core
-  #   T-021  open-core separability: core must not import Hub / compliance-pack /
-  #          multi-tenant packages
-  #   T-029  doc consistency: claim surfaces must not overclaim, and living docs
-  #          must reference D-numbers rather than restate them
+  #   T-014  architectural fitness: adding a Connector produces zero core diffs
+  #   T-021  open-core separability: core must not import Hub / compliance packages
+  #   T-029  doc consistency on claim surfaces
   #
-  # These are the project's real quality gates — they substitute for the line-level
-  # review depth a non-coding maintainer cannot provide (CONTRIBUTING.md).
+  # These substitute for the line-level review depth a non-coding maintainer
+  # cannot provide (CONTRIBUTING.md).

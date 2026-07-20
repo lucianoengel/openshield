@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+// DetectorType is a closed enum rather than a string. A free-form detector name
+// can itself leak what it detected — a detector named for a customer, project or
+// person — reintroducing the leak the summary type exists to prevent.
+enum DetectorType {
+  DETECTOR_TYPE_UNSPECIFIED = 0;
+  DETECTOR_TYPE_CPF = 1;
+  DETECTOR_TYPE_SSN = 2;
+  DETECTOR_TYPE_CREDIT_CARD = 3;
+  DETECTOR_TYPE_EMAIL = 4;
+  DETECTOR_TYPE_PHONE = 5;
+}
+
+// LocalMatch holds matched content. Host-only.
+message LocalMatch {
+  DetectorType detector_type = 1;
+  double confidence = 2;
+  string matched_text = 3;
+  uint32 offset = 4;
+}
+
+// LocalClassification NEVER leaves the host. It exists as a separate type from
+// ClassificationSummary rather than as a redaction step, because redaction is a
+// runtime behaviour that gets skipped — a debug logger, a retry, a new code
+// path. Two types make the mistake a compile error (D10).
+message LocalClassification {
+  string event_id = 1;
+  repeated LocalMatch matches = 2;
+}
+
+// ClassificationSummary is the ONLY classification form permitted to cross the
+// host boundary. Its field set is exactly these four and is asserted by test —
+// no content, no hash, no fingerprint, no embedding (D10, D11).
+message ClassificationSummary {
+  string event_id = 1;
+  DetectorType detector_type = 2;
+  double confidence = 3;
+  uint32 match_count = 4;
+}
