@@ -1,0 +1,69 @@
+schema: spec-driven
+
+context: |
+  OpenShield — open-source Data Security Platform. DLP is capability #1, not the product.
+
+  THE PIPELINE IS FIXED and must not change:
+    Event -> Classification -> Policy -> Decision -> Enforcement -> Audit -> Investigation -> Analytics
+  New capabilities arrive as new Event producers, Classifiers, Policies and Enforcers.
+  A change that requires editing the core is a design failure, not a feature.
+
+  Stack: Go (agent AND backend — single language, decision D8). OPA/Rego native for policy.
+  PostgreSQL is the system of record AND the hash-chained audit ledger. NATS JetStream is a
+  BUS ONLY (bounded retention is not a system of record). Protobuf + gRPC. Podman, not Docker.
+  Linux-first; Windows/macOS deferred. Apache-2.0. Repo: github.com/lucianoengel/openshield.
+
+  PHASE 1 IS OBSERVE-AND-AUDIT ONLY. Decisions are recorded, not enforced. Enforcement lands
+  in Phase 2, once the classifier's real false-positive rate is known.
+
+  HONESTY CONSTRAINTS — these are load-bearing, not style preferences. Three adversarial
+  review rounds established that the original brief promised things it cannot deliver:
+    - NEVER claim "tamper-proof". The honest claim is "tamper-evident with forward-integrity
+      between anchors"; full tamper-proofing needs a witness outside the deployer's control.
+    - NEVER claim prevention of exfiltration or effectiveness against a motivated adversary.
+      Anyone with root on their own machine defeats a host agent (stop the unit, live USB,
+      exfil from a VM, block egress). The honest goal is tamper-DETECTION, not prevention.
+      The design centre is the careless insider.
+    - NEVER treat hashing as a privacy control for low-entropy PII. SSN/CPF ~1e9, cards ~1e7
+      after BIN+Luhn, DOB ~36.5k — all brute-forceable, and salting does not fix it. Transmit
+      type + confidence + count only.
+    - NEVER treat embeddings or fuzzy fingerprints as de-identification. vec2text recovers
+      ~92% of 32-token inputs. They are content-equivalent: encrypted, access-controlled,
+      never distributed through the Hub.
+
+  ARCHITECTURAL INVARIANTS:
+    - Enforcers receive ONLY the Decision — never the classifier, regex or model behind it
+      (CrowdSec separation). The action set is CLOSED and TYPED (Block/Alert/Quarantine-local/
+      Encrypt-local); an open action framework lets a compromised control plane express
+      "upload file to URL".
+    - Decision carries CONFIDENCE, not certainty. Classification output is noisy by nature
+      (Presidio ~22.7% precision on person names) and Policy must consume it as such.
+    - The privileged process NEVER parses attacker-controlled bytes. All content parsing runs
+      in a separate unprivileged, sandboxed worker (precedent: ClamAV CVE-2025-20260, a PDF
+      parser heap overflow to RCE in a privileged daemon).
+    - Fail-open is mandatory for stability but is itself a bypass: every timeout-allow emits a
+      high-severity audit event, and scan budgets are capped.
+    - Privacy-law features are architecture, not later additions: retention limits with purge,
+      purpose tagging, exclusion lists as a first-class policy primitive, pseudonymisation by
+      default, and an audit trail of who VIEWED an investigation (not only who acted).
+    - Keep the core small. Prior OSS DLP died of maintenance economics, not bad detection
+      (MyDLP acquired, OpenDLP abandoned, Apache Metron retired). Ambition is the failure mode.
+
+  Full reasoning: reports/scouting-r1.md (D1-D9), reports/review-r1.md (D10-D23 + findings),
+  intake.md (brief, threat model, definition of done), reports/phase1-plan.md (29 tickets).
+  READ THOSE before proposing anything that contradicts a D-number.
+
+rules:
+  proposal:
+    - State explicitly what the change does NOT claim or cover. Overclaiming is this project's
+      known failure mode.
+    - If the change touches the core pipeline, justify why it cannot be a plugin instead.
+    - Name the decision (D1-D23) it depends on, or say that it establishes a new one.
+  spec:
+    - Negative properties ("transmits no content", "never parses untrusted bytes") must be
+      stated with the concrete test that proves them. Unfalsifiable prose is not a spec.
+    - Distinguish what is enforced by types or CI from what relies on discipline. Prefer the
+      former; discipline rots silently.
+  tasks:
+    - Break work into chunks of at most 2 hours.
+    - Every task asserting a security or privacy property names its test.
