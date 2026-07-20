@@ -60,16 +60,16 @@
 - **T-029** CI doc-consistency check  _(~3.0h · deps: T-001)_
     - ✓ Mechanises the drift that hit intake.md twice. IMPORTANT - a naive denylist grep DOES NOT WORK (proven 2026-07-20: it false-positived on 4 legitimate uses, because this project's discipline consists of discussing the forbidden words). Design: (1) scan CLAIM SURFACES only - README.md and future user-facing/marketing copy - not all docs; (2) support an inline '<!-- allow: <term> -->' escape for deliberate discussion; (3) append-only research reports under docs/research-* are excluded entirely; (4) separately assert that living docs reference D-numbers rather than restating them (flag paragraphs >3 lines adjacent to a D-ref). Acceptance: check passes on the current tree, and fails on a test fixture asserting 'OpenShield provides tamper-proof audit logs' in README.
 
-## DOING (1)
+## DOING (0)
 
-- **T-001** Repo skeleton + governance docs  _(~1.0h)_
-    - ✓ MOSTLY DONE 2026-07-20: repo created+pushed; LICENSE(Apache-2.0), README (honest claims), SECURITY.md (solo-meetable SLA), CONTRIBUTING.md (AI-authorship disclosure D22/L3), ETHICS.md (L5), .gitignore, docs/ consolidation, docs/decisions.md canonical register all landed. REMAINING: Go module layout (cmd/, internal/{core,agent,connectors,enforcers}) + 3-platform CI matrix + the CI denylist grep on overclaiming words (that check is T-029).
 
 ## BLOCKED (0)
 
 
-## DONE (0)
+## DONE (1)
 
+- **T-001** Repo skeleton + governance docs  _(~1.0h)_
+    - ✓ MOSTLY DONE 2026-07-20: repo created+pushed; LICENSE(Apache-2.0), README (honest claims), SECURITY.md (solo-meetable SLA), CONTRIBUTING.md (AI-authorship disclosure D22/L3), ETHICS.md (L5), .gitignore, docs/ consolidation, docs/decisions.md canonical register all landed. REMAINING: Go module layout (cmd/, internal/{core,agent,connectors,enforcers}) + 3-platform CI matrix + the CI denylist grep on overclaiming words (that check is T-029).
 
 ---
-_agent-hours: 0.0 done · 122.0 remaining (29 tickets)_
+_agent-hours: 1.0 done · 121.0 remaining (29 tickets)_

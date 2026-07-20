@@ -11,3 +11,6 @@
 
 # case tooling scratch
 /evidence/
+
+# go
+/vendor/

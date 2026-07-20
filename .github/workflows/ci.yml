@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Only Linux ships in Phase 1, but the agent must stay portable — the Connector
+    # and Enforcer interfaces must not bake in Linux assumptions (docs/decisions.md D9).
+    # Building on all three keeps that claim honest rather than aspirational.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  # Placeholder for the checks that enforce this project's invariants by mechanism
+  # rather than discipline. Each is a ticket; none is implemented yet.
+  #
+  #   T-006  import allowlist: the privileged agent process must not depend on
+  #          encoding/*, compress/*, archive/* or any parser package
+  #   T-014  architectural fitness: adding a Connector produces zero diffs in
+  #          internal/core
+  #   T-021  open-core separability: core must not import Hub / compliance-pack /
+  #          multi-tenant packages
+  #   T-029  doc consistency: claim surfaces must not overclaim, and living docs
+  #          must reference D-numbers rather than restate them
+  #
+  # These are the project's real quality gates — they substitute for the line-level
+  # review depth a non-coding maintainer cannot provide (CONTRIBUTING.md).
