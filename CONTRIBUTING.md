@@ -66,6 +66,15 @@ Not everything becomes a change. Spikes and measurements are throwaway code answ
 question; mechanical infrastructure has no design space worth specifying. Capability work — the
 things with long-lived contracts — gets a change.
 
+**"Keep going" is not an exemption.** This rule was broken three times in a row during a run of
+consecutive implementation tickets, because momentum favours visible progress over the process
+that keeps specs true. The result was measurable: two synced specs went stale against the code,
+and the most security-critical capability in the repo shipped with no spec at all. It was
+repaired by `add-agent-process-boundary`, which exists partly as the record that it happened.
+
+If you are about to change a contract, a boundary or a protocol, and you are reaching for the
+editor rather than `/opsx:propose`, that is the moment the rule is for.
+
 Two OpenSpec sharp edges worth knowing:
 
 - **Put `SHALL` or `MUST` on the FIRST line of a requirement.** The validator reads only that
