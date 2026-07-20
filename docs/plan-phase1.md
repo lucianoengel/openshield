@@ -13,8 +13,8 @@
 > and start M0.
 >
 > **Full context lives on disk**, not in conversation: `~/workspace/openshield/intake.md`
-> (brief, threat model, reworded privacy claim), `reports/scouting-r1.md` (D1-D9),
-> `reports/review-r1.md` (D10-D23), `case.md` (working log). The lab memory graph key
+> (brief, threat model, reworded privacy claim), `docs/research-scouting-r1.md` (D1-D9),
+> `docs/research-review-r1.md` (D10-D23), `case.md` (working log). The lab memory graph key
 > `case:openshield` carries the decision summary. **Read those before changing this plan** —
 > the reasoning behind every D-number is there, and re-deriving it wastes a research round.
 
@@ -24,7 +24,7 @@ OpenShield is a greenfield open-source Data Security Platform. The bet: a fixed 
 (Event → Classification → Policy → Decision → Enforcement → Audit) absorbs a decade of
 capabilities by only adding plugins. DLP is capability #1, not the product.
 
-Two rounds of work preceded this plan, both in `~/workspace/openshield/reports/`:
+Two rounds of work preceded this plan, both in `docs/`:
 - **`scouting-r1.md`** — research (D1-D9). Established Linux-first, observe-only Phase 1,
   no clipboard events, all-Go, GitHub Actions for cross-platform CI.
 - **`review-r1.md`** — 4 adversarial reviewers (D10-D23). Verdict: *the pipeline architecture

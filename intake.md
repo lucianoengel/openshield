@@ -1,5 +1,11 @@
 # Intake Brief — internal
 
+> **Process file.** This is the internal assignment brief for the homelab case workflow.
+> **Decisions are NOT canonical here** — [`docs/decisions.md`](docs/decisions.md) is the single
+> source of truth for D-numbers. This file references them; it must not restate them. (It drifted
+> out of sync twice by restating them, which is why the register exists.)
+> Public-facing docs: [`README.md`](README.md) · [`docs/threat-model.md`](docs/threat-model.md)
+
 - **Case / slug:** openshield
 - **Profile:** engineering
 - **Client / contact:** internal
@@ -18,8 +24,8 @@ Protection, Developer Security, Enterprise Governance) is expressible as *new Ev
 Classifiers, Policies and Enforcers* — with zero changes to the core.
 
 ## Desired outcome — what "done" looks like
-> **Reconciled 2026-07-20** against `reports/scouting-r1.md` (D1-D9) and
-> `reports/review-r1.md` (D10-D22). Earlier text described a Rust agent and clipboard events;
+> **Reconciled 2026-07-20** against `docs/research-scouting-r1.md` (D1-D9) and
+> `docs/research-review-r1.md` (D10-D22). Earlier text described a Rust agent and clipboard events;
 > both are superseded (D8 all-Go for backend/non-hot-path; D2 drops clipboard — Wayland
 > prevents system-wide observation).
 
@@ -217,12 +223,12 @@ this decision record. **Settled stack** — the brief's proposal, as amended by 
 
 ---
 ## Entry points (where we start)
-Superseded by the ticket queue — see `tickets.jsonl` / `tickets.md` and `reports/phase1-plan.md`.
+Superseded by the ticket queue — see `tickets.jsonl` / `tickets.md` and `docs/plan-phase1.md`.
 Order: **T-001** repo+governance → **T-002** GC spike (could partly reverse D8) → **T-003**
 schema+Decision contract → **T-004** peer-UEBA paper test (cheapest test of the 10-year claim).
 
 ## Open unknowns
-**Resolved by round-1 research** (`reports/scouting-r1.md`) — kept only as pointers:
+**Resolved by round-1 research** (`docs/research-scouting-r1.md`) — kept only as pointers:
 - ~~Prior art~~ → CrowdSec decision-separation, Presidio limits, and the OSS-DLP graveyard
   (MyDLP acquired, OpenDLP abandoned, Metron retired — all died of maintenance economics).
 - ~~Policy IR across two languages~~ → dissolved by D8; OPA/Rego native in Go.

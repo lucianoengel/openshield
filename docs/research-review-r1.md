@@ -1,6 +1,6 @@
 # OpenShield — Round-1 Adversarial Review
 
-**Date:** 2026-07-20 · **Inputs:** intake.md, reports/scouting-r1.md
+**Date:** 2026-07-20 · **Inputs:** intake.md, docs/research-scouting-r1.md
 **Reviewers (4, independent, instructed to attack not praise):** senior architecture ·
 applied cryptography · red team / threat model · privacy law + OSS sustainability
 

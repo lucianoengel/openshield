@@ -49,8 +49,10 @@ context: |
     - Keep the core small. Prior OSS DLP died of maintenance economics, not bad detection
       (MyDLP acquired, OpenDLP abandoned, Apache Metron retired). Ambition is the failure mode.
 
-  Full reasoning: reports/scouting-r1.md (D1-D9), reports/review-r1.md (D10-D23 + findings),
-  intake.md (brief, threat model, definition of done), reports/phase1-plan.md (29 tickets).
+  CANONICAL DECISIONS: docs/decisions.md — the single source of truth for D-numbers.
+  Reference decisions BY NUMBER; never restate them (restatement is what drifts).
+  Rationale: docs/research-scouting-r1.md (D1-D9), docs/research-review-r1.md (D10-D23 + findings),
+  intake.md (brief, threat model, definition of done), docs/plan-phase1.md (29 tickets).
   READ THOSE before proposing anything that contradicts a D-number.
 
 rules:

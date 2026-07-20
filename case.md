@@ -7,6 +7,9 @@ status: open
 created: 2026-07-20
 notion: https://app.notion.com/p/OpenShield-Open-Source-Data-Security-Platform-3a33a4b5b2f28137b137ff0ee6f70d27
 ---
+> **Process file.** Working log for the homelab case workflow, in chronological order.
+> **Decisions are NOT canonical here** — see [`docs/decisions.md`](docs/decisions.md).
+> Entries below are a historical record of when things were decided, not the current state.
 
 # OpenShield – Open Source Data Security Platform
 
@@ -37,7 +40,7 @@ Event → Classification → Policy → Decision → Enforcement → Audit pipel
   the MVP to **Linux-first, dogfooded on the owner's own fleet**, and defers the Windows
   driver and macOS entitlement out of the MVP.
 
-- **2026-07-20 — Round-1 scouting done** → `reports/scouting-r1.md` (3 parallel scouts).
+- **2026-07-20 — Round-1 scouting done** → `docs/research-scouting-r1.md` (3 parallel scouts).
   Headline: two scouts independently converged on **Phase 1 should be observe-only, not
   blocking**. Key findings: clipboard DLP is architecturally prevented on Wayland; fanotify
   permission events can hang the whole machine if the agent stalls (fail-open is a
@@ -61,7 +64,7 @@ Event → Classification → Policy → Decision → Enforcement → Audit pipel
   the architecture. M1/R1 answer only "how far does the local build loop get before we ask for
   a host change." If the loop needs a capability, ask for it — do not redesign around it.
 
-- **2026-07-20 — Round-1 adversarial review done** → `reports/review-r1.md` (4 reviewers:
+- **2026-07-20 — Round-1 adversarial review done** → `docs/research-review-r1.md` (4 reviewers:
   architecture, applied crypto, red team, privacy law + OSS sustainability). **The pipeline
   architecture largely survives; the brief's stated principles do not.** Three reviewers
   independently found OpenShield promising properties it cannot deliver:
@@ -100,13 +103,10 @@ Event → Classification → Policy → Decision → Enforcement → Audit pipel
   agent-built project; the binding constraint is owner *decision latency*, generally same-day.
 
 ## Unknowns
-Tracked in `intake.md` § Open unknowns. The two that gate everything else:
-1. **Policy IR** — must be offline, deterministic, sandboxed, and executable identically from
-   Rust (agent) and Go (backend). CEL vs Rego/OPA-wasm vs custom.
-2. **Event schema + `Decision` contract** — hardest to change later; everything downstream.
-
-Blocking on the owner: licence (Apache-2.0 vs AGPL-3.0), forcing function / ship intent,
-GitHub repo location, Windows & macOS test targets.
+**Superseded — see [`docs/decisions.md`](docs/decisions.md) § Known open questions.**
+The two listed here originally (policy IR across Rust/Go; licence choice) are both resolved:
+D8 dissolved the policy-IR problem by going single-language, and the licence is Apache-2.0.
+The one genuinely open decision is **D19** — the GC-pause measurement (T-002).
 
 ## Working notes
 - Next: `deep-research` scout on prior art (CrowdSec hub/decision model, OPA, Presidio,

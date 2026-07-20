@@ -1,0 +1,13 @@
+# build
+/bin/
+/dist/
+*.test
+*.out
+
+# local dev
+.env
+*.local.yaml
+/tmp/
+
+# case tooling scratch
+/evidence/

@@ -1,10 +1,8 @@
 # Tickets
 
 
-## TODO (29)
+## TODO (28)
 
-- **T-001** Repo skeleton + governance docs  _(~3.0h)_
-    - ✓ CI green on ubuntu/windows/macos-latest. LICENSE(Apache-2.0); SECURITY.md w/ solo-meetable SLA; CONTRIBUTING.md disclosing AI authorship (D22/L3); README honest claims. TESTABLE FLOOR: CI denylist grep fails the build on 'tamper-proof'|'prevents exfiltration'|'guarantee'|'unbreakable' in docs, plus manual sign-off vs intake.md threat-model table. Also: Apache-2.0 s7 deployer-liability note in README (L2); ETHICS.md stating conscious permissive dual-use posture (L5). Repo+push DONE 2026-07-20.
 - **T-002** Go GC-pause spike for fanotify responder (D19)  _(~3.0h)_
     - ✓ Recorded p50/p99/max response latency + GC pause distribution under allocation pressure; written verdict: Go stays for the responder OR responder is carved out. Either outcome passes; an unmeasured assumption is the failure.
 - **T-003** Event schema + Decision contract (protobuf)  _(~4.0h)_
@@ -62,8 +60,10 @@
 - **T-029** CI doc-consistency check  _(~2.0h · deps: T-001)_
     - ✓ Mechanises the drift that bit intake.md twice: CI greps the LIVING docs (intake.md, case.md, README) for superseded terms - 'Rust' outside an allowlisted historical context, unqualified 'tamper-proof', 'CEL', 'policy IR' - and fails the build. Reports are append-only historical records and are excluded. The only mechanism here that does not depend on someone remembering.
 
-## DOING (0)
+## DOING (1)
 
+- **T-001** Repo skeleton + governance docs  _(~1.0h)_
+    - ✓ MOSTLY DONE 2026-07-20: repo created+pushed; LICENSE(Apache-2.0), README (honest claims), SECURITY.md (solo-meetable SLA), CONTRIBUTING.md (AI-authorship disclosure D22/L3), ETHICS.md (L5), .gitignore, docs/ consolidation, docs/decisions.md canonical register all landed. REMAINING: Go module layout (cmd/, internal/{core,agent,connectors,enforcers}) + 3-platform CI matrix + the CI denylist grep on overclaiming words (that check is T-029).
 
 ## BLOCKED (0)
 
@@ -72,4 +72,4 @@
 
 
 ---
-_agent-hours: 0.0 done · 123.0 remaining (29 tickets)_
+_agent-hours: 0.0 done · 121.0 remaining (29 tickets)_
