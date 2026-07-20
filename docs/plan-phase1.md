@@ -94,10 +94,10 @@ Runs in unprivileged worker. Luhn + CPF check digits. TESTABLE: reflect emitted 
 
 Local policy file (no control plane in Phase 1); OPA/Rego native in Go; policy over classifier output yields well-formed Decision; identical input yields identical Decision.
 
-#### T-009 · Audit ledger: Postgres hash chain + forward integrity (D12)
+#### T-009 · Audit ledger: Postgres hash chain + forward integrity (D12) · **done**
 `~8h` · depends: T-003, T-026
 
-Postgres = system of record; JetStream = bus only. Key-evolving forward integrity: post-compromise attacker cannot rewrite pre-compromise entries. Tampering test detects direct-DB modification. Docs say tamper-EVIDENT, never tamper-proof. External anchoring is T-017, NOT hand-waved here.
+Postgres = system of record; JetStream = bus only. Key-evolving forward integrity: post-compromise attacker cannot rewrite pre-compromise entries. Tampering test detects direct-DB modification. Docs say tamper-EVIDENT, never tamper-proof. External anchoring is T-019, NOT hand-waved here. **Landed** as an evolving Ed25519 keypair, not the symmetric ratchet originally specified — a symmetric scheme cannot be verified without the seed, and the seed forges (D30). Two further bugs surfaced only under a real Postgres and are recorded in the archived change: the chain was broken by the database's own timestamp precision, and nothing rotated the signing key at all, which would have meant forward integrity of zero in a deployed system.
 
 #### T-010 · CLI query over audit store (replaces React UI)
 `~2h` · depends: T-009
@@ -124,7 +124,7 @@ The server side referenced by T-017 (mTLS), T-018 (heartbeat) and the verificati
 
 'Offline-capable' is a stated core principle and nothing implemented it. When the control plane is unreachable the agent must durably queue events on disk and forward on reconnect - NEVER silently drop. Bounded with an explicit overflow policy (and overflow itself is an audit event). Acceptance: kill the control plane, generate events, restart it, all events arrive in order; fill the queue to its ceiling and assert the documented overflow behaviour.
 
-#### T-026 · DB schema + migrations
+#### T-026 · DB schema + migrations · **done**
 `~4h` · depends: T-003
 
 Versioned, forward-only migrations for the audit ledger and telemetry tables. Must accommodate D12's hash-chain columns and D13/D20's retention+purpose+pseudonymisation fields from the start - retrofitting columns into a hash-chained ledger is expensive. Acceptance: migrate up from empty on a clean DB; schema matches the T-003 protobuf shape.

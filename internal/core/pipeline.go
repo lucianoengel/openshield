@@ -220,6 +220,10 @@ var (
 	ErrReentry     = errors.New("pipeline: re-entry from within a stage is refused")
 	ErrStageFailed = errors.New("pipeline: stage failed")
 	ErrNoDecision  = errors.New("pipeline: no stage produced a decision")
+	// ErrNotRecorded means the pipeline reached a terminal outcome that could
+	// not be written to the audit ledger. It is deliberately distinct from
+	// ErrStageFailed: the pipeline worked, the record of it did not.
+	ErrNotRecorded = errors.New("pipeline: terminal outcome was not recorded")
 )
 
 type reentryKey struct{}
@@ -246,7 +250,13 @@ type Dispatcher struct {
 	// OnOutcome receives every terminal outcome, including timeouts and
 	// failures. The dispatcher never drops an Event silently; if this is nil
 	// the outcome is still returned to the caller.
-	OnOutcome func(ctx context.Context, s *State, o Outcome)
+	//
+	// It returns an error, and the dispatcher surfaces that error to the
+	// caller, because this is where the audit append happens. A void callback
+	// would make "the Decision was not recorded" structurally unreportable —
+	// the caller would have no channel through which to learn it, which is the
+	// silent-failure mode the ledger exists to prevent.
+	OnOutcome func(ctx context.Context, s *State, o Outcome) error
 }
 
 func NewDispatcher(r *Registry, stageDeadline time.Duration) *Dispatcher {
@@ -278,15 +288,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, e *corev1.Event) (*corev1.Dec
 			continue
 		case OutcomeDecided:
 			d.Metrics.Decided.Add(1)
-			d.report(ctx, st, out)
-			return out.Decision, nil
+			// The Decision is returned ALONGSIDE the recording error, not
+			// instead of it. The caller is answering a blocked process and
+			// must still act; what it must not do is act believing the action
+			// was audited. Both facts are true, so both are returned.
+			return out.Decision, d.report(ctx, st, out)
 		case OutcomeTimeout:
 			d.Metrics.TimedOut.Add(1)
-			d.report(ctx, st, out)
+			if rerr := d.report(ctx, st, out); rerr != nil {
+				return nil, rerr
+			}
 			return nil, fmt.Errorf("stage %q: %w", stage.Name(), context.DeadlineExceeded)
 		case OutcomeFailed:
 			d.Metrics.Failed.Add(1)
-			d.report(ctx, st, out)
+			if rerr := d.report(ctx, st, out); rerr != nil {
+				return nil, rerr
+			}
 			return nil, fmt.Errorf("%w: %s: %v", ErrStageFailed, stage.Name(), err)
 		}
 	}
@@ -296,7 +313,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, e *corev1.Event) (*corev1.Dec
 	// allowed, and silence would conflate them.
 	out := Outcome{Kind: OutcomeFailed, Stage: "(pipeline)", Severity: SeverityWarn, Err: ErrNoDecision}
 	d.Metrics.Failed.Add(1)
-	d.report(ctx, st, out)
+	if rerr := d.report(ctx, st, out); rerr != nil {
+		return nil, rerr
+	}
 	return nil, ErrNoDecision
 }
 
@@ -341,8 +360,12 @@ func (d *Dispatcher) runStage(ctx context.Context, stage Stage, st *State) (Outc
 	}
 }
 
-func (d *Dispatcher) report(ctx context.Context, s *State, o Outcome) {
-	if d.OnOutcome != nil {
-		d.OnOutcome(ctx, s, o)
+func (d *Dispatcher) report(ctx context.Context, s *State, o Outcome) error {
+	if d.OnOutcome == nil {
+		return nil
 	}
+	if err := d.OnOutcome(ctx, s, o); err != nil {
+		return fmt.Errorf("%w: %v", ErrNotRecorded, err)
+	}
+	return nil
 }

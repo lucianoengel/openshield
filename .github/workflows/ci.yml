@@ -84,6 +84,42 @@ jobs:
       - name: agent process-boundary invariants
         run: go test -run 'TestFrame|TestOversized|TestTruncated|TestClassifierError|TestUnreadable|TestByteCeiling|TestWorkerRefuses|TestPrivilegedTalks|TestWorkerTimeout' -v ./internal/agent/
 
+  ledger:
+    # The audit ledger's storage layer is tested against a REAL PostgreSQL.
+    #
+    # It has to be. The bug that motivated this job was invisible to every
+    # in-memory test: TIMESTAMPTZ stores microseconds while the canonical
+    # encoding commits to nanoseconds, so an entry sealed with a real
+    # time.Now() verified as TAMPERED the moment it was read back. A fake
+    # storage layer would have agreed with the code.
+    #
+    # OPENSHIELD_REQUIRE_POSTGRES turns the local skip into a hard failure
+    # here, because an integration suite that skips silently and reports ok is
+    # worse than no suite at all — it manufactures confidence.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: openshield
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: openshield
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U openshield"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: audit ledger against real PostgreSQL
+        env:
+          OPENSHIELD_REQUIRE_POSTGRES: '1'
+        run: go test -race -count=1 -v ./internal/store/...
+      - name: a failed append is never silent
+        run: go test -run 'TestUnreachableLedger|TestTimeoutIsRecorded|TestNoDecisionIsStillRecorded' -v ./internal/core/
+
   # Still to come, each its own ticket:
   #   T-014  architectural fitness: adding a Connector produces zero core diffs
   #   T-021  open-core separability: core must not import Hub / compliance packages

@@ -29,11 +29,18 @@ import (
 //  1. A hash chain: each entry commits to its predecessor, so editing one entry
 //     invalidates every hash after it. Alone this is weak — an attacker holding
 //     the signing key rewrites the whole history consistently.
-//  2. A ratcheting key: K(n+1) = H(K(n)), with K(n) destroyed after use. Alone
-//     this is also weak — entries are individually authentic but their order and
-//     completeness are unprotected.
+//  2. An evolving KEYPAIR: each epoch generates a fresh Ed25519 key, publishes
+//     its public half signed by the previous epoch's private key, then destroys
+//     that private key. Alone this is also weak — entries are individually
+//     authentic but their order and completeness are unprotected.
 //
 // Together, the tail an attacker can rewrite begins at the moment of compromise.
+//
+// This was a SYMMETRIC ratchet (K(n+1) = H(K(n))) until it was found to provide
+// no forward integrity at all: verification needed the seed, and the seed
+// forges. The only party able to verify the log was the only party able to fake
+// it. The asymmetric design exists specifically so verification takes public
+// material only — see docs/decisions.md D30.
 
 // RetentionClass drives the purge job (T-013). Recorded from the first
 // migration because adding a column to a hash-chained ledger later changes what

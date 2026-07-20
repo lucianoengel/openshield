@@ -1,5 +1,8 @@
-## ADDED Requirements
+# audit-ledger Specification
 
+## Purpose
+TBD - created by archiving change add-audit-ledger. Update Purpose after archive.
+## Requirements
 ### Requirement: Every entry commits to its predecessor
 Each ledger entry MUST contain a hash computed over its own content and the hash of the entry
 before it. The first entry commits to a genesis value that is recorded.
@@ -70,6 +73,15 @@ evolution may occur per epoch rather than per entry.
 - **WHEN** the configuration surface for epoch length is read
 - **THEN** it states that the epoch bounds how much recent history a host compromise can rewrite
 
+#### Scenario: The key actually evolves during ordinary operation
+- **WHEN** more entries are appended than one epoch admits
+- **THEN** the signing key has evolved and later entries are signed by a different epoch key
+- **AND** the chain still verifies across the epoch boundary, since entries signed by a
+  destroyed key must remain valid against the published public-key chain
+- **AND** the default epoch length is finite rather than unbounded: a key that never evolves
+  provides no forward integrity at all, because the key that signed the first entry is still
+  resident at the ten-thousandth
+
 ### Requirement: The tamper-evidence claim states what it does not cover
 Documentation and any user-facing surface MUST describe the ledger as tamper-**evident** with
 forward integrity, and MUST NOT describe it as tamper-proof.
@@ -138,3 +150,4 @@ occurred, which is the failure mode the whole ledger exists to prevent.
 - **WHEN** the database is unreachable and an append is attempted
 - **THEN** the caller receives an error naming the condition
 - **AND** no code path discards the entry without returning an error
+

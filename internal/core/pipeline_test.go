@@ -174,8 +174,9 @@ func TestFailingStageIsAuditedExactlyOnce(t *testing.T) {
 	d := core.NewDispatcher(r, time.Second)
 
 	var outcomes []core.Outcome
-	d.OnOutcome = func(_ context.Context, _ *core.State, o core.Outcome) {
+	d.OnOutcome = func(_ context.Context, _ *core.State, o core.Outcome) error {
 		outcomes = append(outcomes, o)
+		return nil
 	}
 
 	_, err := d.Dispatch(context.Background(), testEvent())
@@ -205,7 +206,7 @@ func TestSlowStageTimesOutLoudly(t *testing.T) {
 	d := core.NewDispatcher(r, 50*time.Millisecond)
 
 	var got []core.Outcome
-	d.OnOutcome = func(_ context.Context, _ *core.State, o core.Outcome) { got = append(got, o) }
+	d.OnOutcome = func(_ context.Context, _ *core.State, o core.Outcome) error { got = append(got, o); return nil }
 
 	start := time.Now()
 	_, err := d.Dispatch(context.Background(), testEvent())
@@ -258,7 +259,7 @@ func TestNoDecisionIsStillReported(t *testing.T) {
 	d := core.NewDispatcher(r, time.Second)
 
 	var got []core.Outcome
-	d.OnOutcome = func(_ context.Context, _ *core.State, o core.Outcome) { got = append(got, o) }
+	d.OnOutcome = func(_ context.Context, _ *core.State, o core.Outcome) error { got = append(got, o); return nil }
 
 	_, err := d.Dispatch(context.Background(), testEvent())
 	if !errors.Is(err, core.ErrNoDecision) {

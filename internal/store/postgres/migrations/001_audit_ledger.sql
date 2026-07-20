@@ -14,6 +14,12 @@ CREATE TABLE IF NOT EXISTS audit_entries (
     hash            BYTEA NOT NULL,
     sig             BYTEA NOT NULL,
 
+    -- Which signing epoch produced `sig`. Hashed, so an attacker cannot
+    -- re-point an entry at an epoch whose key they still hold. Verification
+    -- CANNOT recompute an entry's hash without it, so an entry from any epoch
+    -- past the first fails to verify if this column is missing.
+    key_epoch       BIGINT NOT NULL DEFAULT 0,
+
     -- Decision (nullable: pipeline terminations produce an outcome, no decision)
     decision_id     TEXT,
     event_id        TEXT,
