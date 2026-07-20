@@ -15,9 +15,14 @@ Email DLP, AI Security, Data Discovery, Classification, Lineage, Insider Risk, U
 Protection, Developer Security, Enterprise Governance — is expressible as *new Event producers,
 Classifiers, Policies and Enforcers*, with zero changes to the core.
 
-That bet is untested. [`plan-phase1.md`](plan-phase1.md) T-004 is the cheapest test of it:
-design peer-baseline UEBA on paper and see whether it forces core changes. A verdict of "yes"
-is a success — it costs hours now instead of years later.
+That bet has now been tested on paper ([T-004](design-t004-peer-ueba.md)) and it is **partly
+false**. Peer-baseline UEBA needs its risk score to reach Policy, which is a feedback edge a
+linear pipeline cannot express — so it requires a small core addition (an enrichment Context,
+and a `context_version` on Decision). The corrected claim is that capabilities of the same
+*shape* need no core change, while a new *shape* of data flow needs a small, identifiable one.
+
+Finding that on paper cost an afternoon. Finding it after the hash-chained audit ledger existed
+would have cost a migration and a break in the chain's continuity.
 
 ## Why now
 

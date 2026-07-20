@@ -43,4 +43,16 @@ message Decision {
   string policy_id = 6;
   string policy_version = 7;
   google.protobuf.Timestamp decided_at = 8;
+  // Version of the enrichment Context this decision was evaluated against.
+  //
+  // Added before any consumer existed, on the strength of the T-004 paper
+  // design (docs/design-t004-peer-ueba.md): peer-baseline UEBA needs its risk
+  // score to reach Policy, and without recording WHICH context version applied,
+  // replay cannot reproduce a Decision — re-running against today's context
+  // would legitimately produce a different answer.
+  //
+  // Empty in Phase 1: no Context exists yet. The field is here because
+  // retrofitting one into a hash-chained audit ledger (T-009) would mean a
+  // migration and a break in the chain's continuity.
+  string context_version = 9;
 }

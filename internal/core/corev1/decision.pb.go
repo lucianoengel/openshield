@@ -109,8 +109,20 @@ type Decision struct {
 	PolicyId      string                 `protobuf:"bytes,6,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
 	PolicyVersion string                 `protobuf:"bytes,7,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	DecidedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=decided_at,json=decidedAt,proto3" json:"decided_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Version of the enrichment Context this decision was evaluated against.
+	//
+	// Added before any consumer existed, on the strength of the T-004 paper
+	// design (docs/design-t004-peer-ueba.md): peer-baseline UEBA needs its risk
+	// score to reach Policy, and without recording WHICH context version applied,
+	// replay cannot reproduce a Decision — re-running against today's context
+	// would legitimately produce a different answer.
+	//
+	// Empty in Phase 1: no Context exists yet. The field is here because
+	// retrofitting one into a hash-chained audit ledger (T-009) would mean a
+	// migration and a break in the chain's continuity.
+	ContextVersion string `protobuf:"bytes,9,opt,name=context_version,json=contextVersion,proto3" json:"context_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Decision) Reset() {
@@ -199,11 +211,18 @@ func (x *Decision) GetDecidedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Decision) GetContextVersion() string {
+	if x != nil {
+		return x.ContextVersion
+	}
+	return ""
+}
+
 var File_openshield_v1_decision_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_decision_proto_rawDesc = "" +
 	"\n" +
-	"\x1copenshield/v1/decision.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xac\x02\n" +
+	"\x1copenshield/v1/decision.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd5\x02\n" +
 	"\bDecision\x12\x1f\n" +
 	"\vdecision_id\x18\x01 \x01(\tR\n" +
 	"decisionId\x12\x19\n" +
@@ -216,7 +235,8 @@ const file_openshield_v1_decision_proto_rawDesc = "" +
 	"\tpolicy_id\x18\x06 \x01(\tR\bpolicyId\x12%\n" +
 	"\x0epolicy_version\x18\a \x01(\tR\rpolicyVersion\x129\n" +
 	"\n" +
-	"decided_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt*\x8d\x01\n" +
+	"decided_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\x12'\n" +
+	"\x0fcontext_version\x18\t \x01(\tR\x0econtextVersion*\x8d\x01\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fACTION_ALLOW\x10\x01\x12\x10\n" +

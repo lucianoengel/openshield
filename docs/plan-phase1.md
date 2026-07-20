@@ -66,7 +66,7 @@ Recorded p50/p99/max response latency + GC pause distribution under allocation p
 
 Protobuf. Decision carries confidence not certainty (D4) + CLOSED typed action set (D14); classification output = type+confidence+count only (D10); stable pseudonymous user ID (D23) + purpose tag (D20); compile-time test that enforcers cannot see classifier internals. ESCAPE HATCH (review finding): T-005 has not yet characterised what fanotify actually delivers (file handles vs paths). If T-005 contradicts the schema, REVISE T-003 immediately - before T-007/T-008/T-009 build on it. Same 'revise now if wrong' licence as T-004.
 
-#### T-004 · Peer-UEBA paper design - the hard fitness test (A1/D23)
+#### T-004 · Peer-UEBA paper design - the hard fitness test (A1/D23) · **done**
 `~3h` · depends: T-003
 
 NO CODE. Written design of peer-baseline UEBA as an Analytics module against the T-003 schema, plus explicit verdict: does it require core changes? If yes, revise T-003 now. Finding yes is a success.
@@ -204,6 +204,18 @@ Mechanises the drift that hit brief.md twice. IMPORTANT - a naive denylist grep 
 `~6h` · depends: T-007, T-008, T-010, T-011, T-012, T-013, T-027
 
 QUANTIFIED, not vibes: explicit idle CPU%/RSS ceilings defined and met; before/after file-op latency benchmark recorded; install+upgrade exercised; FP rate on real files recorded; fail-open-on-crash verified. NOTE units: ~6 agent-h of build/measure work wrapped around an unavoidable ~1-week calendar soak. Validates pipeline+classifier+operability, NOT the product as a control (D16 - owner has root).
+
+#### T-030 · Enrichment Context abstraction (A6, from T-004) · `~4h` · depends: T-008
+
+Design — **not implement** — the read-only enrichment Context that Policy consults: risk score,
+asset tier, exception groups, org unit. Written asynchronously off the hot path, read
+synchronously on it, versioned so replay stays deterministic, and a **closed typed set** rather
+than a key-value bag (an open surface would let a compromised control plane influence decisions,
+the same threat D14 closed for actions). Phase 1 needs no Context; the Decision contract already
+accommodates one (D27).
+
+*Acceptance:* a written design; no implementation; `context_version` semantics specified for
+replay.
 
 ## Explicitly NOT in Phase 1
 

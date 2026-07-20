@@ -16,8 +16,16 @@ Event → Classification → Policy → Decision → Enforcement → Audit → I
 ```
 
 New capabilities arrive as new **Event producers**, **Classifiers**, **Policies** and
-**Enforcers**. The pipeline itself never changes. A change that requires editing the core is a
-design failure, not a feature.
+**Enforcers**.
+
+The precise claim — narrowed after testing it on paper ([T-004](docs/design-t004-peer-ueba.md)) —
+is that capabilities of the *same shape* as existing ones require no core changes. A capability
+introducing a new *shape* of data flow requires a core addition. The pipeline's value is that
+such additions are rare, small, and identifiable in advance rather than discovered mid-build.
+
+The stronger claim — "no capability ever requires a core change" — is false, and we know exactly
+which capability falsifies it: peer-baseline UEBA needs a risk score to reach Policy, which is a
+feedback edge a linear pipeline cannot express.
 
 Detection and enforcement are kept completely separate, following CrowdSec's model: an Enforcer
 receives only a `Decision`. It never learns which classifier matched, which regex fired, or how

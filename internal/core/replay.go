@@ -52,6 +52,13 @@ func DecisionsEquivalent(want, got *corev1.Decision) error {
 	if want.GetPolicyVersion() != got.GetPolicyVersion() {
 		return fmt.Errorf("replay: policy_version %q != %q", want.GetPolicyVersion(), got.GetPolicyVersion())
 	}
+	// Compared, not excluded: a Decision evaluated against a different context
+	// version may legitimately differ, so replay must be told which context to
+	// reproduce against rather than silently accepting either.
+	if want.GetContextVersion() != got.GetContextVersion() {
+		return fmt.Errorf("replay: context_version %q != %q",
+			want.GetContextVersion(), got.GetContextVersion())
+	}
 	return nil
 }
 
@@ -60,7 +67,7 @@ func DecisionsEquivalent(want, got *corev1.Decision) error {
 // deliberately excluded. Without that assertion, a new field would default to
 // "not compared" and replay would silently cover less than it claims.
 var ReplayComparedFields = []string{
-	"action", "confidence", "reason", "policy_id", "policy_version",
+	"action", "confidence", "reason", "policy_id", "policy_version", "context_version",
 }
 
 // ReplayExcludedFields are non-deterministic by nature.
