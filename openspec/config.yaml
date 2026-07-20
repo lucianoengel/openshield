@@ -59,7 +59,7 @@ rules:
       known failure mode.
     - If the change touches the core pipeline, justify why it cannot be a plugin instead.
     - Name the decision (D1-D23) it depends on, or say that it establishes a new one.
-  spec:
+  specs:
     - Negative properties ("transmits no content", "never parses untrusted bytes") must be
       stated with the concrete test that proves them. Unfalsifiable prose is not a spec.
     - Distinguish what is enforced by types or CI from what relies on discipline. Prefer the
