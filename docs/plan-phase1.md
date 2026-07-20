@@ -56,7 +56,7 @@ Ordered by **risk retired per hour**, not dependency convenience:
 
 MOSTLY DONE 2026-07-20: repo created+pushed; LICENSE(Apache-2.0), README (honest claims), SECURITY.md (solo-meetable SLA), CONTRIBUTING.md (AI-authorship disclosure D22/L3), ETHICS.md (L5), .gitignore, docs/ consolidation, docs/decisions.md canonical register all landed. REMAINING: Go module layout (cmd/, internal/{core,agent,connectors,enforcers}) + 3-platform CI matrix + the CI denylist grep on overclaiming words (that check is T-029).
 
-#### T-002 · Go GC-pause spike for fanotify responder (D19)
+#### T-002 · Go GC-pause spike for fanotify responder (D19) · **done**
 `~3h` · depends: —
 
 Recorded p50/p99/max response latency + GC pause distribution under allocation pressure; written verdict: Go stays for the responder OR responder is carved out. Either outcome passes; an unmeasured assumption is the failure.

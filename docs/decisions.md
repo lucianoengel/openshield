@@ -30,7 +30,7 @@ an owner call · **scoped** = settled but with a named condition that could narr
 | # | Decision | Status |
 |---|---|---|
 | **D8** | **Single language: all-Go**, superseding the brief's Rust-agent/Go-backend split. One language ⇒ one shared policy engine ⇒ the cross-runtime parity risk is *deleted rather than solved*. Chosen over Rust because the owner does not write code: agent-written Go converges in fewer compile-fix cycles and is reviewable by a non-coding owner — the only real oversight mechanism here. | firm |
-| **D19** | **D8 is scoped, not blanket.** The fanotify permission-response hot path is challenged: GC pauses and scheduler jitter inside a live permission window meet the worst failure mode in the system. **T-002 measures it.** Go stays, or that one component is carved out (cgo/Rust). Unverified is the only failing outcome. | **open** |
+| **D19** | ~~D8 is scoped~~ — **RESOLVED 2026-07-20 by measurement, D8 stands unmodified.** Worst-case responder latency 532µs (typical 1-3µs) at 2 cores under 256 MB/s allocation and 10× realistic event rate. GC is not the risk; unbounded stalls are, and those are a design problem the fail-open watchdog addresses (D17/D18, T-011) — not a language problem. Evidence: [`spike-t002-gc-pause.md`](spike-t002-gc-pause.md). | firm |
 | **D6** | *(collapsed)* Policy IR — dissolved by D8. OPA/Rego runs natively in Go; no CEL, no WASM, no custom IR. CEL was the trap: an official cross-language conformance suite exists but nobody runs it against the Rust implementation. WASM remains relevant only for sandboxing untrusted Hub packs (Phase 3+). | firm |
 
 ## Detection and enforcement
@@ -83,7 +83,6 @@ an owner call · **scoped** = settled but with a named condition that could narr
 
 ## Known open questions
 
-- **D19** — the GC-pause measurement (T-002). The last decision resting on evidence not argument.
 - **A2 shape questions** — Data Discovery is a catalog and Lineage is a graph; neither has a
   home in the frozen pipeline. T-004 tests only the UEBA sliver of this.
 - Whether the fitness test can ever be strong enough: adding an S3 connector is isomorphic to
