@@ -65,6 +65,8 @@ an owner call · **scoped** = settled but with a named condition that could narr
 | **D26** | **The zero-core-change claim is narrowed, and the CI fitness test is necessary but not sufficient.** Capabilities of the same *shape* as existing ones need no core change; a new *shape* of data flow needs a small one. Demonstrated by [T-004](design-t004-peer-ueba.md), which also produced a worked example of the fitness test being gameable: letting Policy query the analytics store directly passes CI with zero core diffs while destroying the stage isolation the test exists to protect. Green CI is not evidence the architecture held. | firm |
 | **D27** | **`Decision` carries a `context_version`.** Added before any consumer existed, because replay cannot reproduce a Decision without knowing which enrichment context applied, and retrofitting a field into a hash-chained ledger (T-009) means a migration and a break in chain continuity. Empty in Phase 1. | firm |
 
+| **D28** | **Context is a resolved value on `State`, not an accessor, and a closed typed set, not a map.** An accessor would let Policy perform an unbounded lookup inside the permission window D24 protects; an open bag would be a surface through which a compromised control plane could influence decisions by inventing keys — D14's threat by another door. Absent enrichment MUST fail explicitly, never default: a defaulted risk score reads as "safe" and turns an analytics outage into a silent fail-open. Design: [`design-t030-context.md`](design-t030-context.md). Seam implemented, subsystem deliberately not. | firm |
+
 ## Security of the platform itself
 
 | # | Decision | Status |

@@ -98,11 +98,27 @@ func TestStageInterfaceExposesNoSiblingAccess(t *testing.T) {
 
 	// State is what a stage receives; it must not carry a way to reach the
 	// pipeline. Checked by reflection so adding such a field fails here.
+	// Context was added deliberately (T-030) and this list was updated on
+	// purpose — that edit is the speed bump working, not an obstacle to route
+	// around. The rule being enforced: State may carry DATA a stage reads, and
+	// must never carry a HANDLE through which a stage could reach the
+	// dispatcher, the registry or another stage.
 	got := structFieldNames(core.State{})
-	want := []string{"Classification", "Event"}
+	want := []string{"Classification", "Context", "Event"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("State fields = %v, want exactly %v — a stage must not be able to "+
 			"reach the dispatcher, the registry or another stage", got, want)
+	}
+
+	// The distinction that matters: every State field must be inert data, not
+	// something callable. A func or interface field would be a way out.
+	rt := reflect.TypeOf(core.State{})
+	for i := 0; i < rt.NumField(); i++ {
+		switch rt.Field(i).Type.Kind() {
+		case reflect.Func, reflect.Interface, reflect.Chan:
+			t.Errorf("State.%s is %v — a stage could use it to reach outside itself",
+				rt.Field(i).Name, rt.Field(i).Type.Kind())
+		}
 	}
 }
 

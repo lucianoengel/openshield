@@ -109,6 +109,81 @@ func Decided(d *corev1.Decision) Outcome {
 type State struct {
 	Event          *corev1.Event
 	Classification *corev1.LocalClassification
+
+	// Context is enrichment Policy consults but does not compute: risk score,
+	// asset tier, exception groups, org unit.
+	//
+	// It is a resolved VALUE, not an accessor. An accessor would let Policy
+	// perform an unbounded lookup — a cache miss, a lock, a network call —
+	// inside the fanotify permission window that D24 exists to protect.
+	// Resolution happens before dispatch, where blocking is acceptable.
+	//
+	// NIL IN PHASE 1. Nothing computes a Context yet; only the seam exists, so
+	// that the policy stage takes the right shape without a later retrofit.
+	// See docs/design-t030-context.md.
+	Context *Context
+}
+
+// Context is a closed, typed set of enrichment facts.
+//
+// Deliberately not a map[string]string: an open bag would be a surface through
+// which a compromised control plane could influence decisions by inventing keys
+// a policy happens to read — the threat D14 closed for actions, arriving by a
+// different door. Adding a field here should require a deliberate schema change.
+//
+// The subsystem that computes and distributes Contexts is NOT designed here
+// (T-030 designs the seam only). Phase 1 has none.
+type Context struct {
+	// Version identifies the snapshot. Recorded on the Decision so replay can
+	// evaluate against the Context that actually applied (D27).
+	Version string
+	// ComputedAt lets a policy condition on staleness. Stale is normal and
+	// valid — an agent must decide without the network (D1) — but it must be
+	// observable rather than hidden.
+	ComputedAt time.Time
+
+	// RiskScore in [0,1]. HasRiskScore distinguishes "not computed" from
+	// "computed, and this subject looks fine". Conflating them would make every
+	// subject look safe whenever analytics is down: a fail-open with no signal.
+	RiskScore    float64
+	HasRiskScore bool
+
+	AssetTier       AssetTier
+	OrgUnit         string
+	ExceptionGroups []ExceptionGroup
+}
+
+type AssetTier int
+
+const (
+	AssetTierUnspecified AssetTier = iota
+	AssetTierStandard
+	AssetTierSensitive
+	AssetTierCrownJewel
+)
+
+type ExceptionGroup int
+
+const (
+	ExceptionGroupUnspecified ExceptionGroup = iota
+	ExceptionGroupPersonalFolder
+	ExceptionGroupBreakTime
+	ExceptionGroupApprovedTransfer
+)
+
+// ErrContextUnavailable is returned when a policy requires an enrichment fact
+// that is absent. Policies fail explicitly rather than substituting a default —
+// a defaulted risk score reads as "safe" and silently weakens every policy that
+// consults it.
+var ErrContextUnavailable = errors.New("policy: required context is unavailable")
+
+// ContextVersion returns the version to record on a Decision, or "" when no
+// Context applied.
+func (s *State) ContextVersion() string {
+	if s == nil || s.Context == nil {
+		return ""
+	}
+	return s.Context.Version
 }
 
 // Stage is a pipeline stage.

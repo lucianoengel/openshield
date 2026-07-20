@@ -205,7 +205,7 @@ Mechanises the drift that hit brief.md twice. IMPORTANT - a naive denylist grep 
 
 QUANTIFIED, not vibes: explicit idle CPU%/RSS ceilings defined and met; before/after file-op latency benchmark recorded; install+upgrade exercised; FP rate on real files recorded; fail-open-on-crash verified. NOTE units: ~6 agent-h of build/measure work wrapped around an unavoidable ~1-week calendar soak. Validates pipeline+classifier+operability, NOT the product as a control (D16 - owner has root).
 
-#### T-030 · Enrichment Context abstraction (A6, from T-004) · `~4h` · depends: T-008
+#### T-030 · Enrichment Context abstraction (A6, from T-004) · **done** · `~4h`
 
 Design — **not implement** — the read-only enrichment Context that Policy consults: risk score,
 asset tier, exception groups, org unit. Written asynchronously off the hot path, read
@@ -215,7 +215,13 @@ the same threat D14 closed for actions). Phase 1 needs no Context; the Decision 
 accommodates one (D27).
 
 *Acceptance:* a written design; no implementation; `context_version` semantics specified for
-replay.
+replay. **Done 2026-07-20** — [`design-t030-context.md`](design-t030-context.md). The *seam* is
+implemented (`State.Context`, nil in Phase 1); the *subsystem* deliberately is not.
+
+**T-008 must therefore:** take Context as an input rather than reaching for it; fail explicitly
+when a policy references an absent Context field rather than substituting a default (a defaulted
+risk score reads as "safe" and silently weakens every policy consulting it); and populate
+`Decision.context_version` from `State.ContextVersion()`.
 
 ## Explicitly NOT in Phase 1
 
