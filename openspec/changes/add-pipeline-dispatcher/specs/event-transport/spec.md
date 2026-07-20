@@ -46,9 +46,9 @@ Recording the gap explicitly prevents the interface from being mistaken for the 
 - **AND** no caller references a NATS type
 
 ### Requirement: Replay reproduces the recorded Decision
-Given the recorded Event and the pipeline configuration that produced a Decision, re-running the
-pipeline MUST produce an equal Decision. The comparison MUST exclude non-deterministic fields by
-an explicit list.
+Replay of a recorded Event through the pipeline configuration that produced a Decision MUST
+yield an equal Decision, comparing an explicit field list that excludes non-deterministic
+fields.
 
 Replay is what makes the audit trail an investigation tool rather than a log. If a recorded
 decision cannot be reproduced, "every decision should be explainable" is unfounded.

@@ -66,6 +66,14 @@ Not everything becomes a change. Spikes and measurements are throwaway code answ
 question; mechanical infrastructure has no design space worth specifying. Capability work — the
 things with long-lived contracts — gets a change.
 
+Two OpenSpec sharp edges worth knowing:
+
+- **Put `SHALL` or `MUST` on the FIRST line of a requirement.** The validator reads only that
+  line, so a normative keyword on line two reads as a requirement with no normative keyword.
+- **Archive syncs specs itself.** Running `/opsx:sync` first and then archiving makes the
+  archive try to re-apply the same deltas and abort; use `openspec archive --skip-specs` if you
+  have already synced.
+
 ## Reporting vulnerabilities
 
 See [`SECURITY.md`](SECURITY.md). Please do not open public issues for suspected
