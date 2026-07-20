@@ -22,18 +22,39 @@ import (
 // nothing. So this asserts on the SPECIFIC compiler error, not merely on a
 // non-zero exit.
 func TestEnforcerIsolationFailsToCompile(t *testing.T) {
+	mustNotCompile(t, "bad_enforcer.go.txt", []string{
+		"does not implement core.Enforcer",
+		"wrong type for method Enforce",
+	})
+}
+
+// TestTransportRejectsLocalClassification proves the wire boundary cannot carry
+// the host-only classification form. Same mechanism, same reason: a missing
+// method is a compile error, a redaction step is a runtime behaviour.
+func TestTransportRejectsLocalClassification(t *testing.T) {
+	mustNotCompile(t, "bad_transport.go.txt", []string{
+		"cannot use lc",
+		"LocalClassification",
+	})
+}
+
+// mustNotCompile builds a fixture that is expected to FAIL, and asserts the
+// failure is the intended one. Without the message check an unrelated breakage
+// (a typo, a moved package) would make these tests pass while proving nothing.
+func mustNotCompile(t *testing.T, fixture string, wantAny []string) {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping compile test in -short mode")
 	}
 
-	src, err := os.ReadFile(filepath.Join("testdata", "enforcerisolation", "bad_enforcer.go.txt"))
+	src, err := os.ReadFile(filepath.Join("testdata", "enforcerisolation", fixture))
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)
 	}
 
 	// Build inside the real module so the import path resolves.
 	dir := t.TempDir()
-	pkgDir := filepath.Join("testdata", "tmp_enforcerisolation")
+	pkgDir := filepath.Join("testdata", "tmp_"+strings.TrimSuffix(fixture, ".go.txt"))
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -49,18 +70,11 @@ func TestEnforcerIsolationFailsToCompile(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 
 	if err == nil {
-		t.Fatalf("fixture COMPILED — enforcer isolation is not enforced by the type "+
-			"system. An enforcer can reach classifier internals.\noutput:\n%s", out)
+		t.Fatalf("fixture %s COMPILED — the boundary it tests is not enforced by the "+
+			"type system.\noutput:\n%s", fixture, out)
 	}
 
-	// Assert the failure is the one we intend. Without this, an unrelated
-	// breakage (typo, moved package) would make the test pass vacuously.
 	got := string(out)
-	wantAny := []string{
-		"does not implement core.Enforcer",
-		"wrong type for method Enforce",
-		"have Enforce(context.Context, *corev1.Decision, *corev1.LocalClassification) error",
-	}
 	matched := false
 	for _, w := range wantAny {
 		if strings.Contains(got, w) {
@@ -73,5 +87,5 @@ func TestEnforcerIsolationFailsToCompile(t *testing.T) {
 			"This test would otherwise pass vacuously.\nwant one of: %v\ngot:\n%s",
 			wantAny, got)
 	}
-	t.Logf("enforcer isolation confirmed by compiler rejection:\n%s", strings.TrimSpace(got))
+	t.Logf("%s: boundary confirmed by compiler rejection:\n%s", fixture, strings.TrimSpace(got))
 }

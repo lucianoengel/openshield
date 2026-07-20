@@ -55,6 +55,13 @@ an owner call · **scoped** = settled but with a named condition that could narr
 | **D20** | **Privacy-law features are Phase-1 architecture, not later additions:** enforced retention with automatic purge, purpose tagging at schema level, exclusion lists as a first-class policy primitive, pseudonymisation by default, audit trail of who *viewed* an investigation, four-eyes before HR-visible outcomes, a shipped DPIA template. GDPR Art. 35 makes a DPIA effectively mandatory; German works councils hold an **absolute veto** (BetrVG §87(1)(6)). | firm |
 | **D23** | **UEBA supports both modes, gated.** Self-baseline computed locally, on by default. Peer-baseline is an **optional server-side Analytics module, off by default**, with its own consent/DPIA gate. Resolves the brief's silent contradiction between "Peer Analysis" and "the server coordinates, does not compute". Phase-1 cost is one field: a stable pseudonymous user ID. | firm |
 
+## Runtime architecture
+
+| # | Decision | Status |
+|---|---|---|
+| **D24** | **The endpoint pipeline is in-process and synchronous; NATS is the agent↔control-plane boundary only.** The brief names NATS as "the message bus" and says components communicate exclusively through events — read literally on the endpoint, that puts a broker inside the fanotify permission window, where [T-002](spike-t002-gc-pause.md) measured a 1-3µs typical / 532µs worst-case budget with a real process blocked in `TASK_UNINTERRUPTIBLE`. A broker round trip does not fit, and local-first evaluation (D1) means it should not have to. Both mechanisms are "the event bus" in the brief's language; only the second is NATS. Enforced by CI: `internal/core` may not import a broker (`scripts/check-core-deps.sh`). | firm |
+| **D25** | **Per-stage deadlines are owned by the dispatcher, not the stage.** A stage that sets its own deadline can set it to infinity, and an unbounded stage is the mechanism by which the responder hangs a machine. **Honest limit:** Go cannot preempt an uncooperative function, so the deadline bounds the dispatcher's *wait* and a pathological stage's goroutine may outlive it. That is why T-011's fail-open watchdog — which answers the kernel regardless of what the pipeline is doing — is an independent mechanism rather than a consequence of this one. | firm |
+
 ## Security of the platform itself
 
 | # | Decision | Status |

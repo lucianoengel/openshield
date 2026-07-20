@@ -1,0 +1,19 @@
+// This package MUST NOT COMPILE.
+//
+// Proof for the transport requirement: the wire boundary accepts only the
+// summary form. If a LocalClassification could be published, the two-type split
+// in the classification contract would be decoration.
+package badtransport
+
+import (
+	"context"
+
+	"github.com/lucianoengel/openshield/internal/core"
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+)
+
+func leak(t core.Transport, lc *corev1.LocalClassification) error {
+	// LocalClassification holds matched content. There is no method that
+	// accepts it, so this cannot compile.
+	return t.PublishClassification(context.Background(), lc)
+}

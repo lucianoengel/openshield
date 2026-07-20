@@ -109,7 +109,7 @@ Seeded incident renders as an ordered timeline via CLI/SQL.
 
 Hardcoded-verdict classifier stub + flat-file audit sink; ONE real fanotify event traverses the full path. Proves the wiring before ~13h of real classifier+ledger work is committed. Deliberately throwaway.
 
-#### T-022 · Event bus / pipeline dispatcher - the backbone
+#### T-022 · Event bus / pipeline dispatcher - the backbone · **done**
 `~6h` · depends: T-003
 
 The stage-to-stage dispatcher the whole architecture rests on: Event->Classification->Policy->Decision->Enforcement->Audit, with stages registered as plugins rather than wired by hand. NATS JetStream integration for the transport. THIS WAS MISSING ENTIRELY from the first two ticket passes despite the brief calling the Event Bus 'the backbone of the platform'. Acceptance: a stage can be added/removed without editing another stage; replay from the bus reproduces a decision.

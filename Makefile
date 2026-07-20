@@ -1,9 +1,9 @@
 GO ?= go
 PROTOC ?= protoc
 
-.PHONY: all build test vet proto proto-check tidy
+.PHONY: all build test vet check proto proto-check tidy
 
-all: vet test build
+all: vet test check build
 
 build:
 	$(GO) build ./...
@@ -13,6 +13,10 @@ vet:
 
 test:
 	$(GO) test -race ./...
+
+# Architectural boundaries that the compiler cannot express on its own.
+check:
+	./scripts/check-core-deps.sh
 
 # Regenerate Go types from the proto sources. Generated output is committed so
 # a plain `go build` works without a protoc toolchain; `proto-check` guards
