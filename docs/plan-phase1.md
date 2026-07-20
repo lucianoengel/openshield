@@ -61,7 +61,7 @@ MOSTLY DONE 2026-07-20: repo created+pushed; LICENSE(Apache-2.0), README (honest
 
 Recorded p50/p99/max response latency + GC pause distribution under allocation pressure; written verdict: Go stays for the responder OR responder is carved out. Either outcome passes; an unmeasured assumption is the failure.
 
-#### T-003 · Event schema + Decision contract (protobuf)
+#### T-003 · Event schema + Decision contract (protobuf) · **done**
 `~4h` · depends: —
 
 Protobuf. Decision carries confidence not certainty (D4) + CLOSED typed action set (D14); classification output = type+confidence+count only (D10); stable pseudonymous user ID (D23) + purpose tag (D20); compile-time test that enforcers cannot see classifier internals. ESCAPE HATCH (review finding): T-005 has not yet characterised what fanotify actually delivers (file handles vs paths). If T-005 contradicts the schema, REVISE T-003 immediately - before T-007/T-008/T-009 build on it. Same 'revise now if wrong' licence as T-004.

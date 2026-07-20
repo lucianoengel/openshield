@@ -76,9 +76,9 @@
 
 - [x] 7.1 Add the schema, privacy and negative-compile checks to `.github/workflows/ci.yml`,
       replacing the corresponding placeholder comment
-- [ ] 7.2 Update `docs/plan-phase1.md`: mark T-003 done, and record the T-005 dependency on the
+- [x] 7.2 Update `docs/plan-phase1.md`: mark T-003 done, and record the T-005 dependency on the
       `oneof` in case the spike contradicts it
-- [ ] 7.3 Run `/opsx:sync` to fold these delta specs into `openspec/specs/`
+- [x] 7.3 Run `/opsx:sync` to fold these delta specs into `openspec/specs/`
 
 ## Verification performed
 
