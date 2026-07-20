@@ -26,8 +26,13 @@ Classifiers, Policies and Enforcers* — with zero changes to the core.
 The MVP is done when a **Phase 1 Endpoint DLP** slice runs end to end on the fixed pipeline,
 **observe-and-audit only** (D1 — no blocking enforcement in Phase 1):
 
-1. A Go endpoint agent emits real events (`USBInserted`, `FileOpened`/`FileModified`,
-   `BrowserUploadStarted`) onto the bus. **No clipboard events** (D2).
+1. A Go endpoint agent emits real events: `FileOpened`/`FileModified` (fanotify) and
+   `USBInserted`. **No clipboard events** (D2 — Wayland prevents it).
+   **`BrowserUploadStarted` is CUT from Phase 1** (recorded 2026-07-20 after plan review):
+   it needs either a per-browser extension or a TLS-terminating proxy, neither of which is a
+   kernel hook, and both are substantial work that proves nothing the file path doesn't.
+   Deferred to Phase 2 — recorded as a decision here rather than left to drift silently out of
+   the ticket list, which is how it was first lost.
 2. Classification runs **locally on the endpoint**, patterns/deny-lists only (D5), in a
    **separate unprivileged sandboxed worker** — the privileged process never parses untrusted
    bytes (D13). Only **type + confidence + count** leaves the endpoint (D10).
