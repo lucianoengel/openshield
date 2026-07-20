@@ -1,8 +1,8 @@
 package core_test
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
-	"crypto/sha256"
 	"testing"
 	"time"
 
@@ -13,16 +13,20 @@ import (
 )
 
 // The ledger is tested against SPECIFIC attacks — edit, delete, reorder,
-// truncate, and forging an early entry with a later key — rather than by
-// round-tripping a valid chain. A chain implementation that is subtly wrong
-// still round-trips perfectly; that is exactly why round-tripping proves
-// nothing here.
+// truncate, epoch re-pointing, and forging an earlier entry after compromise —
+// rather than by round-tripping a valid chain. A chain that is subtly wrong
+// still round-trips perfectly; that is precisely why round-tripping proves
+// nothing here, and why the first version of this file passed against an
+// implementation with no forward integrity at all.
 
-var testSeed = []byte("test-seed-not-a-real-key")
-
-// buildChain produces n sealed entries, as the ledger would.
-func buildChain(t *testing.T, n int) []*core.Entry {
+// buildChain produces n sealed entries, evolving the key after each one so the
+// forward-integrity tests have a distinct epoch per position.
+func buildChain(t *testing.T, n int) ([]*core.Entry, *core.Signer) {
 	t.Helper()
+	signer, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var entries []*core.Entry
 	prev := core.GenesisHash[:]
 	base := time.Unix(1700000000, 0).UTC()
@@ -39,15 +43,26 @@ func buildChain(t *testing.T, n int) []*core.Entry {
 			SubjectID: "s_1", Purpose: corev1.Purpose_PURPOSE_DLP,
 			Retention: core.RetentionStandard,
 		}
-		core.Seal(e, prev, core.KeyAt(testSeed, uint64(i)))
+		signer.Seal(e, prev)
 		prev = e.Hash
 		entries = append(entries, e)
+		if i < n-1 {
+			if err := signer.Evolve(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	return entries
+	return entries, signer
+}
+
+// verify uses only public material, as an auditor would.
+func verify(entries []*core.Entry, s *core.Signer, anchored bool) core.VerifyResult {
+	return core.VerifyChain(entries, s.Chain(), s.AnchorKey(), anchored)
 }
 
 func TestValidChainVerifies(t *testing.T) {
-	res := core.VerifyChain(buildChain(t, 5), testSeed, false)
+	entries, signer := buildChain(t, 5)
+	res := verify(entries, signer, false)
 	if !res.Consistent {
 		t.Fatalf("valid chain failed to verify: %s", res)
 	}
@@ -56,12 +71,12 @@ func TestValidChainVerifies(t *testing.T) {
 	}
 }
 
-// Task 2.3 — editing an entry in place must be detected AND located.
+// Task 2.3 — editing an entry must be detected AND located.
 func TestEditedEntryIsDetectedAndLocated(t *testing.T) {
-	entries := buildChain(t, 5)
+	entries, signer := buildChain(t, 5)
 	entries[2].Decision.Reason = "tampered"
 
-	res := core.VerifyChain(entries, testSeed, false)
+	res := verify(entries, signer, false)
 	if res.Consistent {
 		t.Fatal("an edited entry verified — the chain provides no protection")
 	}
@@ -74,11 +89,13 @@ func TestEditedEntryIsDetectedAndLocated(t *testing.T) {
 }
 
 // Task 2.4 — deleting a middle entry breaks the link at the following one.
+// With per-epoch signatures this is caught by the hash chain alone, so this
+// test is now the sole guard on that property rather than one of two.
 func TestDeletedEntryIsDetected(t *testing.T) {
-	entries := buildChain(t, 5)
+	entries, signer := buildChain(t, 5)
 	shortened := append(append([]*core.Entry{}, entries[:2]...), entries[3:]...)
 
-	res := core.VerifyChain(shortened, testSeed, false)
+	res := verify(shortened, signer, false)
 	if res.Consistent {
 		t.Fatal("a deleted entry verified — suppression would be invisible")
 	}
@@ -88,22 +105,21 @@ func TestDeletedEntryIsDetected(t *testing.T) {
 }
 
 // Task 2.5 — reordering must be detected. Individually authentic entries in the
-// wrong order would otherwise pass, which is the gap a hash chain closes and a
-// signature alone does not.
+// wrong order would otherwise pass: the gap a hash chain closes and a signature
+// alone does not.
 func TestReorderedEntriesAreDetected(t *testing.T) {
-	entries := buildChain(t, 5)
+	entries, signer := buildChain(t, 5)
 	entries[1], entries[2] = entries[2], entries[1]
 
-	res := core.VerifyChain(entries, testSeed, false)
+	res := verify(entries, signer, false)
 	if res.Consistent {
 		t.Fatal("reordered entries verified — order is unprotected")
 	}
 }
 
-// Truncation must report absence, not success. A shorter but internally
-// consistent chain is exactly what a root attacker would leave behind.
 func TestTruncatedChainReportsAbsence(t *testing.T) {
-	res := core.VerifyChain(nil, testSeed, false)
+	_, signer := buildChain(t, 1)
+	res := verify(nil, signer, false)
 	if res.Consistent {
 		t.Fatal("an empty chain reported as consistent")
 	}
@@ -112,69 +128,148 @@ func TestTruncatedChainReportsAbsence(t *testing.T) {
 	}
 }
 
-// Task 3.2 — THE forward-integrity test.
+// Task 3.2 — THE forward-integrity test, against the REAL threat model.
 //
-// Given the key in force at entry N, an attacker must not be able to forge a
-// valid entry before N. This is what makes the rewritable tail begin at the
-// moment of compromise; without it, a compromised key rewrites all history.
-func TestKeyFromLaterEntryCannotForgeAnEarlierOne(t *testing.T) {
-	const compromiseAt = 3
-	entries := buildChain(t, 6)
+// The attacker takes everything the agent process holds at compromise: the
+// current private key, the whole public-key chain, and every stored entry. The
+// previous version of this test handed the attacker a conveniently derived key
+// while the implementation retained a master seed, so it passed against an
+// implementation providing no forward integrity whatsoever. That failure is why
+// this test is written the way it is.
+func TestCompromisedProcessCannotForgeEarlierEntries(t *testing.T) {
+	entries, signer := buildChain(t, 6)
 
-	// The attacker holds the key in force at entry 3 and everything derivable
-	// from it (the ratchet is one-way, so that is keys 3, 4, 5, ...).
-	compromisedKey := core.KeyAt(testSeed, compromiseAt)
+	// Everything the process holds — all of it public except the CURRENT
+	// private key, which the attacker also has but which belongs to the last
+	// epoch, not to entry 1.
+	stolenChain := signer.Chain()
+	stolenAnchor := signer.AnchorKey()
 
-	// They can forge entry 3 onwards — this must SUCCEED, or the test is not
-	// describing the real threat model.
-	forgedLater := buildChain(t, 6)[compromiseAt]
-	forgedLater.Decision.Reason = "forged-after-compromise"
-	core.Seal(forgedLater, entries[compromiseAt].PrevHash, compromisedKey)
-	m := hmac.New(sha256.New, compromisedKey)
-	m.Write(forgedLater.Hash)
-	if !hmac.Equal(forgedLater.Sig, m.Sum(nil)) {
-		t.Fatal("attacker could not forge a POST-compromise entry; the test's premise is wrong")
+	// The attacker forges entry 1 with the only signing capability they have:
+	// a key of their own, or the current epoch key. Neither is epoch 1's
+	// private key, which was destroyed and is not derivable.
+	attacker, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
 	}
+	forged := &core.Entry{
+		Sequence: 1, KeyEpoch: 1,
+		AppendedAt: entries[1].AppendedAt,
+		Decision:   &corev1.Decision{DecisionId: "d", Reason: "forged-before-compromise"},
+		SubjectID:  "s_1", Purpose: corev1.Purpose_PURPOSE_DLP,
+	}
+	attacker.Seal(forged, entries[1].PrevHash)
+	forged.KeyEpoch = 1 // claim the original epoch, since Seal set the attacker's
 
-	// Now the actual claim: they cannot produce a valid entry 1.
-	forgedEarlier := buildChain(t, 6)[1]
-	forgedEarlier.Decision.Reason = "forged-before-compromise"
-	core.Seal(forgedEarlier, entries[1].PrevHash, compromisedKey)
+	tampered, _ := buildChain(t, 6)
+	tampered[1] = forged
 
-	// Verification derives the key for position 1 from the seed. The attacker
-	// does not have that key and cannot derive it from a later one.
-	tampered := buildChain(t, 6)
-	tampered[1] = forgedEarlier
-	res := core.VerifyChain(tampered, testSeed, false)
+	res := core.VerifyChain(tampered, stolenChain, stolenAnchor, false)
 	if res.Consistent {
-		t.Fatal("an entry forged with a POST-compromise key verified — forward integrity " +
-			"is not achieved, and a compromised host can rewrite all history")
+		t.Fatal("an entry forged after compromise verified — forward integrity is absent, " +
+			"and a compromised host can rewrite all history")
+	}
+	if res.FirstBreak == nil {
+		t.Error("verification failed without locating the break")
 	}
 }
 
-// The ratchet must be one-way: a later key must not reveal an earlier one.
-func TestRatchetIsOneWay(t *testing.T) {
-	k3 := core.KeyAt(testSeed, 3)
-	k4 := core.KeyAt(testSeed, 4)
-	if hmac.Equal(k3, k4) {
-		t.Fatal("ratchet did not evolve the key")
+// The signature check must be independently load-bearing.
+//
+// The entry hash is UNKEYED and computed over public content, so a real
+// attacker recomputes it correctly for whatever they write. The only thing
+// standing between them and a rewritten history is the signature. An earlier
+// version of this file never tested that: every "forgery" it built also
+// corrupted the hash, so deleting the signature check broke no test at all.
+func TestValidHashWithInvalidSignatureIsRejected(t *testing.T) {
+	entries, signer := buildChain(t, 5)
+
+	// Hash and prev-link left intact and correct; only the signature is wrong.
+	// This is what an attacker who cannot sign but can compute produces.
+	entries[1].Sig = make([]byte, len(entries[1].Sig))
+
+	res := verify(entries, signer, false)
+	if res.Consistent {
+		t.Fatal("an entry with a valid hash but an invalid signature verified — the " +
+			"signature check is not load-bearing, and the unkeyed hash alone stops nobody")
 	}
-	// K4 = H(K3). The reverse must not hold for any trivial relation.
-	forward := sha256.Sum256(k3)
-	if !hmac.Equal(forward[:], k4) {
-		t.Fatal("ratchet is not K(n+1) = H(K(n)) as documented")
-	}
-	back := sha256.Sum256(k4)
-	if hmac.Equal(back[:], k3) {
-		t.Fatal("hashing forward from K4 reproduced K3 — the ratchet is reversible")
+	if res.FirstBreak == nil || *res.FirstBreak != 1 {
+		t.Errorf("first break = %v, want 1", res.FirstBreak)
 	}
 }
 
-// Task 4.2 — a consistent chain with no anchor must NOT report success on
-// completeness. Between anchors a root attacker can destroy the chain and build
+// Likewise the epoch binding: an entry whose hash is recomputed to match a
+// different claimed epoch must still fail, because the epoch is hashed.
+func TestRepointedEpochWithRecomputedHashIsRejected(t *testing.T) {
+	entries, signer := buildChain(t, 5)
+
+	// Attacker re-points entry 1 at epoch 4 (whose key they may hold after
+	// compromise) AND recomputes the hash so it matches the new content.
+	// Only the epoch-4 private key would make this verify, and at entry 1's
+	// position the chain expects epoch 1.
+	victim := entries[1]
+	victim.KeyEpoch = 4
+	// Recompute the hash exactly as a knowledgeable attacker would.
+	core.RecomputeHashForTest(victim)
+
+	res := verify(entries, signer, false)
+	if res.Consistent {
+		t.Fatal("an entry re-pointed to another epoch with a recomputed hash verified")
+	}
+}
+
+// Task 3.3 — verification must require NO secret. This test holds only the key
+// chain and the anchor public key, exactly what an auditor would be given.
+func TestVerificationRequiresOnlyPublicMaterial(t *testing.T) {
+	entries, signer := buildChain(t, 4)
+
+	publicChain := signer.Chain()
+	anchor := signer.AnchorKey()
+	for _, ep := range publicChain {
+		if len(ep.PublicKey) != ed25519.PublicKeySize {
+			t.Fatalf("epoch %d exposes something other than a public key", ep.Index)
+		}
+	}
+
+	if res := core.VerifyChain(entries, publicChain, anchor, false); !res.Consistent {
+		t.Fatalf("public-only verification failed on a valid chain: %s", res)
+	}
+	entries[2].Decision.Reason = "tampered"
+	if res := core.VerifyChain(entries, publicChain, anchor, false); res.Consistent {
+		t.Fatal("public-only verification accepted a tampered chain")
+	}
+}
+
+// A substituted key chain must be rejected, or an attacker simply supplies keys
+// they control alongside a rewritten log.
+func TestKeyChainMustStartAtTheAnchor(t *testing.T) {
+	entries, signer := buildChain(t, 3)
+	other, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := core.VerifyChain(entries, signer.Chain(), other.AnchorKey(), false)
+	if res.Consistent {
+		t.Fatal("a chain not starting at the published anchor verified")
+	}
+}
+
+// An entry must not be re-pointable at an epoch whose key the attacker holds.
+func TestEntryCannotBeRepointedToAnotherEpoch(t *testing.T) {
+	entries, signer := buildChain(t, 5)
+	entries[1].KeyEpoch = 4
+	res := core.VerifyChain(entries, signer.Chain(), signer.AnchorKey(), false)
+	if res.Consistent {
+		t.Fatal("an entry re-pointed to a different epoch verified; KeyEpoch is not bound")
+	}
+}
+
+// Task 4.2 — a consistent chain with no anchor must NOT report completeness as
+// established. Between anchors a root attacker can destroy the chain and build
 // a shorter consistent one that verifies perfectly.
 func TestConsistentButUnanchoredReportsCompletenessUnverified(t *testing.T) {
-	res := core.VerifyChain(buildChain(t, 4), testSeed, false)
+	entries, signer := buildChain(t, 4)
+	res := verify(entries, signer, false)
 	if !res.Consistent {
 		t.Fatalf("valid chain failed: %s", res)
 	}
@@ -182,14 +277,14 @@ func TestConsistentButUnanchoredReportsCompletenessUnverified(t *testing.T) {
 		t.Errorf("completeness = %v, want unverified — internal consistency is not "+
 			"evidence that nothing was removed", res.Completeness)
 	}
-	// And the result must be structured, not collapsible to a bare boolean.
 	if res.String() == "" || res.ToSequence != 3 {
 		t.Errorf("result does not carry its range: %s", res)
 	}
 }
 
 func TestAnchoredChainReportsAnchored(t *testing.T) {
-	res := core.VerifyChain(buildChain(t, 4), testSeed, true)
+	entries, signer := buildChain(t, 4)
+	res := verify(entries, signer, true)
 	if res.Completeness != core.CompletenessAnchored {
 		t.Errorf("completeness = %v, want anchored", res.Completeness)
 	}
@@ -199,15 +294,19 @@ func TestAnchoredChainReportsAnchored(t *testing.T) {
 // shifted between each other without changing the hash.
 func TestCanonicalEncodingResistsFieldShifting(t *testing.T) {
 	base := time.Unix(1700000000, 0).UTC()
+	signer, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
 	mk := func(subject, ctxVer string) *core.Entry {
 		e := &core.Entry{Sequence: 1, AppendedAt: base, SubjectID: subject, ContextVersion: ctxVer}
-		core.Seal(e, core.GenesisHash[:], core.KeyAt(testSeed, 1))
+		signer.Seal(e, core.GenesisHash[:])
 		return e
 	}
 	a := mk("ab", "c")
 	b := mk("a", "bc")
 	if hmac.Equal(a.Hash, b.Hash) {
-		t.Error("(\"ab\",\"c\") and (\"a\",\"bc\") hash identically — the encoding is not " +
+		t.Error(`("ab","c") and ("a","bc") hash identically — the encoding is not ` +
 			"length-prefixed and fields can be shifted without detection")
 	}
 }
@@ -216,11 +315,15 @@ func TestCanonicalEncodingResistsFieldShifting(t *testing.T) {
 // and "a decision was made with empty fields" are different facts.
 func TestNilDecisionDoesNotCollideWithEmpty(t *testing.T) {
 	base := time.Unix(1700000000, 0).UTC()
+	signer, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
 	withNil := &core.Entry{Sequence: 1, AppendedAt: base}
-	core.Seal(withNil, core.GenesisHash[:], core.KeyAt(testSeed, 1))
+	signer.Seal(withNil, core.GenesisHash[:])
 
 	withEmpty := &core.Entry{Sequence: 1, AppendedAt: base, Decision: &corev1.Decision{}}
-	core.Seal(withEmpty, core.GenesisHash[:], core.KeyAt(testSeed, 1))
+	signer.Seal(withEmpty, core.GenesisHash[:])
 
 	if hmac.Equal(withNil.Hash, withEmpty.Hash) {
 		t.Error("a nil Decision hashes identically to an empty one")

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -63,6 +64,10 @@ type Entry struct {
 	OutcomeKind string
 	OutcomeStage string
 
+	// KeyEpoch is the epoch whose key signed this entry. Hashed, so an attacker
+	// cannot re-point an entry at an epoch whose key they hold.
+	KeyEpoch uint64
+
 	PrevHash []byte
 	Hash     []byte
 	Sig      []byte
@@ -94,6 +99,7 @@ func (e *Entry) canonicalBytes() []byte {
 	}
 
 	u64(e.Sequence)
+	u64(e.KeyEpoch)
 	u64(uint64(e.AppendedAt.UTC().UnixNano()))
 	raw(e.PrevHash)
 	str(e.SubjectID)
@@ -122,68 +128,103 @@ func (e *Entry) canonicalBytes() []byte {
 // an implicit zero, so "the chain starts here" is a claim in the data.
 var GenesisHash = sha256.Sum256([]byte("openshield.audit.genesis.v1"))
 
-// Ratchet holds the evolving signing key.
+// KeyEpoch is one link in the public-key chain.
 //
-// K(n+1) = H(K(n)); K(n) is overwritten after use.
+// Each epoch's public key is signed by the PREVIOUS epoch's private key, which
+// is then destroyed. Verification walks forward from the anchor using only
+// public material — there is no secret anywhere in the verification path, which
+// is the property a symmetric scheme could not provide.
+type KeyEpoch struct {
+	Index uint64
+	// PublicKey signs entries in this epoch.
+	PublicKey ed25519.PublicKey
+	// SigByPrev is PublicKey signed by epoch Index-1's private key. Empty for
+	// the anchor epoch, whose authenticity comes from being published
+	// out-of-band rather than from a predecessor.
+	SigByPrev []byte
+}
+
+// Signer holds the CURRENT private key and nothing else.
 //
-// HONEST LIMIT: overwriting a key in Go is best-effort. The garbage collector
-// may have copied the slice, and nothing here can force those copies to be
-// erased. The realistic protection is that the window is short and an attacker
-// reading agent memory has already won on other fronts. Claiming erasure would
-// be a stronger statement than the runtime supports.
-type Ratchet struct {
-	key []byte
-	n   uint64
+// It cannot reconstruct a prior private key: prior keys are generated
+// independently and destroyed, not derived. That is what makes compromise at
+// epoch N unable to forge epoch N-1 — and it is the specific thing the previous
+// symmetric implementation got wrong by retaining a master seed.
+//
+// HONEST LIMIT: destroying a key means overwriting it in memory, which Go's GC
+// makes best-effort — copies may survive. The realistic protection is that the
+// window is short and an attacker reading agent memory has already won on other
+// fronts. Claiming erasure would overstate what the runtime supports.
+type Signer struct {
+	epoch uint64
+	priv  ed25519.PrivateKey
+	chain []KeyEpoch
 }
 
-func NewRatchet(seed []byte) *Ratchet {
-	k := make([]byte, len(seed))
-	copy(k, seed)
-	return &Ratchet{key: k}
-}
-
-// Sign signs data with the current key, then evolves.
-func (r *Ratchet) Sign(data []byte) []byte {
-	m := hmac.New(sha256.New, r.key)
-	m.Write(data)
-	sig := m.Sum(nil)
-	r.evolve()
-	return sig
-}
-
-// KeyAt derives the key in force at index n from a seed. Used by verification,
-// which must reconstruct historical keys — and is precisely why a recovered
-// current key cannot forge the past: the ratchet is one-way.
-func KeyAt(seed []byte, n uint64) []byte {
-	k := make([]byte, len(seed))
-	copy(k, seed)
-	for i := uint64(0); i < n; i++ {
-		s := sha256.Sum256(k)
-		k = s[:]
+// NewSigner creates the anchor epoch. PK_0 must be published out-of-band; a
+// verifier that takes the anchor from the same host that could have rewritten
+// the log gains little (see design.md, open question 4).
+func NewSigner() (*Signer, error) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, fmt.Errorf("generating anchor key: %w", err)
 	}
-	return k
+	return &Signer{
+		priv:  priv,
+		chain: []KeyEpoch{{Index: 0, PublicKey: pub}},
+	}, nil
 }
 
-func (r *Ratchet) evolve() {
-	next := sha256.Sum256(r.key)
-	for i := range r.key { // best-effort overwrite; see the type comment
-		r.key[i] = 0
+// Evolve advances to the next epoch: generate a keypair, sign the new public
+// key with the current private key, then destroy the current private key.
+func (s *Signer) Evolve() error {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return fmt.Errorf("generating epoch key: %w", err)
 	}
-	r.key = next[:]
-	r.n++
+	sig := ed25519.Sign(s.priv, pub)
+
+	for i := range s.priv { // best-effort destruction; see the type comment
+		s.priv[i] = 0
+	}
+	s.priv = priv
+	s.epoch++
+	s.chain = append(s.chain, KeyEpoch{Index: s.epoch, PublicKey: pub, SigByPrev: sig})
+	return nil
 }
 
-func (r *Ratchet) Index() uint64 { return r.n }
+func (s *Signer) Epoch() uint64      { return s.epoch }
+func (s *Signer) Chain() []KeyEpoch  { return append([]KeyEpoch{}, s.chain...) }
+func (s *Signer) AnchorKey() ed25519.PublicKey {
+	return s.chain[0].PublicKey
+}
 
-// Seal computes an entry's hash and signature, given the ratchet key in force.
-func Seal(e *Entry, prevHash []byte, key []byte) {
+// Seal computes an entry's hash and signs it with the current epoch key.
+func (s *Signer) Seal(e *Entry, prevHash []byte) {
 	e.PrevHash = prevHash
-	c := e.canonicalBytes()
-	h := sha256.Sum256(c)
+	e.KeyEpoch = s.epoch
+	h := sha256.Sum256(e.canonicalBytes())
 	e.Hash = h[:]
-	m := hmac.New(sha256.New, key)
-	m.Write(e.Hash)
-	e.Sig = m.Sum(nil)
+	e.Sig = ed25519.Sign(s.priv, e.Hash)
+}
+
+// VerifyKeyChain walks the public-key chain from the anchor using ONLY public
+// material. Returns the per-epoch public keys if the chain is sound.
+func VerifyKeyChain(chain []KeyEpoch, anchor ed25519.PublicKey) ([]ed25519.PublicKey, error) {
+	if len(chain) == 0 {
+		return nil, errors.New("ledger: empty key chain")
+	}
+	if !chain[0].PublicKey.Equal(anchor) {
+		return nil, errors.New("ledger: key chain does not start at the published anchor")
+	}
+	keys := []ed25519.PublicKey{chain[0].PublicKey}
+	for i := 1; i < len(chain); i++ {
+		if !ed25519.Verify(chain[i-1].PublicKey, chain[i].PublicKey, chain[i].SigByPrev) {
+			return nil, fmt.Errorf("ledger: epoch %d public key is not signed by epoch %d", i, i-1)
+		}
+		keys = append(keys, chain[i].PublicKey)
+	}
+	return keys, nil
 }
 
 // Completeness distinguishes "the chain is internally consistent" from
@@ -261,7 +302,7 @@ type Ledger interface {
 // Tested against specific attacks — edit, delete, reorder, truncate, and
 // forging an early entry with a later key — rather than by round-tripping a
 // valid chain. A chain implementation that is subtly wrong still round-trips.
-func VerifyChain(entries []*Entry, seed []byte, anchored bool) VerifyResult {
+func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, anchored bool) VerifyResult {
 	res := VerifyResult{Consistent: true, Entries: len(entries)}
 	res.Completeness = CompletenessUnverified
 	if anchored {
@@ -274,11 +315,18 @@ func VerifyChain(entries []*Entry, seed []byte, anchored bool) VerifyResult {
 		return res
 	}
 
+	keys, err := VerifyKeyChain(chain, anchor)
+	if err != nil {
+		res.Consistent = false
+		res.Reason = err.Error()
+		return res
+	}
+
 	res.FromSequence = entries[0].Sequence
 	res.ToSequence = entries[len(entries)-1].Sequence
 
 	prev := GenesisHash[:]
-	for i, e := range entries {
+	for _, e := range entries {
 		seq := e.Sequence
 		fail := func(reason string) VerifyResult {
 			res.Consistent = false
@@ -293,13 +341,25 @@ func VerifyChain(entries []*Entry, seed []byte, anchored bool) VerifyResult {
 		if !hmac.Equal(e.Hash, want[:]) {
 			return fail("entry hash does not match its content: entry was modified")
 		}
-		key := KeyAt(seed, uint64(i))
-		m := hmac.New(sha256.New, key)
-		m.Write(e.Hash)
-		if !hmac.Equal(e.Sig, m.Sum(nil)) {
-			return fail("signature invalid for the key in force at this position")
+		if e.KeyEpoch >= uint64(len(keys)) {
+			return fail("entry references an epoch beyond the key chain")
+		}
+		if !ed25519.Verify(keys[e.KeyEpoch], e.Hash, e.Sig) {
+			return fail("signature invalid for the epoch key this entry claims")
 		}
 		prev = e.Hash
 	}
 	return res
+}
+
+// RecomputeHashForTest recomputes an entry's hash over its current content.
+//
+// Exported for attack tests only. It models what an attacker can trivially do:
+// the entry hash is unkeyed and computed over public content, so recomputing it
+// after modification is free. What they cannot do is produce a matching
+// signature — which is why the signature check must be independently tested,
+// and why an earlier version of these tests proved less than it appeared to.
+func RecomputeHashForTest(e *Entry) {
+	h := sha256.Sum256(e.canonicalBytes())
+	e.Hash = h[:]
 }

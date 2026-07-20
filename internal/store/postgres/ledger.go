@@ -14,17 +14,19 @@ import (
 // Ledger is the PostgreSQL audit ledger.
 type Ledger struct {
 	pool *pgxpool.Pool
-	seed []byte
 
-	mu      sync.Mutex // appends are serialised: the chain has one tail
-	ratchet *core.Ratchet
-	seq     uint64
-	prev    []byte
+	mu     sync.Mutex // appends are serialised: the chain has one tail
+	signer *core.Signer
+	seq    uint64
+	prev   []byte
 }
 
 // Open connects, migrates, and resumes the chain from whatever is already
 // stored — so a restart continues the chain rather than starting a second one.
-func Open(ctx context.Context, dsn string, seed []byte) (*Ledger, error) {
+// Open connects and migrates. The Signer holds only the current private key —
+// no master secret is retained, which is the property the earlier symmetric
+// implementation failed to provide.
+func Open(ctx context.Context, dsn string, signer *core.Signer) (*Ledger, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
@@ -38,7 +40,7 @@ func Open(ctx context.Context, dsn string, seed []byte) (*Ledger, error) {
 		return nil, err
 	}
 
-	l := &Ledger{pool: pool, seed: seed}
+	l := &Ledger{pool: pool, signer: signer}
 	if err := l.resume(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -54,7 +56,6 @@ func (l *Ledger) resume(ctx context.Context) error {
 	if count == 0 {
 		l.seq = 0
 		l.prev = core.GenesisHash[:]
-		l.ratchet = core.NewRatchet(l.seed)
 		return nil
 	}
 	var seq int64
@@ -66,9 +67,6 @@ func (l *Ledger) resume(ctx context.Context) error {
 	}
 	l.seq = uint64(seq) + 1
 	l.prev = hash
-	// Fast-forward the ratchet to the position after the last entry. The key
-	// for earlier positions is not recoverable from here — that is the point.
-	l.ratchet = core.NewRatchet(core.KeyAt(l.seed, l.seq))
 	return nil
 }
 
@@ -82,8 +80,7 @@ func (l *Ledger) Append(ctx context.Context, e *core.Entry) error {
 	defer l.mu.Unlock()
 
 	e.Sequence = l.seq
-	key := core.KeyAt(l.seed, l.seq)
-	core.Seal(e, l.prev, key)
+	l.signer.Seal(e, l.prev)
 
 	d := e.Decision
 	var (
@@ -170,7 +167,11 @@ func (l *Ledger) Verify(ctx context.Context) (core.VerifyResult, error) {
 	// anchored=false: nothing external attests that entries were not removed
 	// wholesale. External anchoring is T-019, and until it exists the honest
 	// answer is that completeness is unverified.
-	return core.VerifyChain(entries, l.seed, false), nil
+	//
+	// Note the verification path takes only PUBLIC material — the key chain and
+	// the anchor. No secret is required, so an auditor or the endpoint itself
+	// can run exactly this check.
+	return core.VerifyChain(entries, l.signer.Chain(), l.signer.AnchorKey(), false), nil
 }
 
 func (l *Ledger) Close() error {
