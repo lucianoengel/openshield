@@ -74,7 +74,7 @@ NO CODE. Written design of peer-baseline UEBA as an Analytics module against the
 
 ### M1 — Walking skeleton (one event, end to end)
 
-#### T-005 · fanotify observe spike
+#### T-005 · fanotify observe spike · **done**
 `~3h` · depends: —
 
 Documented capability matrix (which events unprivileged via FAN_REPORT_FID; is content readable or is CAP_DAC_READ_SEARCH required); clear statement of what the SHIPPED agent needs. Sandbox limits inform the dev loop only, never the product.

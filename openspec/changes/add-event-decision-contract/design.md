@@ -13,8 +13,9 @@ Three constraints shape every decision below:
 - **Reviewability.** The maintainer directs and reviews but does not write code
   ([`CONTRIBUTING.md`](../../../CONTRIBUTING.md)). Designs whose correctness depends on
   line-level scrutiny are the wrong shape here; designs enforced by a failing build are right.
-- **Provisionality where evidence is missing.** T-005 has not yet run, so how filesystem events
-  identify their subject is genuinely unknown.
+- **Measure before committing.** How filesystem events identify their subject was unknown when
+  this design was first written. T-005 has since run and the answer changed the schema — see
+  the subject-identity decision below.
 
 ## Goals / Non-Goals
 
@@ -23,7 +24,7 @@ Three constraints shape every decision below:
 - Make the closed action set, the content-free wire form, and enforcer isolation enforceable by
   the compiler or CI rather than by review.
 - Generate Go types into `internal/core` and commit them, so `go build` works without protoc.
-- Leave a clean seam for the path-vs-handle question T-005 will answer.
+- Model all three subject-identity forms T-005 measured, so no consumer can assume a path.
 
 **Non-Goals:**
 - Transport, authentication, agent identity (T-017).
@@ -91,18 +92,22 @@ A lint rule tests "does not today".
 making compilation fail unrelatedly. Mitigated by asserting on the specific compiler error
 substring, not merely on non-zero exit.
 
-### Path vs handle: a oneof, deliberately provisional
+### Subject identity: a three-arm oneof — measured, no longer provisional
 
-**Chosen:** the filesystem subject is a `oneof { string resolved_path; bytes file_handle; }`
-plus a discriminator, so both forms are expressible before T-005 tells us which we get.
+**Chosen:** `oneof { string resolved_path; bytes file_handle; ParentAndName parent_name; }`.
 
-Unprivileged fanotify reports file handles rather than descriptors, and resolving one to a path
-may require `CAP_DAC_READ_SEARCH`. Committing to `string path` now risks a schema change after
-consumers exist; a `oneof` costs one level of indirection and buys the option.
+This was written as a provisional two-arm oneof pending T-005. The spike ran
+([`spike-t005-fanotify.md`](../../../docs/spike-t005-fanotify.md)) and the hedge was both
+vindicated and wrong: the oneof was right to exist, and it had the wrong arity.
 
-**This is the change's weakest point and is marked as such.** If T-005 shows only one form ever
-occurs, the `oneof` should collapse — and that revision must happen before T-007/T-008/T-009
-build on it.
+Both forms occur, and **which one arrives is a consequence of a coverage decision the agent
+makes**, not an environmental accident. Classic mode gives a file descriptor per event, so the
+path follows from a readlink. FID mode exists precisely so a single `FAN_MARK_FILESYSTEM` can
+cover a whole filesystem without an fd per event — the thing that makes whole-disk coverage
+practical — and delivers an opaque handle instead. DFID_NAME mode delivers a parent handle plus
+a filename, which is a third shape: cheap to read, but a name is not a path.
+
+So collapsing was never available. The correction is a third arm, not a simplification.
 
 ### Generated code is committed
 
@@ -113,9 +118,14 @@ time — adds a protoc dependency to every consumer for no benefit at this size.
 
 ## Risks / Trade-offs
 
-- **The schema is being fixed before the producer is understood (T-005).** → Explicit escape
-  hatch: this change is revised, not patched around, if T-005 contradicts it. Recorded in the
-  proposal, the spec and the ticket. The `oneof` limits the blast radius.
+- ~~The schema is being fixed before the producer is understood.~~ **Discharged.** T-005 ran and
+  contradicted the schema; the change was revised rather than patched around, exactly as the
+  escape hatch specified. The correction was arity (three forms, not two), not direction.
+- **Classic mode and permission-event delivery remain unmeasured** — both returned EPERM in the
+  dev sandbox, which cannot obtain real `CAP_SYS_ADMIN`. The fd → `readlink` path is documented
+  and is the oldest part of the fanotify ABI, but documented is not measured. → A capability
+  grant has been requested; the schema decision holds either way, since it must accommodate all
+  three forms regardless of which the agent prefers.
 - **Two classification types will drift.** → A shared test fixture set exercises both; the wire
   type's field list is asserted exactly, so adding a field there fails CI.
 - **A negative compile test can pass spuriously.** → Assert on the expected error text.
@@ -135,9 +145,11 @@ schema tests → negative compile test → CI wiring. Rollback is deleting the c
 
 ## Open Questions
 
-1. **Path vs handle** — T-005 decides. Blocks collapsing the `oneof`.
-2. **Does `Event` need a device/mount identifier?** Probably, for handle resolution, but T-005
-   determines whether it is separate or embedded in the handle.
+1. ~~Path vs handle~~ — **answered by T-005**: three forms, all real, selected by coverage mode.
+2. **Does `Event` need a device/mount identifier?** T-005 showed the FID record carries an
+   `fsid` alongside the handle, so the pairing is available — but whether the schema should
+   surface it separately or keep it inside the opaque handle is undecided. It matters only when
+   resolving handles across mounts, which is a filesystem-wide-mark concern (T-006).
 3. **Should `ClassificationSummary` carry a coarse severity, or only a detector type?** Deferred
    to T-008, when the policy engine shows what it actually needs to consume.
 4. **Sequence numbers per agent or per connector?** Per agent is simpler; per connector detects

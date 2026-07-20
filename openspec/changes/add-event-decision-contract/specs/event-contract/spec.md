@@ -59,18 +59,35 @@ endpoint (D10).
 - **THEN** it contains no `bytes` field other than explicitly allowlisted opaque identifiers,
   and the allowlist is asserted in the test so that adding a new `bytes` field fails CI
 
-### Requirement: Path representation is deferred pending measurement
-The `Event` message SHALL represent the subject of a filesystem event in a form that can carry
-either a resolved path or an opaque kernel file handle, because which of these is available has
-not yet been established.
+### Requirement: Filesystem subject identity has three forms
+The `Event` message SHALL represent the subject of a filesystem event as a choice of exactly
+three forms, because fanotify delivers three different identities depending on the coverage mode
+the agent selects (measured in [T-005](../../../../docs/spike-t005-fanotify.md)):
 
-**This requirement is explicitly provisional.** Ticket T-005 (fanotify observe spike) will
-determine whether the agent receives resolvable paths or only handles requiring
-`open_by_handle_at`. If T-005 contradicts this representation, this spec is revised before any
-consumer is built on it.
+- `resolved_path` — classic mode, where the kernel supplies a file descriptor and the path
+  follows from `readlink /proc/self/fd/N` with no further capability;
+- `file_handle` — FID mode, used with a filesystem-wide mark so the kernel need not open an fd
+  per event; opaque, and resolving it requires `CAP_DAC_READ_SEARCH`;
+- `parent_and_name` — DFID_NAME mode, a parent-directory handle plus the filename; the name
+  needs no capability, but a name alone is not a path.
 
-#### Scenario: Both representations are expressible
-- **WHEN** a filesystem Event is constructed from a resolved path
-- **THEN** it validates
-- **WHEN** a filesystem Event is constructed from an opaque handle with no resolved path
-- **THEN** it also validates, and consumers can distinguish the two cases
+Consumers SHALL be able to distinguish which form they received, and SHALL NOT assume a path is
+available.
+
+An earlier version of this requirement modelled only two forms and described itself as
+provisional pending measurement. The measurement was taken; the provisional note is discharged;
+the arity was wrong. Three forms is now a measured fact, not a hedge.
+
+#### Scenario: All three identity forms are expressible
+- **WHEN** an Event is constructed from a resolved path
+- **THEN** it validates and reports its identity form as `resolved_path`
+- **WHEN** an Event is constructed from an opaque file handle with no path
+- **THEN** it validates and reports its identity form as `file_handle`
+- **WHEN** an Event is constructed from a parent handle and a filename
+- **THEN** it validates and reports its identity form as `parent_and_name`
+
+#### Scenario: Consumers cannot silently assume a path
+- **WHEN** a consumer requests the resolved path of an Event carrying only a file handle
+- **THEN** the call returns an explicit "not available" result rather than an empty string
+- **AND** a test asserts this for each of the three forms, so a consumer that ignores the
+  distinction fails rather than treating a missing path as an empty one
