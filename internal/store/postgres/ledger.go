@@ -2,10 +2,13 @@ package postgres
 
 import (
 	"context"
+	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/lucianoengel/openshield/internal/core"
@@ -16,10 +19,21 @@ import (
 type Ledger struct {
 	pool *pgxpool.Pool
 
-	mu     sync.Mutex // appends are serialised: the chain has one tail
+	mu sync.Mutex // appends are serialised: the chain has one tail
+
+	// signer holds the current private key. It is nil for a verify-only ledger:
+	// verification reads the persisted PUBLIC chain and needs no secret, which
+	// is the whole point of the asymmetric design (D30). A nil-signer ledger
+	// refuses to Append.
 	signer *core.Signer
 	seq    uint64
 	prev   []byte
+
+	// persistedEpoch is the highest epoch index written to key_epochs. The
+	// signer's in-memory epoch may be one ahead of it — the key evolves after an
+	// entry is durably stored, and the new epoch's public row is written lazily
+	// in the transaction of the first entry that uses it, never before.
+	persistedEpoch int64
 
 	// EpochEntries is how many entries share a signing key before it evolves.
 	//
@@ -44,12 +58,44 @@ type Ledger struct {
 // activity rather than a session's worth.
 const DefaultEpochEntries = 1000
 
-// Open connects, migrates, and resumes the chain from whatever is already
-// stored — so a restart continues the chain rather than starting a second one.
-// Open connects and migrates. The Signer holds only the current private key —
-// no master secret is retained, which is the property the earlier symmetric
-// implementation failed to provide.
+// ErrCannotResumeWriting is returned when Open is given a signer that does not
+// hold the stored chain's keys. Continuing to write would start a second chain
+// under a new anchor while reusing sequence numbers — silent corruption.
+// Surviving key material across a restart is T-017; until then, writing resumes
+// only in-process, with the same signer that wrote the earlier entries.
+var ErrCannotResumeWriting = errors.New("postgres: signer does not hold the stored chain's keys (T-017)")
+
+// Open connects, migrates, and prepares the ledger for WRITING.
+//
+// The signer holds only the current private key — no master secret is retained,
+// which is the property the earlier symmetric implementation failed to provide.
+// On an empty database the signer's anchor epoch is persisted. On a non-empty
+// database the signer must already hold that chain (same-process resume); a
+// signer whose anchor differs is refused rather than allowed to fork the chain.
 func Open(ctx context.Context, dsn string, signer *core.Signer) (*Ledger, error) {
+	if signer == nil {
+		return nil, errors.New("postgres: Open requires a signer; use OpenForVerify for read-only verification")
+	}
+	l, err := openPool(ctx, dsn, signer)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.prepareForWriting(ctx); err != nil {
+		l.pool.Close()
+		return nil, err
+	}
+	return l, nil
+}
+
+// OpenForVerify connects and migrates for READ-ONLY verification, holding no
+// signer and therefore no secret. This is how the CLI and any independent
+// auditor verify: the public-key chain is loaded from the database, and nothing
+// in this path can produce a valid entry.
+func OpenForVerify(ctx context.Context, dsn string) (*Ledger, error) {
+	return openPool(ctx, dsn, nil)
+}
+
+func openPool(ctx context.Context, dsn string, signer *core.Signer) (*Ledger, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
@@ -62,25 +108,67 @@ func Open(ctx context.Context, dsn string, signer *core.Signer) (*Ledger, error)
 		pool.Close()
 		return nil, err
 	}
-
-	l := &Ledger{pool: pool, signer: signer, EpochEntries: DefaultEpochEntries}
-	if err := l.resume(ctx); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return l, nil
+	return &Ledger{pool: pool, signer: signer, EpochEntries: DefaultEpochEntries}, nil
 }
 
-func (l *Ledger) resume(ctx context.Context) error {
-	var count int64
-	if err := l.pool.QueryRow(ctx, `SELECT count(*) FROM audit_entries`).Scan(&count); err != nil {
+// prepareForWriting persists the anchor on an empty database, or confirms the
+// provided signer holds the stored chain before allowing appends to continue it.
+func (l *Ledger) prepareForWriting(ctx context.Context) error {
+	var entryCount, epochCount int64
+	if err := l.pool.QueryRow(ctx, `SELECT count(*) FROM audit_entries`).Scan(&entryCount); err != nil {
 		return fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
 	}
-	if count == 0 {
+	if err := l.pool.QueryRow(ctx, `SELECT count(*) FROM key_epochs`).Scan(&epochCount); err != nil {
+		return fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
+	}
+
+	if epochCount == 0 {
+		// Fresh database: persist the anchor epoch so the very first entry has a
+		// stored epoch to reference.
+		anchor := l.signer.Chain()[0]
+		if _, err := l.pool.Exec(ctx,
+			`INSERT INTO key_epochs (idx, public_key, sig_by_prev) VALUES ($1,$2,$3)`,
+			int64(anchor.Index), []byte(anchor.PublicKey), anchor.SigByPrev); err != nil {
+			return fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
+		}
 		l.seq = 0
 		l.prev = core.GenesisHash[:]
+		l.persistedEpoch = 0
 		return nil
 	}
+
+	// Existing chain: the signer must be the one that owns it, or writing would
+	// fork it. Compare the stored anchor to the signer's.
+	storedAnchor, err := l.storedAnchor(ctx)
+	if err != nil {
+		return err
+	}
+	if !l.signer.AnchorKey().Equal(storedAnchor) {
+		return ErrCannotResumeWriting
+	}
+	if err := l.resumeTail(ctx); err != nil {
+		return err
+	}
+	return l.pool.QueryRow(ctx, `SELECT max(idx) FROM key_epochs`).Scan(&l.persistedEpoch)
+}
+
+// StoredAnchor returns the persisted anchor (epoch 0) public key, for an
+// operator capturing it out-of-band. It is public material; exporting it
+// reveals no secret.
+func (l *Ledger) StoredAnchor(ctx context.Context) (ed25519.PublicKey, error) {
+	return l.storedAnchor(ctx)
+}
+
+func (l *Ledger) storedAnchor(ctx context.Context) (ed25519.PublicKey, error) {
+	var pk []byte
+	if err := l.pool.QueryRow(ctx,
+		`SELECT public_key FROM key_epochs WHERE idx = 0`).Scan(&pk); err != nil {
+		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
+	}
+	return ed25519.PublicKey(pk), nil
+}
+
+func (l *Ledger) resumeTail(ctx context.Context) error {
 	var seq int64
 	var hash []byte
 	if err := l.pool.QueryRow(ctx,
@@ -98,9 +186,19 @@ func (l *Ledger) resume(ctx context.Context) error {
 // A failure returns an error and the entry is NOT recorded as if it had
 // succeeded: an unrecorded Decision in an observe-only product is
 // indistinguishable from an event that never happened.
+//
+// The whole operation is one transaction: any epoch public key this entry's
+// epoch needs is persisted alongside the entry, so an entry can never be
+// committed referencing an epoch the database lacks. The signing key evolves
+// only AFTER the transaction commits — evolving first would destroy the key
+// that signed an entry we might yet fail to store.
 func (l *Ledger) Append(ctx context.Context, e *core.Entry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if l.signer == nil {
+		return fmt.Errorf("%w: ledger opened for verification only", core.ErrAppendFailed)
+	}
 
 	e.Sequence = l.seq
 
@@ -117,6 +215,70 @@ func (l *Ledger) Append(ctx context.Context, e *core.Entry) error {
 
 	l.signer.Seal(e, l.prev)
 
+	tx, err := l.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %v", core.ErrAppendFailed, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful Commit
+
+	// Persist any epoch rows this entry's epoch depends on but the database does
+	// not yet have. In practice this is the newly evolved epoch from the
+	// previous append; persisting it here, in the transaction of the first entry
+	// that uses it, is what keeps the foreign key satisfiable without ever
+	// destroying a still-needed private key.
+	if err := l.persistEpochsThrough(ctx, tx, int64(e.KeyEpoch)); err != nil {
+		return fmt.Errorf("%w: %v", core.ErrAppendFailed, err)
+	}
+
+	if err := insertEntry(ctx, tx, e); err != nil {
+		return fmt.Errorf("%w: %v", core.ErrAppendFailed, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("%w: %v", core.ErrAppendFailed, err)
+	}
+	if int64(e.KeyEpoch) > l.persistedEpoch {
+		l.persistedEpoch = int64(e.KeyEpoch)
+	}
+
+	l.seq++
+	l.prev = e.Hash
+
+	// Evolve AFTER the entry is durably committed. Its public row will be
+	// written in the next append's transaction, before any entry references it.
+	l.sinceEpoch++
+	if l.EpochEntries > 0 && l.sinceEpoch >= l.EpochEntries {
+		if err := l.signer.Evolve(); err != nil {
+			return fmt.Errorf("entry %d recorded, but key evolution failed — the "+
+				"compromise window is no longer bounded by EpochEntries: %w", e.Sequence, err)
+		}
+		l.sinceEpoch = 0
+	}
+	return nil
+}
+
+// persistEpochsThrough writes any key_epochs rows in (persistedEpoch, want]
+// using the signer's in-memory chain, within the given transaction.
+func (l *Ledger) persistEpochsThrough(ctx context.Context, tx pgx.Tx, want int64) error {
+	if want <= l.persistedEpoch {
+		return nil
+	}
+	chain := l.signer.Chain()
+	for idx := l.persistedEpoch + 1; idx <= want; idx++ {
+		if idx >= int64(len(chain)) {
+			return fmt.Errorf("epoch %d needed but not in the signer's chain", idx)
+		}
+		ep := chain[idx]
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO key_epochs (idx, public_key, sig_by_prev) VALUES ($1,$2,$3)`,
+			int64(ep.Index), []byte(ep.PublicKey), ep.SigByPrev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func insertEntry(ctx context.Context, tx pgx.Tx, e *core.Entry) error {
 	d := e.Decision
 	var (
 		decisionID, eventID, reason, policyID, policyVersion *string
@@ -132,8 +294,7 @@ func (l *Ledger) Append(ctx context.Context, e *core.Entry) error {
 		c := d.GetConfidence()
 		action, confidence = &a, &c
 	}
-
-	_, err := l.pool.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 		INSERT INTO audit_entries (
 			sequence, appended_at, prev_hash, hash, sig, key_epoch,
 			decision_id, event_id, action, confidence, reason, policy_id, policy_version,
@@ -144,34 +305,72 @@ func (l *Ledger) Append(ctx context.Context, e *core.Entry) error {
 		decisionID, eventID, action, confidence, reason, policyID, policyVersion,
 		e.OutcomeKind, e.OutcomeStage,
 		e.SubjectID, int32(e.Purpose), int32(e.Retention), e.ContextVersion)
-	if err != nil {
-		return fmt.Errorf("%w: %v", core.ErrAppendFailed, err)
-	}
-
-	l.seq++
-	l.prev = e.Hash
-
-	// Evolve AFTER the entry is durably stored, never before. Evolving first
-	// would destroy the key that signed the entry we are about to fail to
-	// write, leaving a retry unable to reproduce it.
-	l.sinceEpoch++
-	if l.EpochEntries > 0 && l.sinceEpoch >= l.EpochEntries {
-		if err := l.signer.Evolve(); err != nil {
-			// The entry IS recorded; only the key rotation failed. Returning an
-			// error here would tell the caller the append failed, which is
-			// false — but staying silent would let the compromise window grow
-			// without bound. So: report it, and let the caller see a widened
-			// window rather than a phantom lost entry.
-			return fmt.Errorf("entry %d recorded, but key evolution failed — the "+
-				"compromise window is no longer bounded by EpochEntries: %w", e.Sequence, err)
-		}
-		l.sinceEpoch = 0
-	}
-	return nil
+	return err
 }
 
-// Verify walks the whole chain.
-func (l *Ledger) Verify(ctx context.Context) (core.VerifyResult, error) {
+// loadChain reads the persisted public-key chain. No secret is involved, which
+// is exactly why a separate process can verify.
+func (l *Ledger) loadChain(ctx context.Context) ([]core.KeyEpoch, error) {
+	rows, err := l.pool.Query(ctx,
+		`SELECT idx, public_key, sig_by_prev FROM key_epochs ORDER BY idx ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
+	}
+	defer rows.Close()
+
+	var chain []core.KeyEpoch
+	for rows.Next() {
+		var idx int64
+		var pk, sig []byte
+		if err := rows.Scan(&idx, &pk, &sig); err != nil {
+			return nil, err
+		}
+		chain = append(chain, core.KeyEpoch{
+			Index: uint64(idx), PublicKey: ed25519.PublicKey(pk), SigByPrev: sig,
+		})
+	}
+	return chain, rows.Err()
+}
+
+// Verify walks the whole chain, pinned to expectedAnchor when one is supplied.
+//
+// The chain and the anchor both come from the PERSISTED public material, not
+// from any in-memory signer, so this succeeds even on a ledger opened for
+// verification only. Completeness stays UNVERIFIED regardless of the anchor:
+// pinning the genesis key proves where the chain starts, not that nothing was
+// removed between here and an external witness (T-019).
+func (l *Ledger) Verify(ctx context.Context, expectedAnchor ed25519.PublicKey) (core.VerifyResult, error) {
+	chain, err := l.loadChain(ctx)
+	if err != nil {
+		return core.VerifyResult{}, err
+	}
+
+	entries, err := l.loadEntries(ctx)
+	if err != nil {
+		return core.VerifyResult{}, err
+	}
+
+	// A nil expectedAnchor means the caller did not bring an out-of-band anchor,
+	// so we can only check internal consistency against the chain's own declared
+	// start. Say so in the result: this is the honest degraded mode, and a
+	// caller must not read it as "the chain starts where it should".
+	anchor := expectedAnchor
+	selfAnchored := false
+	if anchor == nil {
+		if len(chain) > 0 {
+			anchor = chain[0].PublicKey
+		}
+		selfAnchored = true
+	}
+
+	res := core.VerifyChain(entries, chain, anchor, false)
+	if selfAnchored && res.Consistent {
+		res.Reason = "no external anchor supplied: internal consistency only, completeness and origin unverified"
+	}
+	return res, nil
+}
+
+func (l *Ledger) loadEntries(ctx context.Context) ([]*core.Entry, error) {
 	rows, err := l.pool.Query(ctx, `
 		SELECT sequence, appended_at, prev_hash, hash, sig, key_epoch,
 		       decision_id, event_id, action, confidence, reason, policy_id, policy_version,
@@ -179,7 +378,7 @@ func (l *Ledger) Verify(ctx context.Context) (core.VerifyResult, error) {
 		       subject_id, purpose, retention_class, context_version
 		FROM audit_entries ORDER BY sequence ASC`)
 	if err != nil {
-		return core.VerifyResult{}, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
+		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
 	}
 	defer rows.Close()
 
@@ -197,7 +396,7 @@ func (l *Ledger) Verify(ctx context.Context) (core.VerifyResult, error) {
 			&decisionID, &eventID, &action, &confidence, &reason, &policyID, &policyVersion,
 			&e.OutcomeKind, &e.OutcomeStage,
 			&e.SubjectID, &purpose, &retention, &e.ContextVersion); err != nil {
-			return core.VerifyResult{}, err
+			return nil, err
 		}
 		e.Sequence = uint64(seq)
 		e.KeyEpoch = uint64(keyEpoch)
@@ -213,18 +412,14 @@ func (l *Ledger) Verify(ctx context.Context) (core.VerifyResult, error) {
 		}
 		entries = append(entries, &e)
 	}
-	if err := rows.Err(); err != nil {
-		return core.VerifyResult{}, err
-	}
+	return entries, rows.Err()
+}
 
-	// anchored=false: nothing external attests that entries were not removed
-	// wholesale. External anchoring is T-019, and until it exists the honest
-	// answer is that completeness is unverified.
-	//
-	// Note the verification path takes only PUBLIC material — the key chain and
-	// the anchor. No secret is required, so an auditor or the endpoint itself
-	// can run exactly this check.
-	return core.VerifyChain(entries, l.signer.Chain(), l.signer.AnchorKey(), false), nil
+// Entries returns the ledger entries in sequence order, for a read surface such
+// as the timeline CLI. Verification is a separate call — a reader must decide
+// what to render, but only after Verify has told it what is trustworthy.
+func (l *Ledger) Entries(ctx context.Context) ([]*core.Entry, error) {
+	return l.loadEntries(ctx)
 }
 
 func (l *Ledger) Close() error {

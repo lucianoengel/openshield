@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func (l *unreachableLedger) Append(context.Context, *core.Entry) error {
 	l.appends++
 	return core.ErrLedgerUnavailable
 }
-func (l *unreachableLedger) Verify(context.Context) (core.VerifyResult, error) {
+func (l *unreachableLedger) Verify(context.Context, ed25519.PublicKey) (core.VerifyResult, error) {
 	return core.VerifyResult{}, core.ErrLedgerUnavailable
 }
 func (l *unreachableLedger) Close() error { return nil }
@@ -32,7 +33,7 @@ func (l *recordingLedger) Append(_ context.Context, e *core.Entry) error {
 	l.entries = append(l.entries, &cp)
 	return nil
 }
-func (l *recordingLedger) Verify(context.Context) (core.VerifyResult, error) {
+func (l *recordingLedger) Verify(context.Context, ed25519.PublicKey) (core.VerifyResult, error) {
 	return core.VerifyResult{Consistent: true}, nil
 }
 func (l *recordingLedger) Close() error { return nil }

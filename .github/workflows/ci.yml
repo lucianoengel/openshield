@@ -119,6 +119,8 @@ jobs:
         run: go test -race -count=1 -v ./internal/store/...
       - name: a failed append is never silent
         run: go test -run 'TestUnreachableLedger|TestTimeoutIsRecorded|TestNoDecisionIsStillRecorded' -v ./internal/core/
+      - name: CLI verifies, never hides a break, and separates its exit codes
+        run: go test -count=1 -v ./internal/cli/
 
   # Still to come, each its own ticket:
   #   T-014  architectural fitness: adding a Connector produces zero core diffs

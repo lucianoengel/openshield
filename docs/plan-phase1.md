@@ -99,10 +99,10 @@ Local policy file (no control plane in Phase 1); OPA/Rego native in Go; policy o
 
 Postgres = system of record; JetStream = bus only. Key-evolving forward integrity: post-compromise attacker cannot rewrite pre-compromise entries. Tampering test detects direct-DB modification. Docs say tamper-EVIDENT, never tamper-proof. External anchoring is T-019, NOT hand-waved here. **Landed** as an evolving Ed25519 keypair, not the symmetric ratchet originally specified — a symmetric scheme cannot be verified without the seed, and the seed forges (D30). Two further bugs surfaced only under a real Postgres and are recorded in the archived change: the chain was broken by the database's own timestamp precision, and nothing rotated the signing key at all, which would have meant forward integrity of zero in a deployed system.
 
-#### T-010 · CLI query over audit store (replaces React UI)
+#### T-010 · CLI query over audit store (replaces React UI) · **done**
 `~2h` · depends: T-009
 
-Seeded incident renders as an ordered timeline via CLI/SQL.
+Seeded incident renders as an ordered timeline via CLI/SQL. **Landed** as `openshieldctl timeline|verify|anchor export`. Building it forced the persistence D30 assumed but the system lacked: the public-key chain lived only in the in-process signer, so no second process could verify and a restart orphaned the history (D32). `verify` exits 0/3/4 so a cron job can tell a clean chain from a tampered one from an unreachable database. Records no viewer and authenticates no operator until T-017 — and says so.
 
 #### T-016 · Trivial wiring proof - one event end to end, stubs only
 `~2h` · depends: T-005, T-022

@@ -299,8 +299,15 @@ type Ledger interface {
 	// unrecorded Decision in an observe-only product is indistinguishable from
 	// an event that never happened.
 	Append(ctx context.Context, e *Entry) error
-	// Verify walks the chain.
-	Verify(ctx context.Context) (VerifyResult, error)
+	// Verify walks the chain, pinned to an expected anchor.
+	//
+	// A non-nil expectedAnchor is the anchor the caller trusts from out-of-band:
+	// verification fails if the stored chain does not begin there. A nil
+	// expectedAnchor asks only for internal consistency, and the result reports
+	// completeness as UNVERIFIED — an anchor read from the same store that could
+	// have been rewritten attests to nothing, and the caller must be told which
+	// question was actually answered.
+	Verify(ctx context.Context, expectedAnchor ed25519.PublicKey) (VerifyResult, error)
 	Close() error
 }
 
