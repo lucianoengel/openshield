@@ -143,31 +143,35 @@ Luciano Engel — sole owner, architect and sign-off. No external stakeholders y
 ---
 <!-- ── BUILD / ENGINEERING profile ─────────────────────────────────────────── -->
 ## Current stack
-Greenfield — nothing exists yet. Repo root is this case dir (`~/workspace/openshield`).
-Proposed stack from the brief (**to be validated during research, not assumed**):
+Greenfield. Repo: `github.com/lucianoengel/openshield` (public, Apache-2.0), first commit is
+this decision record. **Settled stack** — the brief's proposal, as amended by D8/D19:
 
-| Layer            | Proposal                        |
-|------------------|---------------------------------|
-| Endpoint agent   | Rust                            |
-| Windows driver   | C/C++ (minifilter / WFP)        |
-| Backend          | Go                              |
-| Frontend         | React + TypeScript              |
-| Database         | PostgreSQL                      |
-| Message bus      | NATS JetStream                  |
-| Object storage   | S3-compatible                   |
-| Protocol         | gRPC + Protobuf                 |
-| Observability    | OpenTelemetry                   |
-| Deployment       | Docker Compose; K8s optional    |
+| Layer            | Decision                        | Note |
+|------------------|---------------------------------|------|
+| Endpoint agent   | **Go** (was Rust in the brief)  | D8 — single language kills the cross-runtime parity problem |
+| fanotify responder | **Go, pending T-002**         | D19 — GC-pause spike may carve this one component out to cgo/Rust |
+| Backend          | Go                              | |
+| Policy engine    | **OPA/Rego, native Go**         | D6 collapsed once the language split went away |
+| Windows driver   | *deferred out of MVP*           | EV cert + Windows test env; fleet is Linux |
+| Frontend         | React + TS — **cut from Phase 1** | CLI/SQL over the audit store instead |
+| Database         | PostgreSQL — **also the audit ledger** | D12: hash-chained system of record |
+| Message bus      | NATS JetStream — **bus only**   | D12: bounded retention ≠ system of record |
+| Object storage   | S3-compatible                   | evidence storage, later phase |
+| Protocol         | gRPC + Protobuf                 | |
+| Observability    | OpenTelemetry — **cut from Phase 1** | structured logging only for now |
+| Deployment       | **Podman** Compose; K8s optional | no Docker on this host |
 
 ## Stack limitations / known pain
-Risks inherent in the proposal, to be pressure-tested before committing:
-- **Two-language split (Rust agent / Go backend)** duplicates the event schema and policy
-  evaluator across runtimes. Protobuf mitigates the wire format; it does not mitigate a
-  policy engine that must behave *identically* on both sides. This is the single biggest
-  correctness risk in the design — same policy, same input, two implementations, one answer.
-- **Local policy evaluation** requires compiling policies to a portable runtime representation
-  that Rust can execute offline and deterministically (candidates: CEL, Rego/OPA-wasm, a
-  purpose-built IR). Choice constrains the 10-year roadmap.
+- ~~Two-language split~~ — **resolved by D8.** One language means one shared policy engine, so
+  the "same policy, two implementations, one answer" correctness risk no longer exists. This
+  was the single biggest risk in the original design and it was deleted rather than solved.
+- ~~Policy IR portability~~ — **resolved with it.** OPA/Rego runs natively in Go; no CEL, no
+  WASM, no custom IR. WASM stays relevant only for sandboxing untrusted Hub packs (Phase 3+).
+- **Remaining hot-path risk (D19, open until T-002):** GC pauses and scheduler jitter inside a
+  live fanotify permission window. Worst failure mode in the system — a stalled responder parks
+  processes in `TASK_UNINTERRUPTIBLE`. Measurement decides; unverified is the failure.
+- **Classification accuracy is the hard problem** — Presidio benchmarks ~22.7% precision on
+  person names. Policy must consume confidence, never a clean boolean (D4).
 - ~~Windows kernel work~~ — **deferred out of MVP** (needs EV code signing + a Windows test
   environment, neither of which exists here, and the owner's fleet is Linux). Retained as a
   design constraint only: the Connector/Enforcer interfaces must not bake in Linux assumptions.
@@ -185,46 +189,59 @@ Risks inherent in the proposal, to be pressure-tested before committing:
 
 ## Tooling & access
 - Containers: **Podman rootless only** (no Docker, no sudo, not in docker group).
-- Rust toolchain + cargo-mcp/cratedex available for docs & diagnostics.
-- **Repo: GitHub** (owner call, 2026-07-20). Public, Apache-2.0. Exact org/account settled at
-  creation time. Public repo also unlocks free `windows-latest`/`macos-latest` runners (D9).
-- Likely needs a dev pod (`dev_env up openshield`) for the Go/NATS/Postgres backend stack.
-- > TODO — Windows test target for driver work (VM? spare machine? none?).
+- **Go toolchain** (D8). Rust tooling on this host is no longer relevant to the build.
+- **Repo: `github.com/lucianoengel/openshield`** — public, Apache-2.0, created 2026-07-20.
+  Public also unlocks free `windows-latest`/`macos-latest` runners (D9).
+- Likely needs a dev pod (`dev_env up openshield`) for the Go/NATS/Postgres stack.
+- Windows/macOS test targets: **GitHub Actions runners** (D9), not local VMs. `/dev/kvm` here
+  is ACL'd to another user and rootless Podman cannot confer KVM or real `CAP_SYS_ADMIN` — but
+  that is a dev-loop fact, never a design input. Windows *driver* work needs a real target and
+  an EV cert; both are deferred with the platform.
 
 ## Definition of done & quality bar
 - The 6-step end-to-end slice above, demoable from a clean `podman compose up`.
 - **Architectural fitness test in CI**: adding a Connector/Enforcer must produce zero diffs in
   core packages — enforced by a test, not by discipline.
-- Policy-engine parity test: identical policy + input → identical Decision in Rust and Go.
-- Enforcement plugins provably receive Decisions only (no classifier detail on the interface —
-  enforceable at the type level).
-- Audit log tamper-evidence demonstrated by an actual tampering test.
-- TDD for core pipeline logic; OpenTelemetry traces spanning event → decision → enforcement.
+- ~~Policy-engine parity test~~ — **obsolete under D8.** One language, one policy engine, one
+  implementation. Replaced by: identical policy + input → identical Decision (determinism
+  within the single engine).
+- Enforcement plugins provably receive Decisions only, with a **closed, typed action set**
+  (D14) — enforceable at the type level, not by convention.
+- Audit log tamper-evidence demonstrated by an actual tampering test (T-009), with external
+  anchoring (T-019) so the claim is "tamper-evident between anchors", never "tamper-proof".
+- **Negative properties asserted by test, not inspection** — they rot silently otherwise:
+  import allowlist via `go list -deps` proving the privileged process cannot parse untrusted
+  bytes (T-006); wire-byte grep proving no content or reversible hash leaves the endpoint
+  (T-007); CI denylist grep on overclaiming words in docs (T-001).
+- TDD for core pipeline logic. OpenTelemetry is **cut from Phase 1**; structured logging only.
 
 ---
 ## Entry points (where we start)
-1. **The event schema and the `Decision` contract** — everything else is downstream of these
-   two, and they are the hardest things to change later. Design them first, in Protobuf.
-2. The policy IR choice (CEL vs Rego/wasm vs custom), because it constrains 1.
-3. Only then: the thinnest possible vertical slice (one event, one classifier, one policy,
-   one enforcer) to prove the pipeline before widening it.
+Superseded by the ticket queue — see `tickets.jsonl` / `tickets.md` and `reports/phase1-plan.md`.
+Order: **T-001** repo+governance → **T-002** GC spike (could partly reverse D8) → **T-003**
+schema+Decision contract → **T-004** peer-UEBA paper test (cheapest test of the 10-year claim).
 
 ## Open unknowns
-- **Prior art**: how do CrowdSec (hub + decision model), OPA, Presidio, Wazuh, Velociraptor,
-  osquery and the incumbent DLPs (Purview, Nightfall, Cyberhaven) actually structure this?
-  Where has open-source DLP been tried and failed, and why? — first research target.
-- Policy IR that is offline, deterministic, sandboxed and executable from both Rust and Go.
-- Whether NATS JetStream alone satisfies replay + long-term audit, or needs a durable tier.
-- **Linux interception mechanics** — fanotify vs eBPF vs LSM/BPF-LSM for file, clipboard, USB
-  and process events: which give *blocking* (pre-operation) hooks vs observe-only, what each
-  costs in privilege (CAP_SYS_ADMIN? root?), kernel-version floor, and idle overhead. Blocking
-  capability is the crux: an enforcer that can only observe cannot implement `Block`.
-  (Windows/macOS mechanics deferred with the platforms themselves.)
-- Clipboard and browser-upload interception on Linux specifically — Wayland vs X11 changes
-  this completely, and Wayland deliberately restricts clipboard access. May be the hardest
-  MVP event to source honestly.
-- Realistic MVP scope for a solo builder — the brief describes a decade of work; the honest
-  question is which single slice earns the right to build the rest.
+**Resolved by round-1 research** (`reports/scouting-r1.md`) — kept only as pointers:
+- ~~Prior art~~ → CrowdSec decision-separation, Presidio limits, and the OSS-DLP graveyard
+  (MyDLP acquired, OpenDLP abandoned, Metron retired — all died of maintenance economics).
+- ~~Policy IR across two languages~~ → dissolved by D8; OPA/Rego native in Go.
+- ~~NATS sufficiency for audit~~ → no. D12: Postgres is the system of record, JetStream is a bus.
+- ~~Linux interception mechanics~~ → fanotify perm events block open/read/exec (not
+  rename/unlink); BPF-LSM is v2; Landlock cannot police other processes.
+- ~~Clipboard~~ → D2, cut. Wayland architecturally prevents system-wide observation.
+- ~~Browser upload~~ → cut from Phase 1 (needs an extension or TLS proxy, not a kernel hook).
+
+**Still genuinely open:**
+- **D19 / T-002** — does Go's GC jitter break the fanotify permission window? Empirical, and it
+  is the last decision resting on measurement rather than argument.
+- **Phase-1 infrastructure coverage** — the plan was decomposed from *decisions*, so it has
+  blind spots wherever nothing was contested: event bus/dispatcher, control-plane service,
+  offline store-and-forward queue, compose dev stack, DB migrations, packaging. ~8 tickets
+  identified 2026-07-20, not yet written. **Owner decision pending.**
+- **A2 shape questions** — Data Discovery (a catalog, not an event stream) and Lineage (a graph)
+  have no home in the frozen pipeline. T-004 tests only the UEBA sliver.
+- Whether cross-endpoint peer baselining is ever enabled by default (D23 says no).
 
 ## Success criteria & timeframe
 - Success = the pipeline abstraction survives contact with the *second* capability without
