@@ -55,6 +55,12 @@ type Request struct {
 	Path      string
 	Direction corev1.NetworkDirection
 	Body      []byte
+
+	// Identity is the resolved Zero-Trust context for an ACCESS request (D87): the
+	// verified pseudonymous subject + role + device posture (D85/D86). nil for
+	// egress/forward requests (unchanged). When set, Process resolves it into the
+	// policy context and stamps the verified pseudonym as the Event subject.
+	Identity *core.Context
 }
 
 // Gateway runs the assembled network pipeline for one request.
@@ -126,12 +132,19 @@ func pseudonym(raw string) string {
 // deliberately absent — it is classified in the gateway process and never leaves
 // it (D10/D29).
 func (g *Gateway) toEvent(r *Request) *corev1.Event {
+	// For an ACCESS request the subject is the VERIFIED identity pseudonym (D86/D87),
+	// finally replacing the sha256(src-IP) non-identity (D84). For egress it stays the
+	// pseudonymised source address.
+	subject := pseudonym(r.SrcIP)
+	if r.Identity != nil && r.Identity.Identity != "" {
+		subject = r.Identity.Identity
+	}
 	return &corev1.Event{
 		EventId:     newEventID(),
 		AgentId:     "gateway",       // TODO(N1.2): real gateway node identity (T-017 analogue)
 		ConnectorId: "gateway-proxy", // TODO(N1.2): the actual listener connector
 		ObservedAt:  timestamppb.New(g.now().UTC()),
-		Subject:     &corev1.Subject{PseudonymousId: pseudonym(r.SrcIP)},
+		Subject:     &corev1.Subject{PseudonymousId: subject},
 		Purpose:     corev1.Purpose_PURPOSE_DLP,
 		Kind:        corev1.EventKind_EVENT_KIND_HTTP_REQUEST,
 		Target: &corev1.Event_Network{Network: &corev1.NetworkSubject{
@@ -211,6 +224,13 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 	disp := core.NewDispatcher(&reg, g.deadline)
 	disp.OnOutcome = core.NewAuditSink(g.ledger).Record
 	disp.Logger = g.logger
+	// For an ACCESS request, resolve the verified identity into the policy context
+	// (D85/D87) via the SAME hook peer-UEBA uses (D53), so the policy authorizes on
+	// input.context.{identity, role, device_posture}.
+	if req.Identity != nil {
+		ident := req.Identity
+		disp.ResolveContext = func(*corev1.Event) *core.Context { return ident }
+	}
 
 	dec, err := disp.Dispatch(ctx, ev)
 	if dec != nil {
