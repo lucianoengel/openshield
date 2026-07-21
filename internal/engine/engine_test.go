@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
@@ -24,18 +26,28 @@ func requirePG(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	l, err := postgres.OpenForVerify(ctx, dsn)
+	// Availability check WITHOUT migrating (a bare ping) — migrating before the
+	// advisory lock would race the other DB packages under `go test ./...`.
+	pool, err := pgxpool.New(ctx, dsn)
+	if err == nil {
+		err = pool.Ping(ctx)
+	}
 	if err != nil {
+		if pool != nil {
+			pool.Close()
+		}
 		if os.Getenv("OPENSHIELD_REQUIRE_POSTGRES") != "" {
 			t.Fatalf("POSTGRES REQUIRED but unavailable: %v", err)
 		}
 		t.Skipf("LOUD SKIP: Postgres unavailable (%v) — the walking skeleton is NOT verified", err)
 	}
-	l.Close()
-	// clean slate
-	pool := mustPool(t)
-	defer pool.Close()
-	_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
+	pool.Close()
+	// Lock BEFORE any DDL, then clean the slate. The test's postgres.Open migrates
+	// under the held lock.
+	lockDB(t)
+	p := mustPool(t)
+	defer p.Close()
+	_, _ = p.Exec(context.Background(), `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
 }
 
 func buildWorker(t *testing.T) string {
