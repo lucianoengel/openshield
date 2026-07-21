@@ -55,6 +55,6 @@ func clean(t *testing.T) bool {
 	}
 	defer p2.Close()
 	_, _ = p2.Exec(ctx,
-		`DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
+		`DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
 	return true
 }

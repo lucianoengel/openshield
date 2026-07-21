@@ -89,7 +89,7 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 	// leftovers from a previous run would make sequence numbers unpredictable.
 	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dropCancel()
-	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	t.Cleanup(pool.Close)
@@ -186,10 +186,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..008), and no more no matter how many times
+	// One row per migration FILE (001..009), and no more no matter how many times
 	// Migrate runs — that stability is the property under test.
-	if n != 8 {
-		t.Errorf("schema_migrations rows = %d, want 8 — a migration applied twice "+
+	if n != 9 {
+		t.Errorf("schema_migrations rows = %d, want 9 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }

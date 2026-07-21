@@ -24,6 +24,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lucianoengel/openshield/internal/analytics/peerueba"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
@@ -56,10 +57,37 @@ type Server struct {
 	// Gaps counts sequence gaps in verified telemetry (suppression between an
 	// agent and here).
 	Gaps atomic.Int64
+	// PeerAlerts counts server-side peer-UEBA detections recorded (D54).
+	PeerAlerts atomic.Int64
+
+	// peer-UEBA (D54) is a SERVER-SIDE analytics consumer of the verified stream,
+	// OFF unless explicitly enabled — enabling it is the D23 consent/DPIA decision.
+	// analyzer is nil when disabled; when set, a verified `event` feeds the
+	// subject's peer baseline and an above-threshold subject raises a peer alert,
+	// throttled per-subject by peerCooldown (a rising-edge limiter, not a signal
+	// change). It OBSERVES; it never feeds risk back to agents (D14).
+	analyzer      *peerueba.Analyzer
+	peerThreshold float64
+	peerCooldown  time.Duration
+	peerMu        sync.Mutex
+	peerLastAlert map[string]time.Time
+	now           func() time.Time
 }
 
 // New creates a server over an existing pool.
-func New(pool *pgxpool.Pool) *Server { return &Server{pool: pool} }
+func New(pool *pgxpool.Pool) *Server { return &Server{pool: pool, now: time.Now} }
+
+// EnablePeerUEBA turns on server-side peer-baseline analytics (D54). This is the
+// D23 consent/DPIA decision, made deliberately by an operator — NOT a default:
+// without this call the control plane observes no subject and records no peer
+// alert. threshold is the peer-relative risk [0,1] at which a subject alerts;
+// cooldown throttles repeat alerts for a still-anomalous subject.
+func (s *Server) EnablePeerUEBA(threshold float64, cooldown time.Duration) {
+	s.analyzer = peerueba.New()
+	s.peerThreshold = threshold
+	s.peerCooldown = cooldown
+	s.peerLastAlert = map[string]time.Time{}
+}
 
 // Run connects to NATS and subscribes to the telemetry subjects until the
 // context is cancelled.

@@ -39,6 +39,7 @@ for i in $(seq 1 30); do podman exec "$PG" pg_isready -U openshield >/dev/null 2
 podman run -d --name "$SRV" --network "$NET" \
   -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" \
   -e OPENSHIELD_NATS_URL="nats://$NATS:4222" -e OPENSHIELD_HTTP_ADDR=":8080" \
+  -e OPENSHIELD_PEER_UEBA_THRESHOLD="0.6" -e OPENSHIELD_PEER_UEBA_COOLDOWN="1h" \
   openshield-server:fleet >/dev/null
 for i in $(seq 1 30); do podman logs "$SRV" 2>&1 | grep -q "subscribing to telemetry" && break; sleep 1; done
 echo "==> control plane up"
@@ -46,9 +47,13 @@ echo "==> control plane up"
 echo "==> enrolling $N agents"
 for i in $(seq 1 "$N"); do
   tok="$(podman exec -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" "$SRV" openshield-server issue-token 3600)"
+  # agent-1 is the peer-UEBA OUTLIER — a high burst puts subject subj-1 far above
+  # its peers; the rest emit one event per tick (typical). D54.
+  burst=1; [ "$i" = "1" ] && burst=15
   podman run -d --name "osfleet-agent-$i" --network "$NET" \
     -e OPENSHIELD_AGENT_ID="agent-$i" -e OPENSHIELD_ENROLL_URL="http://$SRV:8080/enroll" \
     -e OPENSHIELD_ENROLL_TOKEN="$tok" -e OPENSHIELD_NATS_URL="nats://$NATS:4222" \
+    -e OPENSHIELD_SUBJECT="subj-$i" -e OPENSHIELD_BURST="$burst" \
     -e OPENSHIELD_HEARTBEAT="1s" openshield-fleet-agent:latest >/dev/null
 done
 
@@ -61,6 +66,22 @@ for i in $(seq 1 20); do
 done
 [ -n "$ok" ] || { echo "!! only got verified telemetry from $n/$N agents" >&2; exit 1; }
 echo "   OK: $N agents publishing verified, attributed telemetry"
+
+echo "==> asserting server-side peer-UEBA flags the outlier (subj-1), not a typical subject (D54)"
+pok=""
+for i in $(seq 1 20); do
+  pa="$(psql "SELECT count(*) FROM peer_alerts WHERE subject_id='subj-1'")"
+  if [ "$pa" -ge 1 ] 2>/dev/null; then pok=1; break; fi
+  sleep 1
+done
+[ -n "$pok" ] || { echo "!! no peer alert raised for the outlier subj-1" >&2; exit 1; }
+typ="$(psql "SELECT count(*) FROM peer_alerts WHERE subject_id='subj-2'")"
+[ "$typ" = "0" ] || { echo "!! a typical subject (subj-2) was flagged: $typ alerts" >&2; exit 1; }
+# The cooldown holds: an ever-anomalous outlier raises at most one alert per rising edge.
+sleep 3
+pa2="$(psql "SELECT count(*) FROM peer_alerts WHERE subject_id='subj-1'")"
+[ "$pa2" = "1" ] || { echo "!! cooldown failed: subj-1 has $pa2 alerts, want 1" >&2; exit 1; }
+echo "   OK: outlier subj-1 flagged once (cooldown held), typical subj-2 not flagged"
 
 echo "==> killing agent-1; expecting dead-man's-switch (overdue) after silence grows"
 podman rm -f osfleet-agent-1 >/dev/null

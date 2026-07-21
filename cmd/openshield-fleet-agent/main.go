@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -33,6 +34,11 @@ func main() {
 	token := os.Getenv("OPENSHIELD_ENROLL_TOKEN")
 	natsURL := env("OPENSHIELD_NATS_URL", "nats://127.0.0.1:4222")
 	interval := envDuration("OPENSHIELD_HEARTBEAT", 2*time.Second)
+	// The pseudonymous subject this agent's activity is attributed to (D23), and
+	// how many events it emits per tick — a high burst makes an agent a peer-UEBA
+	// OUTLIER relative to the fleet (D54).
+	subject := env("OPENSHIELD_SUBJECT", agentID)
+	burst := envInt("OPENSHIELD_BURST", 1)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -61,8 +67,11 @@ func main() {
 			return
 		case <-tick.C:
 			_ = pub.PublishHeartbeat(ctx, &corev1.Heartbeat{AgentId: agentID, ObservedAt: timestamppb.Now()})
-			_ = pub.PublishEvent(ctx, &corev1.Event{EventId: agentID + "-ev", AgentId: agentID,
-				Kind: corev1.EventKind_EVENT_KIND_FILE_MODIFIED})
+			for i := 0; i < burst; i++ {
+				_ = pub.PublishEvent(ctx, &corev1.Event{EventId: agentID + "-ev", AgentId: agentID,
+					Kind:    corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
+					Subject: &corev1.Subject{PseudonymousId: subject}})
+			}
 		}
 	}
 }
@@ -103,6 +112,14 @@ func envDuration(k string, def time.Duration) time.Duration {
 	if v := os.Getenv(k); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return def
+}
+func envInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
 		}
 	}
 	return def

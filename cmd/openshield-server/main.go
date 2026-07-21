@@ -51,6 +51,24 @@ func main() {
 
 	srv := controlplane.New(pool)
 
+	// Server-side peer-UEBA (D54), OFF unless a threshold is configured — enabling
+	// it is the operator's D23 consent/DPIA decision, never a default. It observes
+	// the verified fleet stream and records peer alerts; it does not control agents.
+	if v := os.Getenv("OPENSHIELD_PEER_UEBA_THRESHOLD"); v != "" {
+		threshold, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			fatal("OPENSHIELD_PEER_UEBA_THRESHOLD=%q: %v", v, err)
+		}
+		cooldown := 1 * time.Hour
+		if c := os.Getenv("OPENSHIELD_PEER_UEBA_COOLDOWN"); c != "" {
+			if d, err := time.ParseDuration(c); err == nil {
+				cooldown = d
+			}
+		}
+		srv.EnablePeerUEBA(threshold, cooldown)
+		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA enabled (threshold %.2f, cooldown %s)\n", threshold, cooldown)
+	}
+
 	// Optional enrollment endpoint (D44 over the wire). Production fronts it with
 	// TLS. Token issuance is NOT exposed — an admin-local operation.
 	if addr := os.Getenv("OPENSHIELD_HTTP_ADDR"); addr != "" {

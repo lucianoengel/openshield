@@ -47,7 +47,7 @@ func requirePG(t *testing.T) {
 	lockDB(t)
 	p := mustPool(t)
 	defer p.Close()
-	_, _ = p.Exec(context.Background(), `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
+	_, _ = p.Exec(context.Background(), `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
 }
 
 func buildWorker(t *testing.T) string {
