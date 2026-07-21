@@ -87,6 +87,7 @@ const (
 	EventKind_EVENT_KIND_USB_INSERTED  EventKind = 4
 	EventKind_EVENT_KIND_NETWORK_FLOW  EventKind = 5
 	EventKind_EVENT_KIND_HTTP_REQUEST  EventKind = 6
+	EventKind_EVENT_KIND_DNS_QUERY     EventKind = 7 // a resolved DNS question (Phase C — DNS breadth)
 )
 
 // Enum value maps for EventKind.
@@ -99,6 +100,7 @@ var (
 		4: "EVENT_KIND_USB_INSERTED",
 		5: "EVENT_KIND_NETWORK_FLOW",
 		6: "EVENT_KIND_HTTP_REQUEST",
+		7: "EVENT_KIND_DNS_QUERY",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":   0,
@@ -108,6 +110,7 @@ var (
 		"EVENT_KIND_USB_INSERTED":  4,
 		"EVENT_KIND_NETWORK_FLOW":  5,
 		"EVENT_KIND_HTTP_REQUEST":  6,
+		"EVENT_KIND_DNS_QUERY":     7,
 	}
 )
 
@@ -800,7 +803,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xd5\x01\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xef\x01\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
@@ -808,7 +811,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x17EVENT_KIND_FILE_CREATED\x10\x03\x12\x1b\n" +
 	"\x17EVENT_KIND_USB_INSERTED\x10\x04\x12\x1b\n" +
 	"\x17EVENT_KIND_NETWORK_FLOW\x10\x05\x12\x1b\n" +
-	"\x17EVENT_KIND_HTTP_REQUEST\x10\x06*r\n" +
+	"\x17EVENT_KIND_HTTP_REQUEST\x10\x06\x12\x18\n" +
+	"\x14EVENT_KIND_DNS_QUERY\x10\a*r\n" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +

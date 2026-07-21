@@ -24,6 +24,7 @@ enum EventKind {
   EVENT_KIND_USB_INSERTED = 4;
   EVENT_KIND_NETWORK_FLOW = 5;
   EVENT_KIND_HTTP_REQUEST = 6;
+  EVENT_KIND_DNS_QUERY = 7; // a resolved DNS question (Phase C — DNS breadth)
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
