@@ -137,7 +137,7 @@ Versioned, forward-only migrations for the audit ledger and telemetry tables. Mu
 
 Self-PID bypass, response timeout to auto-FAN_ALLOW, safe teardown. Injected-delay test proves auto-allow fires AND is audited high-severity. Zip-bomb fixture hits budget ceiling rather than hanging. Scan budgets capped.
 
-#### T-012 · Parser sandbox hardening (D13)
+#### T-012 · Parser sandbox hardening (D13) · **done**
 `~5h` · depends: T-006
 
 seccomp-bpf, no network, cgroup mem/CPU limits, decompression-bomb limits (ratio/size/nesting). Worker cannot open a socket; bomb fixtures rejected before parsing. Precedent: ClamAV CVE-2025-20260.
