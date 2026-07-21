@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -247,6 +249,10 @@ type Dispatcher struct {
 	// responder hangs a machine.
 	StageDeadline time.Duration
 	Metrics       Metrics
+	// Logger receives a structured line for every terminal outcome (T-028). It
+	// is nil-safe (a discard logger is used when unset), so embedders and tests
+	// are not spammed by default. cmd/* wire a stderr handler.
+	Logger *slog.Logger
 	// OnOutcome receives every terminal outcome, including timeouts and
 	// failures. The dispatcher never drops an Event silently; if this is nil
 	// the outcome is still returned to the caller.
@@ -360,12 +366,79 @@ func (d *Dispatcher) runStage(ctx context.Context, stage Stage, st *State) (Outc
 	}
 }
 
+// log returns the configured logger or a discard logger — never nil, so callers
+// need no nil check.
+func (d *Dispatcher) log() *slog.Logger {
+	if d.Logger != nil {
+		return d.Logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// slogLevel maps an outcome severity to a slog level, so a level filter surfaces
+// the loud events. A timeout is high severity (it turns a Block into an Allow,
+// D17) and logs at Warn, greppable by a rising rate.
+func slogLevel(s Severity) slog.Level {
+	switch s {
+	case SeverityHigh:
+		return slog.LevelWarn
+	case SeverityWarn:
+		return slog.LevelWarn
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// outcomeCategory is the stable slug for a terminal outcome. It prefers the
+// error's identity (so a no-decision fall-off is `no_decision`, a timeout is
+// `timeout`) and otherwise maps the kind — a raw stage error is not a sentinel,
+// so an OutcomeFailed becomes `stage_failed`.
+func outcomeCategory(o Outcome) string {
+	if o.Err != nil {
+		switch c := Category(o.Err); c {
+		case "no_decision", "timeout", "not_recorded", "unreachable", "context_unavailable", "ledger_unavailable", "append_failed":
+			return c
+		}
+	}
+	switch o.Kind {
+	case OutcomeDecided:
+		return "decided"
+	case OutcomeTimeout:
+		return "timeout"
+	case OutcomeFailed:
+		return "stage_failed"
+	default:
+		return o.Kind.String()
+	}
+}
+
+// report logs the terminal outcome — correlated by event id, categorised, at a
+// level matching its severity — and then runs the audit callback. No failure
+// path is silent in the logs (D17). Logs carry ids and categories ONLY, never
+// content: a log is a wire (D10).
 func (d *Dispatcher) report(ctx context.Context, s *State, o Outcome) error {
+	eventID := ""
+	if s != nil {
+		eventID = s.Event.GetEventId()
+	}
+	d.log().LogAttrs(ctx, slogLevel(o.Severity), "pipeline outcome",
+		slog.String("event_id", eventID),
+		slog.String("stage", o.Stage),
+		slog.String("kind", o.Kind.String()),
+		slog.String("severity", o.Severity.String()),
+		slog.String("category", outcomeCategory(o)),
+	)
+
 	if d.OnOutcome == nil {
 		return nil
 	}
 	if err := d.OnOutcome(ctx, s, o); err != nil {
-		return fmt.Errorf("%w: %v", ErrNotRecorded, err)
+		e := fmt.Errorf("%w: %v", ErrNotRecorded, err)
+		d.log().LogAttrs(ctx, slog.LevelError, "outcome not recorded",
+			slog.String("event_id", eventID),
+			slog.String("category", Category(e)),
+		)
+		return e
 	}
 	return nil
 }

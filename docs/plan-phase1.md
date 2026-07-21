@@ -187,7 +187,7 @@ Postgres + NATS + control plane up from a clean checkout with one command. The p
 
 T-015 asserts 'install and upgrade exercised' and nothing built either. systemd unit for the privileged process and the unprivileged worker, correct capability grants (not blanket root where avoidable), Restart=always, clean upgrade that does not lose the offline queue. Acceptance: install, upgrade across versions, and uninstall on a clean Linux VM/container without manual repair.
 
-#### T-028 · Structured logging + agent error handling
+#### T-028 · Structured logging + agent error handling · **done**
 `~3h` · depends: T-006
 
 OTel is cut from Phase 1 but the agent still needs to be debuggable: structured logs, error taxonomy, and defined behaviour when a stage fails (fail-open per D17 where a verdict is involved, loud audit event always). Acceptance: every stage failure path emits a log with correlation id; no silent swallow.
