@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+import "google/protobuf/timestamp.proto";
+
+// RiskUpdate is the control plane telling the gateway a subject's current risk
+// (D91, the T2 continuous-verification loop). The server PUBLISHES it; the gateway
+// READS it into its RiskStore and the LOCAL policy decides (D89) — the server informs,
+// the gateway decides, the server never commands. The subject is pseudonymous (D23);
+// this carries no content, only a fleet-level risk signal.
+message RiskUpdate {
+  string subject = 1;
+  double risk_score = 2; // [0,1]
+  google.protobuf.Timestamp computed_at = 3;
+}

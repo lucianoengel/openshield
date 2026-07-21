@@ -250,7 +250,24 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 
 	gw := gateway.New(cls, accessPol, ledger, log, 30*time.Second)
 	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
-	ap.SetRiskStore(gateway.NewRiskStore()) // populated by the risk-publish channel (A.5b)
+	riskStore := gateway.NewRiskStore()
+	ap.SetRiskStore(riskStore)
+
+	// Subscribe to published risk (D91) so continuous verification (D89) fires on real
+	// risk. When NATS is configured, the control plane's per-subject risk updates
+	// populate the store. Without NATS, the store stays empty (a policy gating on
+	// absent risk allows, D89) — risk gating is inert but the access authz still works.
+	if natsURL := os.Getenv("OPENSHIELD_NATS_URL"); natsURL != "" {
+		conn, err := nats.Connect(natsURL)
+		if err != nil {
+			fatal(log, "risk nats", err)
+		}
+		defer conn.Close()
+		if _, err := gateway.SubscribeRisk(conn, riskStore); err != nil {
+			fatal(log, "risk subscribe", err)
+		}
+		log.Info("gateway: risk continuous-verification subscription active (D91)")
+	}
 
 	srv := &http.Server{
 		Addr: listen, Handler: ap, ReadHeaderTimeout: 10 * time.Second,

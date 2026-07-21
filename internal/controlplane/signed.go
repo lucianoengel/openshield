@@ -77,6 +77,10 @@ func (s *Server) observePeer(ctx context.Context, payload []byte) {
 		return
 	}
 	s.PeerAlerts.Add(1)
+	// Publish the subject's risk to the gateways (D91), best-effort — so continuous
+	// verification (D89) decides on real risk. The server publishes DATA; the gateway
+	// decides (T2/D14). A publish failure never breaks ingest.
+	s.PublishRisk(ctx, subject, pc.RiskScore)
 	// Deliver the alert to a human (D83), best-effort — additive to the record it
 	// already made. Rides observePeer's existing per-subject cooldown, so no
 	// separate throttle is needed.
