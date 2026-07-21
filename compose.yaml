@@ -1,0 +1,49 @@
+# OpenShield DEV stack (T-025).
+#
+# `podman-compose up -d` brings up Postgres + NATS + the control plane from a
+# clean checkout with no manual steps — the server migrates on boot.
+#
+# Use `podman-compose` (the native Python tool), NOT `podman compose` — the
+# latter shells out to docker-compose, which needs a Docker daemon socket that
+# rootless Podman does not provide.
+#
+# THIS IS A DEV STACK, NOT PRODUCTION. Default credentials, no TLS, NATS without
+# persistence, the database port exposed to localhost for convenience. Do not
+# deploy this as-is; production hardening (TLS, secrets, tuning) is packaging
+# (T-027). Containers are Podman rootless, not Docker.
+services:
+  postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: openshield
+      POSTGRES_PASSWORD: dev          # DEV ONLY — never a real deployment
+      POSTGRES_DB: openshield
+    ports:
+      - "127.0.0.1:55432:5432"        # localhost only
+    volumes:
+      - openshield-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openshield"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nats:
+    image: docker.io/library/nats:2
+    ports:
+      - "127.0.0.1:4222:4222"         # client port, localhost only
+
+  server:
+    build:
+      context: .
+      dockerfile: Containerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      OPENSHIELD_DSN: "postgres://openshield:dev@postgres:5432/openshield?sslmode=disable"
+      OPENSHIELD_NATS_URL: "nats://nats:4222"
+    restart: on-failure
+
+volumes:
+  openshield-pgdata:

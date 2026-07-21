@@ -1,0 +1,7 @@
+# Keep the build context small — the Containerfile only needs the Go module.
+.git
+openspec
+docs
+deploy
+spikes
+*.md

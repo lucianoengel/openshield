@@ -93,3 +93,16 @@ AI security, discovery, lineage and behaviour analytics — each as new connecto
 [Apache-2.0](LICENSE). Permissive, with an explicit patent grant. There is no field-of-use
 restriction — see [`ETHICS.md`](ETHICS.md) for why that was a conscious choice and what we ask
 of you anyway.
+
+
+## Running the dev stack
+
+```
+podman-compose up -d
+```
+
+Brings up Postgres + NATS + the control plane from a clean checkout — the server
+migrates on boot, no manual steps. This is a **dev stack**: default credentials,
+no TLS, not production. Use `podman-compose` (native), not `podman compose`
+(which needs a Docker socket rootless Podman lacks). The agent runs on an
+endpoint (it needs host access), not in this stack.

@@ -177,7 +177,7 @@ USBInserted event producer + a real (non-stub) USB enforcer via authorized_defau
 
 CI test asserting core packages do not import Hub / compliance-pack / multi-tenant-control-plane packages, so an open-core split stays cheap. Retrofitting this boundary later is expensive; enforcing it costs one test now.
 
-#### T-025 · Podman compose dev stack
+#### T-025 · Podman compose dev stack · **done**
 `~3h` · depends: T-001
 
 Postgres + NATS + control plane up from a clean checkout with one command. The plan's own verification section opens with 'podman compose up' and no ticket built it. Podman rootless, not Docker. Acceptance: clean clone to running stack, no manual steps.
