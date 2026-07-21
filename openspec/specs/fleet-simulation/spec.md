@@ -1,7 +1,7 @@
 # fleet-simulation Specification
 
 ## Purpose
-TBD - created by archiving change add-fleet-simulation. Update Purpose after archive.
+A one-command multi-agent fleet simulation in podman: N agent containers enroll with their own identities and publish verified telemetry, and it asserts the fleet properties (verified+attributed telemetry, liveness, the dead-man's-switch on a killed agent, revocation rejecting telemetry). deploy/fleet-e2e.sh; token issuance is an operator-local command; fanotify permission mode is not simulable in rootless podman.
 ## Requirements
 ### Requirement: A multi-agent fleet is demonstrable in podman
 There MUST be a one-command simulation that brings up the control plane and multiple agent
