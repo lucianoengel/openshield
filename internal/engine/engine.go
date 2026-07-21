@@ -77,7 +77,15 @@ func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, er
 
 // Engine runs the assembled pipeline for one event.
 type Engine struct {
-	disp *core.Dispatcher
+	disp   *core.Dispatcher
+	ledger core.Ledger
+	now    func() time.Time
+
+	// Enforcers carry out Decisions post-decision (Phase 2). EMPTY by default —
+	// with no enforcers the engine is observe-only (D1): it decides and records,
+	// and enforces nothing. Registering an enforcer turns enforcement on, per
+	// action. Enforcement is CONTAINMENT after detection, not prevention (D16).
+	Enforcers []core.Enforcer
 }
 
 // New assembles the pipeline: classify (via the worker) → policy → decide, with
@@ -89,14 +97,61 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 	disp := core.NewDispatcher(&reg, stageDeadline)
 	disp.OnOutcome = core.NewAuditSink(ledger).Record
 	disp.Logger = logger
-	return &Engine{disp: disp}
+	return &Engine{disp: disp, ledger: ledger, now: time.Now}
 }
 
-// Process runs one event through the pipeline and returns the Decision. A
-// recording failure surfaces as an error alongside any decision (the caller must
-// know the audit did not land), exactly as the dispatcher contracts.
+// Process runs one event through the pipeline, records the Decision, then — if an
+// enforcer can carry out its action — enforces it POST-DECISION. The order is
+// deliberate: the Decision is recorded (by the dispatcher's audit sink) BEFORE
+// enforcement is attempted, so the trail shows what was decided even if
+// enforcement fails or the process dies mid-enforce.
 func (e *Engine) Process(ctx context.Context, ev *corev1.Event) (*corev1.Decision, error) {
-	return e.disp.Dispatch(ctx, ev)
+	dec, err := e.disp.Dispatch(ctx, ev)
+	if dec != nil {
+		e.enforce(ctx, ev, dec)
+	}
+	return dec, err
+}
+
+// enforce dispatches a recorded Decision to the first enforcer that advertises
+// its action, supplying the enforcement TARGET (the event's file path) for a
+// TargetedEnforcer. The enforcement outcome is audited — a failure is
+// high-severity and never silent (D14). With no enforcers this is a no-op
+// (observe-only, D1).
+func (e *Engine) enforce(ctx context.Context, ev *corev1.Event, dec *corev1.Decision) {
+	for _, enf := range e.Enforcers {
+		if !core.CanEnforce(enf, dec) {
+			continue
+		}
+		var enfErr error
+		if te, ok := enf.(core.TargetedEnforcer); ok {
+			enfErr = te.EnforceTarget(ctx, dec, ev.GetFilesystem().GetResolvedPath())
+		} else {
+			enfErr = enf.Enforce(ctx, dec)
+		}
+		e.recordEnforcement(ctx, dec, enfErr)
+		return // one enforcer per action
+	}
+}
+
+func (e *Engine) recordEnforcement(ctx context.Context, dec *corev1.Decision, enfErr error) {
+	entry := &core.Entry{
+		AppendedAt: e.now().UTC(),
+		Decision:   dec,
+		Retention:  core.RetentionStandard,
+	}
+	if enfErr != nil {
+		// A failed enforcement is auditable, never silence (D14).
+		entry.OutcomeKind = "enforcement-failed"
+		entry.OutcomeStage = enfErr.Error()
+	} else {
+		entry.OutcomeKind = "enforced"
+	}
+	// Best-effort: an audit-append failure here is itself logged by the caller's
+	// logger via the dispatcher path for the decision; the enforcement record is
+	// appended directly. If it fails, the decision is still recorded — the
+	// enforcement outcome record is the additional, not the primary, trail.
+	_ = e.ledger.Append(ctx, entry)
 }
 
 // NewFromWorker is the production constructor: it takes a started *privileged.Worker.

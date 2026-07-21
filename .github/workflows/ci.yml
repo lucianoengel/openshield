@@ -89,6 +89,8 @@ jobs:
         run: ./scripts/check-opencore-boundary.sh check && ./scripts/check-opencore-boundary.sh --selftest
       - name: privileged agent has no parser dependency
         run: ./scripts/check-agent-deps.sh
+      - name: enforcement dispatch + quarantine (post-decision, observe-only default)
+        run: go test -count=1 -v ./internal/engine/ ./internal/enforcers/...
       - name: agent process-boundary invariants
         run: go test -run 'TestFrame|TestOversized|TestTruncated|TestClassifierError|TestUnreadable|TestByteCeiling|TestWorkerRefuses|TestPrivilegedTalks|TestWorkerTimeout' -v ./internal/agent/
 

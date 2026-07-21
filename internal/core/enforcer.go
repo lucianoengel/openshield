@@ -43,3 +43,18 @@ func CanEnforce(e Enforcer, d *corev1.Decision) bool {
 	}
 	return false
 }
+
+// TargetedEnforcer is an Enforcer that acts on a specific TARGET (a file path, a
+// connection) supplied by the caller, not carried in the Decision.
+//
+// The Decision carries the verdict and no target (D39): widening the hash-chained
+// Decision contract to carry an enforcement target is a deferred core change. But
+// enforcement of a file genuinely needs to know WHICH file. So the engine, which
+// holds the originating event, supplies the target here — separately from the
+// Decision. The enforcer still receives only the Decision for the VERDICT (D14);
+// the target is the subject of enforcement, not detection detail, exactly as
+// CrowdSec's decision carries the IP to act on.
+type TargetedEnforcer interface {
+	Enforcer
+	EnforceTarget(ctx context.Context, d *corev1.Decision, target string) error
+}
