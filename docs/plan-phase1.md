@@ -104,8 +104,10 @@ Postgres = system of record; JetStream = bus only. Key-evolving forward integrit
 
 Seeded incident renders as an ordered timeline via CLI/SQL. **Landed** as `openshieldctl timeline|verify|anchor export`. Building it forced the persistence D30 assumed but the system lacked: the public-key chain lived only in the in-process signer, so no second process could verify and a restart orphaned the history (D32). `verify` exits 0/3/4 so a cron job can tell a clean chain from a tampered one from an unreachable database. Records no viewer and authenticates no operator until T-017 — and says so.
 
-#### T-016 · Trivial wiring proof - one event end to end, stubs only
+#### T-016 · Trivial wiring proof - one event end to end, stubs only · **subsumed**
 `~2h` · depends: T-005, T-022
+
+**SUBSUMED:** the throwaway wiring proof is no longer needed — the real end-to-end pipeline exists and is tested (classify → policy → decide → audit → CLI; USB event → enforcer; agent telemetry → control plane). The proof this ticket would have provided is now provided by the real components.
 
 Hardcoded-verdict classifier stub + flat-file audit sink; ONE real fanotify event traverses the full path. Proves the wiring before ~13h of real classifier+ledger work is committed. Deliberately throwaway.
 
