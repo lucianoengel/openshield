@@ -73,7 +73,18 @@ func main() {
 		fatal("nats: %v", err)
 	}
 	defer conn.Close()
-	pub := natsx.NewSignedPublisher(agentID, id, conn)
+	// Persist the telemetry sequence so a restart resumes forward-monotonically
+	// instead of resetting to 0 and being rejected as a replay (D66). In-memory
+	// when OPENSHIELD_SEQ_FILE is unset.
+	var pub *natsx.SignedPublisher
+	if seqFile := os.Getenv("OPENSHIELD_SEQ_FILE"); seqFile != "" {
+		pub, err = natsx.NewSignedPublisherWithSeq(agentID, id, conn, natsx.NewFileSeqStore(seqFile))
+		if err != nil {
+			fatal("sequence store: %v", err)
+		}
+	} else {
+		pub = natsx.NewSignedPublisher(agentID, id, conn)
+	}
 
 	tick := time.NewTicker(interval)
 	defer tick.Stop()

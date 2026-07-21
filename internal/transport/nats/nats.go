@@ -1,4 +1,12 @@
-// Package nats implements core.Transport over NATS JetStream.
+// Package nats implements core.Transport over CORE NATS (D66).
+//
+// It uses plain conn.Publish/Subscribe — at-most-once, fire-and-forget. It is NOT
+// JetStream: a publish while the control-plane subscriber is down returns success
+// with nothing durably stored. DURABILITY across a control-plane outage is the
+// OFFLINE QUEUE's job (D40), which wraps this transport and stores-then-flushes;
+// this package does not claim it. Message ATTRIBUTION and gap/replay detection
+// are the signed path's (D50), and the signed sequence is persisted so a restart
+// is forward-monotonic, not a false replay (D66).
 //
 // This is the agent↔control-plane boundary ONLY. It is deliberately not used
 // inside the endpoint pipeline: the fanotify permission responder answers while
