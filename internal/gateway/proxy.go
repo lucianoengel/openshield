@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/lucianoengel/openshield/internal/enforcers/flow"
 )
@@ -60,6 +61,14 @@ func newFlowID() string {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		// HTTPS: the client tunnels through CONNECT and runs TLS end to end with
+		// the origin. The proxy relays ciphertext and inspects nothing here —
+		// seeing the body requires terminating that TLS (interception, N1.3b).
+		p.handleConnect(w, r)
+		return
+	}
+
 	body, tooLarge, err := readBounded(r.Body, p.maxBody)
 	if err != nil {
 		http.Error(w, "gateway: reading request body", http.StatusBadGateway)
@@ -98,6 +107,48 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		p.forward(w, r, body)
 	}
+}
+
+// handleConnect establishes a BLIND TCP tunnel for an HTTPS CONNECT: the TLS
+// session is end to end between the client and the origin, so the proxy relays
+// ciphertext and classifies NOTHING. Tunneled HTTPS bodies are therefore
+// uninspected — a stated coverage gap that TLS interception (N1.3b) closes. The
+// tunnel is logged so the gap is operationally visible, not silent (D16).
+func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
+	upstream, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	if err != nil {
+		http.Error(w, "gateway: upstream dial failed", http.StatusBadGateway)
+		return
+	}
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		upstream.Close()
+		http.Error(w, "gateway: cannot tunnel (no hijack support)", http.StatusInternalServerError)
+		return
+	}
+	client, _, err := hj.Hijack()
+	if err != nil {
+		upstream.Close()
+		return
+	}
+	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		client.Close()
+		upstream.Close()
+		return
+	}
+	p.logger.Info("gateway: tunneling HTTPS (not inspected — TLS interception is N1.3b)",
+		"host", r.Host)
+	go relay(client, upstream)
+	go relay(upstream, client)
+}
+
+// relay copies one direction of a tunnel and closes both ends when it finishes, so
+// the other direction unblocks. Close on an already-closed conn is a harmless
+// no-op — the standard tunnel teardown.
+func relay(dst, src net.Conn) {
+	_, _ = io.Copy(dst, src)
+	dst.Close()
+	src.Close()
 }
 
 // forward sends the buffered request upstream and copies the response back. For a
