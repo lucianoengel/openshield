@@ -22,16 +22,23 @@ import (
 	"io"
 	"os"
 
+	"golang.org/x/crypto/nacl/box"
+
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
-// KeySize is the AES-256 key length.
+// KeySize is the AES-256 key length (symmetric mode) and the Curve25519 key
+// length (escrow mode) — both 32 bytes.
 const KeySize = 32
 
-// magic marks an OpenShield-encrypted file, so re-encryption is idempotent and
-// Decrypt can reject a blob that is not one of ours.
-var magic = []byte("OSENC1\x00")
+// magic marks a SYMMETRIC OpenShield-encrypted file (D57); escrowMagic marks a
+// PUBLIC-KEY escrow blob (D59). Distinct headers make a blob self-describing:
+// re-encryption is idempotent across modes, and recovery routes to the right key.
+var (
+	magic       = []byte("OSENC1\x00")
+	escrowMagic = []byte("OSENCX1\x00")
+)
 
 const nonceSize = 12 // AES-GCM standard nonce
 
@@ -55,7 +62,10 @@ func Encrypt(key, plaintext []byte) ([]byte, error) {
 // this is what makes an encrypted file genuinely unreadable, not just renamed.
 // Exported because operator recovery is a real operation.
 func Decrypt(key, blob []byte) ([]byte, error) {
-	if !isEncrypted(blob) {
+	if bytes.HasPrefix(blob, escrowMagic) {
+		return nil, fmt.Errorf("encryptlocal: this is an escrow blob — use DecryptEscrow")
+	}
+	if !bytes.HasPrefix(blob, magic) {
 		return nil, fmt.Errorf("encryptlocal: not an OpenShield-encrypted blob")
 	}
 	rest := blob[len(magic):]
@@ -74,7 +84,65 @@ func Decrypt(key, blob []byte) ([]byte, error) {
 	return pt, nil
 }
 
-func isEncrypted(blob []byte) bool { return bytes.HasPrefix(blob, magic) }
+// isEncrypted recognises EITHER mode's magic, so re-encryption is an idempotent
+// no-op regardless of which mode wrote the file.
+func isEncrypted(blob []byte) bool {
+	return bytes.HasPrefix(blob, magic) || bytes.HasPrefix(blob, escrowMagic)
+}
+
+// --- Escrow mode (D59): public-key envelope encryption ---
+//
+// The endpoint holds only the recipient PUBLIC key and seals to it with an
+// anonymous sealed-box (an ephemeral keypair per file, its public part embedded).
+// The endpoint CANNOT decrypt what it sealed — recovery needs the recipient
+// PRIVATE key, held off the endpoint. This closes the D57 custody gap: a
+// fully-compromised endpoint yields ciphertext it cannot open.
+
+// GenerateEscrowKeypair returns a Curve25519 (public, private) keypair. The
+// operator provisions the PUBLIC key to endpoints and keeps the PRIVATE key in a
+// vault off the endpoint.
+func GenerateEscrowKeypair() (pub, priv []byte, err error) {
+	pk, sk, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encryptlocal: escrow keygen: %w", err)
+	}
+	return pk[:], sk[:], nil
+}
+
+// EncryptEscrow seals plaintext to the recipient public key. Only the matching
+// private key can open it — the caller (endpoint) cannot.
+func EncryptEscrow(recipientPub, plaintext []byte) ([]byte, error) {
+	if len(recipientPub) != KeySize {
+		return nil, fmt.Errorf("encryptlocal: escrow public key must be %d bytes, got %d", KeySize, len(recipientPub))
+	}
+	var pk [32]byte
+	copy(pk[:], recipientPub)
+	sealed, err := box.SealAnonymous(nil, plaintext, &pk, rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("encryptlocal: escrow seal: %w", err)
+	}
+	out := append([]byte(nil), escrowMagic...)
+	return append(out, sealed...), nil
+}
+
+// DecryptEscrow recovers an escrow blob with the recipient keypair — the recovery
+// operation, run by the off-endpoint private-key holder. A wrong key fails.
+func DecryptEscrow(recipientPub, recipientPriv, blob []byte) ([]byte, error) {
+	if !bytes.HasPrefix(blob, escrowMagic) {
+		return nil, fmt.Errorf("encryptlocal: not an escrow blob")
+	}
+	if len(recipientPub) != KeySize || len(recipientPriv) != KeySize {
+		return nil, fmt.Errorf("encryptlocal: escrow keys must be %d bytes", KeySize)
+	}
+	var pk, sk [32]byte
+	copy(pk[:], recipientPub)
+	copy(sk[:], recipientPriv)
+	pt, ok := box.OpenAnonymous(nil, blob[len(escrowMagic):], &pk, &sk)
+	if !ok {
+		return nil, fmt.Errorf("encryptlocal: escrow open failed (wrong key or corrupt)")
+	}
+	return pt, nil
+}
 
 func newGCM(key []byte) (cipher.AEAD, error) {
 	if len(key) != KeySize {
@@ -87,31 +155,49 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// Enforcer encrypts flagged files in place under a fixed key.
+// Enforcer encrypts flagged files in place. In SYMMETRIC mode (D57) it holds the
+// AES key and can decrypt; in ESCROW mode (D59) it holds only the recipient
+// PUBLIC key and CANNOT decrypt what it seals. Exactly one mode is set.
 type Enforcer struct {
-	key []byte
+	key       []byte // symmetric AES key (symmetric mode)
+	escrowPub []byte // recipient public key (escrow mode)
 }
 
-// New loads a 32-byte key from a file. A wrong-length key is a load error — the
-// enforcer never runs with a weak or truncated key.
+// New loads a 32-byte symmetric key from a file. A wrong-length key is a load
+// error — the enforcer never runs with a weak or truncated key.
 func New(keyPath string) (*Enforcer, error) {
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("encryptlocal: reading key %s: %w", keyPath, err)
 	}
-	if len(key) != KeySize {
-		return nil, fmt.Errorf("encryptlocal: key %s is %d bytes, want %d", keyPath, len(key), KeySize)
-	}
-	return &Enforcer{key: key}, nil
+	return WithKey(key)
 }
 
-// WithKey builds an enforcer from a raw key — for tests and callers holding the
-// key already.
+// WithKey builds a SYMMETRIC enforcer from a raw key.
 func WithKey(key []byte) (*Enforcer, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("encryptlocal: key must be %d bytes, got %d", KeySize, len(key))
 	}
 	return &Enforcer{key: append([]byte(nil), key...)}, nil
+}
+
+// NewEscrow loads a 32-byte recipient PUBLIC key from a file and builds an ESCROW
+// enforcer: it can seal to that key but cannot decrypt (D59). The private key is
+// held off the endpoint.
+func NewEscrow(pubKeyPath string) (*Enforcer, error) {
+	pub, err := os.ReadFile(pubKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("encryptlocal: reading escrow public key %s: %w", pubKeyPath, err)
+	}
+	return WithEscrowKey(pub)
+}
+
+// WithEscrowKey builds an ESCROW enforcer from a raw recipient public key.
+func WithEscrowKey(pub []byte) (*Enforcer, error) {
+	if len(pub) != KeySize {
+		return nil, fmt.Errorf("encryptlocal: escrow public key must be %d bytes, got %d", KeySize, len(pub))
+	}
+	return &Enforcer{escrowPub: append([]byte(nil), pub...)}, nil
 }
 
 func (e *Enforcer) Capabilities() []corev1.Action {
@@ -138,9 +224,14 @@ func (e *Enforcer) EnforceTarget(_ context.Context, _ *corev1.Decision, target s
 		return fmt.Errorf("encryptlocal: reading %s: %w", target, err)
 	}
 	if isEncrypted(data) {
-		return nil // already contained — idempotent
+		return nil // already contained — idempotent (either mode)
 	}
-	blob, err := Encrypt(e.key, data)
+	var blob []byte
+	if e.escrowPub != nil {
+		blob, err = EncryptEscrow(e.escrowPub, data) // endpoint cannot decrypt this
+	} else {
+		blob, err = Encrypt(e.key, data)
+	}
 	if err != nil {
 		return err
 	}

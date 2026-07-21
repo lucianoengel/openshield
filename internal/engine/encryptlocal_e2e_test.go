@@ -61,3 +61,44 @@ func TestEncryptLocalDispatchedAndAudited(t *testing.T) {
 		t.Errorf("second entry = %q, want 'enforced'", led.entries[1].OutcomeKind)
 	}
 }
+
+// End to end in ESCROW mode (D59): a policy deciding ENCRYPT_LOCAL routes to an
+// escrow enforcer holding only the recipient PUBLIC key; the file is sealed so
+// the endpoint cannot decrypt it, only the off-endpoint PRIVATE key recovers it,
+// and the outcome is audited.
+func TestEncryptLocalEscrowDispatchedAndAudited(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "leak.csv")
+	plaintext := []byte("cpf,name\n111.444.777-35,dave\n")
+	if err := os.WriteFile(target, plaintext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pub, priv, err := encryptlocal.GenerateEscrowKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enf, err := encryptlocal.WithEscrowKey(pub) // engine/endpoint holds only pub
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	led := &recLedger{}
+	e := engineWith(led, corev1.Action_ACTION_ENCRYPT_LOCAL, enf)
+	if _, err := e.Process(context.Background(), fsEvent("e1", target)); err != nil {
+		t.Fatal(err)
+	}
+
+	onDisk, _ := os.ReadFile(target)
+	if bytes.Equal(onDisk, plaintext) || bytes.Contains(onDisk, []byte("dave")) {
+		t.Fatal("the flagged file was not sealed")
+	}
+	// Only the escrow PRIVATE key recovers it.
+	got, err := encryptlocal.DecryptEscrow(pub, priv, onDisk)
+	if err != nil || !bytes.Equal(got, plaintext) {
+		t.Fatalf("escrow file does not recover with the private key: %v", err)
+	}
+	if len(led.entries) != 2 || led.entries[1].OutcomeKind != "enforced" {
+		t.Fatalf("expected decision + enforced audit, got %d entries", len(led.entries))
+	}
+}
