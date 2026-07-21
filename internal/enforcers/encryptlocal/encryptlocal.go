@@ -26,6 +26,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/enforcers/safeio"
 )
 
 // KeySize is the AES-256 key length (symmetric mode) and the Curve25519 key
@@ -219,7 +220,11 @@ func (e *Enforcer) EnforceTarget(_ context.Context, _ *corev1.Decision, target s
 	if target == "" {
 		return fmt.Errorf("encryptlocal: empty target")
 	}
-	data, err := os.ReadFile(target)
+	// Read WITHOUT following a symlink at the target: an attacker who swapped the
+	// flagged path for a symlink between classification and here must not redirect
+	// us onto an arbitrary file (D65). A swapped symlink / non-regular target is
+	// refused loudly, never silently followed.
+	data, err := safeio.ReadRegularNoFollow(target)
 	if err != nil {
 		return fmt.Errorf("encryptlocal: reading %s: %w", target, err)
 	}

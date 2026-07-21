@@ -16,6 +16,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/enforcers/safeio"
 )
 
 // Mover moves a file from src to a destination directory. Behind an interface so
@@ -67,15 +68,25 @@ var (
 type fsMover struct{}
 
 func (fsMover) Move(src, dstDir string) (string, error) {
+	// Refuse a swapped symlink / non-regular source (the classification→enforce
+	// TOCTOU, D65): quarantining a symlink would move the link (or, via the
+	// fallback, could copy an attacker-chosen file). A flagged file is a regular
+	// file; anything else at enforce time is refused loudly.
+	if err := safeio.RefuseNonRegular(src); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return "", err
 	}
 	dst := filepath.Join(dstDir, filepath.Base(src))
 	if err := os.Rename(src, dst); err != nil {
-		// Rename fails across filesystems; fall back to copy+remove.
-		data, rerr := os.ReadFile(src)
+		// Rename fails across filesystems; fall back to copy+remove. Read WITHOUT
+		// following a symlink at src: a swapped symlink must not make us copy an
+		// attacker-chosen file into quarantine (D65). Rename itself does not follow
+		// a symlink source; this closes the fallback path's follow.
+		data, rerr := safeio.ReadRegularNoFollow(src)
 		if rerr != nil {
-			return "", err
+			return "", rerr
 		}
 		if werr := os.WriteFile(dst, data, 0o600); werr != nil {
 			return "", werr
