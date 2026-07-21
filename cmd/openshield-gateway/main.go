@@ -99,6 +99,27 @@ func main() {
 		proxy.EnableInterception(minter, splitList(os.Getenv("OPENSHIELD_NO_INTERCEPT")), nil)
 		log.Warn("gateway: TLS INTERCEPTION ENABLED — the interception CA can impersonate any site (D75)",
 			slog.Int("do_not_intercept", len(splitList(os.Getenv("OPENSHIELD_NO_INTERCEPT")))))
+
+		// SIGHUP hot-rotates the interception CA without a restart (D79): reload the
+		// CA files and Rotate. A reload error is logged and the old CA keeps serving
+		// (fail-safe) — a bad rotation must not break interception.
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		go func() {
+			for range hup {
+				nc, err1 := os.ReadFile(caCert)
+				nk, err2 := os.ReadFile(caKey)
+				if err1 != nil || err2 != nil {
+					log.Error("gateway: CA reload read failed (old CA still serving)", slog.Any("cert_err", err1), slog.Any("key_err", err2))
+					continue
+				}
+				if err := minter.Rotate(nc, nk); err != nil {
+					log.Error("gateway: interception CA rotation failed (old CA still serving)", slog.String("err", err.Error()))
+					continue
+				}
+				log.Warn("gateway: interception CA ROTATED (SIGHUP) — leaf cache flushed (D79)")
+			}
+		}()
 	}
 
 	// OPTIONAL telemetry projection to the control plane (D77): when NATS + an
