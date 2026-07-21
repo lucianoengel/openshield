@@ -89,10 +89,10 @@ Two processes. TESTABLE: privileged binary is a separate Go module with an impor
 
 Runs in unprivileged worker. Luhn + CPF check digits. TESTABLE: reflect emitted Classification message - fields must be EXACTLY enum-type + float-confidence + int-count; AND grep serialized wire bytes across seeded-PII fixtures for any substring of seed values (must find none). No content, no reversible hash.
 
-#### T-008 · Local policy evaluation to Decision
+#### T-008 · Local policy evaluation to Decision · **done**
 `~4h` · depends: T-003, T-007
 
-Local policy file (no control plane in Phase 1); OPA/Rego native in Go; policy over classifier output yields well-formed Decision; identical input yields identical Decision.
+Local policy file (no control plane in Phase 1); OPA/Rego native in Go; policy over classifier output yields well-formed Decision; identical input yields identical Decision. **Landed** with the engine on a restricted capability set (no network/clock/randomness → deterministic by construction, distributed policy safe-by-construction; D34). Building the determinism test surfaced a real bug: OPA returns numbers as json.Number, so the policy's confidence was silently ignored and every Decision fell back to the classification max — fixed, and the test now proves the value is read before proving it is clamped.
 
 #### T-009 · Audit ledger: Postgres hash chain + forward integrity (D12) · **done**
 `~8h` · depends: T-003, T-026
