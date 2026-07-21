@@ -67,6 +67,19 @@ func buildInput(st *core.State) map[string]interface{} {
 		ctx = map[string]interface{}{
 			"risk_score":     c.RiskScore,
 			"has_risk_score": c.HasRiskScore,
+			// Zero-Trust identity context (D85): identity/role/device_posture, a
+			// boundary-safe closed projection (never the whole Context). A policy
+			// decides identity-aware authorization; absent posture (has_posture
+			// false) lets the policy fail CLOSED for access — the tamper-lockout.
+			"identity": c.Identity,
+			"role":     c.Role,
+			"device_posture": map[string]interface{}{
+				"has_posture":    c.DevicePosture.HasPosture,
+				"compliant":      c.DevicePosture.Compliant,
+				"disk_encrypted": c.DevicePosture.DiskEncrypted,
+				"agent_present":  c.DevicePosture.AgentPresent,
+				"os_patch_tier":  int(c.DevicePosture.OSPatchTier),
+			},
 		}
 	}
 	return map[string]interface{}{

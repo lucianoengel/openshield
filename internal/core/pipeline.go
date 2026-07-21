@@ -153,7 +153,44 @@ type Context struct {
 	AssetTier       AssetTier
 	OrgUnit         string
 	ExceptionGroups []ExceptionGroup
+
+	// Zero-Trust identity context (D85). Identity is the VERIFIED pseudonymous
+	// subject (D23) resolved by the gateway's identity producer; Role is the
+	// authorization group. Both empty until that producer exists (proposal §5.2) —
+	// a ZT policy written against them then denies by default, which is the correct
+	// fail-closed posture, not a gap.
+	Identity string
+	Role     string
+	// DevicePosture is the device's compliance state. Like RiskScore, its presence
+	// flag (HasPosture) distinguishes "not computed" from "computed and compliant":
+	// a defaulted "compliant" when posture is ABSENT is a silent fail-open, so
+	// absence is exposed to policy, which fails CLOSED for access (the tamper-
+	// lockout — a killed/tampered endpoint reports no posture and is denied).
+	DevicePosture DevicePosture
 }
+
+// DevicePosture is a device's compliance state for Zero-Trust access decisions
+// (D85). A closed typed set (D28) — never a map — so a compromised control plane
+// cannot invent posture keys.
+type DevicePosture struct {
+	// HasPosture is false when posture was not computed (no agent, unattested
+	// device). A ZT access policy MUST treat absent posture as untrusted (deny).
+	HasPosture    bool
+	Compliant     bool
+	DiskEncrypted bool
+	AgentPresent  bool
+	OSPatchTier   PatchTier
+}
+
+// PatchTier is a coarse OS-patch-currency band.
+type PatchTier int
+
+const (
+	PatchUnknown PatchTier = iota
+	PatchCurrent
+	PatchStale
+	PatchEndOfLife
+)
 
 type AssetTier int
 
