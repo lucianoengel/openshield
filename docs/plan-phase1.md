@@ -172,7 +172,7 @@ Merkle root periodically anchored to a trust domain outside the agent: second ho
 
 USBInserted event producer + a real (non-stub) USB enforcer via authorized_default, proving the Enforcer interface end-to-end with an actual enforcement point. Restores D1's explicit 'ship one trivial USB enforcer to prove the interface', silently dropped in the first ticket pass. Note A8: this does NOT test the fail-open/blocking contract - that is T-011.
 
-#### T-021 · Open-core separability boundary test (D21)
+#### T-021 · Open-core separability boundary test (D21) · **done**
 `~2h` · depends: T-008
 
 CI test asserting core packages do not import Hub / compliance-pack / multi-tenant-control-plane packages, so an open-core split stays cheap. Retrofitting this boundary later is expensive; enforcing it costs one test now.

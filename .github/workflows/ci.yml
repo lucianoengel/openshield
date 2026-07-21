@@ -85,6 +85,8 @@ jobs:
         run: ./scripts/check-core-deps.sh
       - name: core depends on no concrete capability (T-014)
         run: ./scripts/check-capability-boundary.sh
+      - name: open code does not import enterprise code (T-021)
+        run: ./scripts/check-opencore-boundary.sh check && ./scripts/check-opencore-boundary.sh --selftest
       - name: privileged agent has no parser dependency
         run: ./scripts/check-agent-deps.sh
       - name: agent process-boundary invariants
@@ -129,7 +131,6 @@ jobs:
         run: go test -count=1 -v ./internal/cli/
 
   # Still to come, each its own ticket:
-  #   T-021  open-core separability: core must not import Hub / compliance packages
   #   T-024  offline store-and-forward — the transport seam exists, the
   #          guarantee does NOT. Publish currently errors when unreachable
   #
