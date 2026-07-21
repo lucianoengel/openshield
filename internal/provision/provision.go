@@ -73,6 +73,46 @@ func InitCA() (caCertPEM, caKeyPEM []byte, err error) {
 	return pemBlock("CERTIFICATE", der), pemBlock("PRIVATE KEY", keyDER), nil
 }
 
+// InterceptionCA generates an Ed25519 self-signed CA for TLS INTERCEPTION and
+// returns its cert and private key as PEM. It is DELIBERATELY SEPARATE from the
+// fleet mTLS CA (InitCA): an interception CA can sign a trusted certificate for
+// ANY host, so whoever holds it can impersonate the whole internet to every
+// endpoint that trusts it — a far larger blast radius than fleet identity, which
+// only authorises agents and operators. Fusing the two (signing MITM leaves with
+// the fleet CA) would give the fleet CA that power. The CN differs so the two are
+// distinguishable in a trust store; the key PEM is the trust root whose custody IS
+// interception's security (D16). Deploy it as a trusted root ONLY where
+// interception is authorised.
+func InterceptionCA() (caCertPEM, caKeyPEM []byte, err error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: interception CA keygen: %w", err)
+	}
+	serial, err := randSerial()
+	if err != nil {
+		return nil, nil, err
+	}
+	now := clock()
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "OpenShield Interception CA"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: interception CA cert: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: interception CA key: %w", err)
+	}
+	return pemBlock("CERTIFICATE", der), pemBlock("PRIVATE KEY", keyDER), nil
+}
+
 // IssueCert issues an Ed25519 leaf certificate signed by the CA, carrying the
 // role in the Subject Organizational Unit (D58), serverAuth+clientAuth usage, and
 // the given SANs (host names and/or IPs). An unknown role is rejected — the

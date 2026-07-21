@@ -9,8 +9,11 @@
 // process holding the network sockets (D72).
 //
 // Observe-only by DEFAULT (D1): unless OPENSHIELD_ENFORCE is set, the proxy
-// classifies, decides and audits but forwards every flow. Plain HTTP only — HTTPS
-// bodies are opaque until TLS interception (N1.3).
+// classifies, decides and audits but forwards every flow. HTTPS is tunneled blind
+// unless an interception CA is configured (OPENSHIELD_INTERCEPT_CA_CERT/KEY, D75),
+// in which case non-excluded hosts are TLS-intercepted and their bodies classified;
+// the do-not-intercept list (OPENSHIELD_NO_INTERCEPT) tunnels pinned/sensitive
+// hosts blind.
 package main
 
 import (
@@ -20,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -67,6 +71,28 @@ func main() {
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 
+	// TLS interception is OPT-IN: only when an interception CA is configured. It is
+	// a deliberate, scary capability — the CA can impersonate any site (D75) — so it
+	// is never on by default. The do-not-intercept list tunnels pinned/sensitive
+	// hosts blind even when it is on.
+	if caCert, caKey := os.Getenv("OPENSHIELD_INTERCEPT_CA_CERT"), os.Getenv("OPENSHIELD_INTERCEPT_CA_KEY"); caCert != "" && caKey != "" {
+		certPEM, err := os.ReadFile(caCert)
+		if err != nil {
+			fatal(log, "reading interception CA cert", err)
+		}
+		keyPEM, err := os.ReadFile(caKey)
+		if err != nil {
+			fatal(log, "reading interception CA key", err)
+		}
+		minter, err := gateway.NewCertMinter(certPEM, keyPEM)
+		if err != nil {
+			fatal(log, "interception CA", err)
+		}
+		proxy.EnableInterception(minter, splitList(os.Getenv("OPENSHIELD_NO_INTERCEPT")), nil)
+		log.Warn("gateway: TLS INTERCEPTION ENABLED — the interception CA can impersonate any site (D75)",
+			slog.Int("do_not_intercept", len(splitList(os.Getenv("OPENSHIELD_NO_INTERCEPT")))))
+	}
+
 	srv := &http.Server{Addr: listen, Handler: proxy, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -79,7 +105,7 @@ func main() {
 		slog.String("listen", listen),
 		slog.String("worker", workerBin),
 		slog.Bool("enforce", enforce),
-		slog.String("mode", "plain-HTTP forward proxy (TLS interception deferred, N1.3)"))
+		slog.Bool("intercept", proxy.Intercepting()))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(log, "serving", err)
 	}
@@ -106,6 +132,17 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitList parses a comma-separated env value, trimming blanks.
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func fatal(log *slog.Logger, msg string, err error) {
