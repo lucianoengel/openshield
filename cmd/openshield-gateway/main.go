@@ -28,11 +28,15 @@ import (
 	"syscall"
 	"time"
 
+	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
+	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/gateway"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
+	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -95,6 +99,38 @@ func main() {
 		proxy.EnableInterception(minter, splitList(os.Getenv("OPENSHIELD_NO_INTERCEPT")), nil)
 		log.Warn("gateway: TLS INTERCEPTION ENABLED — the interception CA can impersonate any site (D75)",
 			slog.Int("do_not_intercept", len(splitList(os.Getenv("OPENSHIELD_NO_INTERCEPT")))))
+	}
+
+	// OPTIONAL telemetry projection to the control plane (D77): when NATS + an
+	// enrollment endpoint are configured, enroll a signed identity and project a
+	// boundary-safe view of decisions. Off by default; the local ledger is always
+	// the system of record.
+	if natsURL, enrollURL := os.Getenv("OPENSHIELD_NATS_URL"), os.Getenv("OPENSHIELD_ENROLL_URL"); natsURL != "" && enrollURL != "" {
+		agentID := env("OPENSHIELD_AGENT_ID", "gateway")
+		id, err := identity.Generate(agentID)
+		if err != nil {
+			fatal(log, "identity", err)
+		}
+		if err := enrollpkg.Enroll(ctx, http.DefaultClient, enrollURL, agentID, os.Getenv("OPENSHIELD_ENROLL_TOKEN"), id); err != nil {
+			fatal(log, "enroll", err)
+		}
+		conn, err := nats.Connect(natsURL)
+		if err != nil {
+			fatal(log, "nats", err)
+		}
+		defer conn.Close()
+		var pub *natsx.SignedPublisher
+		if seqFile := os.Getenv("OPENSHIELD_SEQ_FILE"); seqFile != "" {
+			pub, err = natsx.NewSignedPublisherWithSeq(agentID, id, conn, natsx.NewFileSeqStore(seqFile))
+			if err != nil {
+				fatal(log, "sequence store", err)
+			}
+		} else {
+			pub = natsx.NewSignedPublisher(agentID, id, conn)
+		}
+		gw.SetTelemetry(pub)
+		log.Info("gateway: telemetry projection ENABLED (boundary-safe: no user IP, no URL path)",
+			slog.String("agent_id", agentID))
 	}
 
 	srv := &http.Server{Addr: listen, Handler: proxy, ReadHeaderTimeout: 10 * time.Second}

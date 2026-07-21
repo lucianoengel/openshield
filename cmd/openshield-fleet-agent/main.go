@@ -8,10 +8,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +22,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
@@ -64,7 +62,7 @@ func main() {
 	if err != nil {
 		fatal("identity: %v", err)
 	}
-	if err := enroll(ctx, httpClient, enrollURL, agentID, token, id); err != nil {
+	if err := enrollpkg.Enroll(ctx, httpClient, enrollURL, agentID, token, id); err != nil {
 		fatal("enroll: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "fleet-agent %s enrolled\n", agentID)
@@ -120,32 +118,6 @@ func main() {
 					Subject: &corev1.Subject{PseudonymousId: subject}})
 			}
 		}
-	}
-}
-
-func enroll(ctx context.Context, client *http.Client, url, agentID, token string, id *identity.Identity) error {
-	body, _ := json.Marshal(map[string]string{
-		"token": token, "agent_id": agentID,
-		"public_key": base64.StdEncoding.EncodeToString(id.PublicKey()),
-	})
-	// Retry briefly — the endpoint may not be up the instant the container starts.
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("enroll status %d", resp.StatusCode)
-			}
-		} else if time.Now().After(deadline) {
-			return err
-		}
-		time.Sleep(500 * time.Millisecond)
 	}
 }
 

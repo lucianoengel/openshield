@@ -70,6 +70,11 @@ type Gateway struct {
 	// ceiling, D13). Zero lets the worker apply its own default.
 	maxBytes uint64
 
+	// telemetry projects a boundary-safe view of decisions to the control plane.
+	// nil = no projection (the default); the local ledger is the system of record
+	// (D30). Set via SetTelemetry.
+	telemetry Projector
+
 	// Enforcers carry out Decisions post-decision. EMPTY by default — observe-only
 	// (D1): the gateway decides and records, and enforces nothing until a flow
 	// enforcer is registered. Enforcement is CONTAINMENT after detection, not
@@ -82,6 +87,9 @@ type Gateway struct {
 // classifier is an interface so the parser is not linked into the gateway process
 // (D72) and so the assembly is testable without spawning a worker.
 func New(c classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Gateway {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Gateway{
 		classifier: c,
 		policy:     policy,
@@ -207,6 +215,9 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 	dec, err := disp.Dispatch(ctx, ev)
 	if dec != nil {
 		g.enforce(ctx, ev, dec)
+		// Project a boundary-safe view to the control plane (opt-in, best-effort,
+		// additive to the local ledger, D77).
+		g.projectTelemetry(ctx, ev, dec)
 	}
 	return dec, err
 }
