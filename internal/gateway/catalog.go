@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 )
 
@@ -38,4 +40,35 @@ func (c *Catalog) Resolve(host string) (*service, bool) {
 	defer c.mu.RUnlock()
 	s, ok := c.services[host]
 	return s, ok
+}
+
+// Len reports how many services are catalogued (for config validation, D90).
+func (c *Catalog) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.services)
+}
+
+// ParseCatalog builds a Catalog from a config spec "name=url,name2=url2" (D90). A
+// malformed entry (no '=') or an unparseable/host-less URL is an ERROR, never silently
+// skipped — a misconfigured route must fail loudly, not leave a service unreachable.
+func ParseCatalog(spec string) (*Catalog, error) {
+	c := NewCatalog()
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, rawURL, ok := strings.Cut(part, "=")
+		name, rawURL = strings.TrimSpace(name), strings.TrimSpace(rawURL)
+		if !ok || name == "" || rawURL == "" {
+			return nil, fmt.Errorf("catalog: bad entry %q — want name=url", part)
+		}
+		u, err := url.Parse(rawURL)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("catalog: bad url in %q: %v", part, err)
+		}
+		c.Add(name, u)
+	}
+	return c, nil
 }

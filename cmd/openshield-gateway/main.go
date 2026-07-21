@@ -18,6 +18,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -87,6 +90,14 @@ func main() {
 		fatal(log, "starting worker pool", err)
 	}
 	defer pool.Close()
+
+	// Zero-Trust ACCESS MODE (D90): a gateway runs as EITHER an egress forward proxy
+	// (below) OR a client-cert access proxy — different roles, different ports. When
+	// OPENSHIELD_ACCESS_MODE is set, run the access proxy and return.
+	if os.Getenv("OPENSHIELD_ACCESS_MODE") != "" {
+		runAccessMode(ctx, log, pool, ledger)
+		return
+	}
 
 	// The pool satisfies gateway.New's classifier interface (same Classify method as
 	// a single worker), so concurrent flows classify in parallel (D76).
@@ -187,6 +198,88 @@ func main() {
 	}
 	log.Info("gateway shut down")
 }
+
+// runAccessMode serves the Zero-Trust access proxy (D90): the AccessProxy over
+// client-certificate-required TLS, with a file-loaded default-deny access policy, an
+// env service catalog, and a RiskStore. Config is fail-fast and LOUD — a ZT gate must
+// never boot misconfigured and permissive; the failure mode is "does not start",
+// never "starts and admits everyone".
+func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, ledger core.Ledger) {
+	listen := env("OPENSHIELD_ACCESS_LISTEN", "127.0.0.1:8443")
+	clientCA := os.Getenv("OPENSHIELD_ACCESS_CLIENT_CA")
+	serverCert := os.Getenv("OPENSHIELD_ACCESS_SERVER_CERT")
+	serverKey := os.Getenv("OPENSHIELD_ACCESS_SERVER_KEY")
+	policyPath := os.Getenv("OPENSHIELD_ACCESS_POLICY")
+
+	if clientCA == "" || serverCert == "" || serverKey == "" || policyPath == "" {
+		fatal(log, "access mode", errNoAccessConfig)
+	}
+
+	// The access policy is identity-aware and DEFAULT-DENY (D87) — only the operator
+	// can author it. Load it, or abort: never fall back to the observe-first default
+	// (which is default-ALLOW and would admit everyone).
+	mod, err := os.ReadFile(policyPath)
+	if err != nil {
+		fatal(log, "reading access policy", err)
+	}
+	accessPol, err := policy.New(ctx, "access", "1", string(mod))
+	if err != nil {
+		fatal(log, "access policy", err)
+	}
+
+	catalog, err := gateway.ParseCatalog(os.Getenv("OPENSHIELD_ACCESS_CATALOG"))
+	if err != nil {
+		fatal(log, "access catalog", err)
+	}
+	if catalog.Len() == 0 {
+		fatal(log, "access catalog", errEmptyCatalog)
+	}
+
+	caPEM, err := os.ReadFile(clientCA)
+	if err != nil {
+		fatal(log, "reading client CA", err)
+	}
+	clientPool := x509.NewCertPool()
+	if !clientPool.AppendCertsFromPEM(caPEM) {
+		fatal(log, "client CA", errNoCerts)
+	}
+	kp, err := tls.LoadX509KeyPair(serverCert, serverKey)
+	if err != nil {
+		fatal(log, "access server certificate", err)
+	}
+
+	gw := gateway.New(cls, accessPol, ledger, log, 30*time.Second)
+	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
+	ap.SetRiskStore(gateway.NewRiskStore()) // populated by the risk-publish channel (A.5b)
+
+	srv := &http.Server{
+		Addr: listen, Handler: ap, ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{kp},
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    clientPool,
+			MinVersion:   tls.VersionTLS12,
+		},
+	}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	log.Warn("gateway: ZERO-TRUST ACCESS MODE — a valid client certificate is REQUIRED (D86/D90)",
+		slog.String("listen", listen), slog.Int("services", catalog.Len()))
+	if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		fatal(log, "access serving", err)
+	}
+	log.Info("gateway access mode shut down")
+}
+
+var (
+	errNoAccessConfig = errors.New("access mode requires OPENSHIELD_ACCESS_CLIENT_CA, _SERVER_CERT, _SERVER_KEY, and _POLICY")
+	errEmptyCatalog   = errors.New("OPENSHIELD_ACCESS_CATALOG is empty — an access gateway must front at least one service")
+	errNoCerts        = errors.New("no certificates in OPENSHIELD_ACCESS_CLIENT_CA")
+)
 
 func loadOrCreateSigner(path string, log *slog.Logger) (*core.Signer, error) {
 	if s, err := core.LoadSignerFile(path); err == nil {
