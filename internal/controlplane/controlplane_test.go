@@ -45,15 +45,16 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 		t.Skip(msg)
 	}
 	// lockDB BLOCKS on the cross-package advisory lock; under `-race` that wait can
-	// exceed the 5s connect deadline above, so the DROP needs a FRESH deadline —
-	// otherwise the lock wait eats it and the DROP fails "context deadline exceeded".
+	// exceed the 5s connect deadline above, so ALL post-lock DDL (drop AND migrate)
+	// needs a FRESH deadline — otherwise the lock wait eats the original ctx and
+	// the work fails "context deadline exceeded".
 	lockDB(t, pool)
-	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer dropCancel()
-	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, schema_migrations CASCADE`); err != nil {
+	ddlCtx, ddlCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer ddlCancel()
+	if _, err := pool.Exec(ddlCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
-	if err := postgres.Migrate(ctx, pool); err != nil {
+	if err := postgres.Migrate(ddlCtx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(pool.Close)
