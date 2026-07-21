@@ -26,29 +26,25 @@ cleanup(){
 }
 trap cleanup EXIT
 
-echo "==> generating a throwaway CA + certs"
-# CA
-openssl req -x509 -newkey ed25519 -nodes -keyout "$CERTS/ca-key.pem" -out "$CERTS/ca.pem" \
-  -subj "/CN=openshield-test-ca" -days 1 >/dev/null 2>&1
-# Server cert — SAN covers both service container names + localhost; usable as
-# server (enroll HTTPS, NATS TLS) AND client (server→NATS).
-openssl req -newkey ed25519 -nodes -keyout "$CERTS/server-key.pem" -out "$CERTS/server.csr" \
-  -subj "/CN=osmtls-server" >/dev/null 2>&1
-openssl x509 -req -in "$CERTS/server.csr" -CA "$CERTS/ca.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial \
-  -out "$CERTS/server-cert.pem" -days 1 \
-  -extfile <(printf 'subjectAltName=DNS:osmtls-server,DNS:osmtls-nats,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n') >/dev/null 2>&1
-# Agent client cert — role OU=agent (D58): may /enroll, may NOT /view.
-openssl req -newkey ed25519 -nodes -keyout "$CERTS/client-key.pem" -out "$CERTS/client.csr" \
-  -subj "/CN=osmtls-agent/OU=agent" >/dev/null 2>&1
-openssl x509 -req -in "$CERTS/client.csr" -CA "$CERTS/ca.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial \
-  -out "$CERTS/client-cert.pem" -days 1 \
-  -extfile <(printf 'extendedKeyUsage=serverAuth,clientAuth\n') >/dev/null 2>&1
-# Operator client cert — role OU=operator (D58): may /view, may NOT /enroll.
-openssl req -newkey ed25519 -nodes -keyout "$CERTS/op-key.pem" -out "$CERTS/op.csr" \
-  -subj "/CN=osmtls-op/OU=operator" >/dev/null 2>&1
-openssl x509 -req -in "$CERTS/op.csr" -CA "$CERTS/ca.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial \
-  -out "$CERTS/op-cert.pem" -days 1 \
-  -extfile <(printf 'extendedKeyUsage=serverAuth,clientAuth\n') >/dev/null 2>&1
+echo "==> generating a throwaway CA + role-tagged certs via openshield-provision (D60)"
+# Use the real provisioning tool, not hand-rolled openssl — this proves the tool's
+# output actually works with the server, the role gate, and the TLS NATS broker.
+PROV="$(mktemp)"
+go build -o "$PROV" ./cmd/openshield-provision
+"$PROV" ca-init --out "$CERTS" >/dev/null
+# Server cert — SANs cover both service container names + localhost + 127.0.0.1;
+# usable as server (enroll HTTPS, NATS TLS) AND client (server→NATS). Role is
+# irrelevant for the server leg; tag it agent.
+"$PROV" cert --ca "$CERTS" --role agent --cn osmtls-server \
+  --san osmtls-server --san osmtls-nats --san localhost --san 127.0.0.1 --out "$CERTS/srv" >/dev/null
+mv "$CERTS/srv/cert.pem" "$CERTS/server-cert.pem"; mv "$CERTS/srv/key.pem" "$CERTS/server-key.pem"
+# Agent client cert (OU=agent): may /enroll, may NOT /view.
+"$PROV" cert --ca "$CERTS" --role agent --cn osmtls-agent --out "$CERTS/ag" >/dev/null
+mv "$CERTS/ag/cert.pem" "$CERTS/client-cert.pem"; mv "$CERTS/ag/key.pem" "$CERTS/client-key.pem"
+# Operator client cert (OU=operator): may /view, may NOT /enroll.
+"$PROV" cert --ca "$CERTS" --role operator --cn osmtls-op --out "$CERTS/op2" >/dev/null
+mv "$CERTS/op2/cert.pem" "$CERTS/op-cert.pem"; mv "$CERTS/op2/key.pem" "$CERTS/op-key.pem"
+rm -f "$PROV"
 chmod 644 "$CERTS"/*.pem
 chmod 755 "$CERTS" # mktemp -d is 0700; the container's nonroot user must traverse it
 
