@@ -186,10 +186,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..009), and no more no matter how many times
+	// One row per migration FILE (001..010), and no more no matter how many times
 	// Migrate runs — that stability is the property under test.
-	if n != 9 {
-		t.Errorf("schema_migrations rows = %d, want 9 — a migration applied twice "+
+	if n != 10 {
+		t.Errorf("schema_migrations rows = %d, want 10 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }
@@ -256,11 +256,8 @@ func TestRowEditedDirectlyInPostgresIsDetected(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(ctx,
-		`UPDATE audit_entries SET action = $1 WHERE sequence = 1`,
-		int32(corev1.Action_ACTION_ALLOW)); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `UPDATE audit_entries SET action = $1 WHERE sequence = 1`,
+		int32(corev1.Action_ACTION_ALLOW))
 
 	res, err := l.Verify(ctx, nil)
 	if err != nil {
@@ -290,9 +287,7 @@ func TestDeletedRowIsDetected(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM audit_entries WHERE sequence = 1`); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `DELETE FROM audit_entries WHERE sequence = 1`)
 	res, err := l.Verify(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -699,6 +694,67 @@ func TestWriteResumeWithForeignSignerIsRefused(t *testing.T) {
 
 // tombstone erases an entry's content in place, keeping the skeleton, as Purge
 // does — used to drive the verification tests directly.
+// The ledger is append-only at the DB level (D63): the app role cannot DELETE an
+// entry or change an integrity column, but the retention tombstone (content-only)
+// still succeeds. This proves the trigger stops an ordinary connection-string
+// holder; the tamper tests prove Verify() still catches a bypasser.
+func TestLedgerIsAppendOnly(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pool, err := pgxpool.New(ctx, dsn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	if _, err := pool.Exec(ctx, `DELETE FROM audit_entries WHERE sequence = 1`); err == nil {
+		t.Error("DELETE on audit_entries succeeded — the ledger is not append-only")
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE audit_entries SET hash = $1 WHERE sequence = 1`, []byte("tampered")); err == nil {
+		t.Error("UPDATE of hash succeeded — integrity columns are mutable")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET prev_hash = $1 WHERE sequence = 1`,
+		[]byte("x")); err == nil {
+		t.Error("UPDATE of prev_hash succeeded — the chain link is mutable")
+	}
+	// A retention-style tombstone touches only content columns + tombstoned_at.
+	if _, err := pool.Exec(ctx,
+		`UPDATE audit_entries SET tombstoned_at = now(), subject_id = '', action = NULL WHERE sequence = 1`); err != nil {
+		t.Errorf("retention tombstone was blocked by the append-only trigger: %v", err)
+	}
+	// Un-tombstoning is one-way.
+	if _, err := pool.Exec(ctx,
+		`UPDATE audit_entries SET tombstoned_at = NULL WHERE sequence = 1`); err == nil {
+		t.Error("un-tombstoning succeeded — erasure must be one-way")
+	}
+}
+
+// bypassAppendOnly runs a raw mutation with the append-only trigger (migration
+// 010, D63) DISABLED — it models an adversary who got PAST the DB control (a
+// table owner / superuser who can disable the trigger). The tamper tests use it
+// so they can still create a tamper and prove Verify() catches a bypasser; the
+// trigger itself stopping an ordinary DSN-holder is proven separately.
+func bypassAppendOnly(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `ALTER TABLE audit_entries DISABLE TRIGGER USER`); err != nil {
+		t.Fatalf("disable append-only trigger: %v", err)
+	}
+	_, execErr := pool.Exec(ctx, sql, args...)
+	if _, err := pool.Exec(ctx, `ALTER TABLE audit_entries ENABLE TRIGGER USER`); err != nil {
+		t.Fatalf("re-enable append-only trigger: %v", err)
+	}
+	if execErr != nil {
+		t.Fatalf("bypass exec: %v", execErr)
+	}
+}
+
 func tombstoneRow(t *testing.T, pool *pgxpool.Pool, seq int64) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
@@ -751,10 +807,8 @@ func TestTombstonedLinkStillChecked(t *testing.T) {
 	}
 	tombstoneRow(t, pool, 2)
 	// Corrupt the tombstoned row's link.
-	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET prev_hash = $1 WHERE sequence = 2`,
-		[]byte("not-the-real-prev-hash-value-here")); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `UPDATE audit_entries SET prev_hash = $1 WHERE sequence = 2`,
+		[]byte("not-the-real-prev-hash-value-here"))
 	res, err := l.Verify(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -779,10 +833,8 @@ func TestTombstonedSignatureStillChecked(t *testing.T) {
 	}
 	tombstoneRow(t, pool, 2)
 	// Corrupt only the signature, leaving hash and link intact.
-	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET sig = $1 WHERE sequence = 2`,
-		bytes.Repeat([]byte{0}, 64)); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `UPDATE audit_entries SET sig = $1 WHERE sequence = 2`,
+		bytes.Repeat([]byte{0}, 64))
 	res, err := l.Verify(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -810,9 +862,7 @@ func TestPurgeRespectsHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Backdate both well past the standard 365d age.
-	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`)
 
 	n, err := l.Purge(ctx, time.Now().UTC())
 	if err != nil {
@@ -851,9 +901,7 @@ func TestPurgeErasesContent(t *testing.T) {
 	if err := l.Append(ctx, entry("alice")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`)
 	if _, err := l.Purge(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -1005,9 +1053,7 @@ func TestTruncationPastAnchorDetected(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A root attacker destroys the witnessed tail, rebuilding a shorter chain.
-	if _, err := pool.Exec(ctx, `DELETE FROM audit_entries WHERE sequence >= 3`); err != nil {
-		t.Fatal(err)
-	}
+	bypassAppendOnly(t, pool, `DELETE FROM audit_entries WHERE sequence >= 3`)
 	res, err := l.Verify(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
