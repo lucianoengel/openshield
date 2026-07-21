@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
 )
@@ -21,11 +22,9 @@ func TestOperatorReadAPI(t *testing.T) {
 		 VALUES ('sub_abc', 0.97, 'v1', now())`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload, received_at)
-		 VALUES ('stale-agent','event','e1','\x00', now() - interval '2 hours')`); err != nil {
-		t.Fatal(err)
-	}
+	// Enrolled + last verified telemetry 2h ago → overdue (SEC-3: roster + verified only).
+	seedRoster(t, pool, "stale-agent")
+	seedTelemetryRow(t, pool, "stale-agent", true, time.Now().Add(-2*time.Hour))
 
 	ca := newOneCA(t)
 	addr := serveRoleGated(t, srv, ca)

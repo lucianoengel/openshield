@@ -31,12 +31,10 @@ func TestNotifyOverdueDeliversAndDedups(t *testing.T) {
 	srv.SetNotifier(fn)
 	ctx := context.Background()
 
-	// A stale agent: last seen 2 hours ago (overdue past 15m).
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload, received_at)
-		 VALUES ('stale','event','e1','\x00', now() - interval '2 hours')`); err != nil {
-		t.Fatal(err)
-	}
+	// A stale agent: ENROLLED (in the roster) and last seen via VERIFIED telemetry 2 hours
+	// ago (overdue past 15m). SEC-3: liveness is roster + verified telemetry only.
+	seedRoster(t, pool, "stale")
+	seedTelemetryRow(t, pool, "stale", true, time.Now().Add(-2*time.Hour))
 
 	n, err := srv.NotifyOverdue(ctx, 15*time.Minute)
 	if err != nil {
