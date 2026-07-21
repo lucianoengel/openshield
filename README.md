@@ -3,9 +3,15 @@
 An open-source **Data Security Platform**. DLP is the first capability built on it, not the
 product itself.
 
-> **Status: pre-alpha. No working code yet.** What exists today is a decision record — the
-> research, the adversarial reviews, and the plan. Published from the first commit deliberately,
-> so the reasoning is auditable rather than reconstructed later.
+> **Status: pre-alpha, but the walking skeleton runs.** Phase 1 is built and tested — the full
+> observe path (fanotify connector → sandboxed classifier → OPA policy → Decision → forward-secure
+> audit ledger) runs end to end on Linux, with a fleet control plane (per-agent identity, signed
+> telemetry, enrollment, dead-man's-switch), server-side peer-UEBA, mutual-TLS transport with
+> cert-role authorization, and post-decision enforcers (quarantine, USB, encrypt-local with key
+> escrow) that are **observe-only by default**. Integration tests run against real Postgres/NATS
+> and live Podman containers. It is still pre-alpha: no packaged release, not hardened for
+> production, and everything below about what it does *not* claim still holds. The reasoning is
+> published from the first commit so it is auditable rather than reconstructed later.
 
 ## The idea
 
@@ -66,7 +72,8 @@ Read [`docs/threat-model.md`](docs/threat-model.md) before drawing conclusions a
 
 | Path | What |
 |---|---|
-| [`docs/decisions.md`](docs/decisions.md) | **Canonical decision register (D1-D23).** Single source of truth for *why*. |
+| [`docs/decisions.md`](docs/decisions.md) | **Canonical decision register (D1-D59).** Single source of truth for *why*. |
+| [`CHANGELOG.md`](CHANGELOG.md) | What was built, in order — the milestone arc. |
 | [`docs/threat-model.md`](docs/threat-model.md) | What this stops, and what defeats it. |
 | [`docs/brief.md`](docs/brief.md) | Why this exists, what "done" means, the stack. |
 | [`docs/plan-phase1.md`](docs/plan-phase1.md) | Roadmap — 29 tickets, ~122 agent-hours. Source of truth for *what* and *when*. |
@@ -80,13 +87,19 @@ restating them.
 
 ## Roadmap
 
-Phase 1 is **observe-and-audit only** on Linux: events are classified, policies produce
-Decisions, and Decisions are recorded — but nothing is blocked. Enforcement arrives in Phase 2,
-once the classifier's real false-positive rate is known from live data. A DLP tool that blocks
-based on a noisy classifier is hostile to its own users.
+Phase 1 shipped **observe-and-audit** on Linux: events are classified, policies produce
+Decisions, and Decisions are recorded in a forward-secure ledger. Enforcement now exists as a
+post-decision step — quarantine, USB, and encrypt-local (with public-key escrow) — but is
+**observe-only by default**: an enforcer must be explicitly registered, per action. Nothing is
+enforced inline (the triggering access already happened); enforcement CONTAINS after detection, it
+does not prevent. Inline blocking stays deferred until the classifier's real false-positive rate is
+known from live data — a DLP tool that blocks on a noisy classifier is hostile to its own users.
 
-Later phases add Cloud, Email, Developer and Collaboration security, identity-aware policies,
-AI security, discovery, lineage and behaviour analytics — each as new connectors and enforcers.
+Also built beyond the observe path: a fleet control plane (per-agent Ed25519 identity, single-use
+enrollment, signed telemetry with replay/gap detection, dead-man's-switch), server-side peer-baseline
+UEBA, mutual-TLS transport with certificate role authorization, and an authenticated operator
+view-audit. Later phases add Cloud, Email, Developer and Collaboration security, identity-aware
+policies, AI security, discovery and lineage — each as new connectors and enforcers.
 
 ## Licence
 
@@ -102,7 +115,9 @@ podman-compose up -d
 ```
 
 Brings up Postgres + NATS + the control plane from a clean checkout — the server
-migrates on boot, no manual steps. This is a **dev stack**: default credentials,
-no TLS, not production. Use `podman-compose` (native), not `podman compose`
-(which needs a Docker socket rootless Podman lacks). The agent runs on an
-endpoint (it needs host access), not in this stack.
+migrates on boot, no manual steps. This is a **dev stack**: default credentials
+and plaintext transport, not production. Mutual TLS on the agent-facing channels
+is opt-in (off by default) via the `OPENSHIELD_TLS_*` env vars; `deploy/mtls-e2e.sh`
+exercises it end to end with a throwaway CA. Use `podman-compose` (native), not
+`podman compose` (which needs a Docker socket rootless Podman lacks). The agent
+runs on an endpoint (it needs host access), not in this stack.

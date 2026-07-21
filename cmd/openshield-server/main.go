@@ -79,8 +79,14 @@ func main() {
 		fatal("TLS configuration: %v", err)
 	}
 	if tlsConf != nil {
+		// This presents a client cert and verifies the NATS server's cert against
+		// the CA. It does NOT make the broker demand a client cert from AGENTS —
+		// that is the broker's own `--tlsverify --tlscacert`, a DEPLOYMENT
+		// requirement (D55). Without it, mutual auth on the telemetry leg does not
+		// hold even though this logs "enabled"; D50 signing still protects evidence.
 		srv.SetNATSOptions(nats.Secure(tlsConf.ClientConfig()))
-		fmt.Fprintln(os.Stderr, "openshield-server: mutual TLS enabled on agent-facing channels")
+		fmt.Fprintln(os.Stderr, "openshield-server: mutual TLS enabled on the enrollment endpoint; "+
+			"NATS mutual auth requires the broker's --tlsverify (D55)")
 	}
 
 	// Optional enrollment endpoint (D44 over the wire). Served over mutual TLS

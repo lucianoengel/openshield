@@ -39,11 +39,18 @@ func TestEscrowEndpointCannotDecrypt(t *testing.T) {
 		t.Fatal("plaintext survived the escrow seal")
 	}
 
-	// The endpoint's material (the public key) cannot open it: a symmetric decrypt
-	// with the public-key bytes as a key fails, and there is no way to open without
-	// the private key.
+	// The endpoint's material cannot open it. Two distinct checks:
+	// (a) a symmetric decrypt with the public-key bytes as a key is rejected — mode
+	//     separation (this fails at magic-routing, before any crypto);
 	if _, err := encryptlocal.Decrypt(pub, onDisk); err == nil {
 		t.Fatal("an escrow blob opened via symmetric Decrypt — modes crossed")
+	}
+	// (b) a GENUINE escrow open using only the endpoint's material (the public key
+	//     substituted for the private key) reaches box.OpenAnonymous and is
+	//     rejected by the CRYPTO, not by routing — proving the seal is a real
+	//     barrier, so this assertion would catch a weakened sealed-box, unlike (a).
+	if _, err := encryptlocal.DecryptEscrow(pub, pub, onDisk); err == nil {
+		t.Fatal("escrow blob opened with only public material — the seal is not a cryptographic barrier")
 	}
 
 	// The PRIVATE key recovers the exact original.

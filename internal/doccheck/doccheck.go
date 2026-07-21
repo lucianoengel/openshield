@@ -20,7 +20,7 @@ import (
 // an allowlist, not "all docs", because docs/ is where the project reasons out
 // loud — including about what it CANNOT do — and scanning it would recreate the
 // false-positive failure the naive grep suffered.
-var ClaimSurfaces = []string{"README.md"}
+var ClaimSurfaces = []string{"README.md", "CHANGELOG.md"}
 
 // forbidden are overclaiming terms, each mapping to a specific false promise the
 // threat model forbids: tamper-proofing, prevention, absolutes. Matched
