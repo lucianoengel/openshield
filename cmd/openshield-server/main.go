@@ -39,6 +39,18 @@ func main() {
 	}
 
 	srv := controlplane.New(pool)
+
+	// Optional enrollment endpoint (D44 over the wire). Production fronts it with
+	// TLS. Token issuance is NOT exposed — an admin-local operation.
+	if addr := os.Getenv("OPENSHIELD_HTTP_ADDR"); addr != "" {
+		go func() {
+			fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint on %s\n", addr)
+			if err := srv.ServeHTTP(ctx, addr); err != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint: %v\n", err)
+			}
+		}()
+	}
+
 	fmt.Fprintf(os.Stderr, "openshield-server: subscribing to telemetry on %s\n", natsURL)
 	if err := srv.Run(ctx, natsURL); err != nil && ctx.Err() == nil {
 		fatal("control plane: %v", err)
