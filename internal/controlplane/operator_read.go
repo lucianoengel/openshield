@@ -3,8 +3,10 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -41,9 +43,71 @@ func (s *Server) RecentPeerAlerts(ctx context.Context, limit int) ([]PeerAlert, 
 	return out, rows.Err()
 }
 
+// AlertFilter is a search query over the fleet's peer alerts (Phase F1). Every field is
+// optional; a zero field is "no constraint". The filter is applied as PARAMETERIZED SQL —
+// operator input is never concatenated into the query, so the search surface is not a SQL
+// injection vector.
+type AlertFilter struct {
+	SubjectID string    // exact pseudonymous subject, or "" for any
+	MinRisk   float64   // only alerts at or above this risk
+	Since     time.Time // only alerts at or after this time (zero = no lower bound)
+	Until     time.Time // only alerts at or before this time (zero = no upper bound)
+	Limit     int       // max rows (default 100)
+}
+
+// SearchPeerAlerts returns peer alerts matching the filter, newest first. It builds the
+// WHERE clause from only the constraints that are set, binding each as a placeholder — the
+// operator's values are DATA, never SQL. This is the F1 search over the fleet aggregate,
+// the substrate a SIEM UI queries.
+func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAlert, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	q := `SELECT subject_id, risk_score, context_version, detected_at FROM peer_alerts`
+	var conds []string
+	var args []any
+	add := func(cond string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(cond, len(args))) // $N binds the value just appended
+	}
+	if f.SubjectID != "" {
+		add("subject_id = $%d", f.SubjectID)
+	}
+	if f.MinRisk > 0 {
+		add("risk_score >= $%d", f.MinRisk)
+	}
+	if !f.Since.IsZero() {
+		add("detected_at >= $%d", f.Since)
+	}
+	if !f.Until.IsZero() {
+		add("detected_at <= $%d", f.Until)
+	}
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	args = append(args, limit)
+	q += fmt.Sprintf(" ORDER BY detected_at DESC LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PeerAlert
+	for rows.Next() {
+		var a PeerAlert
+		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.DetectedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // OperatorReadHandler serves the operator's read surface over the fleet: recent peer
-// alerts (/alerts) and overdue agents (/overdue). It is mounted behind the
-// operator-role gate (D82); it holds no signer and can forge nothing (D30).
+// alerts (/alerts), a filtered search (/search), and overdue agents (/overdue). It is
+// mounted behind the operator-role gate (D82); it holds no signer and can forge nothing (D30).
 func (s *Server) OperatorReadHandler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -54,6 +118,38 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		}
 		limit := queryInt(r, "limit", 100)
 		alerts, err := s.RecentPeerAlerts(r.Context(), limit)
+		if err != nil {
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, alerts)
+	})
+
+	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		f := AlertFilter{
+			SubjectID: r.URL.Query().Get("subject"),
+			Limit:     queryInt(r, "limit", 100),
+		}
+		if v := r.URL.Query().Get("min_risk"); v != "" {
+			if x, err := strconv.ParseFloat(v, 64); err == nil {
+				f.MinRisk = x
+			}
+		}
+		if v := r.URL.Query().Get("since"); v != "" {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				f.Since = t
+			}
+		}
+		if v := r.URL.Query().Get("until"); v != "" {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				f.Until = t
+			}
+		}
+		alerts, err := s.SearchPeerAlerts(r.Context(), f)
 		if err != nil {
 			http.Error(w, "read failed", http.StatusInternalServerError)
 			return

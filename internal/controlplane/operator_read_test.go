@@ -51,9 +51,16 @@ func TestOperatorReadAPI(t *testing.T) {
 		t.Fatalf("/overdue = %+v, want the stale agent flagged overdue", overdue)
 	}
 
-	// Agent role: 403 on both (the operator gate).
+	// Operator: /search with a min_risk filter returns the high-risk alert.
+	var searched []controlplane.PeerAlert
+	getJSON(t, op, "https://"+addr+"/search?min_risk=0.9", &searched)
+	if len(searched) != 1 || searched[0].SubjectID != "sub_abc" {
+		t.Fatalf("/search?min_risk=0.9 = %+v, want the seeded high-risk alert", searched)
+	}
+
+	// Agent role: 403 on all (the operator gate), including /search.
 	agent := clientWith(t, ca, "bob", "agent")
-	for _, path := range []string{"/alerts", "/overdue"} {
+	for _, path := range []string{"/alerts", "/search", "/overdue"} {
 		resp, err := agent.Get("https://" + addr + path)
 		if err != nil {
 			t.Fatal(err)
