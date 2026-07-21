@@ -25,6 +25,10 @@ enum DetectorType {
   // checksum — its confidence is capped accordingly).
   DETECTOR_TYPE_IBAN = 10;
   DETECTOR_TYPE_HEALTH_DATA = 11;
+  // An operator-authored custom rule (Phase D3). All custom rules report this single
+  // generic type — a free-form per-rule name could leak what it detects, so the closed
+  // enum is preserved. Per-rule policy routing (a rule id in the contract) is a follow-up.
+  DETECTOR_TYPE_CUSTOM = 12;
 }
 
 // LocalMatch holds matched content. Host-only.

@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+// RuleValidator names a built-in validator a custom rule may pair with its pattern. A
+// custom rule ships a PATTERN and a NAMED validator, never executable code — so an
+// operator-authored rule cannot introduce a code-execution path (the pattern runs on Go's
+// RE2 engine, which is linear-time and immune to catastrophic backtracking / ReDoS).
+enum RuleValidator {
+  RULE_VALIDATOR_NONE = 0; // the pattern is the validator
+  RULE_VALIDATOR_LUHN = 1; // digits pass the Luhn checksum
+}
+
+// DetectorRule is one operator-authored declarative detector (Phase D3): a regex pattern,
+// the confidence to report, and an optional named validator. rule_id identifies the rule
+// for bundle management; it is NOT surfaced to the pipeline (custom hits report the
+// generic DETECTOR_TYPE_CUSTOM, preserving the no-leak closed enum).
+message DetectorRule {
+  uint32 rule_id = 1;
+  string pattern = 2;
+  double confidence = 3;
+  RuleValidator validator = 4;
+}
+
+// RuleBundle is a set of custom rules an operator authors and approves together.
+message RuleBundle {
+  repeated DetectorRule rules = 1;
+  int64 issued_at = 2;
+}
+
+// SignedRuleBundle carries a marshaled RuleBundle and an Ed25519 signature over those
+// exact bytes. The node loads the rules ONLY if the signature verifies against a trusted
+// operator public key — a compromised control plane can distribute this message but cannot
+// forge the signature, so it cannot inject detection rules (the T2 model preserving D14).
+message SignedRuleBundle {
+  bytes bundle = 1;    // the marshaled RuleBundle
+  bytes signature = 2; // Ed25519 signature over `bundle`
+}
