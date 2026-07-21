@@ -30,6 +30,65 @@ type Case struct {
 	ClosedAt         *time.Time `json:"closed_at,omitempty"`
 }
 
+// OpenCaseForIncident opens a case for a correlated incident (F2→F3 linking) and records
+// an opening note summarizing what was correlated, so an operator triaging an incident gets
+// a case pre-populated with the evidence trail. The case and its note are written in one
+// transaction — a case without its originating context is a worse artifact than no case.
+func (s *Server) OpenCaseForIncident(ctx context.Context, inc Incident, operator string) (int64, error) {
+	if inc.SubjectID == "" || operator == "" {
+		return 0, fmt.Errorf("cases: incident subject and operator are required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	var id int64
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO cases (subject_id, opened_by) VALUES ($1,$2) RETURNING id`,
+		inc.SubjectID, operator).Scan(&id); err != nil {
+		return 0, err
+	}
+	note := fmt.Sprintf("opened from correlated incident: %d alerts, peak risk %.2f, %s to %s",
+		inc.AlertCount, inc.MaxRisk, inc.FirstSeen.Format(time.RFC3339), inc.LastSeen.Format(time.RFC3339))
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO case_notes (case_id, author, note) VALUES ($1,$2,$3)`,
+		id, "system:correlation", note); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// CaseNotes returns a case's notes oldest-first (for reading an investigation trail).
+func (s *Server) CaseNotes(ctx context.Context, caseID int64) ([]CaseNote, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT author, note, created_at FROM case_notes WHERE case_id = $1 ORDER BY created_at ASC, id ASC`, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CaseNote
+	for rows.Next() {
+		var n CaseNote
+		if err := rows.Scan(&n.Author, &n.Note, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// CaseNote is one attributed note on a case.
+type CaseNote struct {
+	Author    string    `json:"author"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // OpenCase starts an investigation of a subject, attributed to the opening operator.
 func (s *Server) OpenCase(ctx context.Context, subjectID, operator string) (int64, error) {
 	if subjectID == "" || operator == "" {

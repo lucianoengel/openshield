@@ -245,3 +245,13 @@ requester and the approver.
 #### Scenario: A single operator cannot close a case alone
 - **WHEN** an operator requests a case closure and then tries to approve it
 - **THEN** the self-approval is refused and the case stays open, and only a different operator's approval closes it, recording both parties
+
+### Requirement: A correlated incident can open a pre-populated investigation case
+The control plane MUST be able to open an investigation case for a correlated incident's
+subject, writing an opening note that summarizes the incident (alert count, peak risk, time
+span) in the same transaction, attributed to the correlation system rather than an operator.
+An incident without a subject MUST NOT open a case.
+
+#### Scenario: An incident opens a case with its summary
+- **WHEN** an operator opens a case from a correlated incident
+- **THEN** a case is created for the incident's subject with a system-authored note carrying the alert count and peak risk, and a subjectless incident opens no case
