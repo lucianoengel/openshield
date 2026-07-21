@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+// SignedTelemetry wraps a telemetry payload with the agent's identity signature
+// (T-017). The control plane verifies the signature against the ENROLLED key and
+// the sequence for suppression/replay before persisting, so the fleet view is
+// attributable — not self-asserted (D41/D44).
+//
+// signature is over the canonical envelope (agent_id, sequence, payload), the
+// same bytes the agent signs and the control plane checks. One monotonic
+// sequence per agent across all kinds, so a dropped message leaves a hole.
+message SignedTelemetry {
+  string agent_id = 1;
+  uint64 sequence = 2;
+  string kind = 3;      // event | classification | decision
+  bytes payload = 4;    // marshalled Event / ClassificationSummary / Decision
+  bytes signature = 5;
+}

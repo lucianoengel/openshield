@@ -50,7 +50,7 @@ func (s *Server) recordHeartbeat(ctx context.Context, data []byte) {
 		s.DecodeFailures.Add(1)
 		return
 	}
-	if err := s.insert(ctx, "heartbeat", h.GetAgentId(), "", data); err != nil {
+	if err := s.insert(ctx, "heartbeat", h.GetAgentId(), "", data, false); err != nil {
 		s.DecodeFailures.Add(1)
 	}
 }

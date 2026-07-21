@@ -50,6 +50,12 @@ type Server struct {
 	// is observable — a silent vanish would be the missing-evidence failure the
 	// system exists to prevent.
 	DecodeFailures atomic.Int64
+	// RejectedTelemetry counts signed telemetry that failed verification (bad
+	// signature, unknown/revoked agent, replay) — rejected, never silent.
+	RejectedTelemetry atomic.Int64
+	// Gaps counts sequence gaps in verified telemetry (suppression between an
+	// agent and here).
+	Gaps atomic.Int64
 }
 
 // New creates a server over an existing pool.
@@ -98,6 +104,17 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	s.subs = append(s.subs, hbSub)
 	s.mu.Unlock()
 
+	// Signed telemetry (T-017): verified against the enrolled key before persist.
+	sigSub, err := conn.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
+		s.handleSigned(context.Background(), m.Data)
+	})
+	if err != nil {
+		return fmt.Errorf("controlplane: subscribing signed telemetry: %w", err)
+	}
+	s.mu.Lock()
+	s.subs = append(s.subs, sigSub)
+	s.mu.Unlock()
+
 	<-ctx.Done()
 	return s.Close()
 }
@@ -109,7 +126,7 @@ func (s *Server) handle(ctx context.Context, kind string, data []byte) {
 		s.DecodeFailures.Add(1)
 		return
 	}
-	if err := s.insert(ctx, kind, agentID, eventID, data); err != nil {
+	if err := s.insert(ctx, kind, agentID, eventID, data, false); err != nil {
 		// A persistence failure is also not silent — count it as a decode/handle
 		// failure so a full store or a down database is observable.
 		s.DecodeFailures.Add(1)
@@ -144,10 +161,10 @@ func decodeIndex(kind string, data []byte) (agentID, eventID string, ok bool) {
 	}
 }
 
-func (s *Server) insert(ctx context.Context, kind, agentID, eventID string, payload []byte) error {
+func (s *Server) insert(ctx context.Context, kind, agentID, eventID string, payload []byte, verified bool) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload) VALUES ($1,$2,$3,$4)`,
-		agentID, kind, eventID, payload)
+		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload, verified) VALUES ($1,$2,$3,$4,$5)`,
+		agentID, kind, eventID, payload, verified)
 	return err
 }
 
