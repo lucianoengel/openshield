@@ -64,3 +64,10 @@ func (p *SignedPublisher) PublishClassification(_ context.Context, c *corev1.Cla
 func (p *SignedPublisher) PublishDecision(_ context.Context, d *corev1.Decision) error {
 	return p.publish("decision", d)
 }
+
+// PublishHeartbeat signs and publishes the agent's liveness signal (T-018) so a
+// verified heartbeat advances last-seen — a silent agent is detectable AND the
+// heartbeat is attributable, not self-asserted.
+func (p *SignedPublisher) PublishHeartbeat(_ context.Context, h *corev1.Heartbeat) error {
+	return p.publish("heartbeat", h)
+}

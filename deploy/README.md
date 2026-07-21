@@ -78,3 +78,19 @@ restores the dev Postgres — on any exit. This closes the gap the in-process te
 leave: it exercises the built binary, its container config, its DSN and the real
 NATS wire, not just the Server struct. Not a CI job by default (it builds an
 image); run it on demand.
+
+
+## Multi-agent fleet simulation
+
+```
+bash deploy/fleet-e2e.sh
+```
+
+Brings up the control plane + Postgres + NATS and N **agent containers**, each
+enrolling over HTTP with its own identity and publishing **verified** signed
+telemetry + heartbeats. It asserts the fleet properties: verified+attributed
+telemetry, liveness, the **dead-man's-switch** on a killed agent, and
+**revocation** rejecting a revoked agent's telemetry — then tears down and
+restores the dev Postgres. Fanotify permission mode is NOT simulable in rootless
+podman (it needs init-namespace CAP_SYS_ADMIN), so this proves the fleet CONTROL
+path, not kernel eventing.

@@ -1,0 +1,12 @@
+# Fleet agent image for the fleet simulation (Direction 1).
+FROM docker.io/library/golang:1.26 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/openshield-fleet-agent ./cmd/openshield-fleet-agent
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/openshield-fleet-agent /usr/bin/openshield-fleet-agent
+USER nonroot
+ENTRYPOINT ["/usr/bin/openshield-fleet-agent"]

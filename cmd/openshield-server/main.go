@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -21,6 +23,15 @@ import (
 
 func main() {
 	dsn := env("OPENSHIELD_DSN", "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable")
+	// Operator-local subcommands (issuance/revocation are NOT network endpoints, D51).
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "issue-token":
+			os.Exit(issueToken(dsn, os.Args[2:]))
+		case "revoke":
+			os.Exit(revokeAgent(dsn, os.Args[2:]))
+		}
+	}
 	natsURL := env("OPENSHIELD_NATS_URL", "nats://127.0.0.1:4222")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -56,6 +67,53 @@ func main() {
 		fatal("control plane: %v", err)
 	}
 	fmt.Fprintln(os.Stderr, "openshield-server: shut down")
+}
+
+func issueToken(dsn string, args []string) int {
+	ttl := 3600
+	if len(args) > 0 {
+		if v, err := strconv.Atoi(args[0]); err == nil {
+			ttl = v
+		}
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "issue-token:", err)
+		return 1
+	}
+	defer pool.Close()
+	if err := postgres.Migrate(ctx, pool); err != nil {
+		fmt.Fprintln(os.Stderr, "issue-token migrate:", err)
+		return 1
+	}
+	tok, err := controlplane.New(pool).IssueToken(ctx, time.Duration(ttl)*time.Second, time.Now())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "issue-token:", err)
+		return 1
+	}
+	fmt.Println(tok)
+	return 0
+}
+
+func revokeAgent(dsn string, args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: openshield-server revoke <agent-id>")
+		return 2
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "revoke:", err)
+		return 1
+	}
+	defer pool.Close()
+	if err := controlplane.New(pool).Revoke(ctx, args[0], time.Now()); err != nil {
+		fmt.Fprintln(os.Stderr, "revoke:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "revoked %s\n", args[0])
+	return 0
 }
 
 func env(key, def string) string {
