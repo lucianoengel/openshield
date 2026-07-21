@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/lucianoengel/openshield/internal/agent/identity"
@@ -43,16 +45,30 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Mutual TLS on the agent-facing channels (D55), OFF unless configured. A
+	// partial/unreadable config fails loudly, never silently to plaintext.
+	tlsConf, err := tlsconf.LoadFromEnv()
+	if err != nil {
+		fatal("TLS configuration: %v", err)
+	}
+	httpClient := http.DefaultClient
+	var natsOpts []nats.Option
+	if tlsConf != nil {
+		httpClient = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf.ClientConfig()}}
+		natsOpts = append(natsOpts, nats.Secure(tlsConf.ClientConfig()))
+		fmt.Fprintf(os.Stderr, "fleet-agent %s: mutual TLS enabled\n", agentID)
+	}
+
 	id, err := identity.Generate(agentID)
 	if err != nil {
 		fatal("identity: %v", err)
 	}
-	if err := enroll(ctx, enrollURL, agentID, token, id); err != nil {
+	if err := enroll(ctx, httpClient, enrollURL, agentID, token, id); err != nil {
 		fatal("enroll: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "fleet-agent %s enrolled\n", agentID)
 
-	conn, err := nats.Connect(natsURL)
+	conn, err := nats.Connect(natsURL, natsOpts...)
 	if err != nil {
 		fatal("nats: %v", err)
 	}
@@ -76,7 +92,7 @@ func main() {
 	}
 }
 
-func enroll(ctx context.Context, url, agentID, token string, id *identity.Identity) error {
+func enroll(ctx context.Context, client *http.Client, url, agentID, token string, id *identity.Identity) error {
 	body, _ := json.Marshal(map[string]string{
 		"token": token, "agent_id": agentID,
 		"public_key": base64.StdEncoding.EncodeToString(id.PublicKey()),
@@ -86,7 +102,7 @@ func enroll(ctx context.Context, url, agentID, token string, id *identity.Identi
 	for {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

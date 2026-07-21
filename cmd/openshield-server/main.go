@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
+	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 )
 
 func main() {
@@ -69,13 +71,32 @@ func main() {
 		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA enabled (threshold %.2f, cooldown %s)\n", threshold, cooldown)
 	}
 
-	// Optional enrollment endpoint (D44 over the wire). Production fronts it with
-	// TLS. Token issuance is NOT exposed — an admin-local operation.
+	// Mutual TLS on the agent-facing channels (D55), OFF unless configured —
+	// enabling it is a deliberate deployment step. A partial or unreadable
+	// configuration fails loudly here, never silently to plaintext.
+	tlsConf, err := tlsconf.LoadFromEnv()
+	if err != nil {
+		fatal("TLS configuration: %v", err)
+	}
+	if tlsConf != nil {
+		srv.SetNATSOptions(nats.Secure(tlsConf.ClientConfig()))
+		fmt.Fprintln(os.Stderr, "openshield-server: mutual TLS enabled on agent-facing channels")
+	}
+
+	// Optional enrollment endpoint (D44 over the wire). Served over mutual TLS
+	// when configured; the token travels in the body. Token issuance is NOT
+	// exposed — an admin-local operation.
 	if addr := os.Getenv("OPENSHIELD_HTTP_ADDR"); addr != "" {
 		go func() {
 			fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint on %s\n", addr)
-			if err := srv.ServeHTTP(ctx, addr); err != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint: %v\n", err)
+			var serveErr error
+			if tlsConf != nil {
+				serveErr = srv.ServeHTTPTLS(ctx, addr, tlsConf.ServerConfig())
+			} else {
+				serveErr = srv.ServeHTTP(ctx, addr)
+			}
+			if serveErr != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint: %v\n", serveErr)
 			}
 		}()
 	}

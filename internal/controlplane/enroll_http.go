@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -60,17 +61,36 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ServeHTTP runs the enrollment endpoint until the context is cancelled, then
-// shuts it down gracefully.
+// ServeHTTP runs the enrollment endpoint in plaintext until the context is
+// cancelled. For production use ServeHTTPTLS — the token travels in the body.
 func (s *Server) ServeHTTP(ctx context.Context, addr string) error {
-	srv := &http.Server{Addr: addr, Handler: s.EnrollHandler(), ReadHeaderTimeout: 5 * time.Second}
+	return s.serve(ctx, addr, nil)
+}
+
+// ServeHTTPTLS runs the enrollment endpoint over MUTUAL TLS (D55): the server
+// demands and verifies a CA-issued client certificate, so a peer without one is
+// refused at the handshake, before any token is seen. There is no plaintext
+// fallback — a failed handshake is a refusal, not a downgrade.
+func (s *Server) ServeHTTPTLS(ctx context.Context, addr string, tlsCfg *tls.Config) error {
+	return s.serve(ctx, addr, tlsCfg)
+}
+
+func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) error {
+	srv := &http.Server{Addr: addr, Handler: s.EnrollHandler(), ReadHeaderTimeout: 5 * time.Second, TLSConfig: tlsCfg}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	var err error
+	if tlsCfg != nil {
+		// Certs come from TLSConfig.Certificates, so the file args are empty.
+		err = srv.ListenAndServeTLS("", "")
+	} else {
+		err = srv.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

@@ -42,9 +42,10 @@ type TelemetryRow struct {
 type Server struct {
 	pool *pgxpool.Pool
 
-	mu   sync.Mutex
-	subs []*nats.Subscription
-	conn *nats.Conn
+	mu       sync.Mutex
+	subs     []*nats.Subscription
+	conn     *nats.Conn
+	natsOpts []nats.Option
 
 	// DecodeFailures counts messages that did not decode. A malformed message is
 	// dropped so it cannot stall the subscription, but it is COUNTED so the drop
@@ -89,10 +90,15 @@ func (s *Server) EnablePeerUEBA(threshold float64, cooldown time.Duration) {
 	s.peerLastAlert = map[string]time.Time{}
 }
 
+// NATSOptions are applied to the control plane's NATS connection — used to pass
+// nats.Secure(clientConfig) for mutual TLS (D55). Empty means a plaintext
+// connection, unchanged from before.
+func (s *Server) SetNATSOptions(opts ...nats.Option) { s.natsOpts = opts }
+
 // Run connects to NATS and subscribes to the telemetry subjects until the
 // context is cancelled.
 func (s *Server) Run(ctx context.Context, natsURL string) error {
-	conn, err := nats.Connect(natsURL)
+	conn, err := nats.Connect(natsURL, s.natsOpts...)
 	if err != nil {
 		return fmt.Errorf("controlplane: connecting to NATS: %w", err)
 	}
