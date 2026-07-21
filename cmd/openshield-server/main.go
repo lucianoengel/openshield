@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
+	"github.com/lucianoengel/openshield/internal/notify"
 	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
@@ -68,6 +69,24 @@ func main() {
 		}
 		fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
 	})
+
+	// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
+	// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
+	// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
+	// deduplicated (once per silence) and run on a timer.
+	if hook := os.Getenv("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
+		srv.SetNotifier(notify.NewWebhook(hook))
+		overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
+		overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
+		go retain.Loop(ctx, overdueInterval, func(ctx context.Context) {
+			if n, err := srv.NotifyOverdue(ctx, overdueThreshold); err != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: overdue check failed: %v\n", err)
+			} else if n > 0 {
+				fmt.Fprintf(os.Stderr, "openshield-server: notified %d newly-overdue agent(s)\n", n)
+			}
+		})
+		fmt.Fprintf(os.Stderr, "openshield-server: alert delivery enabled (webhook)\n")
+	}
 
 	// Server-side peer-UEBA (D54), OFF unless a threshold is configured — enabling
 	// it is the operator's D23 consent/DPIA decision, never a default. It observes

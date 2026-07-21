@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/notify"
 )
 
 // handleSigned verifies a signed telemetry envelope against the ENROLLED agent
@@ -76,6 +77,10 @@ func (s *Server) observePeer(ctx context.Context, payload []byte) {
 		return
 	}
 	s.PeerAlerts.Add(1)
+	// Deliver the alert to a human (D83), best-effort — additive to the record it
+	// already made. Rides observePeer's existing per-subject cooldown, so no
+	// separate throttle is needed.
+	s.emit(ctx, notify.Notification{Kind: notify.KindPeerAlert, Subject: subject, RiskScore: pc.RiskScore, At: now})
 }
 
 // recordPeerAlert persists a server-side detection to peer_alerts — a DERIVATION,

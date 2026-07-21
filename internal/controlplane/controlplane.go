@@ -26,6 +26,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/analytics/peerueba"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/notify"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
@@ -60,6 +61,17 @@ type Server struct {
 	Gaps atomic.Int64
 	// PeerAlerts counts server-side peer-UEBA detections recorded (D54).
 	PeerAlerts atomic.Int64
+	// NotifyFailures counts alert-delivery errors (D83). Delivery is best-effort —
+	// a failure is counted, never fatal — so this counter is how a broken sink is
+	// observable rather than silent.
+	NotifyFailures atomic.Int64
+
+	// notifier delivers alerts to a human (D83). Default Nop (delivery off);
+	// SetNotifier turns it on. notifiedOverdue dedups overdue notifications so a
+	// silent agent alerts once, not every check.
+	notifier        notify.Notifier
+	notifyMu        sync.Mutex
+	notifiedOverdue map[string]bool
 
 	// peer-UEBA (D54) is a SERVER-SIDE analytics consumer of the verified stream,
 	// OFF unless explicitly enabled — enabling it is the D23 consent/DPIA decision.
@@ -76,7 +88,9 @@ type Server struct {
 }
 
 // New creates a server over an existing pool.
-func New(pool *pgxpool.Pool) *Server { return &Server{pool: pool, now: time.Now} }
+func New(pool *pgxpool.Pool) *Server {
+	return &Server{pool: pool, now: time.Now, notifier: notify.Nop{}, notifiedOverdue: map[string]bool{}}
+}
 
 // EnablePeerUEBA turns on server-side peer-baseline analytics (D54). This is the
 // D23 consent/DPIA decision, made deliberately by an operator — NOT a default:
