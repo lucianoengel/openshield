@@ -233,3 +233,15 @@ data) and its endpoint MUST sit behind the operator-role gate.
 #### Scenario: A burst raises an incident and a quiet subject does not
 - **WHEN** the correlation rule runs over the alert aggregate
 - **THEN** a subject with enough alerts in the window raises one incident with its count and peak risk, while a single-alert or out-of-window subject does not, and a non-operator is refused
+
+### Requirement: The control plane manages investigation cases with four-eyes closure
+The control plane MUST let an operator open a case on a subject, assign it, and add
+attributed notes, with every actor recorded from a verified operator certificate. Closing a
+case MUST be a four-eyes action: one operator requests closure and a DIFFERENT operator
+approves it; an operator MUST NOT be able to both request and approve the same closure, and
+an approval without a prior request MUST be refused. A closed case MUST record both the
+requester and the approver.
+
+#### Scenario: A single operator cannot close a case alone
+- **WHEN** an operator requests a case closure and then tries to approve it
+- **THEN** the self-approval is refused and the case stays open, and only a different operator's approval closes it, recording both parties
