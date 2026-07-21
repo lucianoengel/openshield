@@ -37,10 +37,12 @@ type Classifier struct {
 	detectors []Detector
 }
 
-// New returns the default classifier: CPF, credit card, SSN, email.
+// New returns the default classifier: CPF, credit card, SSN, email, and the
+// Phase-D2 secrets detectors (private keys, AWS keys, JWTs, vendor API tokens).
 func New() *Classifier {
 	return &Classifier{detectors: []Detector{
 		cpf{}, creditCard{}, ssn{}, email{},
+		privateKey{}, awsAccessKey{}, jwt{}, apiToken{},
 	}}
 }
 

@@ -33,6 +33,12 @@ const (
 	DetectorType_DETECTOR_TYPE_CREDIT_CARD DetectorType = 3
 	DetectorType_DETECTOR_TYPE_EMAIL       DetectorType = 4
 	DetectorType_DETECTOR_TYPE_PHONE       DetectorType = 5
+	// Secrets / credentials (Phase D2). Structural detectors — a PEM block, a
+	// prefixed cloud key, a decodable JWT — so a hit is strong, low-FP evidence.
+	DetectorType_DETECTOR_TYPE_PRIVATE_KEY    DetectorType = 6
+	DetectorType_DETECTOR_TYPE_AWS_ACCESS_KEY DetectorType = 7
+	DetectorType_DETECTOR_TYPE_JWT            DetectorType = 8
+	DetectorType_DETECTOR_TYPE_API_TOKEN      DetectorType = 9
 )
 
 // Enum value maps for DetectorType.
@@ -44,14 +50,22 @@ var (
 		3: "DETECTOR_TYPE_CREDIT_CARD",
 		4: "DETECTOR_TYPE_EMAIL",
 		5: "DETECTOR_TYPE_PHONE",
+		6: "DETECTOR_TYPE_PRIVATE_KEY",
+		7: "DETECTOR_TYPE_AWS_ACCESS_KEY",
+		8: "DETECTOR_TYPE_JWT",
+		9: "DETECTOR_TYPE_API_TOKEN",
 	}
 	DetectorType_value = map[string]int32{
-		"DETECTOR_TYPE_UNSPECIFIED": 0,
-		"DETECTOR_TYPE_CPF":         1,
-		"DETECTOR_TYPE_SSN":         2,
-		"DETECTOR_TYPE_CREDIT_CARD": 3,
-		"DETECTOR_TYPE_EMAIL":       4,
-		"DETECTOR_TYPE_PHONE":       5,
+		"DETECTOR_TYPE_UNSPECIFIED":    0,
+		"DETECTOR_TYPE_CPF":            1,
+		"DETECTOR_TYPE_SSN":            2,
+		"DETECTOR_TYPE_CREDIT_CARD":    3,
+		"DETECTOR_TYPE_EMAIL":          4,
+		"DETECTOR_TYPE_PHONE":          5,
+		"DETECTOR_TYPE_PRIVATE_KEY":    6,
+		"DETECTOR_TYPE_AWS_ACCESS_KEY": 7,
+		"DETECTOR_TYPE_JWT":            8,
+		"DETECTOR_TYPE_API_TOKEN":      9,
 	}
 )
 
@@ -301,14 +315,18 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xac\x01\n" +
+	"matchCount*\xa1\x02\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
 	"\x11DETECTOR_TYPE_SSN\x10\x02\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_CREDIT_CARD\x10\x03\x12\x17\n" +
 	"\x13DETECTOR_TYPE_EMAIL\x10\x04\x12\x17\n" +
-	"\x13DETECTOR_TYPE_PHONE\x10\x05B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x13DETECTOR_TYPE_PHONE\x10\x05\x12\x1d\n" +
+	"\x19DETECTOR_TYPE_PRIVATE_KEY\x10\x06\x12 \n" +
+	"\x1cDETECTOR_TYPE_AWS_ACCESS_KEY\x10\a\x12\x15\n" +
+	"\x11DETECTOR_TYPE_JWT\x10\b\x12\x1b\n" +
+	"\x17DETECTOR_TYPE_API_TOKEN\x10\tB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once
