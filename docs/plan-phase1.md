@@ -167,7 +167,7 @@ Agent heartbeat to control plane; 'agent last seen' per host; alert when telemet
 
 Merkle root periodically anchored to a trust domain outside the agent: second host, WORM/object-lock storage, or a public transparency service when online. Documents the honest boundary: tamper-evident WITH forward-integrity BETWEEN anchors; full tamper-proofing needs a witness the deployer does not control.
 
-#### T-020 · USB event + trivial USB enforcer (D1)
+#### T-020 · USB event + trivial USB enforcer (D1) · **done**
 `~4h` · depends: T-003, T-008
 
 USBInserted event producer + a real (non-stub) USB enforcer via authorized_default, proving the Enforcer interface end-to-end with an actual enforcement point. Restores D1's explicit 'ship one trivial USB enforcer to prove the interface', silently dropped in the first ticket pass. Note A8: this does NOT test the fail-open/blocking contract - that is T-011.
