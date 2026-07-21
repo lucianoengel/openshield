@@ -147,7 +147,7 @@ seccomp-bpf, no network, cgroup mem/CPU limits, decompression-bomb limits (ratio
 
 Retention purge demonstrably runs; excluded path produces no event; viewing an investigation writes an audit row. PLUS the three L1 items previously dropped: employee-visible notice mechanism; four-eyes gate before any HR-visible outcome; DPIA template shipped in docs/. Purpose tagging + pseudonymisation by default. Exclusion lists are a first-class policy primitive.
 
-#### T-014 · CI architectural fitness test (A1)
+#### T-014 · CI architectural fitness test (A1) · **done**
 `~3h` · depends: T-004, T-008, T-009
 
 Adding a Connector produces zero diffs in core packages. KNOWN-WEAK alone (S3 is isomorphic; gamable via map[string]any). T-004 paper verdict recorded alongside; green CI is not by itself validation of the 10-year claim.

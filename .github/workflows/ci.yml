@@ -77,8 +77,12 @@ jobs:
         run: go test -run 'TestAction|TestDecision|TestClassification|TestEvent|TestFilesystem|TestEnforcerIsolation|TestTransportRejects|TestPhase1' -v ./internal/core/
       - name: pipeline invariants
         run: go test -run 'TestStage|TestDispatch|TestReentry|TestFailingStage|TestSlowStage|TestTimeouts|TestNoDecision|TestReplay' -v ./internal/core/
+      - name: architectural fitness (necessary, not sufficient — see D26)
+        run: go test -v ./internal/fitness/
       - name: core has no broker dependency
         run: ./scripts/check-core-deps.sh
+      - name: core depends on no concrete capability (T-014)
+        run: ./scripts/check-capability-boundary.sh
       - name: privileged agent has no parser dependency
         run: ./scripts/check-agent-deps.sh
       - name: agent process-boundary invariants
@@ -123,7 +127,6 @@ jobs:
         run: go test -count=1 -v ./internal/cli/
 
   # Still to come, each its own ticket:
-  #   T-014  architectural fitness: adding a Connector produces zero core diffs
   #   T-021  open-core separability: core must not import Hub / compliance packages
   #   T-024  offline store-and-forward — the transport seam exists, the
   #          guarantee does NOT. Publish currently errors when unreachable
