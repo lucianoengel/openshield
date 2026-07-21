@@ -86,6 +86,11 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 	if tlsCfg != nil {
 		mux.Handle("/enroll", requireRole(RoleAgent, s.EnrollHandler()))
 		mux.Handle("/view", requireRole(RoleOperator, s.ViewHandler()))
+		// Operator read surface (D82): the fleet's peer alerts and overdue agents,
+		// behind the SAME operator-role gate as /view — read-only, forge-nothing.
+		opRead := requireRole(RoleOperator, s.OperatorReadHandler())
+		mux.Handle("/alerts", opRead)
+		mux.Handle("/overdue", opRead)
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}
