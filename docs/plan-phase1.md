@@ -132,7 +132,7 @@ Versioned, forward-only migrations for the audit ledger and telemetry tables. Mu
 
 ### M2 — The properties that make it real
 
-#### T-011 · Fail-open watchdog, exercised for real (D17/D18)
+#### T-011 · Fail-open watchdog, exercised for real (D17/D18) · **done**
 `~4h` · depends: T-006
 
 Self-PID bypass, response timeout to auto-FAN_ALLOW, safe teardown. Injected-delay test proves auto-allow fires AND is audited high-severity. Zip-bomb fixture hits budget ceiling rather than hanging. Scan budgets capped.
