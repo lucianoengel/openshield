@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -61,13 +62,16 @@ func main() {
 		fatal(log, "loading policy", err)
 	}
 
-	worker, err := privileged.StartWorker(ctx, workerBin)
+	poolSize := envInt("OPENSHIELD_WORKER_POOL", 4)
+	pool, err := privileged.StartPool(ctx, workerBin, poolSize)
 	if err != nil {
-		fatal(log, "starting worker", err)
+		fatal(log, "starting worker pool", err)
 	}
-	defer worker.Close()
+	defer pool.Close()
 
-	gw := gateway.NewFromWorker(worker, pol, ledger, log, 30*time.Second)
+	// The pool satisfies gateway.New's classifier interface (same Classify method as
+	// a single worker), so concurrent flows classify in parallel (D76).
+	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 
@@ -130,6 +134,16 @@ func loadOrCreateSigner(path string, log *slog.Logger) (*core.Signer, error) {
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return def
+}
+
+// envInt reads an integer env var, falling back to def on absence or a parse error.
+func envInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }
