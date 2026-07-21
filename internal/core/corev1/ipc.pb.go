@@ -34,6 +34,7 @@ type ClassifyRequest struct {
 	//
 	//	*ClassifyRequest_Path
 	//	*ClassifyRequest_FileHandle
+	//	*ClassifyRequest_Content
 	Subject isClassifyRequest_Subject `protobuf_oneof:"subject"`
 	// Hard ceiling on bytes the worker may read. A decompression bomb must hit a
 	// limit rather than exhaust memory.
@@ -111,6 +112,15 @@ func (x *ClassifyRequest) GetFileHandle() []byte {
 	return nil
 }
 
+func (x *ClassifyRequest) GetContent() []byte {
+	if x != nil {
+		if x, ok := x.Subject.(*ClassifyRequest_Content); ok {
+			return x.Content
+		}
+	}
+	return nil
+}
+
 func (x *ClassifyRequest) GetMaxBytes() uint64 {
 	if x != nil {
 		return x.MaxBytes
@@ -130,9 +140,21 @@ type ClassifyRequest_FileHandle struct {
 	FileHandle []byte `protobuf:"bytes,4,opt,name=file_handle,json=fileHandle,proto3,oneof"`
 }
 
+type ClassifyRequest_Content struct {
+	// Inline bytes the CALLER already holds. Used by a network-capable node (the
+	// gateway) that must hold the body to proxy it: handing the bytes here moves
+	// the PARSER (the RCE surface) into the sandboxed worker rather than running
+	// it in the process holding the network sockets (D71). The path-only rule —
+	// the worker opens the file itself so the CAP_SYS_ADMIN agent never holds
+	// bytes — is the AGENT's discipline, not the proto's.
+	Content []byte `protobuf:"bytes,6,opt,name=content,proto3,oneof"`
+}
+
 func (*ClassifyRequest_Path) isClassifyRequest_Subject() {}
 
 func (*ClassifyRequest_FileHandle) isClassifyRequest_Subject() {}
+
+func (*ClassifyRequest_Content) isClassifyRequest_Subject() {}
 
 type DetectorHit struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -276,14 +298,15 @@ var File_openshield_v1_ipc_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_ipc_proto_rawDesc = "" +
 	"\n" +
-	"\x17openshield/v1/ipc.proto\x12\ropenshield.v1\x1a\"openshield/v1/classification.proto\"\xac\x01\n" +
+	"\x17openshield/v1/ipc.proto\x12\ropenshield.v1\x1a\"openshield/v1/classification.proto\"\xc8\x01\n" +
 	"\x0fClassifyRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
 	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12\x14\n" +
 	"\x04path\x18\x03 \x01(\tH\x00R\x04path\x12!\n" +
 	"\vfile_handle\x18\x04 \x01(\fH\x00R\n" +
-	"fileHandle\x12\x1b\n" +
+	"fileHandle\x12\x1a\n" +
+	"\acontent\x18\x06 \x01(\fH\x00R\acontent\x12\x1b\n" +
 	"\tmax_bytes\x18\x05 \x01(\x04R\bmaxBytesB\t\n" +
 	"\asubject\"\x85\x01\n" +
 	"\vDetectorHit\x12@\n" +
@@ -338,6 +361,7 @@ func file_openshield_v1_ipc_proto_init() {
 	file_openshield_v1_ipc_proto_msgTypes[0].OneofWrappers = []any{
 		(*ClassifyRequest_Path)(nil),
 		(*ClassifyRequest_FileHandle)(nil),
+		(*ClassifyRequest_Content)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

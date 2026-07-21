@@ -28,6 +28,13 @@ message ClassifyRequest {
   oneof subject {
     string path = 3;
     bytes file_handle = 4;
+    // Inline bytes the CALLER already holds. Used by a network-capable node (the
+    // gateway) that must hold the body to proxy it: handing the bytes here moves
+    // the PARSER (the RCE surface) into the sandboxed worker rather than running
+    // it in the process holding the network sockets (D71). The path-only rule —
+    // the worker opens the file itself so the CAP_SYS_ADMIN agent never holds
+    // bytes — is the AGENT's discipline, not the proto's.
+    bytes content = 6;
   }
   // Hard ceiling on bytes the worker may read. A decompression bomb must hit a
   // limit rather than exhaust memory.

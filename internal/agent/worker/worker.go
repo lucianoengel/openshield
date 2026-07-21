@@ -16,6 +16,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -34,42 +35,61 @@ type Classifier interface {
 
 // Handle serves one ClassifyRequest.
 //
-// The worker opens the file itself, with its own unprivileged credentials. It
-// does NOT receive bytes from the privileged process: that would put
-// attacker-controlled content in the privileged address space, which is exactly
-// what the split exists to prevent. It also means the worker's access is bounded
-// by ordinary filesystem permissions rather than by CAP_SYS_ADMIN.
+// Two subjects reach the parser, both parsed HERE in the sandbox:
+//
+//   - path: the ENDPOINT case. The worker opens the file itself with its own
+//     unprivileged credentials; the privileged CAP_SYS_ADMIN agent never holds
+//     the bytes at all. That path-only discipline is the AGENT's (its code sends
+//     no content, and check-agent-deps keeps parsers out of its binary), which is
+//     why a `content` subject from it would be a bug — but the rule lives in the
+//     agent, not here.
+//   - content: the GATEWAY case. A network-capable node that ALREADY holds the
+//     body (it read it off the socket to proxy it) hands the bytes over so the
+//     PARSER runs in the sandbox rather than in the process holding the network
+//     sockets (D71). It does not create new exposure — that caller already has
+//     the bytes — it moves the RCE surface behind seccomp/no-network.
+//
+// Either way the response carries detector types and counts, never matched
+// content (D10/D29), and either way the bytes pass the same bounded reader.
 func Handle(ctx context.Context, c Classifier, req *corev1.ClassifyRequest) *corev1.ClassifyResponse {
 	resp := &corev1.ClassifyResponse{
 		RequestId: req.GetRequestId(),
 		EventId:   req.GetEventId(),
 	}
 
-	path := req.GetPath()
-	if path == "" {
-		// A file handle needs CAP_DAC_READ_SEARCH to resolve (measured in
-		// T-005), which the worker deliberately does not have. Resolution is
-		// the privileged side's job; it passes a path.
-		resp.Error = "worker: no path supplied (handle resolution is not the worker's job)"
-		return resp
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		// An error is NOT "nothing found". Reporting it as a clean result would
-		// let an unreadable or crashing file read as safe.
-		resp.Error = fmt.Sprintf("worker: open: %v", err)
-		return resp
-	}
-	defer f.Close()
-
 	max := req.GetMaxBytes()
 	if max == 0 {
 		max = DefaultMaxBytes
 	}
+
+	// Resolve the subject to a reader. A file handle needs CAP_DAC_READ_SEARCH to
+	// resolve (T-005), which the worker deliberately lacks — resolution is the
+	// privileged side's job — so it is not a subject the worker reads.
+	var src io.Reader
+	switch s := req.GetSubject().(type) {
+	case *corev1.ClassifyRequest_Content:
+		// Inline bytes the caller already holds. Empty content is a valid input
+		// (classify → no hits), distinguished from "no subject" by the oneof type.
+		src = bytes.NewReader(s.Content)
+	case *corev1.ClassifyRequest_Path:
+		f, err := os.Open(s.Path)
+		if err != nil {
+			// An error is NOT "nothing found". Reporting it as a clean result
+			// would let an unreadable or crashing file read as safe.
+			resp.Error = fmt.Sprintf("worker: open: %v", err)
+			return resp
+		}
+		defer f.Close()
+		src = f
+	default:
+		resp.Error = "worker: no subject supplied (path or content required)"
+		return resp
+	}
+
 	// Hard ceiling before any parser sees the stream. A decompression bomb must
-	// hit a limit rather than exhaust memory (D13).
-	lr := &limitReader{R: f, N: int64(max)}
+	// hit a limit rather than exhaust memory (D13) — the same bound for a file on
+	// disk and for inline bytes.
+	lr := &limitReader{R: src, N: int64(max)}
 
 	hits, err := c.Classify(ctx, lr)
 	if err != nil {

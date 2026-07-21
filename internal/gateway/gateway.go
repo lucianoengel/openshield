@@ -8,16 +8,15 @@
 // EXISTING audit sink, and — observe-only by default (D1) — dispatches the verdict
 // to a registered flow enforcer keyed by flow_id (D69).
 //
-// KNOWN GAP (D71): the body is classified IN-PROCESS here. The endpoint parses
-// attacker-controlled bytes in a seccomp-sandboxed, network-denied worker
-// (D29/D35) precisely because a parser bug in a network-capable process is RCE —
-// and the gateway IS network-capable. Production body classification MUST move to
-// a sandboxed worker (reusing the worker seam). This skeleton runs no live
-// traffic; the gap is recorded, not assumed away.
+// The body is classified IN THE SANDBOXED WORKER, not in this process (D72,
+// closing D71). The gateway is network-capable, and a parser bug in a
+// network-capable process is RCE — the exact danger the worker's seccomp/
+// no-network sandbox (D29/D35) removes. The gateway holds the body only to proxy
+// it and to hand it to the worker; it does not link the parser (asserted by a
+// dependency-graph test).
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -28,10 +27,18 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/lucianoengel/openshield/internal/classify"
+	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
+
+// classifier is the subset of the worker the gateway needs — the SAME private
+// interface the engine holds, so a *privileged.Worker satisfies both. An
+// interface so the body-classify stage is testable without spawning a process,
+// and so the gateway's dependency graph contains no parser (D72).
+type classifier interface {
+	Classify(ctx context.Context, req *corev1.ClassifyRequest) (*corev1.ClassifyResponse, error)
+}
 
 // Request is one network request the gateway is deciding on. Body is the plaintext
 // the gateway holds; it is classified in-process and NEVER placed in the Event,
@@ -52,12 +59,16 @@ type Request struct {
 
 // Gateway runs the assembled network pipeline for one request.
 type Gateway struct {
-	classifier *classify.Classifier
+	classifier classifier
 	policy     core.Stage
 	ledger     core.Ledger
 	deadline   time.Duration
 	logger     *slog.Logger
 	now        func() time.Time
+
+	// maxBytes caps how much of a body the worker parses (decompression-bomb
+	// ceiling, D13). Zero lets the worker apply its own default.
+	maxBytes uint64
 
 	// Enforcers carry out Decisions post-decision. EMPTY by default — observe-only
 	// (D1): the gateway decides and records, and enforces nothing until a flow
@@ -66,17 +77,26 @@ type Gateway struct {
 	Enforcers []core.Enforcer
 }
 
-// New assembles the network pipeline: classify-body (in-process) → policy →
-// decide, with the audit sink recording every terminal outcome.
-func New(policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Gateway {
+// New assembles the network pipeline: classify-body (via the sandboxed worker) →
+// policy → decide, with the audit sink recording every terminal outcome. The
+// classifier is an interface so the parser is not linked into the gateway process
+// (D72) and so the assembly is testable without spawning a worker.
+func New(c classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Gateway {
 	return &Gateway{
-		classifier: classify.New(),
+		classifier: c,
 		policy:     policy,
 		ledger:     ledger,
 		deadline:   stageDeadline,
 		logger:     logger,
 		now:        time.Now,
 	}
+}
+
+// NewFromWorker is the production constructor: it takes a started
+// *privileged.Worker, so body classification runs in the seccomp/no-network
+// sandbox (D72). Mirrors engine.NewFromWorker.
+func NewFromWorker(w *privileged.Worker, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Gateway {
+	return New(w, policy, ledger, logger, stageDeadline)
 }
 
 func newEventID() string {
@@ -121,32 +141,42 @@ func (g *Gateway) toEvent(r *Request) *corev1.Event {
 	}
 }
 
-// bodyClassifyStage classifies THIS request's body in-process and puts a
-// content-free classification on State — the network analogue of the engine's
-// classifyStage, except the plaintext is HELD by the gateway, not fetched by path
-// (the body is never in the Event, D10/D29). Content-free: type + confidence +
-// count per occurrence, matched text NEVER attached.
+// bodyClassifyStage hands THIS request's body to the sandboxed worker and puts
+// the result on State — the network analogue of the engine's classifyStage. The
+// plaintext is HELD by the gateway (it read it off the socket) but PARSED by the
+// worker (D72), and the body is never in the Event (D10/D29). Content-free:
+// type + confidence + count per occurrence, matched text NEVER attached — the
+// worker never returns matched content across the IPC.
 type bodyClassifyStage struct {
-	c    *classify.Classifier
-	body []byte
+	c        classifier
+	body     []byte
+	maxBytes uint64
 }
 
 func (bodyClassifyStage) Name() string { return "net-classify" }
 
 func (s bodyClassifyStage) Run(ctx context.Context, st *core.State) (core.Outcome, error) {
-	hits, err := s.c.Classify(ctx, bytes.NewReader(s.body))
+	resp, err := s.c.Classify(ctx, &corev1.ClassifyRequest{
+		RequestId: st.Event.GetEventId(),
+		EventId:   st.Event.GetEventId(),
+		Subject:   &corev1.ClassifyRequest_Content{Content: s.body},
+		MaxBytes:  s.maxBytes,
+	})
 	if err != nil {
-		// A classify failure is NOT "nothing found" — surface it so a failed scan
+		// A worker failure is NOT "nothing found" — surface it so a failed parse
 		// is auditable, never a silent clean result (D17).
-		return core.Outcome{}, fmt.Errorf("net-classify: %w", err)
+		return core.Outcome{}, fmt.Errorf("net-classify: worker: %w", err)
+	}
+	if resp.GetError() != "" {
+		return core.Outcome{}, fmt.Errorf("net-classify: worker reported: %s", resp.GetError())
 	}
 	lc := &corev1.LocalClassification{EventId: st.Event.GetEventId()}
-	for _, h := range hits {
+	for _, h := range resp.GetHits() {
 		for i := uint32(0); i < h.GetCount(); i++ {
 			lc.Matches = append(lc.Matches, &corev1.LocalMatch{
 				DetectorType: h.GetDetectorType(),
 				Confidence:   h.GetConfidence(),
-				// MatchedText deliberately empty — no content leaves the gateway.
+				// MatchedText deliberately empty — no content crossed the IPC.
 			})
 		}
 	}
@@ -168,7 +198,7 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 	ev := g.toEvent(req)
 
 	var reg core.Registry
-	reg.Register(bodyClassifyStage{c: g.classifier, body: req.Body})
+	reg.Register(bodyClassifyStage{c: g.classifier, body: req.Body, maxBytes: g.maxBytes})
 	reg.Register(g.policy)
 	disp := core.NewDispatcher(&reg, g.deadline)
 	disp.OnOutcome = core.NewAuditSink(g.ledger).Record
