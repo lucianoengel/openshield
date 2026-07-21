@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+import "google/protobuf/timestamp.proto";
+
+// PostureUpdate reports a device's compliance state to the gateway (D92), so the
+// access policy can require an attested, compliant device (D85). The endpoint agent
+// knows its own device state and reports it (the report side is a follow-up); the
+// gateway reads it into its PostureStore and the LOCAL policy decides. A device with
+// NO posture published is UNTRUSTED — the D85 tamper-lockout: a killed/tampered
+// endpoint reports no posture and is denied. The subject is pseudonymous (D23).
+message PostureUpdate {
+  string subject = 1;
+  bool compliant = 2;
+  bool disk_encrypted = 3;
+  bool agent_present = 4;
+  int32 os_patch_tier = 5; // matches core.PatchTier
+  google.protobuf.Timestamp computed_at = 6;
+}

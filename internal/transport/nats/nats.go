@@ -36,6 +36,7 @@ const (
 	SubjectDecisions      = "openshield.v1.decisions"
 	SubjectHeartbeat      = "openshield.v1.heartbeats"
 	SubjectRisk           = "openshield.v1.risk"
+	SubjectPosture        = "openshield.v1.posture"
 )
 
 // Transport publishes wire-form messages to the control plane.

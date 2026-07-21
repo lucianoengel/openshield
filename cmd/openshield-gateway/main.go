@@ -252,11 +252,14 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
 	riskStore := gateway.NewRiskStore()
 	ap.SetRiskStore(riskStore)
+	postureStore := gateway.NewPostureStore()
+	ap.SetPostureStore(postureStore)
 
-	// Subscribe to published risk (D91) so continuous verification (D89) fires on real
-	// risk. When NATS is configured, the control plane's per-subject risk updates
-	// populate the store. Without NATS, the store stays empty (a policy gating on
-	// absent risk allows, D89) — risk gating is inert but the access authz still works.
+	// Subscribe to published risk (D91) and device posture (D92). When NATS is
+	// configured, the control plane's per-subject risk updates and the endpoints'
+	// posture updates populate the stores. Without NATS both stay empty: a risk-gating
+	// policy allows on absent risk (D89), but a posture-requiring policy DENIES on
+	// absent posture (D85 tamper-lockout) — the two fail in opposite directions.
 	if natsURL := os.Getenv("OPENSHIELD_NATS_URL"); natsURL != "" {
 		conn, err := nats.Connect(natsURL)
 		if err != nil {
@@ -266,7 +269,10 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		if _, err := gateway.SubscribeRisk(conn, riskStore); err != nil {
 			fatal(log, "risk subscribe", err)
 		}
-		log.Info("gateway: risk continuous-verification subscription active (D91)")
+		if _, err := gateway.SubscribePosture(conn, postureStore); err != nil {
+			fatal(log, "posture subscribe", err)
+		}
+		log.Info("gateway: risk + device-posture subscriptions active (D91/D92)")
 	}
 
 	srv := &http.Server{

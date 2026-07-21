@@ -31,7 +31,19 @@ type AccessProxy struct {
 	// verification (D89): the access decision context is enriched with it so the
 	// LOCAL policy can step-up/deny on rising risk. nil = no risk enrichment.
 	risk *RiskStore
+
+	// posture, when set, supplies published per-subject device posture (D92): the
+	// access decision context is enriched with it. A subject with NO published
+	// posture keeps HasPosture=false and a posture-requiring policy denies it (the
+	// D85 tamper-lockout). nil = no posture enrichment.
+	posture *PostureStore
 }
+
+// SetPostureStore enables device-posture-aware access (D92): the access handler
+// enriches each request's identity context with the connecting subject's published
+// posture, so a policy can require an attested, compliant device (D85). A device with
+// no published posture fails closed (the tamper-lockout).
+func (p *AccessProxy) SetPostureStore(s *PostureStore) { p.posture = s }
 
 // SetRiskStore enables risk-driven continuous verification (D89): the access handler
 // enriches each request's identity context with the connecting subject's published
@@ -92,6 +104,14 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if score, ok := p.risk.Get(id.Subject); ok {
 			idCtx.RiskScore = score
 			idCtx.HasRiskScore = true
+		}
+	}
+	// Enrich device posture (D92): a subject with published posture gets it (with
+	// HasPosture=true); a subject with NONE keeps HasPosture=false and a
+	// posture-requiring policy denies it — the D85 tamper-lockout.
+	if p.posture != nil {
+		if dp, ok := p.posture.Get(id.Subject); ok {
+			idCtx.DevicePosture = dp
 		}
 	}
 
