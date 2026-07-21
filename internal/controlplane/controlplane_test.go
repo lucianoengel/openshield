@@ -45,7 +45,7 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 		t.Skip(msg)
 	}
 	lockDB(t, pool)
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	if err := postgres.Migrate(ctx, pool); err != nil {

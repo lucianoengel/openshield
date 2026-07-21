@@ -133,6 +133,8 @@ jobs:
         env:
           OPENSHIELD_REQUIRE_POSTGRES: "1"
         run: go test -count=1 -v ./internal/controlplane/
+      - name: agent identity signing (per-agent keys, no shared secret)
+        run: go test -count=1 -v ./internal/agent/identity/
 
   # Still to come, each its own ticket:
   #

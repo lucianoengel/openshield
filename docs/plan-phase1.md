@@ -152,7 +152,7 @@ Retention purge demonstrably runs; excluded path produces no event; viewing an i
 
 Adding a Connector produces zero diffs in core packages. KNOWN-WEAK alone (S3 is isomorphic; gamable via map[string]any). T-004 paper verdict recorded alongside; green CI is not by itself validation of the 10-year claim.
 
-#### T-017 · Agent identity + enrollment (A6)
+#### T-017 · Agent identity + enrollment (A6) · **done**
 `~4h` · depends: T-006, T-023
 
 Per-agent revocable identity; mTLS to the control plane; single-use short-TTL enrollment token or TOFU-with-admin-approval. NEVER a shared fleet secret (one compromised agent must not equal fleet compromise). Telemetry individually signed w/ sequence numbers - it is evidentiary, same integrity bar as the audit log.
