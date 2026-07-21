@@ -141,6 +141,10 @@ jobs:
         env:
           OPENSHIELD_REQUIRE_POSTGRES: "1"
         run: go test -count=1 -v ./internal/engine/
+      - name: fanotify observe front-end (real file change → audit, unprivileged)
+        env:
+          OPENSHIELD_REQUIRE_POSTGRES: "1"
+        run: go test -count=1 -v ./internal/connectors/fanotify/
 
   # Still to come, each its own ticket:
   #
