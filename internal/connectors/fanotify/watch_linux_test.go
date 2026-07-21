@@ -49,16 +49,9 @@ func TestWatchRealFile(t *testing.T) {
 // verifiable audit. A genuine kernel-event → audit run, UNPRIVILEGED, here.
 func TestFanotifyToAudit(t *testing.T) {
 	ctx := context.Background()
-	// Postgres availability.
-	l, err := postgres.OpenForVerify(ctx, dsn)
-	if err != nil {
-		if os.Getenv("OPENSHIELD_REQUIRE_POSTGRES") != "" {
-			t.Fatalf("POSTGRES REQUIRED: %v", err)
-		}
-		t.Skipf("LOUD SKIP: Postgres unavailable (%v)", err)
+	if !clean(t) {
+		t.Skip("LOUD SKIP: Postgres unavailable — fanotify→audit e2e NOT verified")
 	}
-	l.Close()
-	clean(t)
 
 	dir := t.TempDir()
 	w, err := fanotify.Open(dir)

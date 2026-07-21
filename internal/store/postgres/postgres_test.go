@@ -79,12 +79,17 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 	// Serialize DB-touching tests ACROSS packages: `go test ./...` runs packages
 	// in parallel, and this package and internal/controlplane both do DDL on the
 	// same database — a race on schema_migrations otherwise. A session advisory
-	// lock on a dedicated connection, held for the test, serializes them.
+	// lock on a dedicated connection, held for the test, serializes them. This
+	// BLOCKS until the holding package's process exits, which under `-race` can
+	// exceed the 5s connect deadline above — so the DROP below MUST get a fresh
+	// deadline, or the lock wait silently eats it ("context deadline exceeded").
 	lockDB(t, pool)
 
 	// Each test owns the table. Appends are sequenced from the stored tail, so
 	// leftovers from a previous run would make sequence numbers unpredictable.
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, schema_migrations CASCADE`); err != nil {
+	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dropCancel()
+	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	t.Cleanup(pool.Close)

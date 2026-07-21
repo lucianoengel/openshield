@@ -44,8 +44,13 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 		fmt.Fprintf(os.Stderr, "\n!! SKIPPING CONTROL-PLANE TESTS !! %s\n\n", msg)
 		t.Skip(msg)
 	}
+	// lockDB BLOCKS on the cross-package advisory lock; under `-race` that wait can
+	// exceed the 5s connect deadline above, so the DROP needs a FRESH deadline —
+	// otherwise the lock wait eats it and the DROP fails "context deadline exceeded".
 	lockDB(t, pool)
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`); err != nil {
+	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dropCancel()
+	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, audit_entries, key_epochs, anchors, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	if err := postgres.Migrate(ctx, pool); err != nil {
