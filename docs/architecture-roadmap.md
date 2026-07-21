@@ -457,6 +457,20 @@ project's entire brand is honesty about limits; either wire them or downgrade th
   file is actually moved + audited; without the flag, observe-only (decision recorded, file
   untouched).
 
+**HON-4 · A signed device-posture producer** — P1 · new producer · effort M
+- Problem: the posture channel (`PostureStore` / `SubscribePosture`, D92) has **no publisher
+  anywhere in the repo** — nothing ever emits a `PostureUpdate`. The D85/D92 tamper-lockout can
+  therefore never see real data: absent posture fails closed, so a posture-gated policy denies
+  everyone (or is never exercised). Claimed-but-unwired — the Bucket-H shape.
+- Evidence: repo-wide grep — `PostureStore.Set` / `ApplyPostureUpdate` have subscribers, zero
+  producers; contrast risk (`riskpub.go` exists).
+- Fix: an endpoint-agent producer that reports device posture, **agent-key-signed** with subject
+  bound to its own identity (this is the producer SEC-1's posture half verifies). Self-report is
+  only as trustworthy as the reporter — ZT-1 (attestation) is the hardening; absent-posture
+  fail-closed still catches a silent endpoint.
+- Verify: e2e — a running agent publishes signed posture, the gateway applies it, and a
+  forged/unsigned posture for another subject is rejected (SEC-1).
+
 ---
 
 ## Bucket P — Platform & enterprise operability  (gates every category)
@@ -520,11 +534,12 @@ project's entire brand is honesty about limits; either wire them or downgrade th
 Each item notes pipeline fit (P/C/X/A = producer/classify/context/action; or off-pipeline) and effort.
 
 ### Zero Trust / ZTNA  (extends Phase A — the closest-to-credible category)
-- **ZT-1 · Hardware device-posture attestation** — P0-for-credibility · X + new producer · XL.
-  Today posture is self-reported booleans; a compromised-but-alive agent signs `Compliant=true`
-  (SEC-1 only fixes third-party spoofing, not owner-lying). Add TPM/measured-boot signed quotes
-  (the repo already pulls `google/go-tpm` transitively) verified at the gateway. This is the
-  ZTNA-vs-toy line.
+- **ZT-1 · Hardware device-posture attestation** — P1 · X + new producer · XL (sequenced by the
+  revised order, **not** first-tier). Today posture is self-reported booleans; a compromised-but-alive
+  agent signs `Compliant=true` (SEC-1 only fixes third-party spoofing, not owner-lying). Add
+  TPM/measured-boot signed quotes verified at the gateway. (`google/go-tpm` is only an `// indirect`
+  dep today — an artifact, not readiness; treat TPM as greenfield.) Builds on HON-4's posture
+  producer. This is the ZTNA-vs-toy line.
 - **ZT-2 · Wire the OIDC/JWT verifier** — P1 · already-built, needs wiring · S (wire) / M (live JWKS).
   `identity/oidc.go` is complete and well-tested (rejects `none`/alg-confusion) but **no binary
   constructs it**. Wire it into the access proxy; add live JWKS discovery as a conscious,
@@ -538,7 +553,8 @@ Each item notes pipeline fit (P/C/X/A = producer/classify/context/action; or off
 - **ZT-6 · SAML** — P3 · new producer · L. Only after OIDC (ZT-2) proves the SSO seam.
 
 ### DLP  (extends Phase D + enforcement)
-- **DLP-1 · Wire endpoint enforcement** — see HON-3 (P0). Prerequisite for containment meaning anything.
+- **DLP-1 · Wire endpoint enforcement** — _alias, canonical is HON-3 (P0)_. Prerequisite for
+  containment meaning anything. Do not double-propose.
 - **DLP-2 · Real exfiltration-channel producers** — P0-for-product · new producers (+ maybe actions) · XL, per-OS.
   Clipboard, print, screenshot, removable-media file-copy (content-aware, not the current global USB
   on/off), cloud-sync/CASB. A DLP that watches directories but not the channels users exfiltrate
@@ -547,8 +563,8 @@ Each item notes pipeline fit (P/C/X/A = producer/classify/context/action; or off
   DB"), document fingerprinting, OCR for image-borne data. **Architectural tension:** D10/D11 forbid
   hash/fingerprint leaving the endpoint, so EDM/IDM must be server-side or an opt-in worker plugin —
   design it there, do not break the boundary.
-- **DLP-4 · Incident/case workflow** — see HON-2/SIEM-3 (P1). Assignment, disposition, reviewer,
-  four-eyes on the incident.
+- **DLP-4 · Incident/case workflow** — ✅ mostly **LANDED** (D105/D107); residue = legal-hold wiring
+  (HON-2). _Alias — do not re-propose._
 - **DLP-5 · Compliance policy packs** — P1 · classify + policy · M. PCI/HIPAA/GDPR templated Rego +
   detector sets (today one hand-written `default.rego` that only ALERTs on CPF/credit-card).
 - **DLP-6 · Endpoint user coaching/justification** — P1 · X + UI · M. REDIRECT-to-coaching exists at
@@ -570,25 +586,34 @@ Each item notes pipeline fit (P/C/X/A = producer/classify/context/action; or off
   the socket front-end (a UDP:53 resolver / SMTP session listener → `ToEvent` → pipeline) is missing.
   Highest-leverage next network step. Unlocks DNS-exfil/C2 detection (the `TunnelScore` heuristic
   exists but is unwired) and email DLP end-to-end.
-- **NIPS-4 · Response-body inspection** — P1 · classify · S. Today only the *request* body is
+- **NIPS-4 · Response-body inspection** — P1 · classify · M. Today only the *request* body is
   classified; the response is copied through — exfil-via-download and malware delivery pass
-  unclassified. Add multipart + gzip handling (shared with DLP-8).
+  unclassified. Add buffered/streamed classification with memory bounds, gzip + multipart decode
+  (shared with DLP-8), and define response-direction fail-open. **Must preserve the deliberate
+  D73/D17 egress fail-open** — do not "fix" it into fail-closed.
 - **NIPS-5 · HTTP/2 & QUIC interception** — P2 · new work · L. Modern traffic tunnels blind today
   (HTTP/1.1 only).
 - **NIPS-6 · Raw TCP/L4 metadata connector + anomaly/beaconing detection** — P2 · P + C · L.
 
 ### SIEM  (extends Phase F — currently ~5%)
-- **SIEM-1 · Typed/JSONB event storage + `/events` search** — P0 · pipeline extension · L. Today
+- **SIEM-1 · Typed/JSONB *event* storage + `/events` search** — P1 · pipeline extension · L. Today
   `fleet_telemetry` payloads are opaque proto `BYTEA` — field-level queries are impossible and there
   is nothing to hunt in. Decode to typed columns / JSONB at ingest, index, add an `/events` search
-  endpoint (extend the parameterized, injection-safe pattern already in `operator_read.go`).
-- **SIEM-2 · Correlation engine** — P0 · pipeline extension · L. Persistent rules (threshold/sequence
-  over typed fields), **stored incidents with IDs/state**, and an `agent_id` column on `peer_alerts`
-  to make cross-host correlation possible (impossible by schema today). `correlate.go` (one hardcoded
-  burst rule, computed on read, not stored) is the seam.
-- **SIEM-3 · Case/investigation workflow** — see HON-2 (P0/P1). The 011 schema exists; implement it.
-- **SIEM-4 · External log ingestion** — P1 · new connector class · XL. Syslog/JSON first, CEF/WEF/cloud
-  later, feeding the same verified-ingest path. This is what turns "our own telemetry" into "a SIEM."
+  endpoint (extend the parameterized, injection-safe pattern in `operator_read.go`). _(Note: alert
+  `/search` over `peer_alerts` already landed — D103; this is the missing **event** search over
+  telemetry, a different and larger surface.)_
+- **SIEM-2 · Persist & broaden correlation** — P1 · pipeline extension · L. _[partly landed]_ A
+  burst-rule correlator + incident→case conversion landed (D104/D107, `correlate.go`), but incidents
+  are still **computed-on-read** (no `incidents` table; migrations end at 011) and `peer_alerts`
+  (009) has **no `agent_id`/host column**, so cross-host correlation is impossible by schema. Build:
+  persisted incidents (IDs/state), a real multi-rule engine (threshold/sequence over typed fields),
+  and the `agent_id` column. **Do NOT rebuild the correlator that exists.**
+- **SIEM-3 · Case/investigation workflow** — ✅ **LANDED (D105/D107)** (`internal/controlplane/cases.go`).
+  _Alias of HON-2_ — the only residue is the legal-hold wiring tracked there. Do not re-propose.
+- **SIEM-4 · External log ingestion (beyond syslog)** — P1 · new connector class · M. _[partly landed]_
+  A syslog parser + UDP listener landed (D106/D108, `internal/connectors/syslog/`). Remaining: CEF /
+  WEF / cloud-JSON formats and wiring ingested logs into the **verified** ingest + search/correlation
+  path (not just a listener). Effort drops from XL now the syslog precedent exists.
 - **SIEM-5 · Persist + broaden UEBA** — P1 · analytics · M (persist, = SEC-10) / L (features). The
   z-score math is genuinely good but single-feature (event rate) and fully in-memory. Persist baselines;
   add per-kind rate / time-of-day / data-volume features via the Analyzer seam.
@@ -637,8 +662,9 @@ Each item notes pipeline fit (P/C/X/A = producer/classify/context/action; or off
    (wired enforcement + compliance packs), plus **PLAT-1 (a UI)** — this turns two ~40% categories
    into defensible products. In parallel, **PLAT-2/PLAT-4** (durability + metrics) because they gate
    enterprise adoption more than feature breadth.
-3. **Broaden:** NIPS-3 (wire DNS/SMTP), NIPS-1/2 (inline + signatures), SIEM-1/2/3 (event search +
-   correlation + cases), DLP-2/DLP-3 (channels + EDM).
+3. **Broaden:** NIPS-3 (wire DNS/SMTP listeners), NIPS-1/2 (inline + signatures), SIEM-1 (event
+   search) + SIEM-2 (persist correlation + cross-host key) + SIEM-4 (CEF/WEF/cloud ingest),
+   DLP-2/DLP-3 (channels + EDM). _(SIEM-3 / case workflow already landed — D105/D107.)_
 4. **XDR fork (only on the T3 bet):** Phase E / HIPS-*.
 5. **Cross-platform (PLAT-7)** runs alongside, externally gated — highest real-world DLP leverage.
 6. **NAC / VPN:** do not start; return to the owner for the **T4** build-vs-drop decision first.
