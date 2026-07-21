@@ -28,6 +28,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/lucianoengel/openshield/internal/transport/queue"
 )
 
 func main() {
@@ -86,6 +87,21 @@ func main() {
 		pub = natsx.NewSignedPublisher(agentID, id, conn)
 	}
 
+	// Durable offline queue (D40/D67): spool signed telemetry when the control
+	// plane is unreachable and re-send it on reconnect, so an outage causes a gap,
+	// not silent loss (D1). An overflow eviction is logged LOUDLY — a drop that is
+	// not recorded is the silent loss this exists to prevent (D31).
+	if qdir := os.Getenv("OPENSHIELD_QUEUE_DIR"); qdir != "" {
+		max := envInt("OPENSHIELD_QUEUE_MAX", 10000)
+		q, qerr := queue.Open(qdir, max, func(seq uint64) {
+			fmt.Fprintf(os.Stderr, "fleet-agent %s: QUEUE OVERFLOW — dropped spooled record seq=%d (ceiling %d)\n", agentID, seq, max)
+		})
+		if qerr != nil {
+			fatal("offline queue: %v", qerr)
+		}
+		pub.SetSpool(q)
+	}
+
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -93,6 +109,10 @@ func main() {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			// Drain anything spooled during an outage, in order (best-effort).
+			if n, ferr := pub.Flush(); ferr != nil {
+				fmt.Fprintf(os.Stderr, "fleet-agent %s: flush stopped after %d (still unreachable?): %v\n", agentID, n, ferr)
+			}
 			_ = pub.PublishHeartbeat(ctx, &corev1.Heartbeat{AgentId: agentID, ObservedAt: timestamppb.Now()})
 			for i := 0; i < burst; i++ {
 				_ = pub.PublishEvent(ctx, &corev1.Event{EventId: agentID + "-ev", AgentId: agentID,

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lucianoengel/openshield/internal/agent/identity"
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
@@ -38,6 +39,23 @@ type SignedPublisher struct {
 	mu    sync.Mutex // guards the reservation high-water
 	store SeqStore
 	hw    uint64 // persisted high-water; seq may advance up to hw without a write
+
+	// spool is the durable offline queue (D40/D67): when the control plane is
+	// unreachable the SIGNED envelope bytes are stored and re-published verbatim
+	// on Flush — the sequence and signature are baked in, so a late message
+	// verifies exactly as a live one (a gap at worst, D50). send/connected are
+	// seams so the store-or-forward logic is testable without a live broker.
+	spool     Spool
+	send      func([]byte) error
+	connected func() bool
+}
+
+// Spool is the durable store-and-forward interface the publisher needs (satisfied
+// by *queue.Queue): FIFO, bounded, crash-safe.
+type Spool interface {
+	Enqueue(rec []byte) error
+	Drain(fn func([]byte) error) (int, error)
+	Len() int
 }
 
 // NewSignedPublisher wraps an agent identity over a NATS connection with an
@@ -96,10 +114,60 @@ func (p *SignedPublisher) publish(kind string, m proto.Message) error {
 	if err != nil {
 		return err
 	}
-	if p.conn == nil || p.conn.IsClosed() {
-		return fmt.Errorf("signed publisher: connection closed")
+	return p.storeOrSend(b)
+}
+
+// SetSpool attaches a durable offline queue: when the control plane is
+// unreachable, signed envelopes are stored and re-sent on Flush, so telemetry is
+// not silently lost during an outage (D67). Without a spool, an unreachable
+// publish returns an error (unchanged).
+func (p *SignedPublisher) SetSpool(s Spool) { p.spool = s }
+
+// storeOrSend publishes directly when connected and the spool is empty, else
+// durably enqueues — preserving FIFO order (a new message goes BEHIND anything
+// already queued, so the control plane sees events in the order produced).
+func (p *SignedPublisher) storeOrSend(b []byte) error {
+	if p.spool == nil {
+		return p.sendFn()(b)
 	}
-	return p.conn.Publish(SubjectSigned, b)
+	if p.spool.Len() > 0 || !p.connectedFn()() {
+		return p.spool.Enqueue(b)
+	}
+	if err := p.sendFn()(b); err != nil {
+		return p.spool.Enqueue(b) // an outage mid-send must not lose the payload
+	}
+	return nil
+}
+
+// Flush re-sends every spooled envelope in order, stopping at the first failure
+// (keeping the undelivered tail for a later Flush). Returns the number delivered.
+func (p *SignedPublisher) Flush() (int, error) {
+	if p.spool == nil {
+		return 0, nil
+	}
+	return p.spool.Drain(p.sendFn())
+}
+
+// sendFn/connectedFn resolve the seams: an injected override (tests) or the live
+// NATS connection. An absent/closed connection is ErrUnreachable so storeOrSend
+// enqueues rather than erroring.
+func (p *SignedPublisher) sendFn() func([]byte) error {
+	if p.send != nil {
+		return p.send
+	}
+	return func(b []byte) error {
+		if p.conn == nil || p.conn.IsClosed() {
+			return core.ErrUnreachable
+		}
+		return p.conn.Publish(SubjectSigned, b)
+	}
+}
+
+func (p *SignedPublisher) connectedFn() func() bool {
+	if p.connected != nil {
+		return p.connected
+	}
+	return func() bool { return p.conn != nil && p.conn.IsConnected() }
 }
 
 func (p *SignedPublisher) PublishEvent(_ context.Context, e *corev1.Event) error {
