@@ -29,6 +29,9 @@ usage:
 
   openshield-provision escrow-keygen --out DIR
       write escrow-pub (to endpoints) + escrow-priv (to the off-endpoint vault)
+
+  openshield-provision witness-keygen --out DIR
+      write witness-pub (to verifiers) + witness-priv (to the external witness host)
 `
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -45,6 +48,8 @@ func run(args []string) int {
 		return cert(flags(args[1:]))
 	case "escrow-keygen":
 		return escrowKeygen(flags(args[1:]))
+	case "witness-keygen":
+		return witnessKeygen(flags(args[1:]))
 	default:
 		fmt.Fprintf(os.Stderr, "openshield-provision: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -113,6 +118,25 @@ func escrowKeygen(f map[string][]string) int {
 		return fail("%v", err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s/escrow-pub (to endpoints) and %s/escrow-priv (to the off-endpoint vault)\n", out, out)
+	return 0
+}
+
+func witnessKeygen(f map[string][]string) int {
+	out := one(f, "out")
+	if out == "" {
+		return fail("witness-keygen requires --out DIR")
+	}
+	pub, priv, err := provision.WitnessKeypair()
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := writeFile(filepath.Join(out, "witness-pub"), pub, 0o644); err != nil {
+		return fail("%v", err)
+	}
+	if err := writeFile(filepath.Join(out, "witness-priv"), priv, 0o600); err != nil {
+		return fail("%v", err)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s/witness-pub (to verifiers) and %s/witness-priv (to the EXTERNAL witness host — T-019)\n", out, out)
 	return 0
 }
 

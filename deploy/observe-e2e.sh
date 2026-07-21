@@ -22,6 +22,9 @@ trap cleanup EXIT
 echo "==> building the shipped binaries"
 go build -o "$WORK/openshield-engine" ./cmd/openshield-engine
 go build -o "$WORK/openshield-worker" ./cmd/openshield-worker
+go build -o "$WORK/openshield-anchor" ./cmd/openshield-anchor
+go build -o "$WORK/openshield-provision" ./cmd/openshield-provision
+go build -o "$WORK/openshieldctl" ./cmd/openshieldctl
 
 echo "==> dev Postgres up + clean ledger"
 podman start openshield-pg >/dev/null 2>&1 || true
@@ -52,6 +55,16 @@ for i in $(seq 1 20); do
 done
 [ -n "$ok" ] || { echo "!! no ALERT recorded by the running engine binary" >&2; cat "$WORK/engine.log" >&2; exit 1; }
 
+echo "==> operational anchoring (D64): witness the head, then verify completeness is anchored"
+"$WORK/openshield-provision" witness-keygen --out "$WORK/w" >/dev/null 2>&1
+before="$("$WORK/openshieldctl" verify --dsn "$DSN" --witness "$WORK/w/witness-pub" 2>&1 | grep -oE 'completeness=[a-z]+' | head -1)"
+"$WORK/openshield-anchor" --dsn "$DSN" --witness "$WORK/w/witness-priv" 2>&1 | grep -q 'witnessed head' || { echo "!! anchor tool did not witness the head" >&2; exit 1; }
+after="$("$WORK/openshieldctl" verify --dsn "$DSN" --witness "$WORK/w/witness-pub" 2>&1 | grep -oE 'completeness=[a-z]+' | head -1)"
+echo "   completeness before=$before after=$after"
+echo "$after" | grep -q 'anchored' || { echo "!! completeness is not anchored after running openshield-anchor (before=$before after=$after)" >&2; exit 1; }
+echo "   OK: openshield-anchor binary witnessed the head; openshieldctl verify reports anchored"
+
 echo ""
 echo "OBSERVE E2E PASSED: the shipped openshield-engine binary watched a dir, classified a real"
-echo "file, decided ALERT, and recorded it in the forward-secure ledger — end to end, as a binary."
+echo "file, decided ALERT, recorded it in the forward-secure ledger, and the openshield-anchor"
+echo "binary witnessed the head so completeness verifies as anchored — end to end, as binaries."

@@ -24,7 +24,7 @@ const usage = `openshieldctl — query the OpenShield audit ledger
 
 usage:
   openshieldctl timeline [--subject S] [--event E] [--since RFC3339] [--until RFC3339] [--anchor FILE]
-  openshieldctl verify   [--anchor FILE]
+  openshieldctl verify   [--anchor FILE] [--witness FILE]
   openshieldctl anchor export                        (reads the stored anchor, writes PEM)
 
 connection:
@@ -83,6 +83,17 @@ func run(args []string) int {
 			return cli.ExitUnavailable
 		}
 		defer r.Close()
+		// A witness public key lets verification report COMPLETENESS against the
+		// external anchor (D64). Without it, verification is the honest UNVERIFIED
+		// degraded mode. openshieldctl stays read-only — this only reads.
+		if fs.witness != "" {
+			wpub, werr := loadWitnessPub(fs.witness)
+			if werr != nil {
+				fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", werr)
+				return cli.ExitUnavailable
+			}
+			r.WitnessPub = wpub
+		}
 		return cli.Verify(ctx, os.Stdout, r, anchor)
 
 	case "anchor":
@@ -117,6 +128,19 @@ func exportAnchor(ctx context.Context, dsn string) int {
 	return cli.ExitOK
 }
 
+// loadWitnessPub reads a raw 32-byte Ed25519 witness public key (as written by
+// openshield-provision witness-keygen).
+func loadWitnessPub(path string) (ed25519.PublicKey, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading witness public key %s: %w", path, err)
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("witness public key %s is %d bytes, want %d", path, len(b), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
+}
+
 // loadAnchor reads a PEM Ed25519 public key, or returns nil when no file is
 // given. nil is the honest degraded mode — the CLI states it in the header.
 func loadAnchor(path string) (ed25519.PublicKey, error) {
@@ -145,8 +169,8 @@ func loadAnchor(path string) (ed25519.PublicKey, error) {
 // --- minimal flag handling, kept explicit so the command surface is obvious ---
 
 type flags struct {
-	dsn, subject, event, anchor string
-	since, until                time.Time
+	dsn, subject, event, anchor, witness string
+	since, until                         time.Time
 }
 
 func newFlags() *flags {
@@ -197,6 +221,10 @@ func (f *flags) parse(args []string) error {
 		case "--anchor":
 			if v, err = next(); err == nil {
 				f.anchor = v
+			}
+		case "--witness":
+			if v, err = next(); err == nil {
+				f.witness = v
 			}
 		case "--since":
 			if v, err = next(); err == nil {

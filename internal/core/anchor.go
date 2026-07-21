@@ -56,8 +56,22 @@ func NewWitness() (*Witness, error) {
 	return &Witness{priv: priv, pub: pub}, nil
 }
 
+// WitnessFromKey reconstructs a witness from a saved private key, so anchoring
+// runs under a STABLE key a verifier can check — a witness that regenerates every
+// run would sign anchors nobody can attribute (T-019).
+func WitnessFromKey(priv ed25519.PrivateKey) (*Witness, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("witness: private key must be %d bytes, got %d", ed25519.PrivateKeySize, len(priv))
+	}
+	return &Witness{priv: priv, pub: priv.Public().(ed25519.PublicKey)}, nil
+}
+
 // PublicKey is the material a verifier needs — and all it needs.
 func (w *Witness) PublicKey() ed25519.PublicKey { return w.pub }
+
+// PrivateKey exposes the witness private key for persistence. Its custody is the
+// whole guarantee (T-019): a witness key the deployer controls attests to little.
+func (w *Witness) PrivateKey() ed25519.PrivateKey { return w.priv }
 
 // Anchor signs a checkpoint of (seq, hash).
 func (w *Witness) Anchor(seq uint64, hash []byte) Anchor {

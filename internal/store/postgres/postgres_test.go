@@ -1170,3 +1170,58 @@ func TestWriteResumeWithReloadedSigner(t *testing.T) {
 		t.Errorf("entries=%d to=%d, want 6 and 5 — resume forked or lost entries", res.Entries, res.ToSequence)
 	}
 }
+
+// Operational anchoring (D64): a witness reconstructed from a SAVED key, using the
+// SIGNER-LESS path the openshield-anchor tool uses (OpenForVerify), witnesses the
+// head and MOVES completeness from UNVERIFIED to Anchored — proving anchoring is
+// runnable, not just a library call. Without the witness pub, the honest
+// UNVERIFIED degraded mode remains.
+func TestAnchoringMovesCompleteness(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A witness persisted and reloaded (the operational path — a stable key).
+	orig, err := core.NewWitness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	witness, err := core.WitnessFromKey(orig.PrivateKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The witness tool opens the ledger SIGNER-LESS and anchors the head.
+	lv, err := postgres.OpenForVerify(ctx, dsn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lv.Close()
+	if _, err := lv.AnchorHead(ctx, witness); err != nil {
+		t.Fatalf("signer-less anchoring failed: %v", err)
+	}
+
+	// With the witness public key, completeness is Anchored.
+	lv.WitnessPub = witness.PublicKey()
+	res, err := lv.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Completeness != core.CompletenessAnchored {
+		t.Fatalf("completeness = %v, want Anchored after witnessing the head", res.Completeness)
+	}
+
+	// Without the witness public key, the honest UNVERIFIED degraded mode.
+	lv.WitnessPub = nil
+	res2, err := lv.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Completeness == core.CompletenessAnchored {
+		t.Error("reported Anchored without the witness pub — completeness must be UNVERIFIED then")
+	}
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Anchor the OpenShield ledger head periodically (T-019/D64)
+Documentation=https://github.com/lucianoengel/openshield
+
+[Timer]
+# The interval IS the undetectable-loss window: everything appended since the
+# last anchor can still be truncated without detection. Shorten it to shrink the
+# window, at the cost of more anchor rows.
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

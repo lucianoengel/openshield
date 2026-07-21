@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenShield ledger anchoring (witness the audit ledger head, T-019/D64)
+Documentation=https://github.com/lucianoengel/openshield
+After=network-online.target
+
+[Service]
+Type=oneshot
+# The witness key MUST live in a trust domain the ledger operator does not
+# control — an anchor witnessed by a key the operator holds attests to little.
+# Provision it with: openshield-provision witness-keygen --out /etc/openshield/witness
+Environment=OPENSHIELD_DSN=postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable
+Environment=OPENSHIELD_WITNESS_KEY=/etc/openshield/witness/witness-priv
+ExecStart=/usr/local/bin/openshield-anchor
+User=openshield-anchor
+# The anchor process needs only the anchors-table write + head read; it must NOT
+# hold the ledger signer (it opens the ledger signer-less).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

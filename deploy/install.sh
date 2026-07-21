@@ -23,6 +23,9 @@ echo "==> building binaries"
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-agent"  ./cmd/openshield-agent )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-worker" ./cmd/openshield-worker )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-server" ./cmd/openshield-server )
+( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-engine"    ./cmd/openshield-engine )
+( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-anchor"    ./cmd/openshield-anchor )
+( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-provision" ./cmd/openshield-provision )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshieldctl"     ./cmd/openshieldctl )
 
 # Create system users if absent (idempotent).

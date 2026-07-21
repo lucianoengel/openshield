@@ -22,6 +22,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
 )
 
@@ -120,6 +121,17 @@ func IssueCert(caCertPEM, caKeyPEM []byte, cn, role string, sans []string) (cert
 // belongs off the endpoint (used by encryptlocal.DecryptEscrow for recovery).
 func EscrowKeypair() (pub, priv []byte, err error) {
 	return encryptlocal.GenerateEscrowKeypair()
+}
+
+// WitnessKeypair generates an Ed25519 anchoring-witness keypair (T-019). The
+// private key runs the witness (openshield-anchor) in a trust domain the ledger
+// operator does not control; the public key goes to verifiers. Raw key bytes.
+func WitnessKeypair() (pub, priv []byte, err error) {
+	w, err := core.NewWitness()
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: witness keygen: %w", err)
+	}
+	return append([]byte(nil), w.PublicKey()...), append([]byte(nil), w.PrivateKey()...), nil
 }
 
 func parseCA(caCertPEM, caKeyPEM []byte) (*x509.Certificate, ed25519.PrivateKey, error) {
