@@ -162,7 +162,7 @@ Per-agent revocable identity; mTLS to the control plane; single-use short-TTL en
 
 Agent heartbeat to control plane; 'agent last seen' per host; alert when telemetry silence exceeds threshold; audit event emitted when the systemd unit stops/is masked. This IMPLEMENTS the honest claim replacing 'tamper-proof' - without it the README claim is unbacked.
 
-#### T-019 · Audit log external anchoring (D12/B3)
+#### T-019 · Audit log external anchoring (D12/B3) · **done**
 `~4h` · depends: T-009
 
 Merkle root periodically anchored to a trust domain outside the agent: second host, WORM/object-lock storage, or a public transparency service when online. Documents the honest boundary: tamper-evident WITH forward-integrity BETWEEN anchors; full tamper-proofing needs a witness the deployer does not control.

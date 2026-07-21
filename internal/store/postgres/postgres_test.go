@@ -173,10 +173,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001, 002, 003), and no more no matter how many
-	// times Migrate runs — that stability is the property under test.
-	if n != 3 {
-		t.Errorf("schema_migrations rows = %d, want 3 — a migration applied twice "+
+	// One row per migration FILE (001..004), and no more no matter how many times
+	// Migrate runs — that stability is the property under test.
+	if n != 4 {
+		t.Errorf("schema_migrations rows = %d, want 4 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }
@@ -917,5 +917,111 @@ func TestVerifierCannotRecordView(t *testing.T) {
 	if err := v.RecordView(ctx, "unauthenticated:someone"); err == nil {
 		t.Fatal("a verify-only ledger recorded a view — appending needs the signer a pure " +
 			"verifier must not hold (D30)")
+	}
+}
+
+// --- add-external-anchoring: witnessed completeness (T-019) ---
+
+// A fully-anchored chain reports ANCHORED; a partial anchor reports the boundary.
+func TestAnchoringCompletenessBoundary(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	w, err := core.NewWitness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.WitnessPub = w.PublicKey()
+
+	for i := 0; i < 4; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Anchor the current head (seq 3).
+	if _, err := l.AnchorHead(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Completeness != core.CompletenessAnchored {
+		t.Errorf("completeness = %s, want anchored — a witness covers the head", res.Completeness)
+	}
+	if res.AnchoredThrough != 3 {
+		t.Errorf("AnchoredThrough = %d, want 3", res.AnchoredThrough)
+	}
+
+	// Append more, WITHOUT a new anchor: the tail is now unwitnessed again.
+	for i := 4; i < 6; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err = l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Completeness != core.CompletenessUnverified {
+		t.Errorf("completeness = %s, want unverified — entries 4,5 are past the last anchor", res.Completeness)
+	}
+	if res.AnchoredThrough != 3 {
+		t.Errorf("AnchoredThrough = %d, want 3 (the boundary)", res.AnchoredThrough)
+	}
+}
+
+// Truncating witnessed history is detected. Delete entries past a stored anchor
+// and verification must fail, naming the anchor.
+func TestTruncationPastAnchorDetected(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+	w, err := core.NewWitness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.WitnessPub = w.PublicKey()
+
+	for i := 0; i < 5; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := l.AnchorHead(ctx, w); err != nil { // anchors seq 4
+		t.Fatal(err)
+	}
+	// A root attacker destroys the witnessed tail, rebuilding a shorter chain.
+	if _, err := pool.Exec(ctx, `DELETE FROM audit_entries WHERE sequence >= 3`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Consistent {
+		t.Fatal("a chain truncated past a witnessed anchor verified as consistent — the whole " +
+			"point of anchoring is to detect destruction of witnessed history")
+	}
+}
+
+// A witness key the verifier does not trust cannot fail an honest chain, and
+// verification with no witness configured is unchanged (UNVERIFIED).
+func TestNoWitnessIsUnchanged(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	// No WitnessPub set.
+	for i := 0; i < 3; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Consistent || res.Completeness != core.CompletenessUnverified {
+		t.Errorf("no-witness verify: consistent=%v completeness=%s, want true and unverified",
+			res.Consistent, res.Completeness)
 	}
 }

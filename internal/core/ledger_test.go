@@ -56,8 +56,8 @@ func buildChain(t *testing.T, n int) ([]*core.Entry, *core.Signer) {
 }
 
 // verify uses only public material, as an auditor would.
-func verify(entries []*core.Entry, s *core.Signer, anchored bool) core.VerifyResult {
-	return core.VerifyChain(entries, s.Chain(), s.AnchorKey(), anchored)
+func verify(entries []*core.Entry, s *core.Signer, _ bool) core.VerifyResult {
+	return core.VerifyChain(entries, s.Chain(), s.AnchorKey(), nil, nil)
 }
 
 func TestValidChainVerifies(t *testing.T) {
@@ -164,7 +164,7 @@ func TestCompromisedProcessCannotForgeEarlierEntries(t *testing.T) {
 	tampered, _ := buildChain(t, 6)
 	tampered[1] = forged
 
-	res := core.VerifyChain(tampered, stolenChain, stolenAnchor, false)
+	res := core.VerifyChain(tampered, stolenChain, stolenAnchor, nil, nil)
 	if res.Consistent {
 		t.Fatal("an entry forged after compromise verified — forward integrity is absent, " +
 			"and a compromised host can rewrite all history")
@@ -231,11 +231,11 @@ func TestVerificationRequiresOnlyPublicMaterial(t *testing.T) {
 		}
 	}
 
-	if res := core.VerifyChain(entries, publicChain, anchor, false); !res.Consistent {
+	if res := core.VerifyChain(entries, publicChain, anchor, nil, nil); !res.Consistent {
 		t.Fatalf("public-only verification failed on a valid chain: %s", res)
 	}
 	entries[2].Decision.Reason = "tampered"
-	if res := core.VerifyChain(entries, publicChain, anchor, false); res.Consistent {
+	if res := core.VerifyChain(entries, publicChain, anchor, nil, nil); res.Consistent {
 		t.Fatal("public-only verification accepted a tampered chain")
 	}
 }
@@ -248,7 +248,7 @@ func TestKeyChainMustStartAtTheAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := core.VerifyChain(entries, signer.Chain(), other.AnchorKey(), false)
+	res := core.VerifyChain(entries, signer.Chain(), other.AnchorKey(), nil, nil)
 	if res.Consistent {
 		t.Fatal("a chain not starting at the published anchor verified")
 	}
@@ -258,7 +258,7 @@ func TestKeyChainMustStartAtTheAnchor(t *testing.T) {
 func TestEntryCannotBeRepointedToAnotherEpoch(t *testing.T) {
 	entries, signer := buildChain(t, 5)
 	entries[1].KeyEpoch = 4
-	res := core.VerifyChain(entries, signer.Chain(), signer.AnchorKey(), false)
+	res := core.VerifyChain(entries, signer.Chain(), signer.AnchorKey(), nil, nil)
 	if res.Consistent {
 		t.Fatal("an entry re-pointed to a different epoch verified; KeyEpoch is not bound")
 	}
@@ -282,11 +282,84 @@ func TestConsistentButUnanchoredReportsCompletenessUnverified(t *testing.T) {
 	}
 }
 
+// A witnessed anchor over the head entry makes completeness ANCHORED — nothing
+// can have been truncated (T-019). This replaces the old test that relied on a
+// crude `anchored bool`, which was always false in production and proved nothing.
 func TestAnchoredChainReportsAnchored(t *testing.T) {
 	entries, signer := buildChain(t, 4)
-	res := verify(entries, signer, true)
+	w, err := core.NewWitness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := entries[len(entries)-1]
+	anchor := w.Anchor(head.Sequence, head.Hash)
+
+	res := core.VerifyChain(entries, signer.Chain(), signer.AnchorKey(), []core.Anchor{anchor}, w.PublicKey())
+	if !res.Consistent {
+		t.Fatalf("anchored chain not consistent: %s", res)
+	}
 	if res.Completeness != core.CompletenessAnchored {
-		t.Errorf("completeness = %v, want anchored", res.Completeness)
+		t.Errorf("completeness = %v, want anchored — a witness covers the last entry", res.Completeness)
+	}
+	if res.AnchoredThrough != head.Sequence {
+		t.Errorf("AnchoredThrough = %d, want %d", res.AnchoredThrough, head.Sequence)
+	}
+}
+
+// A partial anchor proves the prefix, not the tail: completeness stays
+// UNVERIFIED but AnchoredThrough reports the boundary.
+func TestPartialAnchorReportsBoundary(t *testing.T) {
+	entries, signer := buildChain(t, 5)
+	w, err := core.NewWitness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Anchor entry 2, leaving 3 and 4 un-witnessed.
+	anchor := w.Anchor(entries[2].Sequence, entries[2].Hash)
+	res := core.VerifyChain(entries, signer.Chain(), signer.AnchorKey(), []core.Anchor{anchor}, w.PublicKey())
+	if !res.Consistent {
+		t.Fatalf("not consistent: %s", res)
+	}
+	if res.Completeness != core.CompletenessUnverified {
+		t.Errorf("completeness = %v, want unverified — the tail after the anchor is not witnessed", res.Completeness)
+	}
+	if res.AnchoredThrough != entries[2].Sequence {
+		t.Errorf("AnchoredThrough = %d, want %d", res.AnchoredThrough, entries[2].Sequence)
+	}
+}
+
+// Truncating the chain to before a valid anchor is DETECTED — the property
+// anchoring exists to add.
+func TestTruncationBeforeAnchorDetected(t *testing.T) {
+	entries, signer := buildChain(t, 5)
+	w, err := core.NewWitness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Witness the full head (sequence 4)...
+	head := entries[len(entries)-1]
+	anchor := w.Anchor(head.Sequence, head.Hash)
+	// ...then present a shorter chain that drops the witnessed tail.
+	truncated := entries[:3] // sequences 0,1,2 — anchor at 4 no longer satisfiable
+	res := core.VerifyChain(truncated, signer.Chain(), signer.AnchorKey(), []core.Anchor{anchor}, w.PublicKey())
+	if res.Consistent {
+		t.Fatal("a chain truncated past a witnessed anchor verified as consistent — " +
+			"anchoring must detect destruction of witnessed history")
+	}
+}
+
+// A forged anchor (wrong witness key) must not be able to FAIL an honest chain.
+func TestForgedAnchorCannotFailHonestChain(t *testing.T) {
+	entries, signer := buildChain(t, 3)
+	real, _ := core.NewWitness()
+	attacker, _ := core.NewWitness()
+	// The attacker signs a bogus checkpoint with THEIR key; the verifier trusts
+	// only `real`. The bogus anchor must be ignored, not treated as a failure.
+	bogus := attacker.Anchor(1, []byte("not the real hash"))
+	res := core.VerifyChain(entries, signer.Chain(), signer.AnchorKey(), []core.Anchor{bogus}, real.PublicKey())
+	if !res.Consistent {
+		t.Fatalf("a forged anchor failed an honest chain: %s — only the trusted witness's "+
+			"anchors may constrain verification", res)
 	}
 }
 

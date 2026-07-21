@@ -277,6 +277,10 @@ type VerifyResult struct {
 	// Tombstoned counts entries erased under retention (T-013). Reported so an
 	// auditor can tell "erased under retention" from "silently missing".
 	Tombstoned int
+	// AnchoredThrough is the highest sequence a valid external anchor witnesses
+	// (T-019). Completeness is proven only up to here; entries after it can still
+	// be truncated undetectably. 0 means no anchor witnessed anything.
+	AnchoredThrough uint64
 	// FirstBreak locates the tampering rather than merely reporting it.
 	FirstBreak *uint64
 	Reason     string
@@ -324,12 +328,9 @@ type Ledger interface {
 // Tested against specific attacks — edit, delete, reorder, truncate, and
 // forging an early entry with a later key — rather than by round-tripping a
 // valid chain. A chain implementation that is subtly wrong still round-trips.
-func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, anchored bool) VerifyResult {
+func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, anchors []Anchor, witnessPub ed25519.PublicKey) VerifyResult {
 	res := VerifyResult{Consistent: true, Entries: len(entries)}
 	res.Completeness = CompletenessUnverified
-	if anchored {
-		res.Completeness = CompletenessAnchored
-	}
 	if len(entries) == 0 {
 		res.Completeness = CompletenessAbsent
 		res.Consistent = false
@@ -347,6 +348,10 @@ func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, a
 	res.FromSequence = entries[0].Sequence
 	res.ToSequence = entries[len(entries)-1].Sequence
 
+	// Head hashes by sequence, so external anchors can be matched to the chain
+	// after it verifies. Built here rather than in a second pass.
+	bySeq := make(map[uint64][]byte, len(entries))
+
 	prev := GenesisHash[:]
 	for _, e := range entries {
 		seq := e.Sequence
@@ -356,6 +361,7 @@ func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, a
 			res.Reason = reason
 			return res
 		}
+		bySeq[e.Sequence] = e.Hash
 		if !hmac.Equal(e.PrevHash, prev) {
 			return fail("previous-hash mismatch: an entry was edited, deleted or reordered")
 		}
@@ -383,7 +389,45 @@ func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, a
 		}
 		prev = e.Hash
 	}
+
+	// External anchors (T-019). The chain is internally consistent; now check
+	// what a witness attests. A valid anchor whose checkpoint the chain no longer
+	// satisfies is a truncation or rewrite of WITNESSED history — a hard failure.
+	// Completeness becomes ANCHORED only if a witness covers the last entry;
+	// otherwise the prefix up to AnchoredThrough is proven and the tail after it
+	// stays UNVERIFIED, because nothing witnesses it.
+	if through, violated, ok := checkAnchors(anchors, witnessPub, bySeq); !ok {
+		res.Consistent = false
+		res.Reason = fmt.Sprintf("anchor at sequence %d no longer satisfied: witnessed history was truncated or rewritten", violated.Sequence)
+		seq := violated.Sequence
+		res.FirstBreak = &seq
+		return res
+	} else {
+		res.AnchoredThrough = through
+		// ANCHORED only when a witness covers the LAST entry — then nothing can
+		// have been truncated. A partial anchor proves the prefix, not the tail,
+		// so completeness stays UNVERIFIED with AnchoredThrough reporting the
+		// boundary.
+		if hasAnchorFor(anchors, witnessPub, res.ToSequence, bySeq) {
+			res.Completeness = CompletenessAnchored
+		}
+	}
 	return res
+}
+
+// hasAnchorFor reports whether a valid witness anchor covers exactly seq. Used to
+// decide full-chain completeness even when the last sequence is 0.
+func hasAnchorFor(anchors []Anchor, witnessPub ed25519.PublicKey, seq uint64, bySeq map[uint64][]byte) bool {
+	for i := range anchors {
+		a := anchors[i]
+		if a.Sequence != seq || !VerifyAnchor(a, witnessPub) {
+			continue
+		}
+		if h, ok := bySeq[seq]; ok && hmac.Equal(h, a.Hash) {
+			return true
+		}
+	}
+	return false
 }
 
 // RecomputeHashForTest recomputes an entry's hash over its current content.

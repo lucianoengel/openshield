@@ -143,6 +143,14 @@ func writeHeader(w io.Writer, res core.VerifyResult, err error, anchor ed25519.P
 	}
 	fmt.Fprintf(w, "VERIFICATION: %s  range=[%d,%d] entries=%d completeness=%s\n",
 		state, res.FromSequence, res.ToSequence, res.Entries, res.Completeness)
+	// When an external witness covers part of the chain, name the boundary: the
+	// prefix is provably complete, the tail after it is not (T-019).
+	if res.Completeness != core.CompletenessAnchored && res.AnchoredThrough > 0 {
+		fmt.Fprintf(w, "  anchors: complete through seq=%d, UNVERIFIED after (nothing witnesses the tail)\n",
+			res.AnchoredThrough)
+	} else if res.Completeness == core.CompletenessAnchored {
+		fmt.Fprintf(w, "  anchors: an external witness attests the full chain\n")
+	}
 	if anchor == nil {
 		fmt.Fprintln(w, "  anchor: NONE supplied — origin and completeness are UNVERIFIED")
 	} else {

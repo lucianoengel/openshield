@@ -51,6 +51,11 @@ type Ledger struct {
 	// this defaults to a finite value rather than to "never".
 	EpochEntries uint64
 	sinceEpoch   uint64
+
+	// WitnessPub verifies external anchors (T-019). Empty until a witness is
+	// configured — with no witness, anchors cannot be validated and completeness
+	// stays UNVERIFIED, which is the honest default.
+	WitnessPub ed25519.PublicKey
 }
 
 // DefaultEpochEntries bounds how much recent history a host compromise can
@@ -363,8 +368,15 @@ func (l *Ledger) Verify(ctx context.Context, expectedAnchor ed25519.PublicKey) (
 		selfAnchored = true
 	}
 
-	res := core.VerifyChain(entries, chain, anchor, false)
-	if selfAnchored && res.Consistent {
+	anchors, err := l.loadAnchors(ctx)
+	if err != nil {
+		return core.VerifyResult{}, err
+	}
+
+	res := core.VerifyChain(entries, chain, anchor, anchors, l.WitnessPub)
+	// The self-anchored (key-anchor) note applies only while completeness is not
+	// externally attested; an anchored chain has a stronger story to tell.
+	if selfAnchored && res.Consistent && res.Completeness != core.CompletenessAnchored {
 		res.Reason = "no external anchor supplied: internal consistency only, completeness and origin unverified"
 	}
 	return res, nil
@@ -417,6 +429,52 @@ func (l *Ledger) loadEntries(ctx context.Context) ([]*core.Entry, error) {
 		entries = append(entries, &e)
 	}
 	return entries, rows.Err()
+}
+
+// loadAnchors reads the persisted external anchors (T-019). Public material —
+// no secret is involved, so a verifier holding no key can still use them.
+func (l *Ledger) loadAnchors(ctx context.Context) ([]core.Anchor, error) {
+	rows, err := l.pool.Query(ctx, `SELECT sequence, hash, witness_sig FROM anchors ORDER BY sequence ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
+	}
+	defer rows.Close()
+	var out []core.Anchor
+	for rows.Next() {
+		var seq int64
+		var hash, sig []byte
+		if err := rows.Scan(&seq, &hash, &sig); err != nil {
+			return nil, err
+		}
+		out = append(out, core.Anchor{Sequence: uint64(seq), Hash: hash, WitnessSig: sig})
+	}
+	return out, rows.Err()
+}
+
+// AnchorHead witnesses the current ledger head and stores the anchor. The
+// witness MUST be provisioned in a trust domain the deployer does not control;
+// an anchor witnessed by a key the deployer holds attests to nothing (T-019).
+//
+// The undetectable-loss window is the interval between AnchorHead calls:
+// everything appended since the last anchor can still be truncated without
+// detection. Callers choosing that interval are choosing that window.
+func (l *Ledger) AnchorHead(ctx context.Context, w *core.Witness) (core.Anchor, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var seq int64
+	var hash []byte
+	if err := l.pool.QueryRow(ctx,
+		`SELECT sequence, hash FROM audit_entries ORDER BY sequence DESC LIMIT 1`).Scan(&seq, &hash); err != nil {
+		return core.Anchor{}, fmt.Errorf("%w: reading head to anchor: %v", core.ErrLedgerUnavailable, err)
+	}
+	a := w.Anchor(uint64(seq), hash)
+	if _, err := l.pool.Exec(ctx,
+		`INSERT INTO anchors (sequence, hash, witness_sig) VALUES ($1,$2,$3)`,
+		int64(a.Sequence), a.Hash, a.WitnessSig); err != nil {
+		return core.Anchor{}, fmt.Errorf("%w: storing anchor: %v", core.ErrLedgerUnavailable, err)
+	}
+	return a, nil
 }
 
 // Purge tombstones every live entry past its retention age (T-013), erasing the
