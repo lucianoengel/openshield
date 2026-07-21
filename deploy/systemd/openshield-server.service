@@ -1,0 +1,25 @@
+# OpenShield control plane (T-027, T-023).
+#
+# An ordinary network service — no special privilege. It subscribes to agent
+# telemetry over NATS and persists it to Postgres (migrating on boot). It
+# coordinates and observes; it does NOT distribute policy or control agents (D14).
+[Unit]
+Description=OpenShield control plane
+Documentation=https://github.com/lucianoengel/openshield
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openshield-server
+User=openshield
+Group=openshield
+# Configure via environment (same vars the binary reads). Production sets these
+# to the real database and NATS; TLS/secrets are a deployment concern.
+Environment=OPENSHIELD_DSN=postgres://openshield:dev@127.0.0.1:5432/openshield?sslmode=disable
+Environment=OPENSHIELD_NATS_URL=nats://127.0.0.1:4222
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

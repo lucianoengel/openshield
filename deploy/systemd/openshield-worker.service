@@ -1,0 +1,27 @@
+# OpenShield unprivileged parser worker (T-027).
+#
+# The UNPRIVILEGED half of the split (D13/D29/D35): this is where attacker-
+# controlled bytes are parsed. It runs as a dedicated non-login user with NO
+# capabilities, self-applies a seccomp network-deny filter (T-012), and takes the
+# cgroup/namespace hardening from the drop-in. A parser RCE here cannot reach the
+# network or the privileged agent.
+#
+# Hardening is layered in via deploy/systemd/openshield-worker.service.d/ (the
+# hardening drop-in the installer places there).
+[Unit]
+Description=OpenShield unprivileged parser worker
+Documentation=https://github.com/lucianoengel/openshield
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openshield-worker
+User=openshield-worker
+Group=openshield-worker
+# No capabilities at all — the worker needs none.
+CapabilityBoundingSet=
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

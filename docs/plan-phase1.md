@@ -182,7 +182,7 @@ CI test asserting core packages do not import Hub / compliance-pack / multi-tena
 
 Postgres + NATS + control plane up from a clean checkout with one command. The plan's own verification section opens with 'podman compose up' and no ticket built it. Podman rootless, not Docker. Acceptance: clean clone to running stack, no manual steps.
 
-#### T-027 · Packaging: systemd unit + install/upgrade path
+#### T-027 · Packaging: systemd unit + install/upgrade path · **done**
 `~5h` · depends: T-006
 
 T-015 asserts 'install and upgrade exercised' and nothing built either. systemd unit for the privileged process and the unprivileged worker, correct capability grants (not blanket root where avoidable), Restart=always, clean upgrade that does not lose the offline queue. Acceptance: install, upgrade across versions, and uninstall on a clean Linux VM/container without manual repair.

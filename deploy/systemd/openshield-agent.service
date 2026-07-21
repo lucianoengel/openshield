@@ -1,0 +1,27 @@
+# OpenShield privileged agent (T-027).
+#
+# The PRIVILEGED half of the split (D13/D29): it sets up fanotify marks and
+# answers permission events. It holds ONLY CAP_SYS_ADMIN — root for the fanotify
+# API, but bounded to that single capability, not the full root set. It never
+# parses attacker-controlled bytes; all parsing is the unprivileged worker's job
+# (openshield-worker.service).
+[Unit]
+Description=OpenShield privileged agent (fanotify)
+Documentation=https://github.com/lucianoengel/openshield
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openshield-agent
+User=root
+# Least privilege: the ONE capability fanotify needs, and no other. The bounding
+# set caps what this process and its children can ever hold.
+AmbientCapabilities=CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_ADMIN
+Restart=on-failure
+RestartSec=2
+# The fail-open watchdog (D18) answers the kernel regardless of pipeline state,
+# so a restart under load cannot hang a blocked process.
+
+[Install]
+WantedBy=multi-user.target
