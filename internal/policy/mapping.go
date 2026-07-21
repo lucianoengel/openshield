@@ -56,11 +56,22 @@ func buildInput(st *core.State) map[string]interface{} {
 			})
 		}
 	}
+	// Context is nil in the observe-only default; a new-shape capability
+	// (peer-UEBA, D26) resolves it via the dispatcher hook, and Policy consults
+	// its risk score. Only the boundary-safe risk fields are exposed — a closed
+	// typed set (D28), not the whole Context.
+	var ctx interface{}
+	if c := st.Context; c != nil {
+		ctx = map[string]interface{}{
+			"risk_score":     c.RiskScore,
+			"has_risk_score": c.HasRiskScore,
+		}
+	}
 	return map[string]interface{}{
 		"purpose":        st.Event.GetPurpose().String(),
 		"event":          map[string]interface{}{"kind": st.Event.GetKind().String()},
 		"classification": hits,
-		"context":        nil,
+		"context":        ctx,
 	}
 }
 

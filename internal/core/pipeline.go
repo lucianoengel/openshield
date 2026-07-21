@@ -249,6 +249,11 @@ type Dispatcher struct {
 	// responder hangs a machine.
 	StageDeadline time.Duration
 	Metrics       Metrics
+	// ResolveContext, if set, resolves the enrichment Context for an event before
+	// the stages run (D28) — the single hook a new-shape Analytics capability
+	// (peer-UEBA) needs to reach the pipeline (D26/D52-adjacent). Nil (the
+	// default) means no Context, exactly Phase-1 observe-only behaviour.
+	ResolveContext func(*corev1.Event) *Context
 	// Logger receives a structured line for every terminal outcome (T-028). It
 	// is nil-safe (a discard logger is used when unset), so embedders and tests
 	// are not spammed by default. cmd/* wire a stderr handler.
@@ -285,6 +290,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, e *corev1.Event) (*corev1.Dec
 	d.Metrics.Dispatched.Add(1)
 
 	st := &State{Event: e}
+	if d.ResolveContext != nil {
+		st.Context = d.ResolveContext(e)
+	}
 
 	for _, stage := range d.registry.Stages() {
 		out, err := d.runStage(ctx, stage, st)

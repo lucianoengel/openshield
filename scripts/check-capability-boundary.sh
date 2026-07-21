@@ -13,7 +13,7 @@
 # the architecture. See internal/fitness and docs/design-t004-peer-ueba.md.
 set -euo pipefail
 
-BANNED_RE='openshield/internal/(connectors|enforcers|classify|policy|store)'
+BANNED_RE='openshield/internal/(connectors|enforcers|classify|policy|store|analytics|engine)'
 deps="$(go list -deps ./internal/core 2>/dev/null || true)"
 
 if [ -z "$deps" ]; then
