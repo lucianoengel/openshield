@@ -375,7 +375,8 @@ func (l *Ledger) loadEntries(ctx context.Context) ([]*core.Entry, error) {
 		SELECT sequence, appended_at, prev_hash, hash, sig, key_epoch,
 		       decision_id, event_id, action, confidence, reason, policy_id, policy_version,
 		       outcome_kind, outcome_stage,
-		       subject_id, purpose, retention_class, context_version
+		       subject_id, purpose, retention_class, context_version,
+		       tombstoned_at
 		FROM audit_entries ORDER BY sequence ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
@@ -391,14 +392,17 @@ func (l *Ledger) loadEntries(ctx context.Context) ([]*core.Entry, error) {
 			action                                               *int32
 			confidence                                           *float64
 			purpose, retention                                   int32
+			tombstonedAt                                         *time.Time
 		)
 		if err := rows.Scan(&seq, &e.AppendedAt, &e.PrevHash, &e.Hash, &e.Sig, &keyEpoch,
 			&decisionID, &eventID, &action, &confidence, &reason, &policyID, &policyVersion,
 			&e.OutcomeKind, &e.OutcomeStage,
-			&e.SubjectID, &purpose, &retention, &e.ContextVersion); err != nil {
+			&e.SubjectID, &purpose, &retention, &e.ContextVersion,
+			&tombstonedAt); err != nil {
 			return nil, err
 		}
 		e.Sequence = uint64(seq)
+		e.Tombstoned = tombstonedAt != nil
 		e.KeyEpoch = uint64(keyEpoch)
 		e.Purpose = corev1.Purpose(purpose)
 		e.Retention = core.RetentionClass(retention)
@@ -413,6 +417,63 @@ func (l *Ledger) loadEntries(ctx context.Context) ([]*core.Entry, error) {
 		entries = append(entries, &e)
 	}
 	return entries, rows.Err()
+}
+
+// Purge tombstones every live entry past its retention age (T-013), erasing the
+// personal-data columns while keeping the chain skeleton (sequence, prev_hash,
+// hash, sig, key_epoch) so verification stays intact across the erasure.
+// Investigation-class entries are HELD — never purged by routine retention.
+//
+// It returns the number of entries tombstoned and is idempotent: an
+// already-tombstoned entry is not selected again (the WHERE clause requires a
+// live row past its age).
+//
+// Deleting rather than tombstoning would break the chain irreparably — later
+// entries link to hashes this row carries. That tension between GDPR erasure and
+// a hash chain is the whole reason this is a tombstone and not a DELETE (D36).
+func (l *Ledger) Purge(ctx context.Context, now time.Time) (int64, error) {
+	var total int64
+	// Each bounded class is purged with its own age cutoff. Investigation is
+	// absent from this loop by construction — a held class has no cutoff.
+	for _, class := range []core.RetentionClass{
+		core.RetentionUnspecified, core.RetentionShort, core.RetentionStandard,
+	} {
+		maxAge, bounded := class.MaxAge()
+		if !bounded {
+			continue
+		}
+		cutoff := now.Add(-maxAge)
+		tag, err := l.pool.Exec(ctx, `
+			UPDATE audit_entries
+			SET tombstoned_at = $1,
+			    subject_id = '', decision_id = NULL, event_id = NULL,
+			    reason = NULL, policy_id = NULL, policy_version = NULL,
+			    action = NULL, confidence = NULL, purpose = 0,
+			    outcome_kind = '', outcome_stage = ''
+			WHERE tombstoned_at IS NULL
+			  AND retention_class = $2
+			  AND appended_at < $3`,
+			now.UTC(), int32(class), cutoff.UTC())
+		if err != nil {
+			return total, fmt.Errorf("%w: purge class %d: %v", core.ErrLedgerUnavailable, class, err)
+		}
+		total += tag.RowsAffected()
+	}
+	return total, nil
+}
+
+// RecordView appends an entry recording that an investigation was viewed (D20).
+// The view itself is a chained, tamper-evident entry. `viewer` should carry the
+// OS user labelled unauthenticated until real identity exists (T-017) — an
+// unlabelled identity here would misrepresent accountability the system does not
+// yet have.
+func (l *Ledger) RecordView(ctx context.Context, viewer string) error {
+	return l.Append(ctx, &core.Entry{
+		AppendedAt:   time.Now().UTC(),
+		OutcomeKind:  "investigation-viewed",
+		OutcomeStage: viewer,
+		Retention:    core.RetentionStandard,
+	})
 }
 
 // Entries returns the ledger entries in sequence order, for a read surface such

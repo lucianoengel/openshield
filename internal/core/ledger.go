@@ -48,15 +48,15 @@ import (
 type RetentionClass int32
 
 const (
-	RetentionUnspecified RetentionClass = iota
-	RetentionShort                      // routine telemetry
-	RetentionStandard                   // ordinary decisions
-	RetentionInvestigation              // held for an open investigation
+	RetentionUnspecified   RetentionClass = iota
+	RetentionShort                        // routine telemetry
+	RetentionStandard                     // ordinary decisions
+	RetentionInvestigation                // held for an open investigation
 )
 
 // Entry is one record in the ledger.
 type Entry struct {
-	Sequence  uint64
+	Sequence   uint64
 	AppendedAt time.Time
 
 	Decision       *corev1.Decision
@@ -68,7 +68,7 @@ type Entry struct {
 	// Outcome records pipeline terminations that produced no Decision —
 	// timeouts and stage failures. An Event that produced no Decision is not
 	// the same as one that was allowed, and the ledger must not conflate them.
-	OutcomeKind string
+	OutcomeKind  string
 	OutcomeStage string
 
 	// KeyEpoch is the epoch whose key signed this entry. Hashed, so an attacker
@@ -78,6 +78,11 @@ type Entry struct {
 	PrevHash []byte
 	Hash     []byte
 	Sig      []byte
+
+	// Tombstoned marks an entry whose content was erased under retention (T-013).
+	// The skeleton (sequence, links, hash, signature) is kept so the chain stays
+	// verifiable; the content is gone. Set from the store's tombstoned_at column.
+	Tombstoned bool
 }
 
 // canonicalBytes produces the exact byte string that is hashed and signed.
@@ -200,8 +205,8 @@ func (s *Signer) Evolve() error {
 	return nil
 }
 
-func (s *Signer) Epoch() uint64      { return s.epoch }
-func (s *Signer) Chain() []KeyEpoch  { return append([]KeyEpoch{}, s.chain...) }
+func (s *Signer) Epoch() uint64     { return s.epoch }
+func (s *Signer) Chain() []KeyEpoch { return append([]KeyEpoch{}, s.chain...) }
 func (s *Signer) AnchorKey() ed25519.PublicKey {
 	return s.chain[0].PublicKey
 }
@@ -269,6 +274,9 @@ type VerifyResult struct {
 	FromSequence uint64
 	ToSequence   uint64
 	Entries      int
+	// Tombstoned counts entries erased under retention (T-013). Reported so an
+	// auditor can tell "erased under retention" from "silently missing".
+	Tombstoned int
 	// FirstBreak locates the tampering rather than merely reporting it.
 	FirstBreak *uint64
 	Reason     string
@@ -351,9 +359,21 @@ func VerifyChain(entries []*Entry, chain []KeyEpoch, anchor ed25519.PublicKey, a
 		if !hmac.Equal(e.PrevHash, prev) {
 			return fail("previous-hash mismatch: an entry was edited, deleted or reordered")
 		}
-		want := sha256.Sum256(e.canonicalBytes())
-		if !hmac.Equal(e.Hash, want[:]) {
-			return fail("entry hash does not match its content: entry was modified")
+		// A tombstoned entry has had its content erased under retention (T-013).
+		// Its stored hash still commits to the ORIGINAL content, so we cannot —
+		// and must not — recompute the hash from what remains. Every OTHER check
+		// still runs: the chain link above, and the epoch and signature below.
+		// The hash is thus still an authenticated link in the chain; only the
+		// "hash matches current content" check is waived, and only for an entry
+		// deliberately emptied. Waiving more than that would reopen the exact gap
+		// that once let a valid hash hide an invalid signature.
+		if e.Tombstoned {
+			res.Tombstoned++
+		} else {
+			want := sha256.Sum256(e.canonicalBytes())
+			if !hmac.Equal(e.Hash, want[:]) {
+				return fail("entry hash does not match its content: entry was modified")
+			}
 		}
 		if e.KeyEpoch >= uint64(len(keys)) {
 			return fail("entry references an epoch beyond the key chain")

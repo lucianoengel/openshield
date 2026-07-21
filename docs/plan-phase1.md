@@ -142,7 +142,7 @@ Self-PID bypass, response timeout to auto-FAN_ALLOW, safe teardown. Injected-del
 
 seccomp-bpf, no network, cgroup mem/CPU limits, decompression-bomb limits (ratio/size/nesting). Worker cannot open a socket; bomb fixtures rejected before parsing. Precedent: ClamAV CVE-2025-20260.
 
-#### T-013 · Privacy-law product features (D20/L1)
+#### T-013 · Privacy-law product features (D20/L1) · **done**
 `~8h` · depends: T-003, T-009
 
 Retention purge demonstrably runs; excluded path produces no event; viewing an investigation writes an audit row. PLUS the three L1 items previously dropped: employee-visible notice mechanism; four-eyes gate before any HR-visible outcome; DPIA template shipped in docs/. Purpose tagging + pseudonymisation by default. Exclusion lists are a first-class policy primitive.

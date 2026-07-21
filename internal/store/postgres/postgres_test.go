@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -172,10 +173,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001, 002), and no more no matter how many times
-	// Migrate runs — that stability is the property under test.
-	if n != 2 {
-		t.Errorf("schema_migrations rows = %d, want 2 — a migration applied twice "+
+	// One row per migration FILE (001, 002, 003), and no more no matter how many
+	// times Migrate runs — that stability is the property under test.
+	if n != 3 {
+		t.Errorf("schema_migrations rows = %d, want 3 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }
@@ -678,5 +679,243 @@ func TestWriteResumeWithForeignSignerIsRefused(t *testing.T) {
 	if !errors.Is(err, postgres.ErrCannotResumeWriting) {
 		t.Fatalf("err = %v, want ErrCannotResumeWriting — writing with a foreign "+
 			"signer forks the chain and must be refused", err)
+	}
+}
+
+// --- add-privacy-features: retention tombstone, purge, view-audit ---
+
+// tombstone erases an entry's content in place, keeping the skeleton, as Purge
+// does — used to drive the verification tests directly.
+func tombstoneRow(t *testing.T, pool *pgxpool.Pool, seq int64) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		UPDATE audit_entries SET tombstoned_at = now(),
+		    subject_id='', decision_id=NULL, event_id=NULL, reason=NULL,
+		    policy_id=NULL, policy_version=NULL, action=NULL, confidence=NULL, purpose=0
+		WHERE sequence = $1`, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A tombstoned middle entry keeps the chain verifiable — the whole point of
+// tombstoning rather than deleting.
+func TestTombstonedChainVerifies(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+	for i := 0; i < 5; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tombstoneRow(t, pool, 2) // erase a middle entry's content
+
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Consistent {
+		t.Fatalf("chain broke after a tombstone: %s — tombstoning must preserve the chain", res)
+	}
+	if res.Tombstoned != 1 {
+		t.Errorf("tombstoned count = %d, want 1 — verification must report erasure openly", res.Tombstoned)
+	}
+}
+
+// Waiving the content recompute for a tombstoned row must NOT waive the prev-hash
+// link check — otherwise erasure would become a way to reorder history.
+func TestTombstonedLinkStillChecked(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+	for i := 0; i < 4; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tombstoneRow(t, pool, 2)
+	// Corrupt the tombstoned row's link.
+	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET prev_hash = $1 WHERE sequence = 2`,
+		[]byte("not-the-real-prev-hash-value-here")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Consistent {
+		t.Fatal("a tombstoned row with a broken link verified — waiving the content check " +
+			"must not waive the chain-link check")
+	}
+}
+
+// The exact gap that once hid the original signature bug must not reopen for
+// tombstoned rows: the signature is still checked.
+func TestTombstonedSignatureStillChecked(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+	for i := 0; i < 4; i++ {
+		if err := l.Append(ctx, entry(fmt.Sprintf("s%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tombstoneRow(t, pool, 2)
+	// Corrupt only the signature, leaving hash and link intact.
+	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET sig = $1 WHERE sequence = 2`,
+		bytes.Repeat([]byte{0}, 64)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Consistent {
+		t.Fatal("a tombstoned row with a forged signature verified — the signature check " +
+			"must still run on tombstoned rows")
+	}
+}
+
+// Purge tombstones expired routine entries and holds investigation-class ones.
+func TestPurgeRespectsHold(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+
+	// Two entries, both made "old" by backdating appended_at below.
+	if err := l.Append(ctx, &core.Entry{AppendedAt: time.Now().UTC(), SubjectID: "routine",
+		Retention: core.RetentionStandard, Decision: entry("routine").Decision}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(ctx, &core.Entry{AppendedAt: time.Now().UTC(), SubjectID: "held",
+		Retention: core.RetentionInvestigation, Decision: entry("held").Decision}); err != nil {
+		t.Fatal(err)
+	}
+	// Backdate both well past the standard 365d age.
+	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := l.Purge(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("purged %d, want 1 — only the routine entry should be tombstoned", n)
+	}
+	// The held entry's content must survive.
+	var heldSubject string
+	if err := pool.QueryRow(ctx, `SELECT subject_id FROM audit_entries WHERE retention_class = $1`,
+		int32(core.RetentionInvestigation)).Scan(&heldSubject); err != nil {
+		t.Fatal(err)
+	}
+	if heldSubject != "held" {
+		t.Errorf("investigation-class content was erased (subject=%q) — a legal hold must "+
+			"override routine retention", heldSubject)
+	}
+	// Purge is idempotent.
+	n2, err := l.Purge(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n2 != 0 {
+		t.Errorf("second purge tombstoned %d, want 0 — purge must be idempotent", n2)
+	}
+}
+
+// After purge, the tombstoned row's personal-data columns are empty, and the
+// chain still verifies.
+func TestPurgeErasesContent(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+	if err := l.Append(ctx, entry("alice")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Purge(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var subject string
+	var decisionID *string
+	if err := pool.QueryRow(ctx, `SELECT subject_id, decision_id FROM audit_entries WHERE sequence = 0`).
+		Scan(&subject, &decisionID); err != nil {
+		t.Fatal(err)
+	}
+	if subject != "" || decisionID != nil {
+		t.Errorf("purge left personal data: subject=%q decision_id=%v", subject, decisionID)
+	}
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Consistent || res.Tombstoned != 1 {
+		t.Errorf("after purge: consistent=%v tombstoned=%d, want true and 1", res.Consistent, res.Tombstoned)
+	}
+}
+
+// Viewing an investigation writes a chained, labelled audit entry.
+func TestViewIsRecorded(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	if err := l.Append(ctx, entry("alice")); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.RecordView(ctx, "unauthenticated:alice-os-user"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := l.Entries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := entries[len(entries)-1]
+	if last.OutcomeKind != "investigation-viewed" {
+		t.Errorf("last entry kind = %q, want investigation-viewed", last.OutcomeKind)
+	}
+	if !strings.Contains(last.OutcomeStage, "unauthenticated:") {
+		t.Errorf("viewer = %q, want it labelled unauthenticated (no real identity until T-017)", last.OutcomeStage)
+	}
+	// The view is itself a chained entry — the whole ledger still verifies.
+	res, err := l.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Consistent {
+		t.Errorf("recording a view broke the chain: %s", res)
+	}
+}
+
+// A signer-less verifier must NOT be able to record a view: appending needs the
+// signing key the verifier deliberately does not hold (D30). This is the honest
+// boundary — view accountability behind a read surface is a write-capable
+// service's job (T-023), not the CLI's.
+func TestVerifierCannotRecordView(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	// Seed with a real signer so the tables exist and a chain is present.
+	s, _ := core.NewSigner()
+	w, err := postgres.Open(ctx, dsn(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Append(ctx, entry("alice"))
+	w.Close()
+
+	v, err := postgres.OpenForVerify(ctx, dsn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	if err := v.RecordView(ctx, "unauthenticated:someone"); err == nil {
+		t.Fatal("a verify-only ledger recorded a view — appending needs the signer a pure " +
+			"verifier must not hold (D30)")
 	}
 }
