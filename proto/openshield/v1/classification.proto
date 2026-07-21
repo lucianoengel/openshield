@@ -20,6 +20,11 @@ enum DetectorType {
   DETECTOR_TYPE_AWS_ACCESS_KEY = 7;
   DETECTOR_TYPE_JWT = 8;
   DETECTOR_TYPE_API_TOKEN = 9;
+  // International PII (Phase D2 remainder). IBAN has a mod-97 checksum (a strong
+  // validator like CPF); health-data is keyword/dictionary evidence (weaker, no
+  // checksum — its confidence is capped accordingly).
+  DETECTOR_TYPE_IBAN = 10;
+  DETECTOR_TYPE_HEALTH_DATA = 11;
 }
 
 // LocalMatch holds matched content. Host-only.

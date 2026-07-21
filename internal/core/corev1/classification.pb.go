@@ -39,21 +39,28 @@ const (
 	DetectorType_DETECTOR_TYPE_AWS_ACCESS_KEY DetectorType = 7
 	DetectorType_DETECTOR_TYPE_JWT            DetectorType = 8
 	DetectorType_DETECTOR_TYPE_API_TOKEN      DetectorType = 9
+	// International PII (Phase D2 remainder). IBAN has a mod-97 checksum (a strong
+	// validator like CPF); health-data is keyword/dictionary evidence (weaker, no
+	// checksum — its confidence is capped accordingly).
+	DetectorType_DETECTOR_TYPE_IBAN        DetectorType = 10
+	DetectorType_DETECTOR_TYPE_HEALTH_DATA DetectorType = 11
 )
 
 // Enum value maps for DetectorType.
 var (
 	DetectorType_name = map[int32]string{
-		0: "DETECTOR_TYPE_UNSPECIFIED",
-		1: "DETECTOR_TYPE_CPF",
-		2: "DETECTOR_TYPE_SSN",
-		3: "DETECTOR_TYPE_CREDIT_CARD",
-		4: "DETECTOR_TYPE_EMAIL",
-		5: "DETECTOR_TYPE_PHONE",
-		6: "DETECTOR_TYPE_PRIVATE_KEY",
-		7: "DETECTOR_TYPE_AWS_ACCESS_KEY",
-		8: "DETECTOR_TYPE_JWT",
-		9: "DETECTOR_TYPE_API_TOKEN",
+		0:  "DETECTOR_TYPE_UNSPECIFIED",
+		1:  "DETECTOR_TYPE_CPF",
+		2:  "DETECTOR_TYPE_SSN",
+		3:  "DETECTOR_TYPE_CREDIT_CARD",
+		4:  "DETECTOR_TYPE_EMAIL",
+		5:  "DETECTOR_TYPE_PHONE",
+		6:  "DETECTOR_TYPE_PRIVATE_KEY",
+		7:  "DETECTOR_TYPE_AWS_ACCESS_KEY",
+		8:  "DETECTOR_TYPE_JWT",
+		9:  "DETECTOR_TYPE_API_TOKEN",
+		10: "DETECTOR_TYPE_IBAN",
+		11: "DETECTOR_TYPE_HEALTH_DATA",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":    0,
@@ -66,6 +73,8 @@ var (
 		"DETECTOR_TYPE_AWS_ACCESS_KEY": 7,
 		"DETECTOR_TYPE_JWT":            8,
 		"DETECTOR_TYPE_API_TOKEN":      9,
+		"DETECTOR_TYPE_IBAN":           10,
+		"DETECTOR_TYPE_HEALTH_DATA":    11,
 	}
 )
 
@@ -315,7 +324,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xa1\x02\n" +
+	"matchCount*\xd8\x02\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -326,7 +335,10 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x19DETECTOR_TYPE_PRIVATE_KEY\x10\x06\x12 \n" +
 	"\x1cDETECTOR_TYPE_AWS_ACCESS_KEY\x10\a\x12\x15\n" +
 	"\x11DETECTOR_TYPE_JWT\x10\b\x12\x1b\n" +
-	"\x17DETECTOR_TYPE_API_TOKEN\x10\tB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x17DETECTOR_TYPE_API_TOKEN\x10\t\x12\x16\n" +
+	"\x12DETECTOR_TYPE_IBAN\x10\n" +
+	"\x12\x1d\n" +
+	"\x19DETECTOR_TYPE_HEALTH_DATA\x10\vB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once
