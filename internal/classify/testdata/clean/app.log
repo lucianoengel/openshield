@@ -1,0 +1,9 @@
+2026-07-21T03:12:04.881Z INFO  server started pid=48213 port=8080 build=a1b3f9c
+2026-07-21T03:12:05.104Z INFO  connected to postgres host=10.0.4.21 pool=16
+2026-07-21T03:12:05.912Z DEBUG cache warm keys=124000 bytes=90112445
+2026-07-21T03:12:07.330Z WARN  slow query id=1934 dur_ms=812 rows=44021
+2026-07-21T03:12:09.001Z INFO  request method=GET path=/v1/status code=200 dur_ms=3
+2026-07-21T03:12:09.442Z INFO  request method=POST path=/enroll code=401 dur_ms=7
+2026-07-21T03:12:11.778Z ERROR upstream timeout addr=192.168.12.44:6379 after_ms=5000
+2026-07-21T03:12:12.010Z INFO  retry attempt=2 backoff_ms=500 max=3
+2026-07-21T03:12:15.663Z INFO  checkpoint seq=88214 lsn=0/1A2B3C4D

@@ -1,0 +1,14 @@
+Quarterly Operations Review
+
+The migration completed on 2026-03-14 after 47 hours of cutover work across
+three regions. Peak throughput reached 12,400 requests per second, well within
+the 15,000 rps ceiling agreed in the capacity plan. Error rates held at 0.02%
+for the duration, with a single 90-second blip at 03:12 UTC attributed to a
+rolling restart of node 7.
+
+Budget for the next fiscal year is set at 1.2 million, allocated 60/25/15 across
+infrastructure, tooling and training. The team of 9 engineers will grow to 14 by
+Q3. Ticket SEC-2048 tracks the remaining hardening items; roughly 30 of the 112
+originally scoped are still open.
+
+Room 214 is booked for the retrospective at 4pm. Bring the printout from page 8.

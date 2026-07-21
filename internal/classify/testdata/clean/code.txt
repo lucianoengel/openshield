@@ -1,0 +1,25 @@
+package billing
+
+// Retry policy: exponential backoff capped at 30s, max 5 attempts.
+const (
+	maxAttempts = 5
+	baseDelayMs = 200
+	maxDelayMs  = 30000
+)
+
+// invoiceTotal sums line items in cents and applies the tax rate in basis points.
+func invoiceTotal(itemsCents []int64, taxBps int64) int64 {
+	var sum int64
+	for _, c := range itemsCents {
+		sum += c
+	}
+	return sum + (sum*taxBps)/10000
+}
+
+// Feature flags are keyed by a 16-char hex id, e.g. 4f2a9c11b7e03d68.
+var defaultFlags = map[string]bool{
+	"4f2a9c11b7e03d68": true,
+	"a0b1c2d3e4f50617": false,
+}
+
+// Ports 8080-8090 are reserved for the local dev stack.
