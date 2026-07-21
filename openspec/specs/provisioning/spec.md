@@ -84,3 +84,14 @@ compromised CA from endpoint trust stores is the endpoint's responsibility, outs
 - **WHEN** the interception PKI's revocation is documented
 - **THEN** leaf revocation is the short leaf TTL, CA revocation is rotate-away or remove-to-tunnel, and
   endpoint trust-store removal is named as the endpoint's responsibility
+
+### Requirement: Client-role certificates are issued distinctly from agent and operator
+Provisioning MUST issue a client-role certificate through a path distinct from the agent/operator
+issuance, carrying a client-role marker and an authorization group, so a client certificate can never
+be mistaken for an agent or operator certificate at the role gate. The agent/operator issuance MUST be
+unchanged.
+
+#### Scenario: A client certificate carries the client role and a group
+- **WHEN** a client certificate is issued for an identity and a group
+- **THEN** it is signed by the CA, marked with the client role, and carries the group, and it is not an
+  agent or operator certificate

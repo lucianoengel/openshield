@@ -31,6 +31,11 @@ import (
 const (
 	RoleAgent    = "agent"
 	RoleOperator = "operator"
+	// RoleClient marks a Zero-Trust CLIENT certificate (D86) — a human or workload
+	// authenticating to the access gateway. Distinct from agent/operator so a client
+	// cert can never be replayed as an agent onboarding or an operator investigation
+	// login at the D58 role gate. Issued via IssueClientCert, never IssueCert.
+	RoleClient = "client"
 )
 
 // CertValidity bounds an issued certificate's lifetime. There is no revocation
@@ -69,6 +74,54 @@ func InitCA() (caCertPEM, caKeyPEM []byte, err error) {
 	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("provision: CA key: %w", err)
+	}
+	return pemBlock("CERTIFICATE", der), pemBlock("PRIVATE KEY", keyDER), nil
+}
+
+// IssueClientCert issues a Zero-Trust CLIENT certificate (D86), signed by the CA —
+// a DISTINCT path from IssueCert (which stays agent/operator only, unchanged). The
+// leaf carries CommonName = the identity (e.g. a user or workload id), OU =
+// [RoleClient] (the marker, so it is never mistaken for an agent/operator cert at the
+// D58 gate), and Organization = [group] (the authorization class the gateway policy
+// authorizes on). clientAuth only — a client cert is not a server. The CN is the raw
+// identity; the identity producer pseudonymises it at the boundary (D23), so it never
+// enters the pipeline.
+func IssueClientCert(caCertPEM, caKeyPEM []byte, identity, group string) (certPEM, keyPEM []byte, err error) {
+	if identity == "" || group == "" {
+		return nil, nil, fmt.Errorf("provision: client cert needs a non-empty identity and group")
+	}
+	caCert, caKey, err := parseCA(caCertPEM, caKeyPEM)
+	if err != nil {
+		return nil, nil, err
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: client leaf keygen: %w", err)
+	}
+	serial, err := randSerial()
+	if err != nil {
+		return nil, nil, err
+	}
+	now := clock()
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:         identity,
+			OrganizationalUnit: []string{RoleClient},
+			Organization:       []string{group},
+		},
+		NotBefore:   now.Add(-time.Hour),
+		NotAfter:    now.Add(CertValidity),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, pub, caKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: client leaf cert: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provision: client leaf key: %w", err)
 	}
 	return pemBlock("CERTIFICATE", der), pemBlock("PRIVATE KEY", keyDER), nil
 }
