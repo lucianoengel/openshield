@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,6 +67,9 @@ type Server struct {
 	// a failure is counted, never fatal — so this counter is how a broken sink is
 	// observable rather than silent.
 	NotifyFailures atomic.Int64
+	// DroppedMessages counts NATS async errors (above all SlowConsumer overflow) — a
+	// receive-side drop is COUNTED and logged, never silent (SEC-4).
+	DroppedMessages atomic.Int64
 
 	// notifier delivers alerts to a human (D83). Default Nop (delivery off);
 	// SetNotifier turns it on. notifiedOverdue dedups overdue notifications so a
@@ -115,10 +119,51 @@ func (s *Server) EnablePeerUEBA(threshold float64, cooldown time.Duration) {
 // connection, unchanged from before.
 func (s *Server) SetNATSOptions(opts ...nats.Option) { s.natsOpts = opts }
 
+// natsErrorHandler counts and loudly logs asynchronous NATS errors — above all a
+// SlowConsumer, which is a subscription's pending queue OVERFLOWING and messages being
+// DROPPED (SEC-4). The send side has spool + gap detection; the receive side had NOTHING —
+// a slow DB insert per message could overflow the client buffer and lose telemetry
+// SILENTLY and uncounted, violating the project's own "no silent loss" invariant. This
+// makes the drop OBSERVABLE via DroppedMessages, never a silent vanish.
+func (s *Server) natsErrorHandler(_ *nats.Conn, sub *nats.Subscription, err error) {
+	s.DroppedMessages.Add(1)
+	subject := ""
+	if sub != nil {
+		subject = sub.Subject
+	}
+	fmt.Fprintf(os.Stderr, "openshield-server: NATS async error (message(s) may be DROPPED) subject=%q: %v\n", subject, err)
+}
+
+// pendingMsgLimit/pendingBytesLimit bound each subscription's client-side queue explicitly,
+// so overflow behaviour is deterministic (and fires the ErrorHandler) rather than relying on
+// the library default. Generous, but bounded — an unbounded queue on a slow consumer is an
+// OOM, a too-small one drops needlessly.
+const (
+	pendingMsgLimit   = 65536
+	pendingBytesLimit = 64 << 20 // 64 MiB
+)
+
+// subscribeCounted subscribes and applies explicit pending limits so a slow consumer
+// overflows into the ErrorHandler (counted) rather than dropping silently (SEC-4).
+func (s *Server) subscribeCounted(conn *nats.Conn, subject string, cb nats.MsgHandler) (*nats.Subscription, error) {
+	sub, err := conn.Subscribe(subject, cb)
+	if err != nil {
+		return nil, err
+	}
+	if err := sub.SetPendingLimits(pendingMsgLimit, pendingBytesLimit); err != nil {
+		return nil, fmt.Errorf("controlplane: pending limits on %s: %w", subject, err)
+	}
+	return sub, nil
+}
+
 // Run connects to NATS and subscribes to the telemetry subjects until the
 // context is cancelled.
 func (s *Server) Run(ctx context.Context, natsURL string) error {
-	conn, err := nats.Connect(natsURL, s.natsOpts...)
+	// SEC-4: install an async ErrorHandler so a SlowConsumer drop is counted + logged, not
+	// silent. Appended to any caller-supplied options (mTLS, D55).
+	opts := append([]nats.Option{}, s.natsOpts...)
+	opts = append(opts, nats.ErrorHandler(s.natsErrorHandler))
+	conn, err := nats.Connect(natsURL, opts...)
 	if err != nil {
 		return fmt.Errorf("controlplane: connecting to NATS: %w", err)
 	}
@@ -136,7 +181,7 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	}
 	for _, sc := range subjects {
 		kind := sc.kind
-		sub, err := conn.Subscribe(sc.subject, func(m *nats.Msg) {
+		sub, err := s.subscribeCounted(conn, sc.subject, func(m *nats.Msg) {
 			s.handle(context.Background(), kind, m.Data)
 		})
 		if err != nil {
@@ -148,7 +193,7 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	}
 
 	// Heartbeats (T-018) update last-seen so a silent agent is detectable.
-	hbSub, err := conn.Subscribe(natsx.SubjectHeartbeat, func(m *nats.Msg) {
+	hbSub, err := s.subscribeCounted(conn, natsx.SubjectHeartbeat, func(m *nats.Msg) {
 		s.recordHeartbeat(context.Background(), m.Data)
 	})
 	if err != nil {
@@ -159,7 +204,7 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	s.mu.Unlock()
 
 	// Signed telemetry (T-017): verified against the enrolled key before persist.
-	sigSub, err := conn.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
+	sigSub, err := s.subscribeCounted(conn, natsx.SubjectSigned, func(m *nats.Msg) {
 		s.handleSigned(context.Background(), m.Data)
 	})
 	if err != nil {
