@@ -63,3 +63,18 @@ watchdog was built even though Phase 1 does not enforce.
 
 Full install-start-upgrade validation needs a systemd host with root; the unit
 files themselves are checked with `systemd-analyze verify` in review.
+
+
+## Real container end-to-end test
+
+```
+bash deploy/e2e.sh
+```
+
+Brings up the compose stack (Postgres + NATS + the **openshield-server binary in a
+container**), publishes telemetry over the real NATS, verifies all three kinds
+(event / classification / decision) land in the real Postgres, then tears down and
+restores the dev Postgres — on any exit. This closes the gap the in-process tests
+leave: it exercises the built binary, its container config, its DSN and the real
+NATS wire, not just the Server struct. Not a CI job by default (it builds an
+image); run it on demand.
