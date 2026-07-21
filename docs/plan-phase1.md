@@ -84,7 +84,7 @@ Documented capability matrix (which events unprivileged via FAN_REPORT_FID; is c
 
 Two processes. TESTABLE: privileged binary is a separate Go module with an import ALLOWLIST excluding encoding/*, compress/*, archive/* and any parser pkg - CI fails build via 'go list -deps' diff if a disallowed import appears; plus a runtime strace/seccomp-audit test asserting no read() beyond dirent/metadata syscalls. Unprivileged worker does all parsing, returns verdicts over IPC.
 
-#### T-007 · Pattern classifier: regex + checksum validators (D5/D10)
+#### T-007 · Pattern classifier · **done**: regex + checksum validators (D5/D10)
 `~5h` · depends: T-003, T-006
 
 Runs in unprivileged worker. Luhn + CPF check digits. TESTABLE: reflect emitted Classification message - fields must be EXACTLY enum-type + float-confidence + int-count; AND grep serialized wire bytes across seeded-PII fixtures for any substring of seed values (must find none). No content, no reversible hash.

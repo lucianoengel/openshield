@@ -19,19 +19,15 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/agent/ipc"
 	"github.com/lucianoengel/openshield/internal/agent/worker"
+	"github.com/lucianoengel/openshield/internal/classify"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
-// nullClassifier finds nothing. Real detectors arrive in T-007; this exists so
-// the process boundary can be exercised end to end now.
-type nullClassifier struct{}
-
-func (nullClassifier) Classify(context.Context, io.Reader) ([]*corev1.DetectorHit, error) {
-	return nil, nil
-}
-
 func main() {
-	c := worker.Classifier(nullClassifier{})
+	// The real pattern classifier (T-007). It lives in the worker's dependency
+	// graph, which MAY hold parsers; the privileged binary's may not, and
+	// scripts/check-agent-deps.sh enforces that split.
+	c := worker.Classifier(classify.New())
 	in, out := os.Stdin, os.Stdout
 
 	for {

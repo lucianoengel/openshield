@@ -190,6 +190,22 @@ func TestPrivilegedTalksToWorkerAcrossProcessBoundary(t *testing.T) {
 	if resp.GetError() != "" {
 		t.Errorf("unexpected worker error: %s", resp.GetError())
 	}
+	// The seeded file holds a valid CPF. With the real classifier wired in
+	// (T-007), the round trip must return a CPF hit — the process boundary now
+	// carries actual detection, not a null result. The hit carries type +
+	// count only; no matched text crosses the boundary (D10).
+	var cpf *corev1.DetectorHit
+	for _, h := range resp.GetHits() {
+		if h.GetDetectorType() == corev1.DetectorType_DETECTOR_TYPE_CPF {
+			cpf = h
+		}
+	}
+	if cpf == nil {
+		t.Fatalf("no CPF hit from a file containing a valid CPF; hits=%v", resp.GetHits())
+	}
+	if cpf.GetCount() < 1 {
+		t.Errorf("CPF count = %d, want >= 1", cpf.GetCount())
+	}
 }
 
 // A worker that hangs must look exactly like a worker that failed. Behind the
