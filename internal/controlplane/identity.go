@@ -23,6 +23,11 @@ var (
 	ErrUnknownAgent = errors.New("controlplane: unknown agent")
 	// ErrRevoked is returned for a revoked agent's telemetry.
 	ErrRevoked = errors.New("controlplane: agent identity revoked")
+	// ErrAgentExists is returned when enrollment would overwrite an EXISTING agent's
+	// identity (SEC-2). Enrollment records a NEW identity; overwriting an existing key or
+	// un-revoking a revoked agent must be an explicit, audited operator action, never an
+	// implicit upsert — otherwise any fresh token can hijack any agent id.
+	ErrAgentExists = errors.New("controlplane: agent id already enrolled (re-enrollment is an operator action)")
 	// ErrBadSignature is returned when a telemetry signature does not verify.
 	ErrBadSignature = errors.New("controlplane: telemetry signature invalid")
 	// ErrReplay is returned for a sequence at or below the last seen — a replay
@@ -74,11 +79,21 @@ func (s *Server) Enroll(ctx context.Context, token, agentID string, pub ed25519.
 		return ErrEnrollment
 	}
 
-	if _, err := tx.Exec(ctx,
+	// SEC-2: refuse to overwrite an existing agent id. ON CONFLICT DO NOTHING + a zero
+	// row count means the id is already enrolled — a fresh token must NOT be able to
+	// replace an agent's key or un-revoke a revoked agent (then sign telemetry as it).
+	// Re-enrollment is a deliberate operator action (revoke/delete the old identity first).
+	ct, err := tx.Exec(ctx,
 		`INSERT INTO agent_identities (agent_id, public_key) VALUES ($1,$2)
-		 ON CONFLICT (agent_id) DO UPDATE SET public_key = EXCLUDED.public_key, revoked_at = NULL`,
-		agentID, []byte(pub)); err != nil {
+		 ON CONFLICT (agent_id) DO NOTHING`,
+		agentID, []byte(pub))
+	if err != nil {
 		return fmt.Errorf("controlplane: recording identity: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		// The id already exists (or is revoked). Reject WITHOUT consuming the token, so a
+		// legitimate holder can still enroll a fresh id — only the hijack is refused.
+		return ErrAgentExists
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE enrollment_tokens SET used_at = $1 WHERE token_hash = $2`, now.UTC(), hash[:]); err != nil {
