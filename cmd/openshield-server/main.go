@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
+	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 )
@@ -52,6 +53,21 @@ func main() {
 	}
 
 	srv := controlplane.New(pool)
+
+	// Enforce the fleet-aggregate retention window (D81): purge received telemetry
+	// and derived peer alerts older than the window, on a timer. The aggregate is a
+	// derived view, so this is a hard delete (the evidentiary ledger tombstones
+	// instead). Without it, personal-adjacent telemetry accrues forever (D20).
+	retInterval := envDuration("OPENSHIELD_RETENTION_INTERVAL", 24*time.Hour)
+	fleetRetention := envDuration("OPENSHIELD_FLEET_RETENTION", 90*24*time.Hour)
+	go retain.Loop(ctx, retInterval, func(ctx context.Context) {
+		n, err := srv.PurgeOlderThan(ctx, time.Now().Add(-fleetRetention))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-server: retention purge failed: %v\n", err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
+	})
 
 	// Server-side peer-UEBA (D54), OFF unless a threshold is configured — enabling
 	// it is the operator's D23 consent/DPIA decision, never a default. It observes
@@ -171,4 +187,13 @@ func env(key, def string) string {
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "openshield-server: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+func envDuration(k string, def time.Duration) time.Duration {
+	if v := os.Getenv(k); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
 }

@@ -30,6 +30,7 @@ import (
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/policy"
+	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"github.com/nats-io/nats.go"
@@ -63,6 +64,20 @@ func main() {
 		fatal(log, "opening ledger", err)
 	}
 	defer ledger.Close()
+
+	// Enforce local-ledger retention on a timer (D81): tombstone bounded-class
+	// entries past their age so content is erased while the hash chain stays
+	// verifiable (D36). The Purge exists (T-013) but was never scheduled (D20).
+	go retain.Loop(ctx, envDuration("OPENSHIELD_RETENTION_INTERVAL", 24*time.Hour), func(ctx context.Context) {
+		n, err := ledger.Purge(ctx, time.Now())
+		if err != nil {
+			log.Error("retention purge failed", slog.String("err", err.Error()))
+			return
+		}
+		if n > 0 {
+			log.Info("retention purge tombstoned entries", slog.Int64("rows", n))
+		}
+	})
 
 	pol, err := policy.NewDefault(ctx)
 	if err != nil {
@@ -222,4 +237,13 @@ func env(k, def string) string {
 func fatal(log *slog.Logger, msg string, err error) {
 	log.Error(msg, slog.String("err", err.Error()))
 	os.Exit(1)
+}
+
+func envDuration(k string, def time.Duration) time.Duration {
+	if v := os.Getenv(k); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
 }

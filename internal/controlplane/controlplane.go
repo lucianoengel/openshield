@@ -231,6 +231,28 @@ func (s *Server) query(ctx context.Context, sql, arg string) ([]TelemetryRow, er
 	return out, rows.Err()
 }
 
+// PurgeOlderThan enforces the fleet-aggregate retention window (D81): it hard-DELETEs
+// received telemetry and derived peer alerts older than cutoff, returning the total
+// rows removed. A hard delete is correct here — the fleet aggregate is a DERIVED
+// detection view, re-derivable from the stream, NOT the evidentiary forward-secure
+// ledger (D38), which tombstones instead to stay chain-verifiable (D36). Without this,
+// personal-adjacent telemetry accrues indefinitely, the posture D20 forbids.
+func (s *Server) PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	var total int64
+	for _, q := range []struct{ table, col string }{
+		{"fleet_telemetry", "received_at"},
+		{"peer_alerts", "detected_at"},
+	} {
+		tag, err := s.pool.Exec(ctx,
+			"DELETE FROM "+q.table+" WHERE "+q.col+" < $1", cutoff.UTC())
+		if err != nil {
+			return total, fmt.Errorf("controlplane: purge %s: %w", q.table, err)
+		}
+		total += tag.RowsAffected()
+	}
+	return total, nil
+}
+
 // Close unsubscribes and closes the NATS connection. The pool is the caller's.
 func (s *Server) Close() error {
 	s.mu.Lock()
