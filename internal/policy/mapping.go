@@ -82,9 +82,19 @@ func buildInput(st *core.State) map[string]interface{} {
 			},
 		}
 	}
+	event := map[string]interface{}{"kind": st.Event.GetKind().String()}
+	// For a network event, expose the requested service host/method/path so a policy
+	// can microsegment (allow a role to a service, D88). This reaches only the LOCAL
+	// in-process policy — telemetry still REDACTS the URL path (D77), and the Decision
+	// carries no content (D14), so local exposure is not a boundary crossing.
+	if ns := st.Event.GetNetwork(); ns != nil {
+		event["host"] = ns.GetSniHost()
+		event["method"] = ns.GetHttpMethod()
+		event["path"] = ns.GetHttpPath()
+	}
 	return map[string]interface{}{
 		"purpose":        st.Event.GetPurpose().String(),
-		"event":          map[string]interface{}{"kind": st.Event.GetKind().String()},
+		"event":          event,
 		"classification": hits,
 		"context":        ctx,
 	}

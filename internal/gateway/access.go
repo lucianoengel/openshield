@@ -5,8 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/gateway/identity"
@@ -25,23 +23,22 @@ import (
 // in opposite directions.
 type AccessProxy struct {
 	gw      *Gateway
-	proxy   *httputil.ReverseProxy
+	catalog *Catalog
 	maxBody int64
 	logger  *slog.Logger
 }
 
-// NewAccessProxy fronts a single internal service (the catalog of many services with
-// per-service policy is A.4). The server that runs it MUST require and verify a
-// client certificate at the TLS layer (RequireAndVerifyClientCert) — this handler
-// reads the already-verified peer certificate.
-func NewAccessProxy(gw *Gateway, upstream *url.URL, maxBody int64, logger *slog.Logger) *AccessProxy {
+// NewAccessProxy fronts the catalog of internal services (D88). The server that runs
+// it MUST require and verify a client certificate at the TLS layer
+// (RequireAndVerifyClientCert) — this handler reads the already-verified peer cert.
+func NewAccessProxy(gw *Gateway, catalog *Catalog, maxBody int64, logger *slog.Logger) *AccessProxy {
 	if maxBody <= 0 {
 		maxBody = DefaultMaxBody
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &AccessProxy{gw: gw, proxy: httputil.NewSingleHostReverseProxy(upstream), maxBody: maxBody, logger: logger}
+	return &AccessProxy{gw: gw, catalog: catalog, maxBody: maxBody, logger: logger}
 }
 
 func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +53,14 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Route to a catalogued internal service. An unknown service is refused (404),
+	// never forwarded — the gateway is an allow-list, not an open relay (D88).
+	svc, ok := p.catalog.Resolve(hostOnly(r.Host))
+	if !ok {
+		http.Error(w, "unknown service", http.StatusNotFound)
+		return
+	}
+
 	// Buffer the body: it is both classified (DLP on the request) and forwarded.
 	body, tooLarge, err := readBounded(r.Body, p.maxBody)
 	if err != nil {
@@ -67,12 +72,13 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authorize through the pipeline on the verified identity context (D85).
+	// Authorize through the pipeline on the verified identity AND the target service
+	// (D88): Host is the resolved service, so the policy can microsegment per service.
 	req := &Request{
 		FlowID:   newFlowID(),
 		SrcIP:    r.RemoteAddr,
 		Protocol: "tcp",
-		Host:     r.Host,
+		Host:     svc.name,
 		Method:   r.Method,
 		Path:     r.URL.Path,
 		Body:     body,
@@ -92,7 +98,7 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Allowed: reverse-proxy to the internal service with the buffered body reset.
+	// Allowed: reverse-proxy to the resolved internal service with the body reset.
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	p.proxy.ServeHTTP(w, r)
+	svc.proxy.ServeHTTP(w, r)
 }

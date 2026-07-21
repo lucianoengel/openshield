@@ -123,7 +123,94 @@ func buildAccessGateway(t *testing.T, worker interface {
 	}
 	gw := gateway.New(worker, pol, &recLedger{}, nil, time.Second)
 	upURL, _ := url.Parse(up.URL)
-	return gateway.NewAccessProxy(gw, upURL, 0, nil), newAccessCA(t)
+	cat := gateway.NewCatalog()
+	// The D87 clients connect to the gateway at 127.0.0.1, so the request Host is
+	// "127.0.0.1" — register the single service under that host.
+	cat.Add("127.0.0.1", upURL)
+	return gateway.NewAccessProxy(gw, cat, 0, nil), newAccessCA(t)
+}
+
+// hostReq builds a GET to the gateway addr but with an overridden Host header, so a
+// client can request a named service (the catalog routes on Host, D88) while TLS still
+// validates against the gateway's 127.0.0.1 cert.
+func hostReq(t *testing.T, addr, host string) *http.Request {
+	t.Helper()
+	r, err := http.NewRequest(http.MethodGet, "https://"+addr+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Host = host
+	return r
+}
+
+// Microsegmentation (D88): the SAME identity reaches one service and is denied another.
+// A finance client is authorized to payroll but not wiki.
+func TestAccessMicrosegmentation(t *testing.T) {
+	payroll, payrollHit := accessUpstream(t)
+	wiki, wikiHit := accessUpstream(t)
+
+	// A per-service policy: finance may reach payroll, and nothing else.
+	pol, err := policy.New(context.Background(), "microseg", "1", `package openshield
+import rego.v1
+allowed if { input.context.role == "finance"; input.event.host == "payroll" }
+decision := {"action":"ALLOW","reason":"authorized","confidence":0.9} if { allowed }
+decision := {"action":"BLOCK","reason":"not authorized for this service","confidence":0.9} if { not allowed }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gateway.New(&fakeWorker{}, pol, &recLedger{}, nil, time.Second)
+	cat := gateway.NewCatalog()
+	pu, _ := url.Parse(payroll.URL)
+	wu, _ := url.Parse(wiki.URL)
+	cat.Add("payroll", pu)
+	cat.Add("wiki", wu)
+	ca := newAccessCA(t)
+	addr := serveAccessTLS(t, gateway.NewAccessProxy(gw, cat, 0, nil), ca)
+	client := accessClient(ca.clientCert(t, "alice@corp", "finance"), ca.pool)
+
+	// finance → payroll: allowed.
+	resp, err := client.Do(hostReq(t, addr, "payroll"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !payrollHit.Load() {
+		t.Errorf("finance→payroll = %d (hit %v), want 200 + reached", resp.StatusCode, payrollHit.Load())
+	}
+
+	// finance → wiki: DENIED, wiki never reached — same identity, different service.
+	resp2, err := client.Do(hostReq(t, addr, "wiki"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Errorf("finance→wiki = %d, want 403 (microsegmentation)", resp2.StatusCode)
+	}
+	if wikiHit.Load() {
+		t.Error("finance reached wiki — microsegmentation failed (same identity must be denied a different service)")
+	}
+}
+
+// An unknown service host is refused 404 and no upstream is reached (the catalog is an
+// allow-list, not an open relay, D88).
+func TestAccessUnknownServiceRefused(t *testing.T) {
+	up, hit := accessUpstream(t)
+	ap, ca := buildAccessGateway(t, &fakeWorker{}, up) // catalog only has "127.0.0.1"
+	addr := serveAccessTLS(t, ap, ca)
+	client := accessClient(ca.clientCert(t, "alice@corp", "finance"), ca.pool)
+
+	resp, err := client.Do(hostReq(t, addr, "does-not-exist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown service = %d, want 404", resp.StatusCode)
+	}
+	if hit.Load() {
+		t.Error("an unknown service reached an upstream — the gateway must not be an open relay")
+	}
 }
 
 // An authorized identity reaches the internal service; a wrong role is denied 403 and
