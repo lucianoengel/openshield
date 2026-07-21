@@ -43,6 +43,13 @@ const (
 	Action_ACTION_QUARANTINE_LOCAL Action = 4
 	Action_ACTION_ENCRYPT_LOCAL    Action = 5
 	Action_ACTION_REDIRECT         Action = 6
+	// Process control (Phase E / HIPS). The DELIBERATE expansion of the closed action
+	// set (the T1 decision, owner-approved): an endpoint that can DENY an exec or KILL a
+	// process. Each is a distinct typed verb with its own enforcer and guard — the action
+	// vocabulary stays CLOSED (D14), it is widened by explicit decision, never opened to a
+	// free-form command a compromised control plane could express.
+	Action_ACTION_DENY_EXEC    Action = 7 // refuse a process execution (the exec-time analogue of BLOCK)
+	Action_ACTION_KILL_PROCESS Action = 8 // terminate a running process
 )
 
 // Enum value maps for Action.
@@ -55,6 +62,8 @@ var (
 		4: "ACTION_QUARANTINE_LOCAL",
 		5: "ACTION_ENCRYPT_LOCAL",
 		6: "ACTION_REDIRECT",
+		7: "ACTION_DENY_EXEC",
+		8: "ACTION_KILL_PROCESS",
 	}
 	Action_value = map[string]int32{
 		"ACTION_UNSPECIFIED":      0,
@@ -64,6 +73,8 @@ var (
 		"ACTION_QUARANTINE_LOCAL": 4,
 		"ACTION_ENCRYPT_LOCAL":    5,
 		"ACTION_REDIRECT":         6,
+		"ACTION_DENY_EXEC":        7,
+		"ACTION_KILL_PROCESS":     8,
 	}
 )
 
@@ -239,7 +250,7 @@ const file_openshield_v1_decision_proto_rawDesc = "" +
 	"\x0epolicy_version\x18\a \x01(\tR\rpolicyVersion\x129\n" +
 	"\n" +
 	"decided_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\x12'\n" +
-	"\x0fcontext_version\x18\t \x01(\tR\x0econtextVersion*\xa2\x01\n" +
+	"\x0fcontext_version\x18\t \x01(\tR\x0econtextVersion*\xd1\x01\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fACTION_ALLOW\x10\x01\x12\x10\n" +
@@ -247,7 +258,9 @@ const file_openshield_v1_decision_proto_rawDesc = "" +
 	"\fACTION_BLOCK\x10\x03\x12\x1b\n" +
 	"\x17ACTION_QUARANTINE_LOCAL\x10\x04\x12\x18\n" +
 	"\x14ACTION_ENCRYPT_LOCAL\x10\x05\x12\x13\n" +
-	"\x0fACTION_REDIRECT\x10\x06B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x0fACTION_REDIRECT\x10\x06\x12\x14\n" +
+	"\x10ACTION_DENY_EXEC\x10\a\x12\x17\n" +
+	"\x13ACTION_KILL_PROCESS\x10\bB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_decision_proto_rawDescOnce sync.Once

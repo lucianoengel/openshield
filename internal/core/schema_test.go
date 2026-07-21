@@ -40,6 +40,11 @@ func TestActionEnumIsClosed(t *testing.T) {
 		// Network verdict (N1/D69): coach/justify redirect. Block-vs-reset is an
 		// enforcement mode, not a verdict, so it deliberately gets no action.
 		"ACTION_REDIRECT",
+		// Process control (Phase E / HIPS): the deliberate T1 expansion of the closed
+		// action set (D14), owner-approved. Two distinct verbs, each a distinct
+		// enforcement capability — NOT an open command surface.
+		"ACTION_DENY_EXEC",
+		"ACTION_KILL_PROCESS",
 	}
 	vals := corev1.Action(0).Descriptor().Values()
 	if vals.Len() != len(want) {

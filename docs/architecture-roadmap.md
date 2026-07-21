@@ -172,12 +172,25 @@ the XDR fork.
 
 > This section is the **pickup queue** produced by the Round-30 full enterprise audit
 > (positioning OpenShield against DLP / HIPS / NTPS / NAC / SIEM / ZT / VPN). It is the
-> single source for that audit's findings so **no re-audit is needed** — every issue and
-> missing feature is captured below as a discrete, actionable ticket. Items above (Phases
-> A–F) describe the *shape* of the work; the items here are the *specific, verified* work.
+> single source for that audit's findings — every issue and missing feature is captured below
+> as a discrete, actionable ticket. Items above (Phases A–F) describe the *shape* of the work;
+> the items here are the *specific* work.
+>
+> **⚠️ Staleness warning.** This queue was written against the 2026-07-21 audit snapshot, and the
+> repo moves fast — a builder is committing concurrently and **D103–D108 landed the same day**
+> (alert search, correlation→incidents, case workflow, syslog ingest+listener), closing or
+> narrowing several tickets below (marked _[verify — may be landed]_ / ✅ LANDED). **Before
+> proposing ANY ticket, re-verify against `HEAD` that the gap still exists.**
 
 ## How the builder worker should consume this
 
+- **Re-verify before proposing.** Open the cited files at `HEAD` and confirm the gap is still
+  open — recent commits (D103–D108: search, correlation, case workflow, syslog) already closed or
+  narrowed HON-2 / SIEM-2 / SIEM-3 / SIEM-4 and part of SIEM-1. Skip or re-scope a ticket whose
+  gap is gone.
+- **One canonical ID per unit of work.** Some work is cross-referenced under several IDs
+  (HON-2≈SIEM-3≈DLP-4, HON-3≈DLP-1, SEC-10≈SIEM-5-persist, SEC-4⊂PLAT-2, NIPS-4∩DLP-8). Aliases
+  are marked _alias — do not double-propose_; propose each unit once.
 - **One OpenSpec change per ticket** (`openspec-propose` → implement → `openspec-archive`),
   per the standing workflow. Ticket IDs (`SEC-1`, `DLP-3`, …) are stable handles — reference
   them in the change name and commit.
@@ -203,9 +216,9 @@ the XDR fork.
 | Category | Maturity | One-line reality |
 |---|---|---|
 | Zero Trust (ZTNA) | ~45% | Real client-cert access broker + microseg + posture/risk policy inputs; posture **self-reported**, OIDC **unwired**, one credential, no client. |
-| DLP | ~35% core | Strong sandboxed detection core; **observe-only in prod** (no enforcers wired), one channel, no EDM/OCR/ML, no case workflow. |
+| DLP | ~35% core | Strong sandboxed detection core; **observe-only in prod** (no enforcers wired), one channel, no EDM/OCR/ML, no endpoint enforcement/coaching. |
 | NIPS / NTPS | ~15% | Forward-proxy egress DLP + opt-in TLS interception. **Not an IPS**: no inline/transparent, no signatures/threat-intel, request-body only. |
-| SIEM | ~5% | Alert store + filter API + one burst rule + one webhook. No event search, no ingestion beyond own agents, no UI. |
+| SIEM | ~15% | Alert `/search` (D103), correlation→incidents (D104), case workflow w/ four-eyes (D105/D107), syslog ingest+listener (D106/D108) all landed. Still missing: *event* search (telemetry is opaque BYTEA), persisted incidents/rules, cross-host key, external formats beyond syslog, UI. |
 | HIPS | 0% | Unbuilt. No exec producer, no behavioral classifier, no exec-control actions. |
 | NAC | 0% | Absent. Posture-as-policy-input ≠ network admission control. Off-pipeline (see T4). |
 | VPN | 0% | Absent. No tunnel. "Zero-Trust VPN" is a mislabel for the ZTNA proxy. Off-pipeline (see T4). |
@@ -251,14 +264,19 @@ These are in code that already runs. Most are S/M. Fix before feature work.
 - Evidence: `internal/gateway/risksub.go` (`SubscribeRisk`), `internal/gateway/posture.go`
   (`SubscribePosture`), `ApplyRiskUpdate`/`ApplyPostureUpdate`; contrast
   `internal/transport/nats/signed.go` (signed telemetry).
-- Fix: wrap `RiskUpdate`/`PostureUpdate` in the existing signed-envelope type; verify against
-  the control-plane signing key **before** `store.Set`; drop + count unverified messages (mirror
-  the telemetry `Gaps`/verified pattern). Bind the update's subject to the signer's authority so
-  a compromised publisher cannot forge *another* subject's facts.
+- Fix (split by producer — they have different key authorities): **risk** is published by the
+  control plane (`internal/gateway/riskpub.go` / `controlplane`) → verify against the
+  **control-plane** key. **posture** is meant to be agent-self-reported → verify against the
+  **agent** key, with the update's subject bound to the signing agent's own identity (a compromised
+  publisher must not forge *another* subject's posture). Both: wrap in the existing signed-envelope
+  type, verify **before** `store.Set`, drop + count unverified (mirror telemetry `Gaps`/verified).
+- Sequencing: uses existing provisioning/enrollment key material — **does NOT wait on PLAT-3.** Do
+  the **risk** half first; the **posture** half can only be tested once a signed posture producer
+  exists (HON-4 — today the posture channel has zero publishers).
 - Verify: unit test publishes a validly-signed update (applied) and a tampered/unsigned/wrong-key
   update (rejected, counted); mutation "skip signature check" must fail the test. The negative
   case must reach real verification, not a routing short-circuit.
-- Blocks: ZT integrity. Pairs with PLAT-3 (message-signing key management).
+- Blocks: ZT integrity.
 
 **SEC-2 · Enrollment cannot overwrite an existing agent's key or un-revoke** — P0 · bug · effort S
 - Problem: `Enroll` uses `ON CONFLICT (agent_id) DO UPDATE SET public_key = …, revoked_at = NULL`.
@@ -286,6 +304,9 @@ These are in code that already runs. Most are S/M. Fix before feature work.
   (today it never appears / drops off after purge).
 - Verify: test that unsigned heartbeats do not reset `LastSeen`; that an enrolled-then-silent
   agent appears overdue; that a purged long-silent agent stays flagged.
+- Sequencing: SEC-3 decides the fate of the unsigned ingest path **before** SEC-4 instruments those
+  same `conn.Subscribe` handlers, and **absorbs SEC-11's `LastSeen` error-vs-absence fix** (same
+  function). Do SEC-3 → SEC-4.
 
 **SEC-4 · No silent server-side telemetry loss** — P0 · bug · effort S
 - Problem: NATS subscribers do a synchronous DB insert per message with **no `SetPendingLimits`
@@ -299,6 +320,8 @@ These are in code that already runs. Most are S/M. Fix before feature work.
   JetStream durable consumers with ack (PLAT-2), which removes the drop window entirely.
 - Verify: an integration test that floods a throttled subscriber asserts the drop counter is
   non-zero and logged (no silent zero). Mutation "swallow the error handler" fails it.
+- Alias: subsumed by PLAT-2 (JetStream) if that lands first. Do the pending-limits/`ErrorHandler`
+  stopgap now regardless; don't build it twice.
 
 **SEC-5 · Tombstone/purge must not be able to destroy evidence undetectably** — P1 · bug · effort M
 - Problem: append-only trigger (migration `010`) permits any `UPDATE` that sets `tombstoned_at`
@@ -308,10 +331,15 @@ These are in code that already runs. Most are S/M. Fix before feature work.
   is unattributable. Enterprise legal-hold posture fails here.
 - Evidence: `internal/store/postgres/migrations/010_*.sql` (trigger), `internal/store/postgres/`
   (`Purge`), `internal/core/ledger.go` (`VerifyChain` treats tombstone as consistent).
-- Fix: (a) trigger enforces that a tombstone `UPDATE` is permitted only for the allowed retention
-  class and only past the configured age, and refuses tombstoning legal-hold rows; (b) every
-  purge/tombstone appends its own audit entry (who/when/policy) so destruction is attributable
-  and chain-visible. Pairs with SEC-6.
+- Fix: (a) a DB trigger **cannot** read Go-side retention ages (`core.RetentionClass.MaxAge()`), so
+  scope the trigger to a *class* check it CAN enforce — **never permit tombstoning
+  `retention_class = investigation`** (legal hold) — and keep age enforcement in `Purge`. (Persist
+  retention policy in a DB table the trigger reads only if age-in-DB is later wanted.) (b) every
+  purge/tombstone appends its own audit entry (who/when/policy) so destruction is attributable and
+  chain-visible. Pairs with SEC-6.
+- Blocked-by: the legal-hold test needs something that *sets* `retention_class = investigation`;
+  nothing does today (see HON-2). Either seed it directly in the test, or land HON-2's
+  case→legal-hold wiring first.
 - Verify: test that tombstoning a legal-hold row is rejected at the DB layer; that a lawful purge
   appends an audit entry; that `VerifyChain` distinguishes lawful tombstone from content rewrite.
 
@@ -402,17 +430,17 @@ project's entire brand is honesty about limits; either wire them or downgrade th
 - Verify: binary-level test — a signed bundle on disk causes a custom detector to fire through the
   real worker; a tampered/unsigned bundle loads nothing and the worker still starts with built-ins.
 
-**HON-2 · Implement or delete the case-workflow schema** — P1 · decision + build · effort M (build) / S (delete)
-- Problem: migration `011_cases.sql` ships `cases`/`case_notes` with a four-eyes-close design,
-  but **zero Go code references these tables** — schema outran implementation, the exact trap the
-  project claims to avoid.
-- Evidence: `internal/store/postgres/migrations/011_cases.sql`; repo-wide grep finds no
-  INSERT/SELECT.
-- Fix: either implement the F3 case workflow against it (open/assign/note/link-alerts/four-eyes
-  close — see `SIEM-3`, and this is what finally *sets* `RetentionInvestigation`/legal hold, tying
-  to SEC-5), or delete migration 011 and remove the claim until built. Do not leave it half-shipped.
-- Verify: if built, an e2e test opens a case, links alerts, requires two distinct operators to
-  close (four-eyes D36), and sets legal-hold on linked evidence.
+**HON-2 · Wire case-open → legal-hold (the case workflow itself LANDED)** — P1 · wiring · effort S
+- Status update: the case workflow is **now implemented** — `internal/controlplane/cases.go`
+  (D105/D107) does open/assign/note/four-eyes close (`ErrFourEyes`) + incident→case linking, with
+  tests. The original "011 is vaporware" finding is **stale — do not re-implement it.**
+- Residual true gap: **nothing sets `retention_class = investigation` (legal hold)** — grep finds no
+  setter outside `internal/core`. So opening a case does not actually hold its linked evidence, and
+  SEC-5's legal-hold guarantee has nothing to protect.
+- Fix: on case-open (or evidence-link), flip the linked ledger rows to the investigation retention
+  class; optionally release on close. This is the setter SEC-5 depends on.
+- Verify: e2e — opening a case + linking evidence flips those rows to legal-hold; a subsequent purge
+  (past normal age) does NOT tombstone them, and SEC-5's trigger refuses to.
 
 **HON-3 · Wire enforcement into the endpoint engine** — P0 · wiring · effort S
 - Problem: the production engine registers **zero enforcers** (`Enforcers` slice empty;

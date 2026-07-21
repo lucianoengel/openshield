@@ -26,6 +26,7 @@ enum EventKind {
   EVENT_KIND_HTTP_REQUEST = 6;
   EVENT_KIND_DNS_QUERY = 7;    // a resolved DNS question (Phase C — DNS breadth)
   EVENT_KIND_SMTP_MESSAGE = 8; // an outbound SMTP message (Phase C — email breadth)
+  EVENT_KIND_PROCESS_EXEC = 9; // a process execution (Phase E — HIPS)
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
@@ -108,5 +109,19 @@ message Event {
     FilesystemSubject filesystem = 9;
     UsbSubject usb = 10;
     NetworkSubject network = 11;
+    ProcessSubject process = 12;
   }
+}
+
+// ProcessSubject is a process execution the HIPS producer observed (Phase E). It carries
+// exec METADATA ONLY (D10/D29) — the executable path, the argument vector, the pid, and the
+// parent's pid/path for lineage rules — never process memory or file content. pid is the
+// enforcement target: what a KILL_PROCESS enforcer acts on, the process analogue of a
+// file path or a flow_id.
+message ProcessSubject {
+  int32 pid = 1;
+  int32 ppid = 2;
+  string exec_path = 3;     // the executable being run
+  repeated string args = 4; // the argument vector (metadata for lineage/LOLBin rules)
+  string parent_path = 5;   // the parent process's executable (for lineage rules)
 }

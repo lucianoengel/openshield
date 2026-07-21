@@ -25,6 +25,13 @@ enum Action {
   ACTION_QUARANTINE_LOCAL = 4;
   ACTION_ENCRYPT_LOCAL = 5;
   ACTION_REDIRECT = 6;
+  // Process control (Phase E / HIPS). The DELIBERATE expansion of the closed action
+  // set (the T1 decision, owner-approved): an endpoint that can DENY an exec or KILL a
+  // process. Each is a distinct typed verb with its own enforcer and guard — the action
+  // vocabulary stays CLOSED (D14), it is widened by explicit decision, never opened to a
+  // free-form command a compromised control plane could express.
+  ACTION_DENY_EXEC = 7;     // refuse a process execution (the exec-time analogue of BLOCK)
+  ACTION_KILL_PROCESS = 8;  // terminate a running process
 }
 
 // Decision is what the policy engine emits and the ONLY thing an enforcer sees.

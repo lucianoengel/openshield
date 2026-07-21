@@ -89,6 +89,7 @@ const (
 	EventKind_EVENT_KIND_HTTP_REQUEST  EventKind = 6
 	EventKind_EVENT_KIND_DNS_QUERY     EventKind = 7 // a resolved DNS question (Phase C — DNS breadth)
 	EventKind_EVENT_KIND_SMTP_MESSAGE  EventKind = 8 // an outbound SMTP message (Phase C — email breadth)
+	EventKind_EVENT_KIND_PROCESS_EXEC  EventKind = 9 // a process execution (Phase E — HIPS)
 )
 
 // Enum value maps for EventKind.
@@ -103,6 +104,7 @@ var (
 		6: "EVENT_KIND_HTTP_REQUEST",
 		7: "EVENT_KIND_DNS_QUERY",
 		8: "EVENT_KIND_SMTP_MESSAGE",
+		9: "EVENT_KIND_PROCESS_EXEC",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":   0,
@@ -114,6 +116,7 @@ var (
 		"EVENT_KIND_HTTP_REQUEST":  6,
 		"EVENT_KIND_DNS_QUERY":     7,
 		"EVENT_KIND_SMTP_MESSAGE":  8,
+		"EVENT_KIND_PROCESS_EXEC":  9,
 	}
 )
 
@@ -602,6 +605,7 @@ type Event struct {
 	//	*Event_Filesystem
 	//	*Event_Usb
 	//	*Event_Network
+	//	*Event_Process
 	Target        isEvent_Target `protobuf_oneof:"target"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -727,6 +731,15 @@ func (x *Event) GetNetwork() *NetworkSubject {
 	return nil
 }
 
+func (x *Event) GetProcess() *ProcessSubject {
+	if x != nil {
+		if x, ok := x.Target.(*Event_Process); ok {
+			return x.Process
+		}
+	}
+	return nil
+}
+
 type isEvent_Target interface {
 	isEvent_Target()
 }
@@ -743,11 +756,98 @@ type Event_Network struct {
 	Network *NetworkSubject `protobuf:"bytes,11,opt,name=network,proto3,oneof"`
 }
 
+type Event_Process struct {
+	Process *ProcessSubject `protobuf:"bytes,12,opt,name=process,proto3,oneof"`
+}
+
 func (*Event_Filesystem) isEvent_Target() {}
 
 func (*Event_Usb) isEvent_Target() {}
 
 func (*Event_Network) isEvent_Target() {}
+
+func (*Event_Process) isEvent_Target() {}
+
+// ProcessSubject is a process execution the HIPS producer observed (Phase E). It carries
+// exec METADATA ONLY (D10/D29) — the executable path, the argument vector, the pid, and the
+// parent's pid/path for lineage rules — never process memory or file content. pid is the
+// enforcement target: what a KILL_PROCESS enforcer acts on, the process analogue of a
+// file path or a flow_id.
+type ProcessSubject struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Pid           int32                  `protobuf:"varint,1,opt,name=pid,proto3" json:"pid,omitempty"`
+	Ppid          int32                  `protobuf:"varint,2,opt,name=ppid,proto3" json:"ppid,omitempty"`
+	ExecPath      string                 `protobuf:"bytes,3,opt,name=exec_path,json=execPath,proto3" json:"exec_path,omitempty"`       // the executable being run
+	Args          []string               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                               // the argument vector (metadata for lineage/LOLBin rules)
+	ParentPath    string                 `protobuf:"bytes,5,opt,name=parent_path,json=parentPath,proto3" json:"parent_path,omitempty"` // the parent process's executable (for lineage rules)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProcessSubject) Reset() {
+	*x = ProcessSubject{}
+	mi := &file_openshield_v1_event_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProcessSubject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProcessSubject) ProtoMessage() {}
+
+func (x *ProcessSubject) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_event_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProcessSubject.ProtoReflect.Descriptor instead.
+func (*ProcessSubject) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ProcessSubject) GetPid() int32 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *ProcessSubject) GetPpid() int32 {
+	if x != nil {
+		return x.Ppid
+	}
+	return 0
+}
+
+func (x *ProcessSubject) GetExecPath() string {
+	if x != nil {
+		return x.ExecPath
+	}
+	return ""
+}
+
+func (x *ProcessSubject) GetArgs() []string {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+func (x *ProcessSubject) GetParentPath() string {
+	if x != nil {
+		return x.ParentPath
+	}
+	return ""
+}
 
 var File_openshield_v1_event_proto protoreflect.FileDescriptor
 
@@ -784,7 +884,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"httpMethod\x12\x1b\n" +
 	"\thttp_path\x18\t \x01(\tR\bhttpPath\x12=\n" +
 	"\tdirection\x18\n" +
-	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\x83\x04\n" +
+	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xbe\x04\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12!\n" +
@@ -800,13 +900,21 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"filesystem\x12-\n" +
 	"\x03usb\x18\n" +
 	" \x01(\v2\x19.openshield.v1.UsbSubjectH\x00R\x03usb\x129\n" +
-	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetworkB\b\n" +
-	"\x06target*k\n" +
+	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetwork\x129\n" +
+	"\aprocess\x18\f \x01(\v2\x1d.openshield.v1.ProcessSubjectH\x00R\aprocessB\b\n" +
+	"\x06target\"\x88\x01\n" +
+	"\x0eProcessSubject\x12\x10\n" +
+	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x12\n" +
+	"\x04ppid\x18\x02 \x01(\x05R\x04ppid\x12\x1b\n" +
+	"\texec_path\x18\x03 \x01(\tR\bexecPath\x12\x12\n" +
+	"\x04args\x18\x04 \x03(\tR\x04args\x12\x1f\n" +
+	"\vparent_path\x18\x05 \x01(\tR\n" +
+	"parentPath*k\n" +
 	"\aPurpose\x12\x17\n" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\x8c\x02\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xa9\x02\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
@@ -816,7 +924,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x17EVENT_KIND_NETWORK_FLOW\x10\x05\x12\x1b\n" +
 	"\x17EVENT_KIND_HTTP_REQUEST\x10\x06\x12\x18\n" +
 	"\x14EVENT_KIND_DNS_QUERY\x10\a\x12\x1b\n" +
-	"\x17EVENT_KIND_SMTP_MESSAGE\x10\b*r\n" +
+	"\x17EVENT_KIND_SMTP_MESSAGE\x10\b\x12\x1b\n" +
+	"\x17EVENT_KIND_PROCESS_EXEC\x10\t*r\n" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +
@@ -835,7 +944,7 @@ func file_openshield_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_openshield_v1_event_proto_goTypes = []any{
 	(Purpose)(0),                  // 0: openshield.v1.Purpose
 	(EventKind)(0),                // 1: openshield.v1.EventKind
@@ -846,23 +955,25 @@ var file_openshield_v1_event_proto_goTypes = []any{
 	(*UsbSubject)(nil),            // 6: openshield.v1.UsbSubject
 	(*NetworkSubject)(nil),        // 7: openshield.v1.NetworkSubject
 	(*Event)(nil),                 // 8: openshield.v1.Event
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	(*ProcessSubject)(nil),        // 9: openshield.v1.ProcessSubject
+	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
 }
 var file_openshield_v1_event_proto_depIdxs = []int32{
-	4, // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
-	2, // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
-	9, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
-	3, // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
-	0, // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
-	1, // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
-	5, // 6: openshield.v1.Event.filesystem:type_name -> openshield.v1.FilesystemSubject
-	6, // 7: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
-	7, // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	4,  // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
+	2,  // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
+	10, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
+	3,  // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
+	0,  // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
+	1,  // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
+	5,  // 6: openshield.v1.Event.filesystem:type_name -> openshield.v1.FilesystemSubject
+	6,  // 7: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
+	7,  // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
+	9,  // 9: openshield.v1.Event.process:type_name -> openshield.v1.ProcessSubject
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_event_proto_init() }
@@ -879,6 +990,7 @@ func file_openshield_v1_event_proto_init() {
 		(*Event_Filesystem)(nil),
 		(*Event_Usb)(nil),
 		(*Event_Network)(nil),
+		(*Event_Process)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -886,7 +998,7 @@ func file_openshield_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_event_proto_rawDesc), len(file_openshield_v1_event_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -25,6 +25,9 @@ var actionNames = map[string]corev1.Action{
 	"ENCRYPT_LOCAL":    corev1.Action_ACTION_ENCRYPT_LOCAL,
 	// Network verdict (N1/D69): a policy can emit REDIRECT to coach a flow.
 	"REDIRECT": corev1.Action_ACTION_REDIRECT,
+	// Process control (Phase E / HIPS): the deliberate T1 action-set expansion (D14).
+	"DENY_EXEC":    corev1.Action_ACTION_DENY_EXEC,
+	"KILL_PROCESS": corev1.Action_ACTION_KILL_PROCESS,
 }
 
 func actionFromName(name string) (corev1.Action, bool) {
@@ -91,6 +94,18 @@ func buildInput(st *core.State) map[string]interface{} {
 		event["host"] = ns.GetSniHost()
 		event["method"] = ns.GetHttpMethod()
 		event["path"] = ns.GetHttpPath()
+	}
+	// For a process-exec event, expose the exec path, args, and parent path so a
+	// behavioral policy can decide on LOLBins and process lineage (Phase E, HIPS). Exec
+	// metadata only (D10/D29) — no process memory or file content.
+	if ps := st.Event.GetProcess(); ps != nil {
+		event["exec_path"] = ps.GetExecPath()
+		event["parent_path"] = ps.GetParentPath()
+		args := make([]interface{}, 0, len(ps.GetArgs()))
+		for _, a := range ps.GetArgs() {
+			args = append(args, a)
+		}
+		event["args"] = args
 	}
 	return map[string]interface{}{
 		"purpose":        st.Event.GetPurpose().String(),
