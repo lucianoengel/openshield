@@ -50,6 +50,50 @@ func (s *Server) View(ctx context.Context, viewer, eventID string) ([]TelemetryR
 	return s.TelemetryForEvent(ctx, eventID)
 }
 
+// Cert roles (D58): a verified client certificate carries a ROLE in its Subject
+// Organizational Unit, and each mutual-TLS route authorizes by that role — not
+// merely by the fact of a valid cert. Trust rests on the CA's issuance discipline
+// (a CA that signs OU=operator for the wrong party loses, the PKI trust class);
+// the win is that the role is CHECKED. A production system might use a dedicated
+// policy OID instead of OU.
+const (
+	RoleAgent    = "agent"
+	RoleOperator = "operator"
+)
+
+// certRole returns the first recognised role in the verified peer certificate's
+// OU, or "" (an unknown/absent role is authorized for nothing — deny by default).
+func certRole(state *tls.ConnectionState) string {
+	if state == nil || len(state.PeerCertificates) == 0 {
+		return ""
+	}
+	for _, ou := range state.PeerCertificates[0].Subject.OrganizationalUnit {
+		if ou == RoleAgent || ou == RoleOperator {
+			return ou
+		}
+	}
+	return ""
+}
+
+// requireRole gates a handler on the verified certificate's role: 401 when there
+// is no verified cert (unauthenticated), 403 when the cert's role is not the one
+// required (authenticated but not authorized), else it serves h. The role comes
+// from the certificate, never the request (D58).
+func requireRole(role string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+			http.Error(w, "client certificate required", http.StatusUnauthorized)
+			return
+		}
+		if certRole(r.TLS) != role {
+			// Authenticated, but this identity is not allowed here (403 ≠ 401).
+			http.Error(w, "forbidden: certificate role not authorized for this endpoint", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // operatorIdentity derives the viewer identity from a VERIFIED mutual-TLS client
 // certificate (D56). The handler runs only under RequireAndVerifyClientCert
 // (D55), so a present peer certificate is already CA-verified — this reads the

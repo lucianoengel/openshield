@@ -37,11 +37,17 @@ openssl req -newkey ed25519 -nodes -keyout "$CERTS/server-key.pem" -out "$CERTS/
 openssl x509 -req -in "$CERTS/server.csr" -CA "$CERTS/ca.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial \
   -out "$CERTS/server-cert.pem" -days 1 \
   -extfile <(printf 'subjectAltName=DNS:osmtls-server,DNS:osmtls-nats,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n') >/dev/null 2>&1
-# Client cert — for agents.
+# Agent client cert — role OU=agent (D58): may /enroll, may NOT /view.
 openssl req -newkey ed25519 -nodes -keyout "$CERTS/client-key.pem" -out "$CERTS/client.csr" \
-  -subj "/CN=osmtls-agent" >/dev/null 2>&1
+  -subj "/CN=osmtls-agent/OU=agent" >/dev/null 2>&1
 openssl x509 -req -in "$CERTS/client.csr" -CA "$CERTS/ca.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial \
   -out "$CERTS/client-cert.pem" -days 1 \
+  -extfile <(printf 'extendedKeyUsage=serverAuth,clientAuth\n') >/dev/null 2>&1
+# Operator client cert — role OU=operator (D58): may /view, may NOT /enroll.
+openssl req -newkey ed25519 -nodes -keyout "$CERTS/op-key.pem" -out "$CERTS/op.csr" \
+  -subj "/CN=osmtls-op/OU=operator" >/dev/null 2>&1
+openssl x509 -req -in "$CERTS/op.csr" -CA "$CERTS/ca.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial \
+  -out "$CERTS/op-cert.pem" -days 1 \
   -extfile <(printf 'extendedKeyUsage=serverAuth,clientAuth\n') >/dev/null 2>&1
 chmod 644 "$CERTS"/*.pem
 chmod 755 "$CERTS" # mktemp -d is 0700; the container's nonroot user must traverse it
@@ -59,7 +65,7 @@ podman run -d --name "$NATS" --network "$NET" -v "$CERTS:/certs:ro,Z" docker.io/
   --tls --tlscert /certs/server-cert.pem --tlskey /certs/server-key.pem \
   --tlsverify --tlscacert /certs/ca.pem >/dev/null
 for i in $(seq 1 30); do podman exec "$PG" pg_isready -U openshield >/dev/null 2>&1 && break; sleep 1; done
-podman run -d --name "$SRV" --network "$NET" -v "$CERTS:/certs:ro,Z" \
+podman run -d --name "$SRV" --network "$NET" -p 18080:8080 -v "$CERTS:/certs:ro,Z" \
   -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" \
   -e OPENSHIELD_NATS_URL="tls://$NATS:4222" -e OPENSHIELD_HTTP_ADDR=":8080" \
   -e OPENSHIELD_TLS_CA=/certs/ca.pem -e OPENSHIELD_TLS_CERT=/certs/server-cert.pem -e OPENSHIELD_TLS_KEY=/certs/server-key.pem \
@@ -96,5 +102,24 @@ nc="$(psql "SELECT count(*) FROM fleet_telemetry WHERE agent_id='agent-nocert'")
 [ "$nc" = "0" ] || { echo "!! agent without a client cert got $nc telemetry rows through — mTLS not enforced" >&2; exit 1; }
 echo "   OK: agent-nocert refused (0 telemetry rows) — no plaintext downgrade"
 
+echo "==> cert-role authorization (D58): agent≠operator across /enroll and /view"
+# Reachable from the host via the published port; server cert SAN includes localhost.
+C=(--cacert "$CERTS/ca.pem" -s -o /dev/null -w '%{http_code}' --max-time 5)
+AG=(--cert "$CERTS/client-cert.pem" --key "$CERTS/client-key.pem")   # OU=agent
+OP=(--cert "$CERTS/op-cert.pem" --key "$CERTS/op-key.pem")           # OU=operator
+optok="$(podman exec -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" "$SRV" openshield-server issue-token 3600)"
+enroll_body='{"token":"'"$optok"'","agent_id":"role-probe","public_key":"AAAA"}'
+
+# An OPERATOR cert must NOT be able to enroll (403).
+op_enroll="$(curl "${C[@]}" "${OP[@]}" -X POST -H 'content-type: application/json' -d "$enroll_body" https://localhost:18080/enroll)"
+[ "$op_enroll" = "403" ] || { echo "!! operator cert on /enroll = $op_enroll, want 403" >&2; exit 1; }
+# An AGENT cert must NOT be able to view (403) — the D56 hole, now closed.
+ag_view="$(curl "${C[@]}" "${AG[@]}" https://localhost:18080/view?event=nope)"
+[ "$ag_view" = "403" ] || { echo "!! agent cert on /view = $ag_view, want 403 (D56 hole open!)" >&2; exit 1; }
+# The OPERATOR cert IS allowed on /view (200 even for a missing event → empty rows).
+op_view="$(curl "${C[@]}" "${OP[@]}" https://localhost:18080/view?event=nope)"
+[ "$op_view" = "200" ] || { echo "!! operator cert on /view = $op_view, want 200" >&2; exit 1; }
+echo "   OK: operator /enroll=403, agent /view=403, operator /view=200 — roles enforced"
+
 echo ""
-echo "MUTUAL-TLS E2E PASSED: cert-bearing agent enrolls + verified telemetry; no-cert agent refused"
+echo "MUTUAL-TLS E2E PASSED: cert-bearing agent enrolls + verified telemetry; no-cert agent refused; roles enforced"

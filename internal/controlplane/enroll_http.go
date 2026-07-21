@@ -76,14 +76,18 @@ func (s *Server) ServeHTTPTLS(ctx context.Context, addr string, tlsCfg *tls.Conf
 }
 
 func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) error {
-	// Under mutual TLS the authenticated investigation-view route (D56) is mounted
-	// alongside enrollment — its recorded viewer comes from the verified client
-	// certificate. In plaintext there is no verified identity, so the view route
-	// is NOT exposed; only enrollment is.
+	// Route mounting depends on TLS. In PLAINTEXT (dev loop): only /enroll, ungated
+	// — there is no cert and no role. Under MUTUAL TLS: both routes, each gated by
+	// the verified certificate's ROLE (D58) — /enroll requires the agent role (an
+	// operator cert cannot fake an agent onboarding) and /view requires the
+	// operator role (an agent cert cannot read investigations). The view route
+	// exists only under TLS (D56).
 	mux := http.NewServeMux()
-	mux.Handle("/enroll", s.EnrollHandler())
 	if tlsCfg != nil {
-		mux.Handle("/view", s.ViewHandler())
+		mux.Handle("/enroll", requireRole(RoleAgent, s.EnrollHandler()))
+		mux.Handle("/view", requireRole(RoleOperator, s.ViewHandler()))
+	} else {
+		mux.Handle("/enroll", s.EnrollHandler())
 	}
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, TLSConfig: tlsCfg}
 	go func() {

@@ -30,8 +30,16 @@ import (
 	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 )
 
-// mkCerts issues a CA + a leaf cert/key under dir and returns their paths.
-func mkCerts(t *testing.T, dir, cn string) (caPath, certPath, keyPath string) {
+// ouList wraps a single OU role (or none) for a cert Subject.
+func ouList(ou string) []string {
+	if ou == "" {
+		return nil
+	}
+	return []string{ou}
+}
+
+// mkCerts issues a CA + a leaf cert/key (with role OU) under dir and returns their paths.
+func mkCerts(t *testing.T, dir, cn, ou string) (caPath, certPath, keyPath string) {
 	t.Helper()
 	caPub, caPriv, _ := ed25519.GenerateKey(rand.Reader)
 	caTmpl := &x509.Certificate{
@@ -44,7 +52,7 @@ func mkCerts(t *testing.T, dir, cn string) (caPath, certPath, keyPath string) {
 
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn},
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn, OrganizationalUnit: ouList(ou)},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
@@ -72,7 +80,7 @@ func mkCerts(t *testing.T, dir, cn string) (caPath, certPath, keyPath string) {
 func TestEnrollOverMutualTLS(t *testing.T) {
 	pool := requireDB(t)
 	dir := t.TempDir()
-	caPath, certPath, keyPath := mkCerts(t, dir, "server")
+	caPath, certPath, keyPath := mkCerts(t, dir, "server", "agent") // client role for /enroll
 	tc, err := tlsconf.Load(caPath, certPath, keyPath)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +140,7 @@ func TestEnrollOverMutualTLS(t *testing.T) {
 func TestTLSDoesNotBypassSigning(t *testing.T) {
 	pool := requireDB(t)
 	dir := t.TempDir()
-	caPath, certPath, keyPath := mkCerts(t, dir, "server")
+	caPath, certPath, keyPath := mkCerts(t, dir, "server", "")
 	tc, err := tlsconf.Load(caPath, certPath, keyPath)
 	if err != nil {
 		t.Fatal(err)

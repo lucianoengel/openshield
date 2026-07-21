@@ -40,11 +40,17 @@ func newOneCA(t *testing.T) *oneCA {
 	return &oneCA{caCert: cert, caKey: priv, pool: pool}
 }
 
-func (c *oneCA) leaf(t *testing.T, cn string, ips []net.IP) tls.Certificate {
+// leaf issues a CA-signed cert with CommonName cn and, if ou != "", that role in
+// the Subject OrganizationalUnit (D58 role authorization).
+func (c *oneCA) leaf(t *testing.T, cn, ou string, ips []net.IP) tls.Certificate {
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	var ous []string
+	if ou != "" {
+		ous = []string{ou}
+	}
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn},
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn, OrganizationalUnit: ous},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
@@ -77,7 +83,7 @@ func TestAuthenticatedViewRecordsCertIdentity(t *testing.T) {
 	ca := newOneCA(t)
 
 	serverCfg := &tls.Config{
-		Certificates: []tls.Certificate{ca.leaf(t, "server", []net.IP{net.ParseIP("127.0.0.1")})},
+		Certificates: []tls.Certificate{ca.leaf(t, "server", "", []net.IP{net.ParseIP("127.0.0.1")})},
 		ClientCAs:    ca.pool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS13,
 	}
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
@@ -94,7 +100,7 @@ func TestAuthenticatedViewRecordsCertIdentity(t *testing.T) {
 
 	// Client with CN "alice".
 	clientCfg := &tls.Config{
-		Certificates: []tls.Certificate{ca.leaf(t, "alice", nil)},
+		Certificates: []tls.Certificate{ca.leaf(t, "alice", "operator", nil)},
 		RootCAs:      ca.pool, MinVersion: tls.VersionTLS13,
 	}
 	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: clientCfg}, Timeout: 3 * time.Second}
@@ -169,7 +175,7 @@ func TestViewWithoutCertRefused(t *testing.T) {
 	seedTelemetry(t, "agent-y", "inv-2")
 
 	serverCfg := &tls.Config{
-		Certificates: []tls.Certificate{ca.leaf(t, "server", []net.IP{net.ParseIP("127.0.0.1")})},
+		Certificates: []tls.Certificate{ca.leaf(t, "server", "", []net.IP{net.ParseIP("127.0.0.1")})},
 		ClientCAs:    ca.pool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS13,
 	}
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
