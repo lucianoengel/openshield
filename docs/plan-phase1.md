@@ -114,7 +114,7 @@ Hardcoded-verdict classifier stub + flat-file audit sink; ONE real fanotify even
 
 The stage-to-stage dispatcher the whole architecture rests on: Event->Classification->Policy->Decision->Enforcement->Audit, with stages registered as plugins rather than wired by hand. NATS JetStream integration for the transport. THIS WAS MISSING ENTIRELY from the first two ticket passes despite the brief calling the Event Bus 'the backbone of the platform'. Acceptance: a stage can be added/removed without editing another stage; replay from the bus reproduces a decision.
 
-#### T-023 · Control plane service
+#### T-023 · Control plane service · **done**
 `~6h` · depends: T-003, T-022
 
 The server side referenced by T-017 (mTLS), T-018 (heartbeat) and the verification steps but never built: receives agent telemetry, serves the audit store, exposes the API the CLI queries. NOT policy distribution (cut from Phase 1 - local policy file). Acceptance: agent connects, telemetry lands in Postgres, CLI reads it back.

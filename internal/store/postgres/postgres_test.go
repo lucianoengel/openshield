@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/lucianoengel/openshield/internal/core"
@@ -74,9 +76,15 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 		t.Skip(msg)
 	}
 
+	// Serialize DB-touching tests ACROSS packages: `go test ./...` runs packages
+	// in parallel, and this package and internal/controlplane both do DDL on the
+	// same database — a race on schema_migrations otherwise. A session advisory
+	// lock on a dedicated connection, held for the test, serializes them.
+	lockDB(t, pool)
+
 	// Each test owns the table. Appends are sequenced from the stored tail, so
 	// leftovers from a previous run would make sequence numbers unpredictable.
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS audit_entries, key_epochs, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS audit_entries, key_epochs, anchors, fleet_telemetry, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	t.Cleanup(pool.Close)
@@ -173,10 +181,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..004), and no more no matter how many times
+	// One row per migration FILE (001..005), and no more no matter how many times
 	// Migrate runs — that stability is the property under test.
-	if n != 4 {
-		t.Errorf("schema_migrations rows = %d, want 4 — a migration applied twice "+
+	if n != 5 {
+		t.Errorf("schema_migrations rows = %d, want 5 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }
@@ -1024,4 +1032,33 @@ func TestNoWitnessIsUnchanged(t *testing.T) {
 		t.Errorf("no-witness verify: consistent=%v completeness=%s, want true and unverified",
 			res.Consistent, res.Completeness)
 	}
+}
+
+// dbLockOnce holds a process-wide Postgres advisory lock on a dedicated
+// connection for the whole test binary. `go test ./...` runs packages as
+// PARALLEL PROCESSES, and this package and internal/controlplane both do DDL on
+// the same database — a race on schema_migrations otherwise. The lock serializes
+// at package granularity: another package's process blocks until this one exits
+// (session exit releases the lock). It is acquired ONCE — several tests call
+// requireDB more than once, and two sessions competing for the same exclusive
+// lock in one process would self-deadlock.
+var (
+	dbLockOnce sync.Once
+	dbLockConn *pgx.Conn // package-level so the held lock connection is not GC-closed
+)
+
+func lockDB(t *testing.T, _ *pgxpool.Pool) {
+	t.Helper()
+	dbLockOnce.Do(func() {
+		conn, err := pgx.Connect(context.Background(), dsn())
+		if err != nil {
+			t.Fatalf("lock connection: %v", err)
+		}
+		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_lock(920431)`); err != nil {
+			t.Fatalf("acquiring advisory lock: %v", err)
+		}
+		dbLockConn = conn // keep the connection (and thus the lock) alive for the process
+		// Held for the process lifetime; process exit releases it. conn is
+		// intentionally never closed.
+	})
 }
