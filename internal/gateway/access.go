@@ -26,7 +26,18 @@ type AccessProxy struct {
 	catalog *Catalog
 	maxBody int64
 	logger  *slog.Logger
+
+	// risk, when set, supplies published per-subject risk for continuous
+	// verification (D89): the access decision context is enriched with it so the
+	// LOCAL policy can step-up/deny on rising risk. nil = no risk enrichment.
+	risk *RiskStore
 }
+
+// SetRiskStore enables risk-driven continuous verification (D89): the access handler
+// enriches each request's identity context with the connecting subject's published
+// risk, and the local policy decides step-up/deny. The server publishes risk (data);
+// the gateway decides (T2) — the server never commands.
+func (p *AccessProxy) SetRiskStore(r *RiskStore) { p.risk = r }
 
 // NewAccessProxy fronts the catalog of internal services (D88). The server that runs
 // it MUST require and verify a client certificate at the TLS layer
@@ -72,6 +83,18 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the identity context, enriched with the subject's PUBLISHED risk for
+	// continuous verification (D89): the policy can step-up/deny a subject whose risk
+	// rose mid-session. Absent risk is left unset (not high) — the opposite
+	// fail-direction from posture (D85).
+	idCtx := id.Context()
+	if p.risk != nil {
+		if score, ok := p.risk.Get(id.Subject); ok {
+			idCtx.RiskScore = score
+			idCtx.HasRiskScore = true
+		}
+	}
+
 	// Authorize through the pipeline on the verified identity AND the target service
 	// (D88): Host is the resolved service, so the policy can microsegment per service.
 	req := &Request{
@@ -82,7 +105,7 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Method:   r.Method,
 		Path:     r.URL.Path,
 		Body:     body,
-		Identity: id.Context(),
+		Identity: idCtx,
 	}
 	dec, perr := p.gw.Process(r.Context(), req)
 	if perr != nil || dec == nil {
