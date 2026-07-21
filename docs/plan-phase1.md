@@ -119,7 +119,7 @@ The stage-to-stage dispatcher the whole architecture rests on: Event->Classifica
 
 The server side referenced by T-017 (mTLS), T-018 (heartbeat) and the verification steps but never built: receives agent telemetry, serves the audit store, exposes the API the CLI queries. NOT policy distribution (cut from Phase 1 - local policy file). Acceptance: agent connects, telemetry lands in Postgres, CLI reads it back.
 
-#### T-024 · Offline store-and-forward queue on the agent
+#### T-024 · Offline store-and-forward queue on the agent · **done**
 `~5h` · depends: T-022
 
 'Offline-capable' is a stated core principle and nothing implemented it. When the control plane is unreachable the agent must durably queue events on disk and forward on reconnect - NEVER silently drop. Bounded with an explicit overflow policy (and overflow itself is an audit event). Acceptance: kill the control plane, generate events, restart it, all events arrive in order; fill the queue to its ceiling and assert the documented overflow behaviour.

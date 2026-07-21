@@ -131,8 +131,6 @@ jobs:
         run: go test -count=1 -v ./internal/cli/
 
   # Still to come, each its own ticket:
-  #   T-024  offline store-and-forward — the transport seam exists, the
-  #          guarantee does NOT. Publish currently errors when unreachable
   #
   # These substitute for the line-level review depth a non-coding maintainer
   # cannot provide (CONTRIBUTING.md).
