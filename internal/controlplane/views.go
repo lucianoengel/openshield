@@ -2,8 +2,11 @@ package controlplane
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -45,6 +48,59 @@ func (s *Server) View(ctx context.Context, viewer, eventID string) ([]TelemetryR
 		return nil, fmt.Errorf("controlplane: recording view: %w", err)
 	}
 	return s.TelemetryForEvent(ctx, eventID)
+}
+
+// operatorIdentity derives the viewer identity from a VERIFIED mutual-TLS client
+// certificate (D56). The handler runs only under RequireAndVerifyClientCert
+// (D55), so a present peer certificate is already CA-verified — this reads the
+// established identity, it does not re-verify. Returns "" when no peer
+// certificate is present (checked defensively; the required-client-cert config
+// makes this unreachable in production), which the caller turns into a refusal.
+func operatorIdentity(state *tls.ConnectionState) string {
+	if state == nil || len(state.PeerCertificates) == 0 {
+		return ""
+	}
+	return "operator:" + state.PeerCertificates[0].Subject.CommonName
+}
+
+// ViewHandler serves an authenticated investigation view (D56). It records the
+// view under the identity taken from the client CERTIFICATE — never a
+// caller-supplied name — and refuses a request with no verified certificate,
+// so no unattributable view occurs (D20). The view is recorded before the
+// evidence is returned (the View invariant). It is mounted ONLY under mutual TLS
+// (there is no authenticated identity to record otherwise).
+func (s *Server) ViewHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/view", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		viewer := operatorIdentity(r.TLS)
+		if viewer == "" {
+			// No verified certificate → no accountable identity → no view (D20).
+			http.Error(w, "client certificate required", http.StatusUnauthorized)
+			return
+		}
+		eventID := r.URL.Query().Get("event")
+		if eventID == "" {
+			http.Error(w, "missing event", http.StatusBadRequest)
+			return
+		}
+		rows, err := s.View(r.Context(), viewer, eventID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		// Boundary-safe projection: event id + kind only, never payload content.
+		out := make([]map[string]string, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, map[string]string{"event_id": row.EventID, "kind": row.Kind})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"viewer": viewer, "rows": out})
+	})
+	return mux
 }
 
 // Views returns recorded views for an event, oldest first.

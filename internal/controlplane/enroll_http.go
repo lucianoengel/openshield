@@ -76,7 +76,16 @@ func (s *Server) ServeHTTPTLS(ctx context.Context, addr string, tlsCfg *tls.Conf
 }
 
 func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) error {
-	srv := &http.Server{Addr: addr, Handler: s.EnrollHandler(), ReadHeaderTimeout: 5 * time.Second, TLSConfig: tlsCfg}
+	// Under mutual TLS the authenticated investigation-view route (D56) is mounted
+	// alongside enrollment — its recorded viewer comes from the verified client
+	// certificate. In plaintext there is no verified identity, so the view route
+	// is NOT exposed; only enrollment is.
+	mux := http.NewServeMux()
+	mux.Handle("/enroll", s.EnrollHandler())
+	if tlsCfg != nil {
+		mux.Handle("/view", s.ViewHandler())
+	}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, TLSConfig: tlsCfg}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
