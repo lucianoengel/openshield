@@ -243,6 +243,29 @@ func (g *Gateway) enforce(ctx context.Context, ev *corev1.Event, dec *corev1.Dec
 	}
 }
 
+// RecordTunnel appends a metadata-only entry for a flow the gateway tunneled
+// WITHOUT inspecting it — the blind tunnel (D74) or a do-not-intercept host (D75).
+// It records the destination host and the reason it was not inspected, and NOTHING
+// else: no body, no URL path, no Decision (nothing was classified, so there is no
+// verdict — representing it as an ALLOW would falsely claim it was inspected). So
+// uninspected egress is VISIBLE in the audit trail rather than silent (D1/D17).
+//
+// Best-effort: a ledger append failure is logged, not fatal — the flow is happening
+// regardless, and a recording failure must not sever connectivity (D30 when it
+// works; a logged gap when it does not).
+func (g *Gateway) RecordTunnel(ctx context.Context, host, reason string) {
+	entry := &core.Entry{
+		AppendedAt:   g.now().UTC(),
+		Retention:    core.RetentionStandard,
+		OutcomeKind:  "tunneled",
+		OutcomeStage: host + " (" + reason + ")",
+	}
+	if err := g.ledger.Append(ctx, entry); err != nil {
+		g.logger.Warn("gateway: recording a tunneled flow failed (flow proceeds, audit gap logged)",
+			"err", err, "host", host, "reason", reason)
+	}
+}
+
 func (g *Gateway) recordEnforcement(ctx context.Context, dec *corev1.Decision, enfErr error) {
 	entry := &core.Entry{
 		AppendedAt: g.now().UTC(),

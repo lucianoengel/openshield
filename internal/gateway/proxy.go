@@ -156,10 +156,20 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, targetURL string, 
 // inner request (D75); otherwise it establishes a BLIND TCP tunnel (D74) — the
 // proxy relays ciphertext and classifies nothing, a stated, logged coverage gap.
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
-	if p.intercepts(hostOnly(r.Host)) {
+	host := hostOnly(r.Host)
+	if p.intercepts(host) {
 		p.startIntercept(w, r)
 		return
 	}
+
+	// This flow is tunneled uninspected — record it as metadata so the audit trail
+	// shows uninspected egress rather than silence (D78). Reason distinguishes "no
+	// interception configured" from "excluded by the do-not-intercept list".
+	reason := "interception-disabled"
+	if p.minter != nil {
+		reason = "do-not-intercept"
+	}
+	p.gw.RecordTunnel(r.Context(), host, reason)
 
 	upstream, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
 	if err != nil {

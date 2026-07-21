@@ -79,6 +79,13 @@ func TestInterceptClassifiesAndForwardsHTTPS(t *testing.T) {
 	if len(led.entries) == 0 {
 		t.Error("intercepted HTTPS body was NOT classified — the D74 coverage gap is not closed")
 	}
+	// An inspected flow records its Decision, NOT a tunnel entry — the two paths
+	// are distinct in the ledger (D78).
+	for _, e := range led.entries {
+		if e.OutcomeKind == "tunneled" {
+			t.Error("an intercepted flow recorded a 'tunneled' entry — inspected flows must record a decision, not a tunnel")
+		}
+	}
 }
 
 // A BLOCK verdict on the inner intercepted request is applied: 403, origin never hit.
@@ -130,8 +137,17 @@ func TestDoNotInterceptTunnelsExcludedHost(t *testing.T) {
 	if !hit.Load() {
 		t.Error("origin not reached through the tunnel")
 	}
-	if len(led.entries) != 0 {
-		t.Errorf("a do-not-intercept host was classified (%d entries) — it must be tunneled blind", len(led.entries))
+	// The do-not-intercept host is tunneled blind but now AUDITED as metadata
+	// (D78): one "tunneled" entry with reason do-not-intercept, no classification.
+	if len(led.entries) != 1 {
+		t.Fatalf("do-not-intercept host recorded %d entries, want exactly 1 tunnel entry (D78)", len(led.entries))
+	}
+	e := led.entries[0]
+	if e.OutcomeKind != "tunneled" || e.Decision != nil {
+		t.Errorf("entry = kind %q decision %v, want a decision-less 'tunneled' outcome (not classified)", e.OutcomeKind, e.Decision)
+	}
+	if !strings.Contains(e.OutcomeStage, "do-not-intercept") {
+		t.Errorf("tunnel entry stage = %q, want reason do-not-intercept", e.OutcomeStage)
 	}
 }
 
