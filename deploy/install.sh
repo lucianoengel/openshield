@@ -24,6 +24,7 @@ echo "==> building binaries"
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-worker" ./cmd/openshield-worker )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-server" ./cmd/openshield-server )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-engine"    ./cmd/openshield-engine )
+( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-gateway"   ./cmd/openshield-gateway )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-anchor"    ./cmd/openshield-anchor )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshield-provision" ./cmd/openshield-provision )
 ( cd "$REPO_ROOT" && go build -o "$BIN_DIR/openshieldctl"     ./cmd/openshieldctl )
@@ -39,12 +40,14 @@ ensure_user() {
 ensure_user openshield
 ensure_user openshield-worker
 ensure_user openshield-engine
+ensure_user openshield-gateway
 
 echo "==> installing systemd units"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-agent.service  "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-worker.service "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-server.service "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-engine.service "$UNIT_DIR/"
+install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-gateway.service "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-anchor.service "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-anchor.timer   "$UNIT_DIR/"
 
@@ -59,18 +62,19 @@ install -m 0644 "$REPO_ROOT/deploy/openshield-agent.service.d-heartbeat.conf" \
 echo "==> reloading systemd"
 systemctl daemon-reload
 
-echo "==> enabling services (server + worker; the agent is enabled but NOT started)"
-systemctl enable openshield-server.service openshield-worker.service openshield-engine.service openshield-agent.service
+echo "==> enabling services (server + worker + engine + gateway; the agent is a DEFERRED stub, not enabled)"
+systemctl enable openshield-server.service openshield-worker.service openshield-engine.service openshield-gateway.service
 
 cat <<'DONE'
 
 OpenShield installed.
 
-  - openshield-server / openshield-worker: enabled.
-  - openshield-agent: enabled but NOT started (start it once fanotify marks are
-    configured for this host):  systemctl start openshield-agent
+  - openshield-server / openshield-worker / openshield-engine / openshield-gateway: enabled.
+    The engine observes OPENSHIELD_WATCH_DIRS; the gateway is observe-only until you
+    set OPENSHIELD_ENFORCE (D1). Both run under their own isolated users (D68).
+  - openshield-agent: installed but NOT enabled. It is the DEFERRED inline-blocking
+    component (D49) and is a STUB today (it exits non-zero); do not enable it until the
+    real agent ships.
 
-Upgrade: rebuild, re-run this installer, then `systemctl restart openshield-agent`.
-Restarting the agent is safe under load — the fail-open watchdog (D18) answers the
-kernel regardless of pipeline state, so a restart cannot hang a blocked process.
+Upgrade: rebuild, re-run this installer, then restart the changed services.
 DONE

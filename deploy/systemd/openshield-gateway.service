@@ -1,0 +1,48 @@
+# OpenShield network gateway (N1 / D73–D83).
+#
+# The gateway is a forward proxy: it classifies request bodies via the sandboxed
+# worker (D72), decides via OPA, appends to the forward-secure ledger, and applies
+# the verdict to the live connection. It HOLDS the ledger signer key (D46) and — when
+# TLS interception is enabled — the interception-CA private key, a SKELETON KEY that
+# can impersonate any site (D75). So, exactly like the engine (D68), it runs under its
+# OWN dedicated user, never root and never the monitored account (D45), with a private
+# 0700 state directory for those secrets. Host root still defeats at-rest protection
+# (D16); this closes the wrong-USER erosion, not a root compromise.
+#
+# It is network-capable by design (it listens and dials Postgres/NATS/upstream), so it
+# is NOT seccomp-network-denied — that is the worker's role (D35). It parses no
+# attacker bytes in-process (the worker does, D72).
+[Unit]
+Description=OpenShield network gateway (proxy; holds the ledger signer + interception CA)
+Documentation=https://github.com/lucianoengel/openshield
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openshield-gateway
+User=openshield-gateway
+Group=openshield-gateway
+# Unprivileged: a forward proxy needs no capabilities.
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# systemd creates /var/lib/openshield-gateway (0700, owned by the gateway user) — the
+# ONLY writable path. The ledger signer state and the interception-CA files live here,
+# owned by the gateway user and unreadable by the monitored account: the signer key
+# and the skeleton key are not under the account whose activity IS the evidence.
+StateDirectory=openshield-gateway
+StateDirectoryMode=0700
+Environment=OPENSHIELD_SIGNER_FILE=/var/lib/openshield-gateway/gateway-signer.state
+Environment=OPENSHIELD_WORKER_BIN=/usr/local/bin/openshield-worker
+Environment=OPENSHIELD_LISTEN=127.0.0.1:8080
+Environment=OPENSHIELD_DSN=postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable
+# Observe-only by default (D1). To ENFORCE, set OPENSHIELD_ENFORCE=1. To INTERCEPT
+# HTTPS, set OPENSHIELD_INTERCEPT_CA_CERT/KEY to files under the StateDirectory (D75);
+# the do-not-intercept list is OPENSHIELD_NO_INTERCEPT (D75).
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

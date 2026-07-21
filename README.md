@@ -53,6 +53,12 @@ integrity between anchors.
 their own machine · offer a tamper-*proof* log (impossible in a single self-hosted trust
 domain) · reliably catch a motivated adversary who encrypts, screenshots or retypes.
 
+**The network gateway is content-inspection egress DLP, not a NIPS or a Zero-Trust enforcement
+point.** It inspects only HTTP(S) that clients are configured to proxy through it, and it
+authenticates no user or device identity — the network subject is a hashed source address, not
+an identity. Identity-aware authorization and broader-protocol/transparent coverage are on the
+roadmap, not built.
+
 The design centre is the **careless insider**, and most real data-loss events are careless.
 Read [`docs/threat-model.md`](docs/threat-model.md) before drawing conclusions about efficacy.
 
