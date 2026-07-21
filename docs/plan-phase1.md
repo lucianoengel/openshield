@@ -192,7 +192,7 @@ T-015 asserts 'install and upgrade exercised' and nothing built either. systemd 
 
 OTel is cut from Phase 1 but the agent still needs to be debuggable: structured logs, error taxonomy, and defined behaviour when a stage fails (fail-open per D17 where a verdict is involved, loud audit event always). Acceptance: every stage failure path emits a log with correlation id; no silent swallow.
 
-#### T-029 · CI doc-consistency check
+#### T-029 · CI doc-consistency check · **done**
 `~3h` · depends: T-001
 
 Mechanises the drift that hit brief.md twice. IMPORTANT - a naive denylist grep DOES NOT WORK (proven 2026-07-20: it false-positived on 4 legitimate uses, because this project's discipline consists of discussing the forbidden words). Design: (1) scan CLAIM SURFACES only - README.md and future user-facing/marketing copy - not all docs; (2) support an inline '<!-- allow: <term> -->' escape for deliberate discussion; (3) append-only research reports under docs/research-* are excluded entirely; (4) separately assert that living docs reference D-numbers rather than restating them (flag paragraphs >3 lines adjacent to a D-ref). Acceptance: check passes on the current tree, and fails on a test fixture asserting 'OpenShield provides tamper-proof audit logs' in README.
