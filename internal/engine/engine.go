@@ -80,6 +80,12 @@ type Engine struct {
 	disp   *core.Dispatcher
 	ledger core.Ledger
 	now    func() time.Time
+	logger *slog.Logger
+
+	// telemetry projects real detections to the control plane. nil = no projection
+	// (the default); the local ledger is the system of record (D30). Set via
+	// SetTelemetry (D80).
+	telemetry Projector
 
 	// Enforcers carry out Decisions post-decision (Phase 2). EMPTY by default —
 	// with no enforcers the engine is observe-only (D1): it decides and records,
@@ -97,7 +103,10 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 	disp := core.NewDispatcher(&reg, stageDeadline)
 	disp.OnOutcome = core.NewAuditSink(ledger).Record
 	disp.Logger = logger
-	return &Engine{disp: disp, ledger: ledger, now: time.Now}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Engine{disp: disp, ledger: ledger, now: time.Now, logger: logger}
 }
 
 // Process runs one event through the pipeline, records the Decision, then — if an
@@ -109,6 +118,10 @@ func (e *Engine) Process(ctx context.Context, ev *corev1.Event) (*corev1.Decisio
 	dec, err := e.disp.Dispatch(ctx, ev)
 	if dec != nil {
 		e.enforce(ctx, ev, dec)
+		// Project the real detection to the control plane (opt-in, best-effort,
+		// additive to the local ledger) so fleet visibility, peer-UEBA and the
+		// dead-man's-switch operate over real endpoint detections (D80).
+		e.projectTelemetry(ctx, ev, dec)
 	}
 	return dec, err
 }

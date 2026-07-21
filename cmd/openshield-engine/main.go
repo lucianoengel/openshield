@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,6 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
+	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/connectors/fanotify"
 	"github.com/lucianoengel/openshield/internal/core"
@@ -28,6 +31,8 @@ import (
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
+	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -71,6 +76,39 @@ func main() {
 	defer worker.Close()
 
 	eng := engine.NewFromWorker(worker, pol, ledger, log, 30*time.Second)
+
+	// OPTIONAL fleet telemetry (D80): when NATS + an enrollment endpoint are
+	// configured, enroll a signed identity and project real detections to the
+	// control plane, so fleet visibility, peer-UEBA and the dead-man's-switch operate
+	// over real endpoint detections. Off by default — the single-host observe path is
+	// unchanged. Mirrors the gateway (D77).
+	if natsURL, enrollURL := os.Getenv("OPENSHIELD_NATS_URL"), os.Getenv("OPENSHIELD_ENROLL_URL"); natsURL != "" && enrollURL != "" {
+		agentID := env("OPENSHIELD_AGENT_ID", "engine")
+		id, err := identity.Generate(agentID)
+		if err != nil {
+			fatal(log, "identity", err)
+		}
+		if err := enrollpkg.Enroll(ctx, http.DefaultClient, enrollURL, agentID, os.Getenv("OPENSHIELD_ENROLL_TOKEN"), id); err != nil {
+			fatal(log, "enroll", err)
+		}
+		conn, err := nats.Connect(natsURL)
+		if err != nil {
+			fatal(log, "nats", err)
+		}
+		defer conn.Close()
+		var pub *natsx.SignedPublisher
+		if seqFile := os.Getenv("OPENSHIELD_SEQ_FILE"); seqFile != "" {
+			pub, err = natsx.NewSignedPublisherWithSeq(agentID, id, conn, natsx.NewFileSeqStore(seqFile))
+			if err != nil {
+				fatal(log, "sequence store", err)
+			}
+		} else {
+			pub = natsx.NewSignedPublisher(agentID, id, conn)
+		}
+		eng.SetTelemetry(pub)
+		log.Info("engine: fleet telemetry ENABLED — real detections project to the control plane (D80)",
+			slog.String("agent_id", agentID))
+	}
 
 	// The observe path needs no privileged agent: fanotify NOTIFY mode works
 	// UNPRIVILEGED (D52). The engine opens the connector itself over the configured
