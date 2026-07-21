@@ -38,11 +38,15 @@ ensure_user() {
 }
 ensure_user openshield
 ensure_user openshield-worker
+ensure_user openshield-engine
 
 echo "==> installing systemd units"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-agent.service  "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-worker.service "$UNIT_DIR/"
 install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-server.service "$UNIT_DIR/"
+install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-engine.service "$UNIT_DIR/"
+install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-anchor.service "$UNIT_DIR/"
+install -m 0644 "$REPO_ROOT"/deploy/systemd/openshield-anchor.timer   "$UNIT_DIR/"
 
 echo "==> installing hardening drop-ins"
 install -d "$UNIT_DIR/openshield-worker.service.d"
@@ -56,7 +60,7 @@ echo "==> reloading systemd"
 systemctl daemon-reload
 
 echo "==> enabling services (server + worker; the agent is enabled but NOT started)"
-systemctl enable openshield-server.service openshield-worker.service openshield-agent.service
+systemctl enable openshield-server.service openshield-worker.service openshield-engine.service openshield-agent.service
 
 cat <<'DONE'
 

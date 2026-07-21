@@ -1,0 +1,44 @@
+# OpenShield endpoint engine (D48/D62/D68).
+#
+# The engine runs the OBSERVE pipeline: it opens fanotify in NOTIFY mode itself
+# (unprivileged, D52), classifies via the sandboxed worker, evaluates the OPA
+# policy, and appends to the forward-secure ledger. It HOLDS the ledger signer key
+# (D46) and OPA — so it runs under its OWN dedicated user, never root and never the
+# monitored account (D45). Host root still defeats at-rest protection (D16); this
+# closes the wrong-USER erosion, not a root compromise.
+#
+# It needs the network (pgx to Postgres) so it is NOT seccomp-network-denied — that
+# is the worker's role (D35). It parses no attacker bytes (the worker does, D29).
+[Unit]
+Description=OpenShield endpoint engine (observe pipeline; holds the ledger signer + OPA)
+Documentation=https://github.com/lucianoengel/openshield
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/openshield-engine
+User=openshield-engine
+Group=openshield-engine
+# Unprivileged: notify-mode fanotify needs no capabilities (D52).
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# systemd creates /var/lib/openshield-engine (0700, owned by the engine user) — the
+# ONLY writable path. The signer state lives here, owned by the engine user and
+# unreadable by the monitored account: the key that signs the evidence is not under
+# the account whose activity IS the evidence.
+StateDirectory=openshield-engine
+StateDirectoryMode=0700
+Environment=OPENSHIELD_SIGNER_FILE=/var/lib/openshield-engine/signer.state
+Environment=OPENSHIELD_WORKER_BIN=/usr/local/bin/openshield-worker
+Environment=OPENSHIELD_DSN=postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable
+# REQUIRED — the engine refuses to start without watch directories (D62). Set the
+# directories this host should observe, comma-separated, then start the service:
+#   Environment=OPENSHIELD_WATCH_DIRS=/home/alice/Documents,/srv/share
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
