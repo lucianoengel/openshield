@@ -105,6 +105,64 @@ func (x *SignedTelemetry) GetSignature() []byte {
 	return nil
 }
 
+// SignedUpdate wraps a control-plane→gateway data update (risk, posture) with an Ed25519
+// signature over the payload bytes (SEC-1). The gateway verifies the signature against a
+// trusted publisher key BEFORE interpreting the payload, so anyone who can merely PUBLISH
+// to the NATS subject (past broker mTLS) cannot forge risk/posture for any subject — only
+// the holder of the signing key can. Risk is signed by the control plane; posture by the
+// reporting agent (different key authorities, same envelope).
+type SignedUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Payload       []byte                 `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`     // the marshalled RiskUpdate / PostureUpdate
+	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"` // Ed25519 signature over `payload`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedUpdate) Reset() {
+	*x = SignedUpdate{}
+	mi := &file_openshield_v1_signed_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedUpdate) ProtoMessage() {}
+
+func (x *SignedUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_signed_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedUpdate.ProtoReflect.Descriptor instead.
+func (*SignedUpdate) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_signed_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SignedUpdate) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *SignedUpdate) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
 var File_openshield_v1_signed_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_signed_proto_rawDesc = "" +
@@ -115,7 +173,10 @@ const file_openshield_v1_signed_proto_rawDesc = "" +
 	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12\x12\n" +
 	"\x04kind\x18\x03 \x01(\tR\x04kind\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12\x1c\n" +
-	"\tsignature\x18\x05 \x01(\fR\tsignatureB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\tsignature\x18\x05 \x01(\fR\tsignature\"F\n" +
+	"\fSignedUpdate\x12\x18\n" +
+	"\apayload\x18\x01 \x01(\fR\apayload\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignatureB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_signed_proto_rawDescOnce sync.Once
@@ -129,9 +190,10 @@ func file_openshield_v1_signed_proto_rawDescGZIP() []byte {
 	return file_openshield_v1_signed_proto_rawDescData
 }
 
-var file_openshield_v1_signed_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_openshield_v1_signed_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_openshield_v1_signed_proto_goTypes = []any{
 	(*SignedTelemetry)(nil), // 0: openshield.v1.SignedTelemetry
+	(*SignedUpdate)(nil),    // 1: openshield.v1.SignedUpdate
 }
 var file_openshield_v1_signed_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -152,7 +214,7 @@ func file_openshield_v1_signed_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_signed_proto_rawDesc), len(file_openshield_v1_signed_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

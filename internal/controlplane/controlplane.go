@@ -15,6 +15,7 @@ package controlplane
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -85,6 +86,11 @@ type Server struct {
 	peerMu        sync.Mutex
 	peerLastAlert map[string]time.Time
 	now           func() time.Time
+
+	// riskSigner signs published risk updates (SEC-1) so the gateway can verify a risk
+	// update came from the control plane, not a forging publisher. nil = risk publishing
+	// off (PublishRisk does not emit an unsigned update the gateway would reject anyway).
+	riskSigner ed25519.PrivateKey
 }
 
 // New creates a server over an existing pool.

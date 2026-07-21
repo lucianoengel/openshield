@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -40,17 +42,43 @@ func (p *PostureStore) Get(subject string) (core.DevicePosture, bool) {
 	return dp, ok
 }
 
-// ApplyPostureUpdate decodes a published PostureUpdate into the store (D92). A
-// malformed payload or empty subject is an error, never a silent no-op.
-func ApplyPostureUpdate(data []byte, store *PostureStore) error {
+// PostureSubscriber applies SIGNED posture updates to the store (SEC-1/D92). Posture is
+// meant to be reported by the endpoint AGENT and signed with its key; the subscriber
+// verifies each update against the trusted publisher key BEFORE applying it, so anyone who
+// can merely publish to the posture subject cannot forge Compliant=true for any subject —
+// which would defeat the D85 device-posture tamper-lockout, the security core of ZT. An
+// update that does not verify is DROPPED and COUNTED, never applied.
+//
+// (The signed posture PRODUCER is HON-4 — until it exists this channel receives no valid
+// update; the happy path is tested when the producer lands. What this fix guarantees NOW is
+// that an UNSIGNED or forged posture update is rejected, closing the SEC-1 forgery hole.)
+type PostureSubscriber struct {
+	store      *PostureStore
+	trustedPub ed25519.PublicKey
+	Rejected   atomic.Int64
+}
+
+// NewPostureSubscriber builds a subscriber that verifies against the trusted posture key.
+func NewPostureSubscriber(store *PostureStore, trustedPub ed25519.PublicKey) *PostureSubscriber {
+	return &PostureSubscriber{store: store, trustedPub: trustedPub}
+}
+
+// Apply verifies a signed posture update and records it. A malformed, unsigned, wrong-key,
+// or tampered update is an error — never a silent no-op (SEC-1). Verification happens BEFORE
+// the inner PostureUpdate is parsed.
+func (p *PostureSubscriber) Apply(data []byte) error {
+	payload, err := verifySignedUpdate(data, p.trustedPub)
+	if err != nil {
+		return err
+	}
 	var pu corev1.PostureUpdate
-	if err := proto.Unmarshal(data, &pu); err != nil {
+	if err := proto.Unmarshal(payload, &pu); err != nil {
 		return fmt.Errorf("gateway: bad posture update: %w", err)
 	}
 	if pu.GetSubject() == "" {
 		return fmt.Errorf("gateway: posture update has no subject")
 	}
-	store.Set(pu.GetSubject(), core.DevicePosture{
+	p.store.Set(pu.GetSubject(), core.DevicePosture{
 		Compliant:     pu.GetCompliant(),
 		DiskEncrypted: pu.GetDiskEncrypted(),
 		AgentPresent:  pu.GetAgentPresent(),
@@ -59,9 +87,12 @@ func ApplyPostureUpdate(data []byte, store *PostureStore) error {
 	return nil
 }
 
-// SubscribePosture subscribes the gateway to published posture updates.
-func SubscribePosture(conn *nats.Conn, store *PostureStore) (*nats.Subscription, error) {
+// Subscribe wires the subscriber to the posture subject; an update that fails verification
+// is dropped and counted, so a forged-posture flood is observable, not silent.
+func (p *PostureSubscriber) Subscribe(conn *nats.Conn) (*nats.Subscription, error) {
 	return conn.Subscribe(natsx.SubjectPosture, func(m *nats.Msg) {
-		_ = ApplyPostureUpdate(m.Data, store)
+		if err := p.Apply(m.Data); err != nil {
+			p.Rejected.Add(1)
+		}
 	})
 }

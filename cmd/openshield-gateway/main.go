@@ -18,9 +18,11 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -255,24 +257,43 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	postureStore := gateway.NewPostureStore()
 	ap.SetPostureStore(postureStore)
 
-	// Subscribe to published risk (D91) and device posture (D92). When NATS is
-	// configured, the control plane's per-subject risk updates and the endpoints'
-	// posture updates populate the stores. Without NATS both stay empty: a risk-gating
-	// policy allows on absent risk (D89), but a posture-requiring policy DENIES on
-	// absent posture (D85 tamper-lockout) — the two fail in opposite directions.
+	// Subscribe to published risk (D91) and device posture (D92) — SIGNED and VERIFIED
+	// (SEC-1). Risk is verified against the control-plane key (OPENSHIELD_RISK_PUBKEY);
+	// posture against the posture-publisher key (OPENSHIELD_POSTURE_PUBKEY). A channel with
+	// NO trusted key configured is NOT subscribed — the gateway never applies an UNSIGNED
+	// update, so a publisher past broker mTLS cannot forge risk=0 / Compliant=true for any
+	// subject. Without NATS both stores stay empty: a risk-gating policy allows on absent
+	// risk (D89), a posture-requiring policy DENIES on absent posture (D85 tamper-lockout).
 	if natsURL := os.Getenv("OPENSHIELD_NATS_URL"); natsURL != "" {
 		conn, err := nats.Connect(natsURL)
 		if err != nil {
 			fatal(log, "risk nats", err)
 		}
 		defer conn.Close()
-		if _, err := gateway.SubscribeRisk(conn, riskStore); err != nil {
-			fatal(log, "risk subscribe", err)
+		if pk := os.Getenv("OPENSHIELD_RISK_PUBKEY"); pk != "" {
+			pub, err := loadEd25519Pub(pk)
+			if err != nil {
+				fatal(log, "risk pubkey", err)
+			}
+			if _, err := gateway.NewRiskSubscriber(riskStore, pub).Subscribe(conn); err != nil {
+				fatal(log, "risk subscribe", err)
+			}
+			log.Info("gateway: SIGNED risk subscription active (SEC-1/D91)")
+		} else {
+			log.Warn("gateway: OPENSHIELD_RISK_PUBKEY unset — risk continuous-verification inert (unsigned risk is never applied, SEC-1)")
 		}
-		if _, err := gateway.SubscribePosture(conn, postureStore); err != nil {
-			fatal(log, "posture subscribe", err)
+		if pk := os.Getenv("OPENSHIELD_POSTURE_PUBKEY"); pk != "" {
+			pub, err := loadEd25519Pub(pk)
+			if err != nil {
+				fatal(log, "posture pubkey", err)
+			}
+			if _, err := gateway.NewPostureSubscriber(postureStore, pub).Subscribe(conn); err != nil {
+				fatal(log, "posture subscribe", err)
+			}
+			log.Info("gateway: SIGNED device-posture subscription active (SEC-1/D92)")
+		} else {
+			log.Warn("gateway: OPENSHIELD_POSTURE_PUBKEY unset — posture channel inert (unsigned posture is never applied, SEC-1)")
 		}
-		log.Info("gateway: risk + device-posture subscriptions active (D91/D92)")
 	}
 
 	srv := &http.Server{
@@ -350,6 +371,20 @@ func splitList(s string) []string {
 func fatal(log *slog.Logger, msg string, err error) {
 	log.Error(msg, slog.String("err", err.Error()))
 	os.Exit(1)
+}
+
+// loadEd25519Pub reads a raw 32-byte Ed25519 public key from a file — the trusted
+// risk/posture publisher key the gateway verifies signed updates against (SEC-1). Same
+// format as the witness key (openshieldctl), so provisioning can emit it the same way.
+func loadEd25519Pub(path string) (ed25519.PublicKey, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading public key %s: %w", path, err)
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("public key %s is %d bytes, want %d", path, len(b), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
 }
 
 func envDuration(k string, def time.Duration) time.Duration {

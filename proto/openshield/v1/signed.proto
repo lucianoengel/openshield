@@ -19,3 +19,14 @@ message SignedTelemetry {
   bytes payload = 4;    // marshalled Event / ClassificationSummary / Decision
   bytes signature = 5;
 }
+
+// SignedUpdate wraps a control-plane→gateway data update (risk, posture) with an Ed25519
+// signature over the payload bytes (SEC-1). The gateway verifies the signature against a
+// trusted publisher key BEFORE interpreting the payload, so anyone who can merely PUBLISH
+// to the NATS subject (past broker mTLS) cannot forge risk/posture for any subject — only
+// the holder of the signing key can. Risk is signed by the control plane; posture by the
+// reporting agent (different key authorities, same envelope).
+message SignedUpdate {
+  bytes payload = 1;    // the marshalled RiskUpdate / PostureUpdate
+  bytes signature = 2;  // Ed25519 signature over `payload`
+}

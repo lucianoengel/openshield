@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"os/signal"
@@ -54,6 +55,23 @@ func main() {
 	}
 
 	srv := controlplane.New(pool)
+
+	// Risk-signing key (SEC-1): risk updates published to the gateway MUST be signed with
+	// the control-plane key so the gateway can verify they came from here, not a forging
+	// publisher. When OPENSHIELD_RISK_SIGNING_KEY is set, load it and enable signed risk
+	// publishing; without it, PublishRisk emits nothing (an unsigned update the gateway
+	// rejects anyway) — risk continuous-verification stays inert rather than forgeable.
+	if kp := os.Getenv("OPENSHIELD_RISK_SIGNING_KEY"); kp != "" {
+		key, err := os.ReadFile(kp)
+		if err != nil {
+			fatal("reading risk signing key: %v", err)
+		}
+		if len(key) != ed25519.PrivateKeySize {
+			fatal("risk signing key is %d bytes, want %d (raw ed25519 private key)", len(key), ed25519.PrivateKeySize)
+		}
+		srv.SetRiskSigner(ed25519.PrivateKey(key))
+		fmt.Fprintf(os.Stderr, "openshield-server: signed risk publishing enabled (SEC-1)\n")
+	}
 
 	// Enforce the fleet-aggregate retention window (D81): purge received telemetry
 	// and derived peer alerts older than the window, on a timer. The aggregate is a

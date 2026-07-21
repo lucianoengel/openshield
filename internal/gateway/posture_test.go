@@ -2,6 +2,8 @@ package gateway_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"net/http"
 	"net/url"
 	"testing"
@@ -15,17 +17,43 @@ import (
 	"github.com/lucianoengel/openshield/internal/policy"
 )
 
-func TestApplyPostureUpdate(t *testing.T) {
+// SEC-1: a signed posture update is applied; an unsigned/forged one is rejected — so a
+// publisher cannot forge Compliant=true and defeat the D85 tamper-lockout.
+func TestPostureSubscriberVerifies(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
 	store := gateway.NewPostureStore()
-	data, _ := proto.Marshal(&corev1.PostureUpdate{Subject: "sub_x", Compliant: true, DiskEncrypted: true})
-	if err := gateway.ApplyPostureUpdate(data, store); err != nil {
-		t.Fatal(err)
+	sub := gateway.NewPostureSubscriber(store, pub)
+
+	signPosture := func(signer ed25519.PrivateKey, subject string, compliant bool) []byte {
+		payload, _ := proto.Marshal(&corev1.PostureUpdate{Subject: subject, Compliant: compliant, DiskEncrypted: true})
+		data, _ := gateway.SignUpdate(payload, signer)
+		return data
+	}
+
+	// Valid signed → applied.
+	if err := sub.Apply(signPosture(priv, "sub_x", true)); err != nil {
+		t.Fatalf("a validly-signed posture update was rejected: %v", err)
 	}
 	dp, ok := store.Get("sub_x")
 	if !ok || !dp.HasPosture || !dp.Compliant {
-		t.Errorf("store after apply = %+v/%v, want present + compliant", dp, ok)
+		t.Errorf("store = %+v/%v, want present + compliant", dp, ok)
 	}
-	if err := gateway.ApplyPostureUpdate([]byte("\xff\xffnope"), store); err == nil {
+
+	// An attacker forging Compliant=true for a NEW subject with the wrong key is rejected —
+	// the tamper-lockout holds (that subject keeps absent posture and is denied).
+	if err := sub.Apply(signPosture(otherPriv, "sub_attacker", true)); err == nil {
+		t.Error("a wrong-key posture forgery was accepted — the tamper-lockout is defeated")
+	}
+	if _, ok := store.Get("sub_attacker"); ok {
+		t.Error("a forged posture reached the store")
+	}
+	// A raw (unsigned) PostureUpdate — not wrapped in a SignedUpdate — is rejected.
+	raw, _ := proto.Marshal(&corev1.PostureUpdate{Subject: "sub_x", Compliant: true})
+	if err := sub.Apply(raw); err == nil {
+		t.Error("an unsigned posture update was accepted")
+	}
+	if err := sub.Apply([]byte("\xff\xffnope")); err == nil {
 		t.Error("a malformed posture update was accepted")
 	}
 }
