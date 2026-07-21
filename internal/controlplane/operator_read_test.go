@@ -60,7 +60,7 @@ func TestOperatorReadAPI(t *testing.T) {
 
 	// Agent role: 403 on all (the operator gate), including /search.
 	agent := clientWith(t, ca, "bob", "agent")
-	for _, path := range []string{"/alerts", "/search", "/overdue"} {
+	for _, path := range []string{"/alerts", "/search", "/incidents", "/overdue"} {
 		resp, err := agent.Get("https://" + addr + path)
 		if err != nil {
 			t.Fatal(err)

@@ -91,6 +91,7 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		opRead := requireRole(RoleOperator, s.OperatorReadHandler())
 		mux.Handle("/alerts", opRead)
 		mux.Handle("/search", opRead)
+		mux.Handle("/incidents", opRead)
 		mux.Handle("/overdue", opRead)
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())

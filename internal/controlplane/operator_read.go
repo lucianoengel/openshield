@@ -157,6 +157,8 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		writeJSON(w, alerts)
 	})
 
+	mux.HandleFunc("/incidents", s.incidentsHandler)
+
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
