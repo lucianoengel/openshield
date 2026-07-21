@@ -3,15 +3,18 @@
 An open-source **Data Security Platform**. DLP is the first capability built on it, not the
 product itself.
 
-> **Status: pre-alpha, but the walking skeleton runs.** Phase 1 is built and tested — the full
-> observe path (fanotify connector → sandboxed classifier → OPA policy → Decision → forward-secure
-> audit ledger) runs end to end on Linux, with a fleet control plane (per-agent identity, signed
-> telemetry, enrollment, dead-man's-switch), server-side peer-UEBA, mutual-TLS transport with
+> **Status: pre-alpha. The observe path runs as a binary; inline blocking is deferred.** On Linux,
+> the `openshield-engine` binary runs the full observe path itself — it watches the configured
+> directories (`OPENSHIELD_WATCH_DIRS`) with **unprivileged notify-mode fanotify**, classifies via
+> the sandboxed worker, evaluates the OPA policy, decides, and appends to the forward-secure audit
+> ledger. Proven end to end at the binary level (`deploy/observe-e2e.sh`: a real file dropped in a
+> watched dir lands an ALERT in the ledger). Also built: a fleet control plane (per-agent identity,
+> signed telemetry, enrollment, dead-man's-switch), server-side peer-UEBA, mutual-TLS transport with
 > cert-role authorization, and post-decision enforcers (quarantine, USB, encrypt-local with key
-> escrow) that are **observe-only by default**. Integration tests run against real Postgres/NATS
-> and live Podman containers. It is still pre-alpha: no packaged release, not hardened for
-> production, and everything below about what it does *not* claim still holds. The reasoning is
-> published from the first commit so it is auditable rather than reconstructed later.
+> escrow) that are **observe-only by default**. **Deferred:** *inline blocking* (the privileged
+> permission-mode agent) — OpenShield contains after detection, it does not prevent inline (D49);
+> and durable/at-scale operation is not yet hardened. It is still pre-alpha: no packaged release,
+> not production-hardened, and everything below about what it does *not* claim still holds.
 
 ## The idea
 

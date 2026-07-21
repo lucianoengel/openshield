@@ -16,17 +16,22 @@ Pre-alpha. The walking skeleton runs; there is no packaged release yet.
 - Protobuf Event/Decision contracts with a **closed, typed action set** and
   confidence-not-certainty; the enforcer interface cannot see classifier internals
   (compile-checked). (D3–D4, D14)
-- Privilege-split endpoint: a privileged fanotify agent that never parses
-  attacker bytes, an unprivileged network-capable engine (OPA + Postgres), and a
-  **seccomp-sandboxed** parser worker. (D13, D29, D35, D48)
+- Privilege-split endpoint DESIGN: an unprivileged network-capable engine (OPA +
+  Postgres) and a **seccomp-sandboxed** parser worker — both built and running;
+  plus a privileged agent (for future inline blocking) that never parses attacker
+  bytes — deferred (D49). (D13, D29, D35, D48)
 - Pattern classifier (regex + checksum: Luhn, CPF) emitting **type + confidence +
   count only** — no content, no reversible low-entropy hashes. (D10, D5)
 - Local OPA/Rego policy evaluation → Decision. (D8, D34)
 - Forward-secure audit ledger on Postgres: hash chain + key-evolving signatures —
   tamper-**evident** with forward integrity between external anchors, never
   tamper-proof (impossible in a single self-hosted trust domain). (D9/T-009, D30, D38)
-- Real fanotify observe connector (NOTIFY mode, unprivileged) wired end to end:
-  kernel file event → classifier → policy → Decision → ledger → ALERT. (D52)
+- Real fanotify observe connector (NOTIFY mode, unprivileged). (D52)
+- The `openshield-engine` **binary** runs the assembled observe path itself
+  (watches `OPENSHIELD_WATCH_DIRS`, notify-mode fanotify → classifier → policy →
+  Decision → ledger → ALERT), proven at the binary level (`deploy/observe-e2e.sh`),
+  not only via package tests. Inline blocking (the privileged permission-mode
+  agent) remains deferred (D49). (D62)
 - Fail-open watchdog, parser-sandbox hardening, retention/purpose/exclusion
   privacy features, doc-consistency guard, open-core import boundary, external
   anchoring. (D17/D18, D35, D20/T-013, D37, D21, D38)
