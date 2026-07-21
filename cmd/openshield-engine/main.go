@@ -28,6 +28,8 @@ import (
 	"github.com/lucianoengel/openshield/internal/connectors/fanotify"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
+	"github.com/lucianoengel/openshield/internal/enforcers/quarantine"
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
@@ -91,6 +93,13 @@ func main() {
 	defer worker.Close()
 
 	eng := engine.NewFromWorker(worker, pol, ledger, log, 30*time.Second)
+
+	// HON-3: register the file enforcers so the endpoint can CONTAIN a detection, not only
+	// observe it. Observe-only by DEFAULT (D1) — registered ONLY when OPENSHIELD_ENFORCE is
+	// set, mirroring the gateway's opt-in flow enforcer.
+	if err := registerEnforcers(eng, log); err != nil {
+		fatal(log, "registering enforcers", err)
+	}
 
 	// OPTIONAL fleet telemetry (D80): when NATS + an enrollment endpoint are
 	// configured, enroll a signed identity and project real detections to the
@@ -225,6 +234,40 @@ func loadOrCreateSigner(path string, log *slog.Logger) (*core.Signer, error) {
 		_ = core.SaveSignerFile(path, s)
 	}
 	return s, nil
+}
+
+// registerEnforcers wires the file enforcers into the engine when OPENSHIELD_ENFORCE is set,
+// so a decision CONTAINS (not only observes) — the HON-3 fix (production was observe-only
+// because no binary ever populated engine.Enforcers). Without the flag the engine gets NO
+// enforcers (observe-only default, D1). QUARANTINE_LOCAL is always registered when enforcing;
+// ENCRYPT_LOCAL is registered on top when a key (symmetric) or recipient pubkey (escrow, D59)
+// is configured. Containment is post-decision (D16), not prevention.
+func registerEnforcers(eng *engine.Engine, log *slog.Logger) error {
+	if os.Getenv("OPENSHIELD_ENFORCE") == "" {
+		log.Info("engine: observe-only (set OPENSHIELD_ENFORCE to register file enforcers)")
+		return nil
+	}
+	qdir := env("OPENSHIELD_QUARANTINE_DIR", "/var/lib/openshield/quarantine")
+	eng.Enforcers = append(eng.Enforcers, quarantine.New(qdir))
+	names := []string{"quarantine→" + qdir}
+	if keyPath := os.Getenv("OPENSHIELD_ENCRYPT_KEY"); keyPath != "" {
+		enc, err := encryptlocal.New(keyPath)
+		if err != nil {
+			return err
+		}
+		eng.Enforcers = append(eng.Enforcers, enc)
+		names = append(names, "encrypt-local")
+	} else if pubPath := os.Getenv("OPENSHIELD_ENCRYPT_PUBKEY"); pubPath != "" {
+		enc, err := encryptlocal.NewEscrow(pubPath)
+		if err != nil {
+			return err
+		}
+		eng.Enforcers = append(eng.Enforcers, enc)
+		names = append(names, "encrypt-local(escrow)")
+	}
+	log.Warn("engine: ENFORCEMENT ENABLED — decisions now CONTAIN, not only observe (HON-3)",
+		slog.Any("enforcers", names))
+	return nil
 }
 
 func env(k, def string) string {
