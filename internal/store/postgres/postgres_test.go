@@ -1062,3 +1062,60 @@ func lockDB(t *testing.T, _ *pgxpool.Pool) {
 		// intentionally never closed.
 	})
 }
+
+// Write-resume across a restart via a RELOADED signer (T-009 seam). Append,
+// export the signer, "restart" by loading it fresh, reopen the ledger — the
+// anchor matches so resume succeeds — and append more; the whole chain verifies
+// as one continuous chain, not a fork.
+func TestWriteResumeWithReloadedSigner(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	signer, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l1, err := postgres.Open(ctx, dsn(), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l1.EpochEntries = 2 // force an evolution so resume crosses an epoch
+	for i := 0; i < 3; i++ {
+		if err := l1.Append(ctx, entry(fmt.Sprintf("a%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Persist the signer's current state and drop everything in memory.
+	blob, err := signer.Export()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = l1.Close()
+
+	// "Restart": a brand-new process reconstructs the SAME signer from the blob.
+	reloaded, err := core.LoadSigner(blob)
+	if err != nil {
+		t.Fatalf("reload signer: %v", err)
+	}
+	l2, err := postgres.Open(ctx, dsn(), reloaded)
+	if err != nil {
+		t.Fatalf("resume with reloaded signer should succeed, got: %v", err)
+	}
+	defer l2.Close()
+	l2.EpochEntries = 2
+	for i := 0; i < 3; i++ {
+		if err := l2.Append(ctx, entry(fmt.Sprintf("b%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := l2.Verify(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Consistent {
+		t.Fatalf("chain broke across a reloaded-signer restart: %s", res)
+	}
+	if res.Entries != 6 || res.ToSequence != 5 {
+		t.Errorf("entries=%d to=%d, want 6 and 5 — resume forked or lost entries", res.Entries, res.ToSequence)
+	}
+}
