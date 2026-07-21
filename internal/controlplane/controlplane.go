@@ -87,6 +87,17 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 		s.mu.Unlock()
 	}
 
+	// Heartbeats (T-018) update last-seen so a silent agent is detectable.
+	hbSub, err := conn.Subscribe(natsx.SubjectHeartbeat, func(m *nats.Msg) {
+		s.recordHeartbeat(context.Background(), m.Data)
+	})
+	if err != nil {
+		return fmt.Errorf("controlplane: subscribing heartbeats: %w", err)
+	}
+	s.mu.Lock()
+	s.subs = append(s.subs, hbSub)
+	s.mu.Unlock()
+
 	<-ctx.Done()
 	return s.Close()
 }

@@ -26,6 +26,7 @@ const (
 	SubjectEvents         = "openshield.v1.events"
 	SubjectClassification = "openshield.v1.classifications"
 	SubjectDecisions      = "openshield.v1.decisions"
+	SubjectHeartbeat      = "openshield.v1.heartbeats"
 )
 
 // Transport publishes wire-form messages to the control plane.
@@ -107,6 +108,13 @@ func (t *Transport) PublishClassification(ctx context.Context, c *corev1.Classif
 
 func (t *Transport) PublishDecision(ctx context.Context, d *corev1.Decision) error {
 	return t.publish(ctx, SubjectDecisions, d)
+}
+
+// PublishHeartbeat sends the agent's "still here" signal (T-018). It is on the
+// concrete transport, not core.Transport: a heartbeat is an operational signal
+// for the dead-man's-switch, not pipeline telemetry, and core stays minimal.
+func (t *Transport) PublishHeartbeat(ctx context.Context, h *corev1.Heartbeat) error {
+	return t.publish(ctx, SubjectHeartbeat, h)
 }
 
 func (t *Transport) Close() error {

@@ -157,7 +157,7 @@ Adding a Connector produces zero diffs in core packages. KNOWN-WEAK alone (S3 is
 
 Per-agent revocable identity; mTLS to the control plane; single-use short-TTL enrollment token or TOFU-with-admin-approval. NEVER a shared fleet secret (one compromised agent must not equal fleet compromise). Telemetry individually signed w/ sequence numbers - it is evidentiary, same integrity bar as the audit log.
 
-#### T-018 · Tamper-detection: heartbeat / dead-man's-switch (D16)
+#### T-018 · Tamper-detection: heartbeat / dead-man's-switch (D16) · **done**
 `~4h` · depends: T-009, T-023
 
 Agent heartbeat to control plane; 'agent last seen' per host; alert when telemetry silence exceeds threshold; audit event emitted when the systemd unit stops/is masked. This IMPLEMENTS the honest claim replacing 'tamper-proof' - without it the README claim is unbacked.

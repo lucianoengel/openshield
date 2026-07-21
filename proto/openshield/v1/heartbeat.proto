@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+import "google/protobuf/timestamp.proto";
+
+// Heartbeat is the agent's "I am still here" signal (T-018).
+//
+// It carries no telemetry — only enough to update the control plane's "last
+// seen" for a host, so that the ABSENCE of an agent becomes detectable. This is
+// what backs the honest claim (D16): tamper-DETECTION, not prevention. A host
+// that should be reporting and goes silent is the signal a dead-man's-switch
+// raises.
+//
+// Sequence is monotonic per agent so a gap is visible; a suppressed heartbeat
+// is not a substitute for the agent being gone, but a gap is one more sign.
+message Heartbeat {
+  string agent_id = 1;
+  uint64 sequence = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
