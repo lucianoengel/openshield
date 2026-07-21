@@ -57,10 +57,13 @@ func (c *Classifier) Classify(_ context.Context, r io.Reader) ([]*corev1.Detecto
 	if err != nil {
 		return nil, fmt.Errorf("classify: reading input: %w", err)
 	}
-	// Phase D1: if the bytes are an Office document (a ZIP of XML), extract its text
-	// first — otherwise the detectors scan deflate-compressed noise and miss the PII
-	// inside a .docx/.xlsx. A non-document (or a corrupt one) is scanned as-is.
+	// Phase D1: if the bytes are a structured document (an OOXML zip or a PDF), extract
+	// its text first — otherwise the detectors scan compressed noise and miss the PII
+	// inside a .docx/.xlsx/.pdf. A non-document (or one that fails to parse) is scanned
+	// as-is, so a mis-detection degrades to "scan raw", never "scan nothing".
 	if extracted, ok := extractOOXML(text); ok {
+		text = extracted
+	} else if extracted, ok := extractPDF(text); ok {
 		text = extracted
 	}
 	var hits []*corev1.DetectorHit
