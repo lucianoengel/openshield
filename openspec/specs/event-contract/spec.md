@@ -9,7 +9,6 @@ What a producer emits into the pipeline: identity, provenance, a pseudonymous su
 > (`schema_test.go`, `privacy_test.go`, `validate_test.go`, `compile_test.go`),
 > each mutation-tested — a schema test that never fails is indistinguishable from
 > no test.
-
 ## Requirements
 ### Requirement: Event identity and provenance
 Every `Event` SHALL carry a producer-assigned unique ID, a monotonic sequence number scoped to
@@ -102,3 +101,15 @@ the arity was wrong. Three forms is now a measured fact, not a hedge.
 - **THEN** the call returns an explicit "not available" result rather than an empty string
 - **AND** a test asserts this for each of the three forms, so a consumer that ignores the
   distinction fails rather than treating a missing path as an empty one
+
+### Requirement: An Event can describe a network flow or request, metadata only
+The Event contract MUST be able to describe a network flow or L7 request as a target variant carrying
+connection/request METADATA only — an opaque flow handle (the enforce target), the 5-tuple, protocol,
+and L7 metadata (host, method, path, direction) — and MUST NOT carry the body content, which stays in
+the classifying process and never crosses the boundary (D10/D29), as file content stays in the worker.
+
+#### Scenario: A network Event carries metadata, never the body
+- **WHEN** a network flow / HTTP request Event is constructed
+- **THEN** it carries the flow handle and connection/request metadata and no body content
+- **AND** a test confirms the Event type exposes no body/content field
+

@@ -24,6 +24,7 @@ enum Action {
   ACTION_BLOCK = 3;
   ACTION_QUARANTINE_LOCAL = 4;
   ACTION_ENCRYPT_LOCAL = 5;
+  ACTION_REDIRECT = 6;
 }
 
 // Decision is what the policy engine emits and the ONLY thing an enforcer sees.

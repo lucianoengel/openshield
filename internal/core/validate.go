@@ -131,6 +131,9 @@ var knownActions = map[corev1.Action]bool{
 	corev1.Action_ACTION_BLOCK:            true,
 	corev1.Action_ACTION_QUARANTINE_LOCAL: true,
 	corev1.Action_ACTION_ENCRYPT_LOCAL:    true,
+	// Network verdict (N1/D69): send a flow to a coaching/justification page.
+	// Block-vs-reset is an enforcement MODE, not a verdict, so it gets no action.
+	corev1.Action_ACTION_REDIRECT: true,
 }
 
 // ValidateDecision enforces the decision-contract spec.

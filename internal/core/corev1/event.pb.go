@@ -85,6 +85,8 @@ const (
 	EventKind_EVENT_KIND_FILE_MODIFIED EventKind = 2
 	EventKind_EVENT_KIND_FILE_CREATED  EventKind = 3
 	EventKind_EVENT_KIND_USB_INSERTED  EventKind = 4
+	EventKind_EVENT_KIND_NETWORK_FLOW  EventKind = 5
+	EventKind_EVENT_KIND_HTTP_REQUEST  EventKind = 6
 )
 
 // Enum value maps for EventKind.
@@ -95,6 +97,8 @@ var (
 		2: "EVENT_KIND_FILE_MODIFIED",
 		3: "EVENT_KIND_FILE_CREATED",
 		4: "EVENT_KIND_USB_INSERTED",
+		5: "EVENT_KIND_NETWORK_FLOW",
+		6: "EVENT_KIND_HTTP_REQUEST",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":   0,
@@ -102,6 +106,8 @@ var (
 		"EVENT_KIND_FILE_MODIFIED": 2,
 		"EVENT_KIND_FILE_CREATED":  3,
 		"EVENT_KIND_USB_INSERTED":  4,
+		"EVENT_KIND_NETWORK_FLOW":  5,
+		"EVENT_KIND_HTTP_REQUEST":  6,
 	}
 )
 
@@ -130,6 +136,56 @@ func (x EventKind) Number() protoreflect.EnumNumber {
 // Deprecated: Use EventKind.Descriptor instead.
 func (EventKind) EnumDescriptor() ([]byte, []int) {
 	return file_openshield_v1_event_proto_rawDescGZIP(), []int{1}
+}
+
+// NetworkDirection is which way a flow crosses the gateway.
+type NetworkDirection int32
+
+const (
+	NetworkDirection_NETWORK_DIRECTION_UNSPECIFIED NetworkDirection = 0
+	NetworkDirection_NETWORK_DIRECTION_EGRESS      NetworkDirection = 1
+	NetworkDirection_NETWORK_DIRECTION_INGRESS     NetworkDirection = 2
+)
+
+// Enum value maps for NetworkDirection.
+var (
+	NetworkDirection_name = map[int32]string{
+		0: "NETWORK_DIRECTION_UNSPECIFIED",
+		1: "NETWORK_DIRECTION_EGRESS",
+		2: "NETWORK_DIRECTION_INGRESS",
+	}
+	NetworkDirection_value = map[string]int32{
+		"NETWORK_DIRECTION_UNSPECIFIED": 0,
+		"NETWORK_DIRECTION_EGRESS":      1,
+		"NETWORK_DIRECTION_INGRESS":     2,
+	}
+)
+
+func (x NetworkDirection) Enum() *NetworkDirection {
+	p := new(NetworkDirection)
+	*p = x
+	return p
+}
+
+func (x NetworkDirection) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (NetworkDirection) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshield_v1_event_proto_enumTypes[2].Descriptor()
+}
+
+func (NetworkDirection) Type() protoreflect.EnumType {
+	return &file_openshield_v1_event_proto_enumTypes[2]
+}
+
+func (x NetworkDirection) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use NetworkDirection.Descriptor instead.
+func (NetworkDirection) EnumDescriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{2}
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
@@ -397,6 +453,130 @@ func (x *UsbSubject) GetSerialPseudonym() string {
 	return ""
 }
 
+// NetworkSubject is a network flow or L7 request the gateway observed (N1/D69).
+// It carries connection/request METADATA ONLY — never the body content, which is
+// classified in the gateway PROCESS and never leaves it (D10/D29), exactly as
+// file content stays in the worker. flow_id is an opaque handle into the
+// gateway's live flow table: the network analogue of a file path, what a flow
+// enforcer resolves to a live connection to act on.
+type NetworkSubject struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	FlowId   string                 `protobuf:"bytes,1,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"`
+	SrcIp    string                 `protobuf:"bytes,2,opt,name=src_ip,json=srcIp,proto3" json:"src_ip,omitempty"`
+	SrcPort  uint32                 `protobuf:"varint,3,opt,name=src_port,json=srcPort,proto3" json:"src_port,omitempty"`
+	DstIp    string                 `protobuf:"bytes,4,opt,name=dst_ip,json=dstIp,proto3" json:"dst_ip,omitempty"`
+	DstPort  uint32                 `protobuf:"varint,5,opt,name=dst_port,json=dstPort,proto3" json:"dst_port,omitempty"`
+	Protocol string                 `protobuf:"bytes,6,opt,name=protocol,proto3" json:"protocol,omitempty"` // tcp | udp | ...
+	// L7 metadata, present when the gateway terminates TLS / sees plaintext. This
+	// is METADATA (a policy decides on it), NOT the body.
+	SniHost       string           `protobuf:"bytes,7,opt,name=sni_host,json=sniHost,proto3" json:"sni_host,omitempty"` // TLS SNI / HTTP Host
+	HttpMethod    string           `protobuf:"bytes,8,opt,name=http_method,json=httpMethod,proto3" json:"http_method,omitempty"`
+	HttpPath      string           `protobuf:"bytes,9,opt,name=http_path,json=httpPath,proto3" json:"http_path,omitempty"`
+	Direction     NetworkDirection `protobuf:"varint,10,opt,name=direction,proto3,enum=openshield.v1.NetworkDirection" json:"direction,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkSubject) Reset() {
+	*x = NetworkSubject{}
+	mi := &file_openshield_v1_event_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkSubject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkSubject) ProtoMessage() {}
+
+func (x *NetworkSubject) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_event_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkSubject.ProtoReflect.Descriptor instead.
+func (*NetworkSubject) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *NetworkSubject) GetFlowId() string {
+	if x != nil {
+		return x.FlowId
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetSrcIp() string {
+	if x != nil {
+		return x.SrcIp
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetSrcPort() uint32 {
+	if x != nil {
+		return x.SrcPort
+	}
+	return 0
+}
+
+func (x *NetworkSubject) GetDstIp() string {
+	if x != nil {
+		return x.DstIp
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetDstPort() uint32 {
+	if x != nil {
+		return x.DstPort
+	}
+	return 0
+}
+
+func (x *NetworkSubject) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetSniHost() string {
+	if x != nil {
+		return x.SniHost
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetHttpMethod() string {
+	if x != nil {
+		return x.HttpMethod
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetHttpPath() string {
+	if x != nil {
+		return x.HttpPath
+	}
+	return ""
+}
+
+func (x *NetworkSubject) GetDirection() NetworkDirection {
+	if x != nil {
+		return x.Direction
+	}
+	return NetworkDirection_NETWORK_DIRECTION_UNSPECIFIED
+}
+
 // Event is what a producer emits. It carries metadata and references only —
 // never file content (D10).
 type Event struct {
@@ -415,6 +595,7 @@ type Event struct {
 	//
 	//	*Event_Filesystem
 	//	*Event_Usb
+	//	*Event_Network
 	Target        isEvent_Target `protobuf_oneof:"target"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -422,7 +603,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_openshield_v1_event_proto_msgTypes[4]
+	mi := &file_openshield_v1_event_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -434,7 +615,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_openshield_v1_event_proto_msgTypes[4]
+	mi := &file_openshield_v1_event_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -447,7 +628,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_openshield_v1_event_proto_rawDescGZIP(), []int{4}
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Event) GetEventId() string {
@@ -531,6 +712,15 @@ func (x *Event) GetUsb() *UsbSubject {
 	return nil
 }
 
+func (x *Event) GetNetwork() *NetworkSubject {
+	if x != nil {
+		if x, ok := x.Target.(*Event_Network); ok {
+			return x.Network
+		}
+	}
+	return nil
+}
+
 type isEvent_Target interface {
 	isEvent_Target()
 }
@@ -543,9 +733,15 @@ type Event_Usb struct {
 	Usb *UsbSubject `protobuf:"bytes,10,opt,name=usb,proto3,oneof"`
 }
 
+type Event_Network struct {
+	Network *NetworkSubject `protobuf:"bytes,11,opt,name=network,proto3,oneof"`
+}
+
 func (*Event_Filesystem) isEvent_Target() {}
 
 func (*Event_Usb) isEvent_Target() {}
+
+func (*Event_Network) isEvent_Target() {}
 
 var File_openshield_v1_event_proto protoreflect.FileDescriptor
 
@@ -569,7 +765,20 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1d\n" +
 	"\n" +
 	"product_id\x18\x02 \x01(\tR\tproductId\x12)\n" +
-	"\x10serial_pseudonym\x18\x03 \x01(\tR\x0fserialPseudonym\"\xc8\x03\n" +
+	"\x10serial_pseudonym\x18\x03 \x01(\tR\x0fserialPseudonym\"\xc1\x02\n" +
+	"\x0eNetworkSubject\x12\x17\n" +
+	"\aflow_id\x18\x01 \x01(\tR\x06flowId\x12\x15\n" +
+	"\x06src_ip\x18\x02 \x01(\tR\x05srcIp\x12\x19\n" +
+	"\bsrc_port\x18\x03 \x01(\rR\asrcPort\x12\x15\n" +
+	"\x06dst_ip\x18\x04 \x01(\tR\x05dstIp\x12\x19\n" +
+	"\bdst_port\x18\x05 \x01(\rR\adstPort\x12\x1a\n" +
+	"\bprotocol\x18\x06 \x01(\tR\bprotocol\x12\x19\n" +
+	"\bsni_host\x18\a \x01(\tR\asniHost\x12\x1f\n" +
+	"\vhttp_method\x18\b \x01(\tR\n" +
+	"httpMethod\x12\x1b\n" +
+	"\thttp_path\x18\t \x01(\tR\bhttpPath\x12=\n" +
+	"\tdirection\x18\n" +
+	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\x83\x04\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12!\n" +
@@ -584,19 +793,26 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"filesystem\x18\t \x01(\v2 .openshield.v1.FilesystemSubjectH\x00R\n" +
 	"filesystem\x12-\n" +
 	"\x03usb\x18\n" +
-	" \x01(\v2\x19.openshield.v1.UsbSubjectH\x00R\x03usbB\b\n" +
+	" \x01(\v2\x19.openshield.v1.UsbSubjectH\x00R\x03usb\x129\n" +
+	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetworkB\b\n" +
 	"\x06target*k\n" +
 	"\aPurpose\x12\x17\n" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\x9b\x01\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xd5\x01\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
 	"\x18EVENT_KIND_FILE_MODIFIED\x10\x02\x12\x1b\n" +
 	"\x17EVENT_KIND_FILE_CREATED\x10\x03\x12\x1b\n" +
-	"\x17EVENT_KIND_USB_INSERTED\x10\x04B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x17EVENT_KIND_USB_INSERTED\x10\x04\x12\x1b\n" +
+	"\x17EVENT_KIND_NETWORK_FLOW\x10\x05\x12\x1b\n" +
+	"\x17EVENT_KIND_HTTP_REQUEST\x10\x06*r\n" +
+	"\x10NetworkDirection\x12!\n" +
+	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +
+	"\x19NETWORK_DIRECTION_INGRESS\x10\x02B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_event_proto_rawDescOnce sync.Once
@@ -610,31 +826,35 @@ func file_openshield_v1_event_proto_rawDescGZIP() []byte {
 	return file_openshield_v1_event_proto_rawDescData
 }
 
-var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_openshield_v1_event_proto_goTypes = []any{
 	(Purpose)(0),                  // 0: openshield.v1.Purpose
 	(EventKind)(0),                // 1: openshield.v1.EventKind
-	(*Subject)(nil),               // 2: openshield.v1.Subject
-	(*ParentAndName)(nil),         // 3: openshield.v1.ParentAndName
-	(*FilesystemSubject)(nil),     // 4: openshield.v1.FilesystemSubject
-	(*UsbSubject)(nil),            // 5: openshield.v1.UsbSubject
-	(*Event)(nil),                 // 6: openshield.v1.Event
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(NetworkDirection)(0),         // 2: openshield.v1.NetworkDirection
+	(*Subject)(nil),               // 3: openshield.v1.Subject
+	(*ParentAndName)(nil),         // 4: openshield.v1.ParentAndName
+	(*FilesystemSubject)(nil),     // 5: openshield.v1.FilesystemSubject
+	(*UsbSubject)(nil),            // 6: openshield.v1.UsbSubject
+	(*NetworkSubject)(nil),        // 7: openshield.v1.NetworkSubject
+	(*Event)(nil),                 // 8: openshield.v1.Event
+	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
 }
 var file_openshield_v1_event_proto_depIdxs = []int32{
-	3, // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
-	7, // 1: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
-	2, // 2: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
-	0, // 3: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
-	1, // 4: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
-	4, // 5: openshield.v1.Event.filesystem:type_name -> openshield.v1.FilesystemSubject
-	5, // 6: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	4, // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
+	2, // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
+	9, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
+	3, // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
+	0, // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
+	1, // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
+	5, // 6: openshield.v1.Event.filesystem:type_name -> openshield.v1.FilesystemSubject
+	6, // 7: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
+	7, // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_event_proto_init() }
@@ -647,17 +867,18 @@ func file_openshield_v1_event_proto_init() {
 		(*FilesystemSubject_FileHandle)(nil),
 		(*FilesystemSubject_ParentAndName)(nil),
 	}
-	file_openshield_v1_event_proto_msgTypes[4].OneofWrappers = []any{
+	file_openshield_v1_event_proto_msgTypes[5].OneofWrappers = []any{
 		(*Event_Filesystem)(nil),
 		(*Event_Usb)(nil),
+		(*Event_Network)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_event_proto_rawDesc), len(file_openshield_v1_event_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   5,
+			NumEnums:      3,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

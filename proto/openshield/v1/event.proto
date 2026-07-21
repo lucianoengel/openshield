@@ -22,6 +22,8 @@ enum EventKind {
   EVENT_KIND_FILE_MODIFIED = 2;
   EVENT_KIND_FILE_CREATED = 3;
   EVENT_KIND_USB_INSERTED = 4;
+  EVENT_KIND_NETWORK_FLOW = 5;
+  EVENT_KIND_HTTP_REQUEST = 6;
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
@@ -58,6 +60,34 @@ message UsbSubject {
   string serial_pseudonym = 3;
 }
 
+// NetworkDirection is which way a flow crosses the gateway.
+enum NetworkDirection {
+  NETWORK_DIRECTION_UNSPECIFIED = 0;
+  NETWORK_DIRECTION_EGRESS = 1;
+  NETWORK_DIRECTION_INGRESS = 2;
+}
+
+// NetworkSubject is a network flow or L7 request the gateway observed (N1/D69).
+// It carries connection/request METADATA ONLY — never the body content, which is
+// classified in the gateway PROCESS and never leaves it (D10/D29), exactly as
+// file content stays in the worker. flow_id is an opaque handle into the
+// gateway's live flow table: the network analogue of a file path, what a flow
+// enforcer resolves to a live connection to act on.
+message NetworkSubject {
+  string flow_id = 1;
+  string src_ip = 2;
+  uint32 src_port = 3;
+  string dst_ip = 4;
+  uint32 dst_port = 5;
+  string protocol = 6; // tcp | udp | ...
+  // L7 metadata, present when the gateway terminates TLS / sees plaintext. This
+  // is METADATA (a policy decides on it), NOT the body.
+  string sni_host = 7; // TLS SNI / HTTP Host
+  string http_method = 8;
+  string http_path = 9;
+  NetworkDirection direction = 10;
+}
+
 // Event is what a producer emits. It carries metadata and references only —
 // never file content (D10).
 message Event {
@@ -75,5 +105,6 @@ message Event {
   oneof target {
     FilesystemSubject filesystem = 9;
     UsbSubject usb = 10;
+    NetworkSubject network = 11;
   }
 }

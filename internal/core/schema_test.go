@@ -37,6 +37,9 @@ func TestActionEnumIsClosed(t *testing.T) {
 		"ACTION_BLOCK",
 		"ACTION_QUARANTINE_LOCAL",
 		"ACTION_ENCRYPT_LOCAL",
+		// Network verdict (N1/D69): coach/justify redirect. Block-vs-reset is an
+		// enforcement mode, not a verdict, so it deliberately gets no action.
+		"ACTION_REDIRECT",
 	}
 	vals := corev1.Action(0).Descriptor().Values()
 	if vals.Len() != len(want) {

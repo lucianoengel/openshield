@@ -9,7 +9,6 @@ What the policy engine emits and the only thing an enforcer is permitted to see.
 > (`schema_test.go`, `privacy_test.go`, `validate_test.go`, `compile_test.go`),
 > each mutation-tested — a schema test that never fails is indistinguishable from
 > no test.
-
 ## Requirements
 ### Requirement: The action set is closed and typed
 `Decision.action` SHALL be a closed protobuf enum whose only members are `ACTION_UNSPECIFIED`,
@@ -89,6 +88,7 @@ invoke any enforcer (D1). The contract is defined in full now; only its executio
 - **AND** no enforcer is invoked
 
 <!-- Added by change `add-agent-process-boundary` (2026-07-20). -->
+
 ### Requirement: Decisions record the enrichment context version
 `Decision` MUST carry a `context_version` identifying the enrichment Context it was evaluated
 against, empty when no Context applied.
@@ -107,3 +107,15 @@ into a hash-chained ledger means a migration and a break in chain continuity.
 #### Scenario: Phase 1 records an empty context version
 - **WHEN** a Decision is produced with no Context present
 - **THEN** `context_version` is empty rather than absent-and-defaulted
+
+### Requirement: The closed action set includes a network redirect verdict
+The closed action set MUST include a REDIRECT verdict (send to a coaching/justification destination)
+and it MUST be accepted by Decision validation; block-versus-reset is an enforcement MODE, not a
+distinct verdict, and MUST NOT be a separate action — keeping the action vocabulary closed and small
+so a compromised or mistaken policy source cannot express an open-ended action (D14).
+
+#### Scenario: A REDIRECT decision validates; the vocabulary stays closed
+- **WHEN** a policy emits a REDIRECT decision
+- **THEN** validation accepts it as a member of the closed action set
+- **AND** a test asserts REDIRECT validates and that no drop/reset action was added (mode, not verdict)
+

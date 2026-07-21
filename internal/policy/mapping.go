@@ -23,6 +23,8 @@ var actionNames = map[string]corev1.Action{
 	"BLOCK":            corev1.Action_ACTION_BLOCK,
 	"QUARANTINE_LOCAL": corev1.Action_ACTION_QUARANTINE_LOCAL,
 	"ENCRYPT_LOCAL":    corev1.Action_ACTION_ENCRYPT_LOCAL,
+	// Network verdict (N1/D69): a policy can emit REDIRECT to coach a flow.
+	"REDIRECT": corev1.Action_ACTION_REDIRECT,
 }
 
 func actionFromName(name string) (corev1.Action, bool) {
