@@ -368,10 +368,32 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	s.subs = append(s.subs, hbSub)
 	s.mu.Unlock()
 
-	// Signed telemetry (T-017): verified against the enrolled key before persist.
-	sigSub, err := s.subscribeCounted(conn, natsx.SubjectSigned, func(m *nats.Msg) {
-		s.handleSigned(context.Background(), m.Data)
-	})
+	// Signed telemetry (T-017): verified against the enrolled key before persist. When JetStream is
+	// enabled (PLAT-2), a durable explicit-ack consumer delivers it and we ACK only after persist — a
+	// message published while this consumer was down is redelivered, not lost. Otherwise the core-NATS
+	// subscription (auto-ack, at-most-once) is unchanged.
+	var sigSub *nats.Subscription
+	if natsx.JetStreamEnabled() {
+		js, jerr := conn.JetStream()
+		if jerr != nil {
+			return fmt.Errorf("controlplane: JetStream context: %w", jerr)
+		}
+		if serr := natsx.EnsureTelemetryStream(js); serr != nil {
+			return fmt.Errorf("controlplane: ensuring telemetry stream: %w", serr)
+		}
+		sigSub, err = js.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
+			switch s.handleSigned(context.Background(), m.Data) {
+			case ingestTransient:
+				_ = m.Nak() // retry — the verified message is not lost
+			default: // ingestPersisted or ingestPermanent — done, do not redeliver
+				_ = m.Ack()
+			}
+		}, nats.Durable(natsx.TelemetryDurable), nats.ManualAck(), nats.AckExplicit())
+	} else {
+		sigSub, err = s.subscribeCounted(conn, natsx.SubjectSigned, func(m *nats.Msg) {
+			s.handleSigned(context.Background(), m.Data)
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("controlplane: subscribing signed telemetry: %w", err)
 	}

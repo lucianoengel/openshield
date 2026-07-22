@@ -48,6 +48,11 @@ type SignedPublisher struct {
 	spool     Spool
 	send      func([]byte) error
 	connected func() bool
+
+	// js, when non-nil, routes publishes through JetStream (PLAT-2): js.Publish persists the envelope
+	// to the durable stream and waits for the PubAck, so the message survives a control-plane outage
+	// after the broker has it. The spool still covers the broker being unreachable (before the stream).
+	js nats.JetStreamContext
 }
 
 // Spool is the durable store-and-forward interface the publisher needs (satisfied
@@ -155,12 +160,39 @@ func (p *SignedPublisher) sendFn() func([]byte) error {
 	if p.send != nil {
 		return p.send
 	}
+	if p.js != nil {
+		// JetStream mode (PLAT-2): publish into the durable stream and wait for the PubAck. A publish
+		// error (broker unreachable, stream missing) is returned so storeOrSend spools it, exactly as
+		// the core path — no loss before the broker.
+		return func(b []byte) error {
+			if p.conn == nil || p.conn.IsClosed() {
+				return core.ErrUnreachable
+			}
+			_, err := p.js.Publish(SubjectSigned, b)
+			return err
+		}
+	}
 	return func(b []byte) error {
 		if p.conn == nil || p.conn.IsClosed() {
 			return core.ErrUnreachable
 		}
 		return p.conn.Publish(SubjectSigned, b)
 	}
+}
+
+// UseJetStream switches the publisher to the durable JetStream path (PLAT-2): it derives a JetStream
+// context from the connection and ensures the telemetry stream exists. Call it once, after connecting,
+// when OPENSHIELD_JETSTREAM is set. Errors if JetStream is unavailable on the server.
+func (p *SignedPublisher) UseJetStream() error {
+	js, err := p.conn.JetStream()
+	if err != nil {
+		return err
+	}
+	if err := EnsureTelemetryStream(js); err != nil {
+		return err
+	}
+	p.js = js
+	return nil
 }
 
 func (p *SignedPublisher) connectedFn() func() bool {

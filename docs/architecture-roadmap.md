@@ -240,6 +240,10 @@ applies.
 1. **PLAT-2 · JetStream telemetry durability** (ADR-2) — durable consumers with ack; replace the
    per-message `FOR UPDATE` in `VerifySigned` with a per-agent advisory lock / batched verify. Closes
    SEC-4's root. Prerequisite for any HA work.
+   - **✅ SHIPPED D180 (2026-07-22) — pending owner audit.** Durable WorkQueue JetStream stream over
+     SubjectSigned + durable explicit-ack consumer (ack-after-persist, nak-transient, ack-terminal replay);
+     publisher js.Publish; VerifySigned advisory-lock replaces FOR UPDATE. Env-gated (OPENSHIELD_JETSTREAM);
+     proven no-loss over a down consumer (real JS) + 2 mutation guards. Default-flip + full-suite migration = follow-on.
 2. **PLAT-2b · Active-passive HA** (ADR-3) — Postgres leader lease + Postgres HA + JetStream. Decide
    before more in-memory state accretes.
 3. **ZT-2b · Live JWKS refresher** (ADR-7) → **ZT-1 · Hardware attestation** — do ZT-1 *after* IDENT-1

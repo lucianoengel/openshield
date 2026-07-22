@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -15,24 +16,52 @@ import (
 // replay is REJECTED and counted — never persisted. A sequence gap (suppression)
 // is recorded and the authentic message still stored. Verified rows are
 // attributable (D44), unlike the self-asserted legacy path (D41).
-func (s *Server) handleSigned(ctx context.Context, data []byte) {
+// ingestOutcome classifies a signed-telemetry handling result so the durable-ack consumer (PLAT-2)
+// can acknowledge correctly: a persisted or terminally-rejected message is ACKed (done), a transient
+// failure is NAKed (redelivered, never dropped). The core-NATS path ignores the return (auto-ack,
+// unchanged behavior).
+type ingestOutcome int
+
+const (
+	ingestPersisted ingestOutcome = iota // stored (or a legitimate gap recorded) — ack
+	ingestTransient                      // an infra/DB error — nak and redeliver
+	ingestPermanent                      // unverifiable/corrupt/already-applied — ack as terminal, counted
+)
+
+// isPermanentVerifyError reports whether a VerifySigned error is a TERMINAL rejection (the message is
+// not evidence and will never verify) rather than a transient infrastructure error worth retrying.
+// A replay (seq already applied) is terminal too — it is idempotent, so redelivering it forever would
+// be a failure mode, not durability.
+func isPermanentVerifyError(err error) bool {
+	return errors.Is(err, ErrUnknownAgent) || errors.Is(err, ErrRevoked) ||
+		errors.Is(err, ErrBadSignature) || errors.Is(err, ErrReplay)
+}
+
+func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 	var env corev1.SignedTelemetry
 	if err := proto.Unmarshal(data, &env); err != nil {
 		s.DecodeFailures.Add(1)
-		return
+		return ingestPermanent // corrupt bytes will not decode on redelivery either
 	}
 	res, err := s.VerifySigned(ctx, env.GetAgentId(), env.GetSequence(), env.GetPayload(), env.GetSignature(), time.Now())
 	if err != nil {
-		// Unverifiable telemetry is not evidence: rejected, counted, not stored.
-		s.RejectedTelemetry.Add(1)
-		return
+		if isPermanentVerifyError(err) {
+			// Unverifiable/replayed telemetry is not evidence: rejected, counted, not stored.
+			s.RejectedTelemetry.Add(1)
+			return ingestPermanent
+		}
+		// A transient infrastructure error (DB unreachable, etc.) — do NOT drop or miscount as a
+		// rejection; retry so the verified message is not lost.
+		return ingestTransient
 	}
 	if res.Gap {
 		s.Gaps.Add(1)
 	}
 	eventID := eventIDFor(env.GetKind(), env.GetPayload())
 	if err := s.insert(ctx, env.GetKind(), env.GetAgentId(), eventID, env.GetPayload(), true); err != nil {
+		// A persist failure is transient (a full/down database) — count it (observable) and retry.
 		s.DecodeFailures.Add(1)
+		return ingestTransient
 	}
 
 	// Server-side peer-UEBA (D54), only for a VERIFIED event: an unverified
@@ -42,6 +71,7 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) {
 	if s.analyzer != nil && env.GetKind() == "event" {
 		s.observePeer(ctx, env.GetAgentId(), env.GetPayload())
 	}
+	return ingestPersisted
 }
 
 // observePeer feeds a verified event's pseudonymous subject (D23) to the fleet

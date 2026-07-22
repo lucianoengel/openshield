@@ -64,7 +64,9 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 // embeddedNATS starts an in-process NATS server and returns its URL.
 func embeddedNATS(t *testing.T) string {
 	t.Helper()
-	opts := &natsserver.Options{Host: "127.0.0.1", Port: -1} // -1 = random free port
+	// JetStream enabled (with a per-test store dir) so PLAT-2 durable-ingest tests work; core-NATS
+	// tests are unaffected (a JetStream-enabled server still serves core pub/sub identically).
+	opts := &natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir()}
 	srv, err := natsserver.NewServer(opts)
 	if err != nil {
 		t.Fatal(err)

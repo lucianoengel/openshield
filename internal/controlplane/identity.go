@@ -136,11 +136,21 @@ func (s *Server) VerifySigned(ctx context.Context, agentID string, seq uint64, p
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Serialize concurrent messages for the SAME agent (the monotonic-sequence check must be
+	// atomic) via a per-agent transaction-scoped ADVISORY lock (PLAT-2), instead of a
+	// `SELECT … FOR UPDATE` that held the agent_identities ROW lock across the whole transaction
+	// (blocking even reads of that identity). hashtext maps the agent id to the lock key; a rare
+	// hash collision merely serializes two unrelated agents briefly — never a correctness issue,
+	// since the sequence is still checked against the correct row. The lock releases at commit/rollback.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, agentID); err != nil {
+		return SignedResult{}, err
+	}
+
 	var pub []byte
 	var revokedAt *time.Time
 	var lastSeq int64
 	err = tx.QueryRow(ctx,
-		`SELECT public_key, revoked_at, last_sequence FROM agent_identities WHERE agent_id = $1 FOR UPDATE`,
+		`SELECT public_key, revoked_at, last_sequence FROM agent_identities WHERE agent_id = $1`,
 		agentID).Scan(&pub, &revokedAt, &lastSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SignedResult{}, ErrUnknownAgent
