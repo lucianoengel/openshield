@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -157,9 +158,25 @@ func (s *Server) PersistBaselines(ctx context.Context) error {
 	if s.analyzer == nil {
 		return nil
 	}
+	// Bound growth (SIEM-5b): drop cold (decayed-below-ε) subjects from the map, and delete their
+	// rows below, so neither the map nor the table grows without limit.
+	pruned := s.analyzer.Prune(peerueba.PruneThreshold)
 	states := s.analyzer.Snapshot()
+
+	// Atomic: the pruned deletes and the surviving upserts commit together (SIEM-5b) — a crash
+	// mid-persist leaves the prior consistent baseline, and it is one round-trip batch, not N.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("persisting baselines: begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	for _, id := range pruned {
+		if _, err := tx.Exec(ctx, `DELETE FROM ueba_baselines WHERE subject = $1`, id); err != nil {
+			return fmt.Errorf("pruning a baseline row: %w", err)
+		}
+	}
 	for _, st := range states {
-		if _, err := s.pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO ueba_baselines (subject, count, last_seen, updated_at)
 			 VALUES ($1, $2, $3, now())
 			 ON CONFLICT (subject) DO UPDATE
@@ -168,7 +185,7 @@ func (s *Server) PersistBaselines(ctx context.Context) error {
 			return fmt.Errorf("persisting baseline for a subject: %w", err)
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // loadBaselines reads the persisted peer-UEBA baseline for restore (SIEM-5). Returns an empty
@@ -179,11 +196,18 @@ func (s *Server) loadBaselines(ctx context.Context) ([]peerueba.SubjectState, er
 		return nil, err
 	}
 	defer rows.Close()
+	now := s.now()
 	var out []peerueba.SubjectState
 	for rows.Next() {
 		var st peerueba.SubjectState
 		if err := rows.Scan(&st.Subject, &st.Count, &st.Last); err != nil {
 			return nil, err
+		}
+		// Validate on load (SIEM-5b): a corrupt row (non-finite/negative count, or a last-seen in the
+		// future beyond a clock-skew grace — reachable only with DB write access) is skipped, so it
+		// never enters the analyzer. A skipped subject simply starts cold.
+		if math.IsNaN(st.Count) || math.IsInf(st.Count, 0) || st.Count < 0 || st.Last.After(now.Add(time.Minute)) {
+			continue
 		}
 		out = append(out, st)
 	}
@@ -209,6 +233,12 @@ func (s *Server) ObserveForTest(subject string) {
 	if s.analyzer != nil {
 		s.analyzer.Observe(subject)
 	}
+}
+
+// LoadBaselinesForTest exposes loadBaselines so a test can assert the on-load validation (SIEM-5b)
+// filters a corrupt/future row before it reaches the analyzer.
+func LoadBaselinesForTest(s *Server, ctx context.Context) ([]peerueba.SubjectState, error) {
+	return s.loadBaselines(ctx)
 }
 
 // PeerRiskForTest returns a subject's current peer-relative risk, or -1 when peer-UEBA is

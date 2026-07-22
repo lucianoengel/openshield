@@ -208,6 +208,10 @@ applies.
   header, receiver rejects stale. (Optionally per-sink secrets.)
 
 ### SIEM-5b · Prune + validate UEBA baselines — P2 · analytics · S
+- **✅ SHIPPED D177 (2026-07-22) — pending owner audit.** `Analyzer.Prune` drops decayed-below-ε
+  subjects (reported for row-deletion); `WithSnapshot` + `loadBaselines` reject a non-finite/negative
+  count or future last-seen; `PersistBaselines` prunes + upserts atomically in one txn. Proven (real PG)
+  + 2 mutation guards. **Remainder: `peerLastAlert` persistence deferred** (benign one-time re-alert after restart).
 - No TTL/prune (O(N) UPSERTs forever, unbounded row + map growth); load accepts a NaN/negative `count`
   or future `last_seen` (decay > 1 inflates the baseline; reachable only with DB write access).
   **Fix:** prune decayed-below-ε rows + batch the upsert in a txn; validate on load; persist the

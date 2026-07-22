@@ -83,7 +83,9 @@ type SubjectState struct {
 func WithSnapshot(states []SubjectState) Option {
 	return func(a *Analyzer) {
 		for _, s := range states {
-			if s.Subject == "" {
+			// Reject a corrupt entry (SIEM-5b): an empty subject, or a count that is not a finite
+			// non-negative number (NaN, ±Inf, negative) — restoring one would poison every z-score.
+			if s.Subject == "" || math.IsNaN(s.Count) || math.IsInf(s.Count, 0) || s.Count < 0 {
 				continue
 			}
 			a.subjects[s.Subject] = &entry{count: s.Count, last: s.Last}
@@ -206,6 +208,28 @@ func (a *Analyzer) Snapshot() []SubjectState {
 		out = append(out, SubjectState{Subject: id, Count: e.count, Last: e.last})
 	}
 	return out
+}
+
+// PruneThreshold is the decayed-activity level below which a subject is treated as cold and pruned
+// (SIEM-5b). Far below any alerting level — a subject decayed this low is indistinguishable from a
+// never-seen one, and if it returns it simply re-accrues from zero.
+const PruneThreshold = 0.01
+
+// Prune removes every subject whose activity has decayed below minCount as of now, and returns the
+// removed subject ids (SIEM-5b) — so a caller can also drop their persisted rows, bounding the map
+// and the table together. Pruning loses no alert-level signal: the threshold is far below any anomaly.
+func (a *Analyzer) Prune(minCount float64) []string {
+	t := a.now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var pruned []string
+	for id, e := range a.subjects {
+		if a.decayedAt(e, t) < minCount {
+			pruned = append(pruned, id)
+			delete(a.subjects, id)
+		}
+	}
+	return pruned
 }
 
 // meanStd of a slice of counts.
