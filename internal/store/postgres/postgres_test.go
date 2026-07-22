@@ -186,10 +186,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..012), and no more no matter how many times
+	// One row per migration FILE (001..013), and no more no matter how many times
 	// Migrate runs — that stability is the property under test.
-	if n != 12 {
-		t.Errorf("schema_migrations rows = %d, want 12 — a migration applied twice "+
+	if n != 13 {
+		t.Errorf("schema_migrations rows = %d, want 13 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }
@@ -1278,5 +1278,64 @@ func TestPurgeRespectsRegistryLegalHold(t *testing.T) {
 	}
 	if n2 != 1 {
 		t.Errorf("after release, purged %d, want 1 — a released hold no longer protects", n2)
+	}
+}
+
+// SEC-6: the app runs under a NON-OWNER login role (a member of openshield_writer). It can
+// append but CANNOT disable the append-only trigger, DELETE, DROP, or escape to the owner —
+// a real boundary (unlike SET ROLE from an owner connection, which RESET ROLE would undo).
+func TestWriterRoleIsRestricted(t *testing.T) {
+	pool := requireDB(t) // owner: drops tables + holds the cross-package lock
+	ctx := context.Background()
+	signer, err := core.NewSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Migrate as owner (creates the tables, trigger, and openshield_writer role).
+	l, err := postgres.Open(ctx, dsn(), signer)
+	if err != nil {
+		t.Fatalf("owner open/migrate: %v", err)
+	}
+	defer l.Close()
+	// Seed an entry as owner so the app's tail resumes cleanly.
+	if err := l.Append(ctx, entry("seed")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a real LOGIN role that is a member of openshield_writer (INHERIT, non-owner).
+	_, _ = pool.Exec(ctx, `DROP ROLE IF EXISTS openshield_apptest`)
+	if _, err := pool.Exec(ctx, `CREATE ROLE openshield_apptest LOGIN PASSWORD 'apptest' INHERIT IN ROLE openshield_writer`); err != nil {
+		t.Fatalf("create app role: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP ROLE IF EXISTS openshield_apptest`) })
+
+	appDSN := "postgres://openshield_apptest:apptest@127.0.0.1:55432/openshield?sslmode=disable"
+	appPool, err := pgxpool.New(ctx, appDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer appPool.Close()
+
+	// The app can Open (Migrate is skipped — already migrated) and APPEND.
+	appLedger, err := postgres.Open(ctx, appDSN, signer)
+	if err != nil {
+		t.Fatalf("non-owner app open (should skip migration): %v", err)
+	}
+	defer appLedger.Close()
+	if err := appLedger.Append(ctx, entry("s1")); err != nil {
+		t.Fatalf("the writer role cannot append — SEC-6 broke the write path: %v", err)
+	}
+
+	// But it CANNOT weaken the guard, and CANNOT escape to the owner.
+	forbidden := map[string]string{
+		"disable trigger": `ALTER TABLE audit_entries DISABLE TRIGGER USER`,
+		"delete":          `DELETE FROM audit_entries`,
+		"drop":            `DROP TABLE audit_entries`,
+		"become owner":    `SET ROLE openshield`,
+	}
+	for name, sql := range forbidden {
+		if _, err := appPool.Exec(ctx, sql); err == nil {
+			t.Errorf("the non-owner app role could %q — SEC-6 boundary failed", name)
+		}
 	}
 }

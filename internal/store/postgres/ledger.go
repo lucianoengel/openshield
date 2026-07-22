@@ -109,9 +109,21 @@ func openPool(ctx context.Context, dsn string, signer *core.Signer) (*Ledger, er
 		pool.Close()
 		return nil, fmt.Errorf("%w: %v", core.ErrLedgerUnavailable, err)
 	}
-	if err := Migrate(ctx, pool); err != nil {
+	// SEC-6: migrations are an OWNER operation (they CREATE TABLE / triggers / roles). The
+	// APP should run under a NON-OWNER login role (a member of openshield_writer) that can
+	// INSERT and tombstone but cannot ALTER the table or disable the append-only trigger —
+	// closing 010's owner-bypass residual. A non-owner cannot run Migrate (its CREATE
+	// statements are denied), so Open MIGRATES ONLY WHEN NEEDED: a read-only check skips it on
+	// an already-migrated database, letting a writer-role app Open without owner rights. The
+	// deploy runs migrations once with the owner DSN, then points the app at the writer DSN.
+	if done, err := fullyMigrated(ctx, pool); err != nil {
 		pool.Close()
 		return nil, err
+	} else if !done {
+		if err := Migrate(ctx, pool); err != nil {
+			pool.Close()
+			return nil, err
+		}
 	}
 	return &Ledger{pool: pool, signer: signer, EpochEntries: DefaultEpochEntries}, nil
 }

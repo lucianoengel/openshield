@@ -345,3 +345,14 @@ the hold MUST restore normal purge eligibility.
 #### Scenario: A legal hold overrides routine purge
 - **WHEN** the purge runs over aged routine entries and one subject is under an active legal hold
 - **THEN** the held subject's evidence survives while an unheld subject's is tombstoned, and releasing the hold lets a later purge tombstone it
+
+### Requirement: The application runs under a non-owner role that cannot weaken the append-only guard
+The ledger MUST support running the application under a non-owner database role that can insert
+entries and perform the permitted tombstone update but CANNOT alter the table, disable the
+append-only trigger, delete, drop the table, or escalate to the owner. Migrations MUST be an
+owner operation; the application MUST be able to open an already-migrated database without owner
+rights, skipping migration via a read-only check.
+
+#### Scenario: A non-owner app can append but cannot weaken the guard
+- **WHEN** the application runs under a non-owner writer role
+- **THEN** it can append entries but cannot disable the append-only trigger, delete, drop the table, or become the owner

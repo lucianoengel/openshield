@@ -68,3 +68,32 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	return nil
 }
+
+// fullyMigrated reports whether every embedded migration is already recorded — a READ-ONLY
+// check (SEC-6) so a non-owner app can decide to skip Migrate (whose CREATE statements it
+// cannot run) rather than fail. If schema_migrations does not exist yet, the DB is not
+// migrated. It never writes, so it is safe under the restricted writer role.
+func fullyMigrated(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	var reg *string
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.schema_migrations')::text`).Scan(&reg); err != nil {
+		return false, fmt.Errorf("checking migration state: %w", err)
+	}
+	if reg == nil {
+		return false, nil // no schema_migrations table → not migrated
+	}
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return false, err
+	}
+	want := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".sql") {
+			want++
+		}
+	}
+	var applied int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
+		return false, fmt.Errorf("counting applied migrations: %w", err)
+	}
+	return applied >= want, nil
+}
