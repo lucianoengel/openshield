@@ -15,9 +15,11 @@ import (
 func TestDNSListenerReceivesAndSurvivesGarbage(t *testing.T) {
 	var mu sync.Mutex
 	var got []dnsc.Query
-	l, err := dnsc.Listen("127.0.0.1:0", func(q dnsc.Query) {
+	var srcIPs []string
+	l, err := dnsc.Listen("127.0.0.1:0", func(srcIP string, q dnsc.Query) {
 		mu.Lock()
 		got = append(got, q)
+		srcIPs = append(srcIPs, srcIP)
 		mu.Unlock()
 	}, nil)
 	if err != nil {
@@ -53,6 +55,7 @@ func TestDNSListenerReceivesAndSurvivesGarbage(t *testing.T) {
 	}
 	mu.Lock()
 	names := []string{got[0].Name, got[1].Name}
+	gotIPs := append([]string(nil), srcIPs...)
 	mu.Unlock()
 	found := false
 	for _, nm := range names {
@@ -62,6 +65,12 @@ func TestDNSListenerReceivesAndSurvivesGarbage(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected the exfil query name, got %v", names)
+	}
+	// The source IP must reach the sink — a loopback client dials from 127.0.0.1.
+	for _, ip := range gotIPs {
+		if ip != "127.0.0.1" {
+			t.Errorf("source IP = %q, want 127.0.0.1 (the loopback client)", ip)
+		}
 	}
 	time.Sleep(50 * time.Millisecond)
 	if l.Dropped() < 1 {

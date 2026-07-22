@@ -20,13 +20,15 @@ import (
 // count is observable (D28), so a flood of unparseable input is visible, not silent.
 type Listener struct {
 	conn    *net.UDPConn
-	sink    func(Query)
+	sink    func(srcIP string, q Query)
 	logger  *slog.Logger
 	dropped atomic.Int64
 }
 
-// Listen binds a UDP socket at addr and delivers each parsed query to sink.
-func Listen(addr string, sink func(Query), logger *slog.Logger) (*Listener, error) {
+// Listen binds a UDP socket at addr and delivers each parsed query — with the datagram's
+// source IP — to sink. The source IP is load-bearing: a DNS query's Event carries it as the
+// flow's origin (a network decision that could not say WHO asked is not actionable).
+func Listen(addr string, sink func(srcIP string, q Query), logger *slog.Logger) (*Listener, error) {
 	if sink == nil {
 		return nil, fmt.Errorf("dns: nil sink")
 	}
@@ -61,7 +63,7 @@ func (l *Listener) Serve(ctx context.Context) error {
 
 	buf := make([]byte, 4096)
 	for {
-		n, _, err := l.conn.ReadFromUDP(buf)
+		n, addr, err := l.conn.ReadFromUDP(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil // clean shutdown
@@ -73,6 +75,10 @@ func (l *Listener) Serve(ctx context.Context) error {
 			l.dropped.Add(1)
 			continue
 		}
-		l.sink(q)
+		srcIP := ""
+		if addr != nil {
+			srcIP = addr.IP.String()
+		}
+		l.sink(srcIP, q)
 	}
 }

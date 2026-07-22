@@ -155,6 +155,26 @@ func main() {
 	if opened == 0 {
 		fatal(log, "opening watchers", errNoWatchDirs)
 	}
+
+	// Optional network source: the DNS query connector (NIPS-3). When OPENSHIELD_DNS_LISTEN
+	// is set, live resolution enters the SAME pipeline as file events — additive to file
+	// watching, and observe-only (D1). Tracked in wg so events is not closed while it produces.
+	if dnsAddr := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_LISTEN")); dnsAddr != "" {
+		dl, err := dnsListener(ctx, dnsAddr, events, log)
+		if err != nil {
+			fatal(log, "dns listen", err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := dl.Serve(ctx); err != nil {
+				log.Error("dns serve", slog.String("err", err.Error()))
+			}
+		}()
+		log.Info("engine: DNS connector ENABLED — live resolution enters the pipeline (NIPS-3)",
+			slog.String("listen", dl.Addr().String()))
+	}
+
 	go func() { wg.Wait(); close(events) }()
 
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
