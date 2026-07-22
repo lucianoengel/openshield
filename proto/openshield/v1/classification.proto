@@ -48,6 +48,11 @@ enum DetectorType {
   // prefix must be an IRS-assigned campus code — structural (no checksum), so a moderate
   // confidence like SSN.
   DETECTOR_TYPE_EIN = 17;
+  // An EXACT-DATA match (EDM, DLP-3): the content carries an actual value from the
+  // operator's fingerprinted sensitive dataset — a SPECIFIC record, not merely its
+  // format. A distinct type because it is a stronger, differently-routed signal than
+  // a format hit, and it must not be conflated with the generic CUSTOM rule.
+  DETECTOR_TYPE_EDM = 18;
 }
 
 // LocalMatch holds matched content. Host-only.

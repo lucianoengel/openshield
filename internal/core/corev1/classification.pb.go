@@ -67,6 +67,11 @@ const (
 	// prefix must be an IRS-assigned campus code — structural (no checksum), so a moderate
 	// confidence like SSN.
 	DetectorType_DETECTOR_TYPE_EIN DetectorType = 17
+	// An EXACT-DATA match (EDM, DLP-3): the content carries an actual value from the
+	// operator's fingerprinted sensitive dataset — a SPECIFIC record, not merely its
+	// format. A distinct type because it is a stronger, differently-routed signal than
+	// a format hit, and it must not be conflated with the generic CUSTOM rule.
+	DetectorType_DETECTOR_TYPE_EDM DetectorType = 18
 )
 
 // Enum value maps for DetectorType.
@@ -90,6 +95,7 @@ var (
 		15: "DETECTOR_TYPE_NPI",
 		16: "DETECTOR_TYPE_UK_NHS",
 		17: "DETECTOR_TYPE_EIN",
+		18: "DETECTOR_TYPE_EDM",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":    0,
@@ -110,6 +116,7 @@ var (
 		"DETECTOR_TYPE_NPI":            15,
 		"DETECTOR_TYPE_UK_NHS":         16,
 		"DETECTOR_TYPE_EIN":            17,
+		"DETECTOR_TYPE_EDM":            18,
 	}
 )
 
@@ -359,7 +366,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xf3\x03\n" +
+	"matchCount*\x8a\x04\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -379,7 +386,8 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x14DETECTOR_TYPE_CA_SIN\x10\x0e\x12\x15\n" +
 	"\x11DETECTOR_TYPE_NPI\x10\x0f\x12\x18\n" +
 	"\x14DETECTOR_TYPE_UK_NHS\x10\x10\x12\x15\n" +
-	"\x11DETECTOR_TYPE_EIN\x10\x11B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x11DETECTOR_TYPE_EIN\x10\x11\x12\x15\n" +
+	"\x11DETECTOR_TYPE_EDM\x10\x12B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once

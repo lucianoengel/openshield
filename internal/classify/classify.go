@@ -47,6 +47,22 @@ func New() *Classifier {
 	}}
 }
 
+// AddEDM adds an EDM detector over the given fingerprint index (DLP-3) to this
+// classifier, so exact-data matching composes with the built-in and custom
+// detectors. A nil/empty index is a no-op — EDM runs only when configured.
+func (c *Classifier) AddEDM(index *EDMIndex) {
+	if index != nil && index.Size() > 0 {
+		c.detectors = append(c.detectors, edm{index: index})
+	}
+}
+
+// NewWithEDM returns the default classifier plus an EDM detector over the index.
+func NewWithEDM(index *EDMIndex) *Classifier {
+	c := New()
+	c.AddEDM(index)
+	return c
+}
+
 // Classify reads the (worker-bounded) stream fully and runs every detector.
 //
 // A read error is returned as an error, never as an empty result: empty hits

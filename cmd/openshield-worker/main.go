@@ -47,7 +47,27 @@ func main() {
 	// scripts/check-agent-deps.sh enforces that split. HON-1: it also loads
 	// operator-authored SIGNED custom rules (D100) when configured — otherwise that
 	// feature was unreachable in production.
-	c := worker.Classifier(loadClassifier())
+	cls := loadClassifier()
+	// DLP-3 exact-data matching: when a serialized EDM index is configured, add its
+	// detector so the worker matches actual sensitive values, not only formats. The
+	// index is k-anonymized (hashes only), so shipping it into the sandbox never
+	// carries the raw dataset (ADR-9). A malformed index aborts — a silently-missing
+	// EDM detector would read as "no exact-data leaks" when none were checked.
+	if ep := os.Getenv("OPENSHIELD_EDM_INDEX"); ep != "" {
+		blob, err := os.ReadFile(ep)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: reading EDM index %q: %v\n", ep, err)
+			os.Exit(1)
+		}
+		idx, err := classify.LoadEDMIndex(blob)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: bad EDM index %q: %v\n", ep, err)
+			os.Exit(1)
+		}
+		cls.AddEDM(idx)
+		fmt.Fprintf(os.Stderr, "openshield-worker: DLP-3 EDM active (%d fingerprints)\n", idx.Size())
+	}
+	c := worker.Classifier(cls)
 	in, out := os.Stdin, os.Stdout
 
 	for {
