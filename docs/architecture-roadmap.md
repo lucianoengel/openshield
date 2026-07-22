@@ -529,8 +529,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     (`ErrPCRMismatch` on drift). swtpm-proven: pure-Go digest matches the TPM's; golden state compliant,
     a drifted PCR rejected. Event-log *attribution* (`binary_bios_measurements`) deferred — diagnostic,
     not gating; go-tpm has no parser and go-tpm-tools is barred (D183).
-  - **Increment 4 · Posture wiring** — proto field + posture producer/verifier + `DevicePosture.Attested`
-    + a posture-gated policy.
+  - ✅ **Increment 4 · Posture wiring (D186)** — SHIPPED, **ZT-1 COMPLETE**. `AttestationReport` proto
+    (evidence, no self-asserted verdict) + `core.DevicePosture.Attested` (exposed to policy) +
+    `gateway.AttestationVerifier` (enroll → one-shot-nonce challenge → verify quote+PCR) + access-proxy
+    overlay. `Attested` is set only by the gateway's own verification, never self-reported. swtpm-proven
+    end-to-end incl. the full TLS access proxy admitting an attested device and denying an unverified
+    one. The NATS challenge/report transport is the noted follow-up (primitive-then-transport, cf.
+    D89→D91).
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
   it is server-side reverse-proxy only.
 - **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an

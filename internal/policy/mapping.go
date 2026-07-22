@@ -83,6 +83,7 @@ func buildInput(st *core.State) map[string]interface{} {
 				"disk_encrypted": c.DevicePosture.DiskEncrypted,
 				"agent_present":  c.DevicePosture.AgentPresent,
 				"os_patch_tier":  int(c.DevicePosture.OSPatchTier),
+				"attested":       c.DevicePosture.Attested,
 			},
 		}
 	}

@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+// AttestationReport carries a device's TPM quote from the endpoint to the gateway
+// so the gateway can verify it and decide whether the device is hardware-attested
+// (ZT-1). It carries EVIDENCE, not a verdict: note the absence of any self-asserted
+// `attested` boolean — the gateway computes attestation from the quote against the
+// device's enrolled AK and golden PCR baseline. A field the endpoint could set to
+// `attested=true` would defeat the whole point of attestation, so it does not exist.
+message AttestationReport {
+  // The device's pseudonymous subject (D23), matching its enrollment.
+  string subject = 1;
+  // The server-issued nonce this quote answers (anti-replay; the gateway checks it
+  // is a fresh nonce it issued and has not consumed).
+  bytes nonce = 2;
+  // The marshaled TPMS_ATTEST quote structure.
+  bytes quote_attest = 3;
+  // The ECDSA signature over quote_attest, as (r, s).
+  bytes quote_sig_r = 4;
+  bytes quote_sig_s = 5;
+}

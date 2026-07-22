@@ -43,7 +43,18 @@ type AccessProxy struct {
 	// — layered on the mTLS DEVICE certificate the connection already requires. nil = the client
 	// certificate is the identity (the pre-SSO behavior).
 	oidc *identity.OIDCVerifier
+
+	// attest, when set, supplies the gateway's SERVER-VERIFIED hardware-attestation
+	// verdict per device (ZT-1). It overlays DevicePosture.Attested with the gateway's
+	// own conclusion from verifying a TPM quote — never a self-reported value — so a
+	// policy can require a hardware-attested device. nil = no attestation enrichment.
+	attest *AttestationVerifier
 }
+
+// SetAttestationVerifier enables hardware-attestation-aware access (ZT-1): the access
+// handler sets DevicePosture.Attested from the gateway's own verification of the
+// device's TPM quote, independent of (and unforgeable by) the self-reported posture.
+func (p *AccessProxy) SetAttestationVerifier(v *AttestationVerifier) { p.attest = v }
 
 // SetOIDCVerifier enables SSO identity: the access handler resolves the request's user identity from
 // a verified OIDC/JWT bearer token (ZT-2). The device certificate is still required at the TLS layer;
@@ -175,6 +186,19 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.posture != nil {
 		if dp, ok := p.posture.Get(deviceID.Subject); ok {
 			idCtx.DevicePosture = dp
+		}
+	}
+	// Overlay the gateway's SERVER-VERIFIED attestation verdict (ZT-1). Attested is
+	// set ONLY from the gateway's own quote verification, never from the endpoint's
+	// self-reported posture — so a compromised endpoint cannot claim attestation. An
+	// attested device also has posture present (we verified something about it); an
+	// unverified device keeps Attested=false, and a policy requiring it fails closed.
+	if p.attest != nil {
+		if p.attest.IsAttested(deviceID.Subject) {
+			idCtx.DevicePosture.Attested = true
+			idCtx.DevicePosture.HasPosture = true
+		} else {
+			idCtx.DevicePosture.Attested = false
 		}
 	}
 

@@ -38,6 +38,25 @@ func (t *TPM) ReadPCRs(pcrs []int) (map[int][]byte, error) {
 	return out, nil
 }
 
+// ExtendPCR extends a PCR with a SHA-256 measurement — the operation firmware and
+// the bootloader use to record measured-boot events. Exposed for capturing and
+// exercising measured state (a normal boot extends PCRs before the OS runs).
+func (t *TPM) ExtendPCR(pcr int, digest []byte) error {
+	_, err := tpm2.PCRExtend{
+		PCRHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMHandle(pcr),
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		Digests: tpm2.TPMLDigestValues{
+			Digests: []tpm2.TPMTHA{{HashAlg: tpm2.TPMAlgSHA256, Digest: digest}},
+		},
+	}.Execute(t.tpm)
+	if err != nil {
+		return fmt.Errorf("attest: extend PCR %d: %w", pcr, err)
+	}
+	return nil
+}
+
 // ExpectedPCRDigest computes the aggregate digest a TPM quote commits to: the
 // SHA-256 hash over the selected PCR values concatenated in ascending index
 // order. A server compares this to a quote's attested digest without a TPM.

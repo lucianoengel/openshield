@@ -180,6 +180,13 @@ type DevicePosture struct {
 	DiskEncrypted bool
 	AgentPresent  bool
 	OSPatchTier   PatchTier
+	// Attested is true only when the gateway has verified a hardware attestation
+	// report for this device (ZT-1: a nonce-fresh TPM quote against the enrolled
+	// AK, in the golden PCR state). It is set by server-side verification, NEVER
+	// by the endpoint's self-reported posture — a self-asserted attestation would
+	// defeat the purpose. Absent/unverified attestation leaves it false (a
+	// policy requiring it fails closed).
+	Attested bool
 }
 
 // PatchTier is a coarse OS-patch-currency band.
