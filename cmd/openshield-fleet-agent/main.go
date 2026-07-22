@@ -23,6 +23,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"crypto/ed25519"
+	"strings"
+
+	"github.com/lucianoengel/openshield/internal/attest"
+
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 
 	"github.com/lucianoengel/openshield/internal/agent/identity"
@@ -127,6 +131,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "fleet-agent %s: signed device-posture reporting enabled (HON-4)\n", agentID)
 	}
 
+	// ZT-1 continuous hardware attestation: when a TPM and a PCR set are configured,
+	// the agent re-attests on an interval so the gateway's Attested signal tracks
+	// this device's current state (a drift drops it within a cycle). Best-effort —
+	// a TPM-open failure logs and skips; attestation never blocks the agent. The AK
+	// must be enrolled at the gateway under postureSubject (the canonical pseudonym).
+	if pcrs := parsePCRs(os.Getenv("OPENSHIELD_ATTEST_PCRS")); len(pcrs) > 0 {
+		tpm, terr := attest.Open(os.Getenv("OPENSHIELD_TPM_ADDR"))
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "fleet-agent %s: attestation disabled — open TPM: %v\n", agentID, terr)
+		} else {
+			ak, aerr := tpm.CreateAK()
+			if aerr != nil {
+				fmt.Fprintf(os.Stderr, "fleet-agent %s: attestation disabled — create AK: %v\n", agentID, aerr)
+				_ = tpm.Close()
+			} else {
+				attInterval := envDuration("OPENSHIELD_ATTEST_INTERVAL", 5*time.Minute)
+				go posture.AttestLoop(ctx, conn, tpm, ak, postureSubject, pcrs, attInterval, nil)
+				fmt.Fprintf(os.Stderr, "fleet-agent %s: ZT-1 continuous attestation enabled (PCRs %v, every %s)\n", agentID, pcrs, attInterval)
+			}
+		}
+	}
+
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -151,6 +177,22 @@ func main() {
 			}
 		}
 	}
+}
+
+// parsePCRs parses a comma-separated PCR list ("16,23") into indices; malformed or
+// empty entries are skipped, an empty/absent value disables attestation.
+func parsePCRs(s string) []int {
+	var pcrs []int
+	for _, f := range strings.Split(s, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(f); err == nil {
+			pcrs = append(pcrs, n)
+		}
+	}
+	return pcrs
 }
 
 func env(k, def string) string {

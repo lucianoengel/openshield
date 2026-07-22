@@ -555,8 +555,12 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     JSON file (posture-roster model) and load it into the gateway verifier (atomic, fail-closed on a bad
     record); `cmd/openshield-gateway` loads it via `OPENSHIELD_ATTEST_ENROLLMENTS`. swtpm-proven: a
     distributed enrollment attests a real device end to end. The ZT-1 chain now runs with real devices.
-    Remaining operability: an **automated network enrollment** (live credential activation over the wire)
-    + the endpoint re-attestation loop.
+  - ✅ **Continuous re-attestation (D190)** — SHIPPED. `posture.AttestLoop` re-attests on an interval so
+    the gateway's Attested signal tracks the device's current state; wired into `cmd/openshield-fleet-agent`
+    (`OPENSHIELD_ATTEST_PCRS`). swtpm-proven continuous verification: a good device stays attested, a
+    drifted device loses attestation within a cycle. **The ZT-1 live loop — enroll → attest → re-attest →
+    policy-gate — is complete for real devices.** Last operability follow-up: **automated network
+    enrollment** (live credential activation over the wire vs the file-based distribution).
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
   it is server-side reverse-proxy only.
 - **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an
