@@ -22,9 +22,12 @@ import (
 	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"crypto/ed25519"
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
+
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/posture"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"github.com/lucianoengel/openshield/internal/transport/queue"
 )
@@ -100,6 +103,20 @@ func main() {
 		pub.SetSpool(q)
 	}
 
+	// HON-4: opt-in device-posture reporting. When OPENSHIELD_POSTURE_SIGNING_KEY is set, the
+	// agent detects its device posture and publishes it SIGNED so the gateway can verify it
+	// (SEC-1) — the producer that finally gives the D85 tamper-lockout real data. The subject
+	// is this agent's own pseudonym: a posture update is bound to the reporting agent.
+	var postureKey ed25519.PrivateKey
+	if kp := os.Getenv("OPENSHIELD_POSTURE_SIGNING_KEY"); kp != "" {
+		key, err := os.ReadFile(kp)
+		if err != nil || len(key) != ed25519.PrivateKeySize {
+			fatal("posture signing key: %v (want a %d-byte ed25519 key)", err, ed25519.PrivateKeySize)
+		}
+		postureKey = ed25519.PrivateKey(key)
+		fmt.Fprintf(os.Stderr, "fleet-agent %s: signed device-posture reporting enabled (HON-4)\n", agentID)
+	}
+
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -112,6 +129,11 @@ func main() {
 				fmt.Fprintf(os.Stderr, "fleet-agent %s: flush stopped after %d (still unreachable?): %v\n", agentID, n, ferr)
 			}
 			_ = pub.PublishHeartbeat(ctx, &corev1.Heartbeat{AgentId: agentID, ObservedAt: timestamppb.Now()})
+			if postureKey != nil {
+				if err := posture.Publish(conn, subject, posture.Detect(), postureKey); err != nil {
+					fmt.Fprintf(os.Stderr, "fleet-agent %s: posture publish failed: %v\n", agentID, err)
+				}
+			}
 			for i := 0; i < burst; i++ {
 				_ = pub.PublishEvent(ctx, &corev1.Event{EventId: agentID + "-ev", AgentId: agentID,
 					Kind:    corev1.EventKind_EVENT_KIND_FILE_MODIFIED,

@@ -35,6 +35,9 @@ usage:
 
   openshield-provision risk-keygen --out DIR
       write risk-pub (to gateways) + risk-priv (to the control-plane server) — SEC-1
+
+  openshield-provision posture-keygen --out DIR
+      write posture-pub (to gateways) + posture-priv (to agents) — HON-4
 `
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -55,6 +58,8 @@ func run(args []string) int {
 		return witnessKeygen(flags(args[1:]))
 	case "risk-keygen":
 		return riskKeygen(flags(args[1:]))
+	case "posture-keygen":
+		return postureKeygen(flags(args[1:]))
 	default:
 		fmt.Fprintf(os.Stderr, "openshield-provision: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -164,6 +169,28 @@ func riskKeygen(f map[string][]string) int {
 		return fail("%v", err)
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s/risk-pub (to gateways, OPENSHIELD_RISK_PUBKEY) and %s/risk-priv (to the server, OPENSHIELD_RISK_SIGNING_KEY — SEC-1)\n", out, out)
+	return 0
+}
+
+// postureKeygen generates the device-posture signing keypair (HON-4/SEC-1): posture-priv to
+// the reporting agents (OPENSHIELD_POSTURE_SIGNING_KEY), posture-pub to every gateway
+// (OPENSHIELD_POSTURE_PUBKEY) so it can verify published posture.
+func postureKeygen(f map[string][]string) int {
+	out := one(f, "out")
+	if out == "" {
+		return fail("posture-keygen requires --out DIR")
+	}
+	pub, priv, err := provision.WitnessKeypair()
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := writeFile(filepath.Join(out, "posture-pub"), pub, 0o644); err != nil {
+		return fail("%v", err)
+	}
+	if err := writeFile(filepath.Join(out, "posture-priv"), priv, 0o600); err != nil {
+		return fail("%v", err)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s/posture-pub (to gateways, OPENSHIELD_POSTURE_PUBKEY) and %s/posture-priv (to agents, OPENSHIELD_POSTURE_SIGNING_KEY — HON-4)\n", out, out)
 	return 0
 }
 
