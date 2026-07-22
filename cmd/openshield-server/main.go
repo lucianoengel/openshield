@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -158,6 +159,22 @@ func main() {
 				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint: %v\n", serveErr)
 			}
 		}()
+	}
+
+	// Optional Prometheus metrics endpoint (PLAT-4), on a SEPARATE address — the "no silent
+	// loss" counters (dropped/rejected/gapped telemetry) so an operator can alert on them.
+	// Unauthenticated by convention (a scrape target); put it on an internal/firewalled addr.
+	if maddr := os.Getenv("OPENSHIELD_METRICS_ADDR"); maddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", srv.MetricsHandler())
+		msrv := &http.Server{Addr: maddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint on %s/metrics\n", maddr)
+			if err := msrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint: %v\n", err)
+			}
+		}()
+		go func() { <-ctx.Done(); _ = msrv.Close() }()
 	}
 
 	fmt.Fprintf(os.Stderr, "openshield-server: subscribing to telemetry on %s\n", natsURL)
