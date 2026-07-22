@@ -105,17 +105,21 @@ measured fact. The measured numbers are recorded and act as a regression guard.
 
 
 ### Requirement: The classifier detects secrets and credentials with structural validators
-The classifier MUST detect private keys, cloud access keys, JSON Web Tokens, and
-vendor-prefixed API tokens, each via a candidate pattern paired with a real validator — a
-PEM private-key framing (and NOT a public key), a published key-id prefix with the correct
-charset and length, a JWT whose header base64url-decodes to a JOSE header, and a token with
-a distinctive vendor prefix above a length floor. A benign look-alike (a public key, a
-non-JOSE three-part string, a wrong-charset key-shaped word, a truncated prefix) MUST NOT
-be reported. A secrets hit MUST carry high confidence, reflecting the structural evidence.
+The classifier MUST detect private keys, cloud access keys, JWTs, and vendor API tokens using a
+candidate pattern paired with a real validator (a PEM frame, a prefixed key id, a decodable JOSE
+header, a distinctive vendor prefix), never a bare regex, so a look-alike string does not trip it.
+The vendor-token detector MUST recognize the distinctive prefixes of the common secret formats —
+including GitHub, Slack, Google, OpenAI/Anthropic, Stripe (live and restricted), GitLab, npm,
+SendGrid, and Twilio — with a body length or charset floor that rejects truncated look-alikes, and
+MUST report these at a high, calibrated confidence reflecting how distinctive the prefix is.
 
-#### Scenario: A real secret is detected and a look-alike is not
-- **WHEN** the classifier scans content containing a private key, an AWS key, a JWT, or a vendor token
-- **THEN** the matching secrets detector fires at high confidence, while a public key, a non-JOSE token, or a wrong-charset look-alike reads clean
+#### Scenario: A benign look-alike does not trip a secret detector
+- **WHEN** the classifier scans a three-dotted non-JOSE token, an AKIA-shaped word, a public-key line, or a truncated or wrong-prefix vendor-token look-alike
+- **THEN** none of the secret detectors fire
+
+#### Scenario: A real vendor token is detected
+- **WHEN** the classifier scans text containing a real vendor-prefixed token (GitHub, Slack, GitLab, npm, SendGrid, Stripe restricted, Twilio, …)
+- **THEN** the API-token detector fires at its calibrated confidence
 
 ### Requirement: The classifier extracts text from Office documents before detection, bounded
 The classifier MUST detect an Office Open XML container (DOCX/XLSX/PPTX) and extract the

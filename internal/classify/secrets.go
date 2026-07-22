@@ -118,15 +118,20 @@ type apiToken struct{}
 
 // Distinctive vendor prefixes: GitHub (ghp_/gho_/ghs_/ghr_/github_pat_), Slack
 // (xoxb-/xoxp-/xoxa-/xoxr-), Google API keys (AIza…), OpenAI/Anthropic (sk-…),
-// Stripe (sk_live_/pk_live_). The prefix carries the confidence; a length floor
+// Stripe (sk_live_/pk_live_/rk_live_), GitLab (glpat-), npm (npm_), SendGrid
+// (SG.x.y), Twilio (SK + 32 hex). The prefix carries the confidence; a length floor
 // on the secret body filters truncated look-alikes.
 var apiTokenRe = regexp.MustCompile(
 	`\b(?:ghp|gho|ghs|ghr)_[A-Za-z0-9]{20,}\b` +
 		`|\bgithub_pat_[A-Za-z0-9_]{20,}\b` +
 		`|\bxox[baprs]-[A-Za-z0-9-]{10,}\b` +
 		`|\bAIza[A-Za-z0-9_-]{20,}\b` +
-		`|\b(?:sk|pk)_live_[A-Za-z0-9]{20,}\b` +
-		`|\bsk-[A-Za-z0-9-]{20,}\b`)
+		`|\b(?:sk|pk|rk)_live_[A-Za-z0-9]{20,}\b` +
+		`|\bsk-[A-Za-z0-9-]{20,}\b` +
+		`|\bglpat-[A-Za-z0-9_-]{20,}\b` +
+		`|\bnpm_[A-Za-z0-9]{36}\b` +
+		`|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b` +
+		`|\bSK[a-f0-9]{32}\b`)
 
 func (apiToken) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_API_TOKEN }
 func (apiToken) Scan(text []byte) (int, float64) {
