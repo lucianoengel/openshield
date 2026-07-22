@@ -111,44 +111,39 @@ contracts, and the ledger — stays fixed. New capability lands as a new event s
 a new policy input, or one deliberate new action, never as a change to the core. That discipline is
 what lets a single codebase span seven security domains instead of fragmenting into seven products.
 
-**How it deploys** — on-host sensors observe endpoint activity, while the network gateway sits
-**inline** in traffic (forward proxy, DNS, SMTP, ZTNA). Both enforce locally and publish signed
-telemetry over a message bus to the control plane, which correlates across domains, writes
-tamper-evident evidence, and publishes risk and containment *context* back to the data plane:
+**How it deploys** — the control plane runs inside a **protected inner network**. End users reach the
+internet directly, but **agent telemetry and control traffic transit the gateway** — the controlled
+ingress (ZTNA / reverse proxy) — because that is the only path into the inner network where the control
+plane runs. Inside, the server correlates across domains, writes tamper-evident evidence, and publishes
+risk and response *context* back out to the agents over the same path:
 
 ```mermaid
 flowchart LR
-  USR["👥 Users &amp;<br/>workloads"]
-  APPS["🔗 Apps &amp;<br/>internet"]
+  NET["🌍 Internet"]
 
-  subgraph DP["Data plane — sensors &amp; inline enforcement"]
-    direction TB
-    ENG["🖥️ Endpoint engine + agent<br/><i>files · processes · USB</i>"]
-    GW["🌐 Network gateway<br/><i>proxy · DNS · SMTP · ZTNA</i>"]
+  subgraph EDGE["User endpoints"]
+    EP["🖥️ Endpoint · agent + engine<br/><i>files · processes · USB · local enforcement</i>"]
   end
 
-  BUS(["📨 signed telemetry bus · mTLS"])
+  GW["🌐 Gateway<br/>ZTNA · reverse proxy · DNS · SMTP<br/><b>controlled ingress</b>"]
 
-  subgraph CP["Control plane"]
+  subgraph INNER["Inner network — protected"]
     direction TB
+    BUS(["signed telemetry bus · mTLS"])
     SRV["Fleet server<br/>ingest · correlate · incidents · notify"]
     LEDGER[("Audit ledger")]
     ANC["Anchor · external witness"]
   end
 
-  OP["👤 Analyst /<br/>operator"]
+  OP["👤 Analyst / operator"]
 
-  USR -->|"activity"| ENG
-  USR -->|"network traffic"| GW
-  GW -->|"allow · block · redirect"| APPS
-  ENG --> BUS
-  GW --> BUS
+  EP -->|"internet — direct"| NET
+  EP <-->|"agent telemetry &amp; control · mTLS"| GW
+  OP -->|"ZTNA access"| GW
+  GW <-->|"the only path in"| BUS
   BUS --> SRV
   SRV --> LEDGER --> ANC
   SRV -.->|"risk &amp; response context"| BUS
-  BUS -.-> ENG
-  BUS -.-> GW
-  OP -->|"search · cases · approvals"| SRV
 ```
 
 ## 🧩 Components
