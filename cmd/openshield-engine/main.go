@@ -29,6 +29,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
+	"github.com/lucianoengel/openshield/internal/enforcers/process"
 	"github.com/lucianoengel/openshield/internal/enforcers/quarantine"
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/policy"
@@ -285,6 +286,13 @@ func registerEnforcers(eng *engine.Engine, log *slog.Logger) error {
 		eng.Enforcers = append(eng.Enforcers, enc)
 		names = append(names, "encrypt-local(escrow)")
 	}
+	// HIPS containment (HIPS-5): KILL_PROCESS terminates a process by pid POST-exec — a real,
+	// runnable containment now that the engine selects the pid target by event kind. DENY_EXEC
+	// (true inline exec-block) is DEFERRED: it needs an exec-permission handler
+	// (FAN_OPEN_EXEC_PERM), which is privileged and env-gated like the inline file responder (B2);
+	// there is no ExecController to wire until that lands, so the deny enforcer is not registered.
+	eng.Enforcers = append(eng.Enforcers, process.NewKillEnforcer())
+	names = append(names, "kill-process")
 	log.Warn("engine: ENFORCEMENT ENABLED — decisions now CONTAIN, not only observe (HON-3)",
 		slog.Any("enforcers", names))
 	return nil

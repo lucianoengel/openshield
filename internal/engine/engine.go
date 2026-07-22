@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
@@ -185,13 +186,24 @@ func (e *Engine) enforce(ctx context.Context, ev *corev1.Event, dec *corev1.Deci
 		}
 		var enfErr error
 		if te, ok := enf.(core.TargetedEnforcer); ok {
-			enfErr = te.EnforceTarget(ctx, dec, ev.GetFilesystem().GetResolvedPath())
+			enfErr = te.EnforceTarget(ctx, dec, enforceTarget(ev))
 		} else {
 			enfErr = enf.Enforce(ctx, dec)
 		}
 		e.recordEnforcement(ctx, dec, enfErr)
 		return // one enforcer per action
 	}
+}
+
+// enforceTarget picks the enforcement TARGET for an event by its KIND: a process event acts on its
+// PID (KILL_PROCESS / DENY_EXEC), a file event on its resolved path (quarantine / encrypt). Without
+// this, every event yielded the (empty, for a process event) filesystem path, so a pid-based
+// enforcer received "" and self-refused — HIPS containment could never act (HIPS-5).
+func enforceTarget(ev *corev1.Event) string {
+	if p := ev.GetProcess(); p != nil {
+		return strconv.FormatInt(int64(p.GetPid()), 10)
+	}
+	return ev.GetFilesystem().GetResolvedPath()
 }
 
 func (e *Engine) recordEnforcement(ctx context.Context, dec *corev1.Decision, enfErr error) {
