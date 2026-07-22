@@ -361,6 +361,17 @@ user-mode *observation* producers (clipboard/print) that need no attestation.** 
 enforcement, not observation; most enterprise data lives on Windows. (T1 `DENY_EXEC` still needs its
 per-verb owner sign-off before wiring; T2 risk-loop and T1 `KILL_PROCESS` are resolved in code.)
 
+**PLAT-7 builder-half status (D187): the cross-platform OBSERVE path is DONE.** The endpoint engine
+now opens its file watcher through a build-time per-OS seam (`openFileWatcher`): fanotify on Linux
+(unchanged, D52), a portable pure-stdlib poll-based watcher (`internal/connectors/filewatch`) on
+windows/darwin — so the SAME `openshield-engine` runs and observes off Linux instead of exiting where
+fanotify is unavailable. Reuses the existing `FilesystemSubject`/`FILE_*` contract (no core change);
+`make all` cross-compiles + cross-vets both targets. REMAINING PLAT-7 follow-ups: native OS watch APIs
+(`ReadDirectoryChangesW`/`FSEvents`) on the same seam; the clipboard/print observation producers; a
+NON-Linux worker sandbox (seccomp is Linux-only, so the parser runs unconfined on windows/darwin today);
+and real Windows/macOS RUNTIME validation (external-gated — the code cross-compiles and the pure logic
+is Linux-proven, but hardware validation is deferred). Enforcement stays owner-gated per ADR-11.
+
 **ADR-12 · SOAR response orchestration without breaking D14 (resolves T5) — three tiers.** SOAR's
 automated response is, on its face, the control-plane-actuates behavior D14 exists to forbid. Resolution
 keeps the sentence "the server coordinates, it does not control" literally true by tiering:
@@ -536,6 +547,11 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     end-to-end incl. the full TLS access proxy admitting an attested device and denying an unverified
     one. The NATS challenge/report transport is the noted follow-up (primitive-then-transport, cf.
     D89→D91).
+  - ✅ **Transport (D187)** — SHIPPED. A NATS challenge/report channel drives the verifier on live data:
+    a device requests a nonce, quotes, publishes; the gateway issues the nonce and verifies, flipping it
+    to attested. The report self-authenticates (it's a TPM-signed quote — no extra signature). Proven
+    embedded-NATS + real-swtpm end-to-end. Remaining ZT-1 operability: **enrollment distribution**
+    (populate the verifier with each device's AK + golden baseline) + the endpoint re-attestation loop.
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
   it is server-side reverse-proxy only.
 - **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an

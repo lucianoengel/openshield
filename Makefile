@@ -1,12 +1,19 @@
 GO ?= go
 PROTOC ?= protoc
 
-.PHONY: all build test vet check proto proto-check tidy
+.PHONY: all build test vet check cross-compile proto proto-check tidy
 
-all: vet test check build
+all: vet test check build cross-compile
 
 build:
 	$(GO) build ./...
+
+# The endpoint agent is cross-platform (ADR-11/PLAT-7): the same code compiles for
+# Windows and macOS, where the engine uses the portable file watcher instead of
+# fanotify. A portability regression must fail locally, not on a user's Mac.
+cross-compile:
+	GOOS=windows GOARCH=amd64 $(GO) build ./...
+	GOOS=darwin  GOARCH=amd64 $(GO) build ./...
 
 vet:
 	$(GO) vet ./...

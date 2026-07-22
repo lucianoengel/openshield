@@ -25,7 +25,6 @@ import (
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
-	"github.com/lucianoengel/openshield/internal/connectors/fanotify"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
@@ -140,15 +139,17 @@ func main() {
 			slog.String("agent_id", agentID))
 	}
 
-	// The observe path needs no privileged agent: fanotify NOTIFY mode works
-	// UNPRIVILEGED (D52). The engine opens the connector itself over the configured
-	// directories (validated above) and runs each event through the pipeline.
+	// The observe path needs no privileged agent. The engine opens a file watcher
+	// over the configured directories (validated above) and runs each event through
+	// the pipeline. The watcher is selected per-OS at build time (openFileWatcher):
+	// Linux fanotify NOTIFY mode, UNPRIVILEGED (D52); a portable poll-based watcher
+	// on windows/darwin so the same engine observes there too (ADR-11/PLAT-7).
 	// Inline blocking (the privileged permission-mode agent) is deferred (D49).
 	events := make(chan *corev1.Event, 64)
 	var wg sync.WaitGroup
 	opened := 0
 	for _, dir := range dirs {
-		w, err := fanotify.Open(dir)
+		w, err := openFileWatcher(dir)
 		if err != nil {
 			log.Error("watch", slog.String("dir", dir), slog.String("err", err.Error()))
 			continue
@@ -265,7 +266,7 @@ func watchDirs() []string {
 // watch feeds a directory's fanotify events into the shared channel until the
 // context is cancelled. A read error that is not cancellation is logged and the
 // watch continues — a transient error must not silently stop observation.
-func watch(ctx context.Context, log *slog.Logger, w *fanotify.Watcher, dir string, out chan<- *corev1.Event, wg *sync.WaitGroup) {
+func watch(ctx context.Context, log *slog.Logger, w fileWatcher, dir string, out chan<- *corev1.Event, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		ev, err := w.Next(ctx)

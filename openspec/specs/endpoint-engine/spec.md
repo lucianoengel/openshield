@@ -45,12 +45,17 @@ break one of the boundaries the whole security model rests on.
   unprivileged
 
 ### Requirement: The engine binary runs the assembled observe pipeline
-The `openshield-engine` binary MUST run the observe path itself — opening the fanotify connector in
-unprivileged notify mode (D52) over configured directories and processing each event through
-classify → policy → decide → audit — rather than building the pipeline and idling. An engine
+The `openshield-engine` binary MUST run the observe path itself — opening a file watcher over
+configured directories and processing each event through classify → policy → decide → audit —
+rather than building the pipeline and idling. The watcher is selected at build time per operating
+system: on Linux the fanotify connector in unprivileged notify mode (D52), and on other operating
+systems (windows, darwin) a portable, unprivileged user-mode watcher, so the same engine runs and
+observes on every supported OS instead of exiting where fanotify is unavailable. An engine
 configured with no watch directories MUST refuse to start, so a running engine is never a silent
 no-op.
 
+The per-OS selection MUST be a build-time seam that leaves the Linux observe path unchanged (still
+fanotify) — the portable watcher is not compiled on Linux and fanotify is not compiled elsewhere.
 Observe-only remains the default: the engine records Decisions and enforces nothing unless an
 enforcer is registered (D1/D14). A classify failure is auditable, never a silent allow (D17). The
 privileged permission-mode agent is not required for observe and remains deferred (D49).
@@ -68,6 +73,12 @@ privileged permission-mode agent is not required for observe and remains deferre
 - **THEN** it exits with an error rather than running as a no-op that observes nothing
 - **AND** a test asserts the refusal
 
+#### Scenario: The engine opens a working watcher on a non-Linux build
+- **WHEN** the engine is built for a non-Linux OS (windows or darwin) and watches a directory
+- **THEN** it opens the portable user-mode watcher rather than the fanotify connector, so startup
+  does not fail with an unsupported-platform error
+- **AND** the Linux build continues to open the fanotify connector unchanged
+
 ### Requirement: The shipped binaries state their capability honestly
 The shipped binaries and their docs MUST distinguish what runs from what is deferred: the observe
 pipeline runs as the `openshield-engine` binary, while inline blocking / the privileged
@@ -80,7 +91,6 @@ inline component and exit non-zero, not present as a healthy but silent service.
   engine for observe, and exits non-zero
 - **AND** the README and CHANGELOG describe the observe path as running as a binary and inline
   blocking as deferred, with no wording implying the full privileged path ships today
-
 
 ### Requirement: The engine projects real detections to the control plane, opt-in
 When a telemetry projector is configured, the engine MUST project each Decision — with its originating
@@ -144,7 +154,6 @@ event continues to fail).
 #### Scenario: An SMTP body is classified in the worker while DNS stays metadata-only
 - **WHEN** the engine processes a network event whose body is provided by the content source, and separately a network event with no content
 - **THEN** the body is classified in the worker and the resulting decision is audited, while the content-less event is classified only on its metadata and a pathless file event still errors
-## ADDED Requirements
 
 ### Requirement: The engine runs an optional exec source into the pipeline
 The engine MUST be able to run the auditd exec connector as an additional event source, enabled by
@@ -157,3 +166,4 @@ be tracked so the event stream is not closed while it is running.
 #### Scenario: A process execution flows through the pipeline
 - **WHEN** the engine has the exec source enabled and reads a paired SYSCALL/EXECVE record set
 - **THEN** a process-execution event is produced onto the engine's event stream for the pipeline to process, and the source shuts down cleanly with the engine
+
