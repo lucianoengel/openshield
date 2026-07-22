@@ -6,6 +6,16 @@ import (
 	"log/slog"
 	"net"
 	"sync/atomic"
+
+	"github.com/lucianoengel/openshield/internal/connectors/limiter"
+)
+
+const (
+	// Admission bounds (NIPS-7): each accepted datagram can mint a pipeline event + ledger write, so
+	// a spoofed-source syslog flood would grow the ledger at wire speed. A global token bucket caps
+	// it. Generous for real log ingest, bounded under flood; tunable via Limiter.
+	defaultRatePerSec = 5000
+	defaultBurst      = 10000
 )
 
 // Listener is the runnable half of the syslog connector (Phase F5 hardening): a UDP socket
@@ -19,10 +29,13 @@ import (
 // denial-of-service waiting to happen). The drop count is observable so a flood of
 // unparseable input is visible, not silent (D28).
 type Listener struct {
-	conn    *net.UDPConn
-	sink    func(Message)
-	logger  *slog.Logger
-	dropped atomic.Int64 // datagrams that failed to parse (read via Dropped)
+	conn        *net.UDPConn
+	sink        func(Message)
+	logger      *slog.Logger
+	dropped     atomic.Int64 // datagrams that failed to parse (read via Dropped)
+	rateLimited atomic.Int64
+	// Limiter bounds admission (NIPS-7); default on, set nil before Serve to disable or replace to tune.
+	Limiter *limiter.Limiter
 }
 
 // Listen binds a UDP socket at addr and delivers each parsed message to sink. It returns
@@ -43,7 +56,8 @@ func Listen(addr string, sink func(Message), logger *slog.Logger) (*Listener, er
 	if err != nil {
 		return nil, fmt.Errorf("syslog: listen %q: %w", addr, err)
 	}
-	return &Listener{conn: conn, sink: sink, logger: logger}, nil
+	return &Listener{conn: conn, sink: sink, logger: logger,
+		Limiter: limiter.New(defaultRatePerSec, defaultBurst)}, nil
 }
 
 // Addr is the bound address (useful when the caller passed :0 for an ephemeral port).
@@ -51,6 +65,9 @@ func (l *Listener) Addr() *net.UDPAddr { return l.conn.LocalAddr().(*net.UDPAddr
 
 // Dropped reports how many datagrams failed to parse.
 func (l *Listener) Dropped() int64 { return l.dropped.Load() }
+
+// RateLimited reports how many datagrams were dropped by the admission rate limit (NIPS-7).
+func (l *Listener) RateLimited() int64 { return l.rateLimited.Load() }
 
 // Serve runs the receive loop until ctx is cancelled, then closes the socket. Each datagram
 // is parsed; a parse failure increments the drop count and is skipped. One buffer sized to
@@ -71,11 +88,31 @@ func (l *Listener) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("syslog: read: %w", err)
 		}
-		msg, perr := Parse(buf[:n])
-		if perr != nil {
-			l.dropped.Add(1)
+		// Admission rate limit (NIPS-7): beyond the sustained rate, drop the datagram BEFORE it
+		// mints a pipeline event + ledger write, so a spoofed-source syslog flood cannot grow the
+		// ledger at wire speed. Counted separately so a flood is observable, not silent (D28).
+		if l.Limiter != nil && !l.Limiter.Allow() {
+			l.rateLimited.Add(1)
 			continue
 		}
-		l.sink(msg)
+		l.handleDatagram(buf[:n])
 	}
+}
+
+// handleDatagram parses one datagram and delivers it to the sink, RECOVERING from any panic (ENG-2):
+// the connector handles attacker-controlled wire bytes, so a panic in the parser or the sink on a
+// crafted datagram must be contained to that datagram (dropped + counted), never crash the process.
+func (l *Listener) handleDatagram(datagram []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			l.dropped.Add(1)
+			l.logger.Error("syslog: recovered from panic handling a datagram", "panic", r)
+		}
+	}()
+	msg, perr := Parse(datagram)
+	if perr != nil {
+		l.dropped.Add(1)
+		return
+	}
+	l.sink(msg)
 }
