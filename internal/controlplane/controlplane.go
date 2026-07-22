@@ -125,6 +125,12 @@ type Server struct {
 	// EntityResolveFailures counts best-effort entity-graph writes that failed — a non-zero value
 	// means some device/user did not land in the graph, observable rather than silent.
 	EntityResolveFailures atomic.Int64
+
+	// CEFIngested / CEFDropped count CEF-over-syslog external logs (SIEM-4) that were persisted vs.
+	// skipped (a non-CEF/malformed datagram, or a persist failure) — the drop is counted, never silent.
+	CEFIngested   atomic.Int64
+	CEFDropped    atomic.Int64
+	cefListenAddr atomic.Value // string: the bound listener address, once RunCEFSyslog binds
 }
 
 // New creates a server over an existing pool.

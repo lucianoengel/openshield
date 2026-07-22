@@ -97,6 +97,19 @@ func main() {
 			fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
 		})
 
+		// SIEM-4: when OPENSHIELD_CEF_SYSLOG_LISTEN is set, receive CEF-over-syslog from the estate and
+		// persist each parsed event as a searchable external log — OpenShield ingesting third-party
+		// security logs, not only its own telemetry. Runs on the LEADER only (leaderCtx), so a standby
+		// does not double-store; a listen error is logged, never fatal (an external feed is best-effort).
+		if cefAddr := os.Getenv("OPENSHIELD_CEF_SYSLOG_LISTEN"); cefAddr != "" {
+			go func() {
+				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 CEF-over-syslog listener on %s\n", cefAddr)
+				if err := srv.RunCEFSyslog(leaderCtx, cefAddr); err != nil && leaderCtx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: CEF-syslog listener stopped: %v\n", err)
+				}
+			}()
+		}
+
 		// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
 		// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
 		// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are

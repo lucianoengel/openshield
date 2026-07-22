@@ -246,3 +246,24 @@ func unescapeValue(s string) string {
 	}
 	return b.String()
 }
+
+// cefMarker is the fixed marker that begins a CEF payload. CEF rides other transports (notably
+// syslog), so a real message is often "<syslog header> CEF:0|vendor|...".
+const cefMarker = "CEF:"
+
+// FromSyslog extracts and parses a CEF payload carried inside a syslog message's free text. CEF is
+// transported over syslog, so after the syslog header is stripped (by syslog.Parse) the remaining
+// message contains "CEF:0|...". It returns (msg, true) when a valid CEF payload is present and parses,
+// and (zero, false) when there is NO CEF payload OR the payload is malformed — a mixed syslog stream is
+// the norm, so "not CEF" is a routine skip, not an error the caller must special-case.
+func FromSyslog(syslogMsg string) (Message, bool) {
+	i := strings.Index(syslogMsg, cefMarker)
+	if i < 0 {
+		return Message{}, false
+	}
+	m, err := Parse([]byte(syslogMsg[i:]))
+	if err != nil {
+		return Message{}, false
+	}
+	return m, true
+}
