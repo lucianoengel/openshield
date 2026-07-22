@@ -94,6 +94,7 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 	// but subject-less event is rejected (permanent: the same bytes won't gain a
 	// subject on redelivery), counted, and never stored. The sequence advance is
 	// COMMITTED so the next message is not seen as a spurious gap.
+	var eventSubject string
 	if env.GetKind() == "event" {
 		var ev corev1.Event
 		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil || ev.GetSubject().GetPseudonymousId() == "" {
@@ -103,6 +104,7 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 			s.RejectedTelemetry.Add(1)
 			return ingestPermanent
 		}
+		eventSubject = ev.GetSubject().GetPseudonymousId()
 	}
 	eventID := eventIDFor(env.GetKind(), env.GetPayload())
 	if err := s.insertTx(ctx, tx, env.GetKind(), env.GetAgentId(), eventID, env.GetPayload(), true); err != nil {
@@ -118,6 +120,13 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 	}
 	if res.Gap {
 		s.Gaps.Add(1)
+	}
+
+	// XDR-1-WIRE: populate the device entity for this verified event's canonical subject, so a device
+	// coalesces across domains in the entity graph. Best-effort (derived index) — the message is
+	// already durably persisted; a graph failure is counted, never a re-ingest.
+	if eventSubject != "" {
+		s.resolveDeviceEntity(ctx, eventSubject)
 	}
 
 	// Server-side peer-UEBA (D54), only for a VERIFIED event: an unverified

@@ -2,13 +2,17 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/gateway/identity"
+	"github.com/lucianoengel/openshield/internal/xdr"
 )
 
 // AccessProxy is the identity-aware reverse/access proxy (D87): a BeyondCorp-style
@@ -49,6 +53,13 @@ type AccessProxy struct {
 	// own conclusion from verifying a TPM quote — never a self-reported value — so a
 	// policy can require a hardware-attested device. nil = no attestation enrichment.
 	attest *AttestationVerifier
+
+	// graph, when set, is the XDR entity graph (XDR-1-WIRE): a dual-credential request links its
+	// DEVICE (cert CN pseudonym) and USER (OIDC subject) aliases to one entity, so a device and the
+	// user on it coalesce. Best-effort and asynchronous — never on the request's critical path.
+	graph *xdr.Store
+	// EntityLinkFailures counts best-effort device⋈user links that failed — observable, never fatal.
+	EntityLinkFailures atomic.Int64
 }
 
 // SetAttestationVerifier enables hardware-attestation-aware access (ZT-1): the access
@@ -72,6 +83,27 @@ func (p *AccessProxy) SetPostureStore(s *PostureStore) { p.posture = s }
 // risk, and the local policy decides step-up/deny. The server publishes risk (data);
 // the gateway decides (T2) — the server never commands.
 func (p *AccessProxy) SetRiskStore(r *RiskStore) { p.risk = r }
+
+// SetEntityGraph enables device⋈user population of the XDR entity graph (XDR-1-WIRE): when a request
+// authenticates with both a device certificate and a distinct OIDC user, the proxy links them into one
+// entity, asynchronously and best-effort. nil = no graph population (the pre-XDR behavior).
+func (p *AccessProxy) SetEntityGraph(g *xdr.Store) { p.graph = g }
+
+// linkDeviceUser fires a best-effort, ASYNC device⋈user link so a proxied request never waits on a
+// graph write (XDR-1-WIRE). A failure is counted, never surfaced to the request.
+func (p *AccessProxy) linkDeviceUser(deviceSubject, userSubject string) {
+	if p.graph == nil || deviceSubject == "" || userSubject == "" || deviceSubject == userSubject {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := p.graph.Link(ctx, xdr.KindDevice, deviceSubject, xdr.KindUser, userSubject); err != nil {
+			p.EntityLinkFailures.Add(1)
+			p.logger.Warn("gateway: entity-graph device-user link failed", "err", err)
+		}
+	}()
+}
 
 // NewAccessProxy fronts the catalog of internal services (D88). The server that runs
 // it MUST require and verify a client certificate at the TLS layer
@@ -161,6 +193,9 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
+	// XDR-1-WIRE: with a distinct user (OIDC on), link device⋈user in the entity graph — async and
+	// best-effort, so it neither delays nor can fail this request.
+	p.linkDeviceUser(deviceID.Subject, id.Subject)
 
 	// Route to a catalogued internal service. An unknown service is refused (404),
 	// never forwarded — the gateway is an allow-list, not an open relay (D88).

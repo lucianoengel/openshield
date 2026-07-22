@@ -564,6 +564,12 @@ func (l *Ledger) Close() error {
 	return nil
 }
 
+// Pool exposes the ledger's connection pool so a binary that already opened the ledger can reach
+// OTHER tables in the same database (e.g. the XDR entity graph, XDR-1-WIRE) without opening a second
+// pool. It is the SAME database; the append-only chain's integrity is enforced by its trigger, not by
+// hiding the pool. Callers must not Close it — the ledger owns its lifecycle.
+func (l *Ledger) Pool() *pgxpool.Pool { return l.pool }
+
 func deref(s *string) string {
 	if s == nil {
 		return ""

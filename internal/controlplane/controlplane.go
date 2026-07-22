@@ -31,6 +31,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/analytics/peerueba"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/notify"
+	"github.com/lucianoengel/openshield/internal/xdr"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
@@ -116,12 +117,39 @@ type Server struct {
 	// update came from the control plane, not a forging publisher. nil = risk publishing
 	// off (PublishRisk does not emit an unsigned update the gateway would reject anyway).
 	riskSigner ed25519.PrivateKey
+
+	// graph is the XDR entity graph (XDR-1-WIRE): enrollment and verified telemetry ingest resolve a
+	// device entity into it so every domain's detections coalesce onto one entity. It is a DERIVED
+	// index (D38), never the system of record — a write failure is counted, never fatal.
+	graph *xdr.Store
+	// EntityResolveFailures counts best-effort entity-graph writes that failed — a non-zero value
+	// means some device/user did not land in the graph, observable rather than silent.
+	EntityResolveFailures atomic.Int64
 }
 
 // New creates a server over an existing pool.
 func New(pool *pgxpool.Pool) *Server {
 	return &Server{pool: pool, now: time.Now, notifier: notify.Nop{}, notifiedOverdue: map[string]bool{},
-		notifyQ: make(chan notify.Notification, 256), notifyDedupe: newDedupeSet(4096)}
+		notifyQ: make(chan notify.Notification, 256), notifyDedupe: newDedupeSet(4096),
+		graph: xdr.NewStore(pool)}
+}
+
+// SetEntityGraph overrides the XDR entity graph (XDR-1-WIRE). New() already builds one from the
+// server's pool; this exists so a test can install a graph over a deliberately-broken pool to exercise
+// the best-effort failure path without mutating the shared schema.
+func (s *Server) SetEntityGraph(g *xdr.Store) { s.graph = g }
+
+// resolveDeviceEntity resolves (find-or-create) the device entity for a canonical subject in the XDR
+// graph, BEST-EFFORT (XDR-1-WIRE): an empty subject or a graph error is counted and dropped, never
+// propagated — the graph is a derived index, so a write failure must not break the primary action.
+func (s *Server) resolveDeviceEntity(ctx context.Context, subject string) {
+	if s.graph == nil || subject == "" {
+		return
+	}
+	if _, err := s.graph.Resolve(ctx, xdr.KindDevice, subject); err != nil {
+		s.EntityResolveFailures.Add(1)
+		fmt.Fprintf(os.Stderr, "openshield-server: entity-graph device resolve failed (subject %s): %v\n", subject, err)
+	}
 }
 
 // EnablePeerUEBA turns on server-side peer-baseline analytics (D54). This is the

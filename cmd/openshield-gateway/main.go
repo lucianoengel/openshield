@@ -42,7 +42,10 @@ import (
 	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/lucianoengel/openshield/internal/store/postgres"
+	"github.com/lucianoengel/openshield/internal/xdr"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"github.com/nats-io/nats.go"
 )
@@ -271,6 +274,12 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	ap.SetRiskStore(riskStore)
 	postureStore := gateway.NewPostureStore()
 	ap.SetPostureStore(postureStore)
+	// XDR-1-WIRE: populate the device⋈user edge of the entity graph from the real dual-credential
+	// path, reusing the ledger's DB pool (same database). Best-effort/async — never affects a request.
+	// The Postgres ledger exposes its pool; a non-Postgres ledger simply gets no graph (capability check).
+	if pg, ok := ledger.(interface{ Pool() *pgxpool.Pool }); ok {
+		ap.SetEntityGraph(xdr.NewStore(pg.Pool()))
+	}
 
 	// OIDC SSO identity (ZT-2): when OPENSHIELD_OIDC_ISSUER is set, the access proxy resolves the
 	// USER identity from a verified bearer token (subject+role from the token), layered on the mTLS

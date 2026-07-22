@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/lucianoengel/openshield/internal/agent/identity"
+	"github.com/lucianoengel/openshield/internal/pseudonym"
 )
 
 var (
@@ -99,7 +100,15 @@ func (s *Server) Enroll(ctx context.Context, token, agentID string, pub ed25519.
 		`UPDATE enrollment_tokens SET used_at = $1 WHERE token_hash = $2`, now.UTC(), hash[:]); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// XDR-1-WIRE: populate the device entity for the newly-enrolled agent, keyed by the ONE canonical
+	// pseudonym (IDENT-1) — the same value the engine stamps on events and the gateway derives from the
+	// cert CN, so this device coalesces across domains. Best-effort, after commit: a graph write must
+	// never fail a real enrollment.
+	s.resolveDeviceEntity(ctx, pseudonym.Of(agentID))
+	return nil
 }
 
 // Revoke marks an agent's identity revoked; its telemetry is thereafter
