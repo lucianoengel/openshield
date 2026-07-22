@@ -114,7 +114,7 @@ func main() {
 	// The pool satisfies gateway.New's classifier interface (same Classify method as
 	// a single worker), so concurrent flows classify in parallel (D76).
 	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
-	applyThreatFeed(gw, log)
+	applyThreatFeed(ctx, gw, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 	// NIPS-4: opt-in response-body inspection (classify + audit the response, not only
@@ -268,7 +268,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	}
 
 	gw := gateway.New(cls, accessPol, ledger, log, 30*time.Second)
-	applyThreatFeed(gw, log)
+	applyThreatFeed(ctx, gw, log)
 	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
 	riskStore := gateway.NewRiskStore()
 	ap.SetRiskStore(riskStore)
@@ -508,7 +508,7 @@ func splitList(s string) []string {
 // applyThreatFeed loads the NIPS-2 IOC feed (OPENSHIELD_IOC_FEED) and enables the
 // threat-intel engine on the gateway. A configured-but-malformed feed aborts
 // startup; no feed leaves the engine inert (the gateway inspects DLP only).
-func applyThreatFeed(gw *gateway.Gateway, log *slog.Logger) {
+func applyThreatFeed(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	path := os.Getenv("OPENSHIELD_IOC_FEED")
 	if path == "" {
 		log.Warn("gateway: OPENSHIELD_IOC_FEED unset — NIPS-2 threat-intel engine inert (DLP inspection only)")
@@ -516,10 +516,26 @@ func applyThreatFeed(gw *gateway.Gateway, log *slog.Logger) {
 	}
 	feed, err := nips.LoadFeed(path)
 	if err != nil {
-		fatal(log, "loading IOC feed", err)
+		fatal(log, "loading IOC feed", err) // fail-fast on a broken INITIAL feed
 	}
 	gw.SetThreatFeed(feed)
 	log.Info("gateway: NIPS-2 threat-intel engine active", slog.Int("indicators", feed.Size()))
+
+	// NIPS-2 hot reload: re-read the feed on a timer so a new IOC takes effect without a restart. A
+	// later malformed edit is served-stale (the current feed is kept) — a feed typo must not disarm the
+	// running IPS. OPENSHIELD_IOC_FEED_RELOAD sets the interval; unset/0 disables reloading.
+	if iv := envDuration("OPENSHIELD_IOC_FEED_RELOAD", 0); iv > 0 {
+		w := nips.NewFeedWatcher(path) // baseline the mtime now (before the first tick)
+		go w.Watch(ctx, iv,
+			func(f *nips.Feed) {
+				gw.SetThreatFeed(f)
+				log.Info("gateway: NIPS-2 IOC feed reloaded", slog.Int("indicators", f.Size()))
+			},
+			func(err error) {
+				log.Error("gateway: NIPS-2 IOC feed reload failed — keeping the current feed", slog.String("err", err.Error()))
+			})
+		log.Info("gateway: NIPS-2 IOC feed hot-reload enabled", slog.Duration("interval", iv))
+	}
 }
 
 func fatal(log *slog.Logger, msg string, err error) {

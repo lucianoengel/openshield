@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -84,8 +85,11 @@ type Gateway struct {
 
 	// threatFeed, when set, is the NIPS-2 threat-intel engine: a threat-classify
 	// stage matches each flow's destination/request metadata against it so the
-	// policy can block a flow to a known-bad indicator. nil = no threat matching.
-	threatFeed *nips.Feed
+	// policy can block a flow to a known-bad indicator. nil (unset) = no threat
+	// matching. It is an ATOMIC pointer so a background feed reload (NIPS-2 hot
+	// refresh) can swap in a new feed without a restart while requests read it
+	// concurrently — the per-request pipeline build reads the CURRENT feed.
+	threatFeed atomic.Pointer[nips.Feed]
 
 	// Enforcers carry out Decisions post-decision. EMPTY by default — observe-only
 	// (D1): the gateway decides and records, and enforces nothing until a flow
@@ -214,7 +218,10 @@ func (s bodyClassifyStage) Run(ctx context.Context, st *core.State) (core.Outcom
 // SetThreatFeed enables the NIPS-2 threat-intel engine: a threat-classify stage
 // matches each flow's destination/request metadata against the feed, so the policy
 // can block a flow to a known-bad indicator. Without a feed the engine is inert.
-func (g *Gateway) SetThreatFeed(f *nips.Feed) { g.threatFeed = f }
+// SetThreatFeed sets (or hot-swaps) the feed atomically. Called once at startup and again by the
+// NIPS-2 background reloader on each successful refresh; in-flight requests keep using whichever feed
+// they loaded, and the next request picks up the new one.
+func (g *Gateway) SetThreatFeed(f *nips.Feed) { g.threatFeed.Store(f) }
 
 // threatClassifyStage matches a flow's metadata against the IOC feed and records
 // the threat matches on State — a distinct axis from the DLP body classification.
@@ -276,8 +283,8 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 	reg.Register(bodyClassifyStage{c: g.classifier, body: req.Body, maxBytes: g.maxBytes})
 	// NIPS-2 threat-intel runs before the policy (when a feed is configured), so the
 	// policy sees input.threat and can block a flow to a known-bad indicator.
-	if g.threatFeed != nil {
-		reg.Register(threatClassifyStage{feed: g.threatFeed})
+	if f := g.threatFeed.Load(); f != nil {
+		reg.Register(threatClassifyStage{feed: f})
 	}
 	reg.Register(g.policy)
 	disp := core.NewDispatcher(&reg, g.deadline)

@@ -53,3 +53,20 @@ absence MUST NOT deny a flow (fail open).
 
 - **WHEN** no feed is configured or a flow matches nothing
 - **THEN** the flow carries no threat match and the threat engine does not by itself deny it
+
+### Requirement: The IOC feed hot-reloads without a restart
+
+The system SHALL reload the IOC feed when its file changes, so a new indicator takes effect without
+restarting the gateway, and the running feed SHALL be swapped atomically (in-flight flows keep the feed
+they read; the next flow sees the new one). A changed-but-malformed feed SHALL be reported and the
+current feed KEPT — a feed edit that fails to parse MUST NOT disarm the running engine.
+
+#### Scenario: A new indicator takes effect after an edit
+
+- **WHEN** the IOC feed file is edited to add an indicator and the reload interval elapses
+- **THEN** a subsequent flow to that indicator is flagged, with no gateway restart
+
+#### Scenario: A malformed edit is served-stale
+
+- **WHEN** the IOC feed file is changed to a version that fails to parse
+- **THEN** the error is reported and the previously-loaded feed keeps serving
