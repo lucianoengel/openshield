@@ -594,9 +594,10 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   tamper-evidence).
 - **DLP-6 · Endpoint user coaching/justification** — P1 · X + UI · M. REDIRECT-to-coaching exists at
   the network gateway only; bring it to the endpoint.
-- **DLP-7 · Detection breadth (remainder)** — P1 · classify · M–L. Passport / national-ID beyond the
-  landed set, driver's license, keyword-proximity/context rules. Ships via the signed custom-rule
-  surface + built-ins.
+- ✅ **DLP-7 · Detection breadth — context/proximity + passport/DL (SHIPPED D199)** — P1 · classify · M–L.
+  `contextNear` keyword-proximity primitive + passport and driver's-license detectors (context-REQUIRED,
+  low-FP for weak-format ids). Remaining: more countries/national-IDs (reuse the primitive), richer
+  context rules via the signed custom-rule surface.
 - **DLP-8 · Format depth** — P2 · classify · M. Nested-archive recursion (stops at one level today),
   RTF / legacy `.doc`, response-body multipart/gzip (shared with NIPS-4).
 

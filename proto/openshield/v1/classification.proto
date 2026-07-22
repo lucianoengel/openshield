@@ -58,6 +58,12 @@ enum DetectorType {
   // excerpt/reformat tolerant via k-gram shingles. Distinct from EDM (structured
   // data) so a policy can route a leaked document differently.
   DETECTOR_TYPE_IDM = 19;
+  // A passport number (DLP-7): weak format (no checksum), so detected only NEAR a
+  // "passport" context keyword — the low-false-positive way to catch it.
+  DETECTOR_TYPE_PASSPORT = 20;
+  // A driver's license (DLP-7): state-variable alphanumeric, context-REQUIRED
+  // (the format alone is too generic to fire on its own).
+  DETECTOR_TYPE_DRIVERS_LICENSE = 21;
 }
 
 // LocalMatch holds matched content. Host-only.

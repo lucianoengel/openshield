@@ -77,6 +77,12 @@ const (
 	// excerpt/reformat tolerant via k-gram shingles. Distinct from EDM (structured
 	// data) so a policy can route a leaked document differently.
 	DetectorType_DETECTOR_TYPE_IDM DetectorType = 19
+	// A passport number (DLP-7): weak format (no checksum), so detected only NEAR a
+	// "passport" context keyword — the low-false-positive way to catch it.
+	DetectorType_DETECTOR_TYPE_PASSPORT DetectorType = 20
+	// A driver's license (DLP-7): state-variable alphanumeric, context-REQUIRED
+	// (the format alone is too generic to fire on its own).
+	DetectorType_DETECTOR_TYPE_DRIVERS_LICENSE DetectorType = 21
 )
 
 // Enum value maps for DetectorType.
@@ -102,28 +108,32 @@ var (
 		17: "DETECTOR_TYPE_EIN",
 		18: "DETECTOR_TYPE_EDM",
 		19: "DETECTOR_TYPE_IDM",
+		20: "DETECTOR_TYPE_PASSPORT",
+		21: "DETECTOR_TYPE_DRIVERS_LICENSE",
 	}
 	DetectorType_value = map[string]int32{
-		"DETECTOR_TYPE_UNSPECIFIED":    0,
-		"DETECTOR_TYPE_CPF":            1,
-		"DETECTOR_TYPE_SSN":            2,
-		"DETECTOR_TYPE_CREDIT_CARD":    3,
-		"DETECTOR_TYPE_EMAIL":          4,
-		"DETECTOR_TYPE_PHONE":          5,
-		"DETECTOR_TYPE_PRIVATE_KEY":    6,
-		"DETECTOR_TYPE_AWS_ACCESS_KEY": 7,
-		"DETECTOR_TYPE_JWT":            8,
-		"DETECTOR_TYPE_API_TOKEN":      9,
-		"DETECTOR_TYPE_IBAN":           10,
-		"DETECTOR_TYPE_HEALTH_DATA":    11,
-		"DETECTOR_TYPE_CUSTOM":         12,
-		"DETECTOR_TYPE_ABA_ROUTING":    13,
-		"DETECTOR_TYPE_CA_SIN":         14,
-		"DETECTOR_TYPE_NPI":            15,
-		"DETECTOR_TYPE_UK_NHS":         16,
-		"DETECTOR_TYPE_EIN":            17,
-		"DETECTOR_TYPE_EDM":            18,
-		"DETECTOR_TYPE_IDM":            19,
+		"DETECTOR_TYPE_UNSPECIFIED":     0,
+		"DETECTOR_TYPE_CPF":             1,
+		"DETECTOR_TYPE_SSN":             2,
+		"DETECTOR_TYPE_CREDIT_CARD":     3,
+		"DETECTOR_TYPE_EMAIL":           4,
+		"DETECTOR_TYPE_PHONE":           5,
+		"DETECTOR_TYPE_PRIVATE_KEY":     6,
+		"DETECTOR_TYPE_AWS_ACCESS_KEY":  7,
+		"DETECTOR_TYPE_JWT":             8,
+		"DETECTOR_TYPE_API_TOKEN":       9,
+		"DETECTOR_TYPE_IBAN":            10,
+		"DETECTOR_TYPE_HEALTH_DATA":     11,
+		"DETECTOR_TYPE_CUSTOM":          12,
+		"DETECTOR_TYPE_ABA_ROUTING":     13,
+		"DETECTOR_TYPE_CA_SIN":          14,
+		"DETECTOR_TYPE_NPI":             15,
+		"DETECTOR_TYPE_UK_NHS":          16,
+		"DETECTOR_TYPE_EIN":             17,
+		"DETECTOR_TYPE_EDM":             18,
+		"DETECTOR_TYPE_IDM":             19,
+		"DETECTOR_TYPE_PASSPORT":        20,
+		"DETECTOR_TYPE_DRIVERS_LICENSE": 21,
 	}
 )
 
@@ -373,7 +383,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xa1\x04\n" +
+	"matchCount*\xe0\x04\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -395,7 +405,9 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x14DETECTOR_TYPE_UK_NHS\x10\x10\x12\x15\n" +
 	"\x11DETECTOR_TYPE_EIN\x10\x11\x12\x15\n" +
 	"\x11DETECTOR_TYPE_EDM\x10\x12\x12\x15\n" +
-	"\x11DETECTOR_TYPE_IDM\x10\x13B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x11DETECTOR_TYPE_IDM\x10\x13\x12\x1a\n" +
+	"\x16DETECTOR_TYPE_PASSPORT\x10\x14\x12!\n" +
+	"\x1dDETECTOR_TYPE_DRIVERS_LICENSE\x10\x15B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once

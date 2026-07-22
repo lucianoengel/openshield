@@ -44,6 +44,7 @@ func New() *Classifier {
 		cpf{}, creditCard{}, ssn{}, email{}, phone{},
 		privateKey{}, awsAccessKey{}, jwt{}, apiToken{},
 		iban{}, healthData{}, abaRouting{}, caSIN{}, npi{}, ukNHS{}, ein{},
+		passport{}, driversLicense{}, // DLP-7: context-gated weak-format identifiers
 	}}
 }
 

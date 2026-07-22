@@ -103,6 +103,8 @@ jobs:
         run: go test -count=1 -v ./internal/nips/ && go test -count=1 -run 'GatewayBlocksKnownBad|GatewayAllowsClean|GatewayNoFeed' -v ./internal/gateway/
       - name: DLP-3 exact-data matching (k-anonymized bloom index, no raw value shipped)
         run: go test -count=1 -run 'EDM|BuildEDM|RecordEDM|IDM' -v ./internal/classify/
+      - name: DLP-7 context-proximity detection (passport/DL fire only near a context keyword)
+        run: go test -count=1 -run "Passport|DriversLicense|Context" -v ./internal/classify/
       - name: DLP-2 exfil-channel awareness (path→channel; policy escalates on an exfil channel)
         run: go test -count=1 -v ./internal/exfil/ && go test -count=1 -run TestExfilChannelAwarePolicy -v ./internal/policy/
       - name: agent process-boundary invariants
