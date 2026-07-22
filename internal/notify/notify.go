@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -60,12 +61,14 @@ type Webhook struct {
 	// verify the alert genuinely came from this control plane. Empty = unsigned (the
 	// body and headers are byte-for-byte unchanged from the pre-signing behavior).
 	Secret []byte
+	// now stamps the signature timestamp (SIEM-8b); injectable for tests. Defaults to time.Now.
+	now func() time.Time
 }
 
 // NewWebhook builds a Webhook with a short timeout, so a slow sink cannot stall the
 // caller (delivery is best-effort).
 func NewWebhook(url string) *Webhook {
-	return &Webhook{URL: url, Client: &http.Client{Timeout: 5 * time.Second}}
+	return &Webhook{URL: url, Client: &http.Client{Timeout: 5 * time.Second}, now: time.Now}
 }
 
 func (w *Webhook) Notify(ctx context.Context, n Notification) error {
@@ -78,11 +81,17 @@ func (w *Webhook) Notify(ctx context.Context, n Notification) error {
 		return Permanent(err) // a bad URL is not fixed by retrying
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// Authenticate the payload (SIEM-8): sign the EXACT bytes being sent so the receiver
-	// signs the raw body it received and the comparison is unambiguous. Only when a secret
-	// is configured — otherwise no header, unchanged.
+	// Authenticate the payload (SIEM-8) and bind it to a timestamp so a captured delivery cannot be
+	// replayed (SIEM-8b): sign "<ts>."+body over the EXACT bytes sent and send the timestamp too.
+	// Only when a secret is configured — otherwise no headers, body byte-for-byte unchanged.
 	if len(w.Secret) > 0 {
-		req.Header.Set(SignatureHeader, Sign(w.Secret, body))
+		clock := w.now
+		if clock == nil {
+			clock = time.Now
+		}
+		ts := clock().Unix()
+		req.Header.Set(TimestampHeader, strconv.FormatInt(ts, 10))
+		req.Header.Set(SignatureHeader, Sign(w.Secret, ts, body))
 	}
 	resp, err := w.Client.Do(req)
 	if err != nil {

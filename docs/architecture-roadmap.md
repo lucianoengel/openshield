@@ -198,6 +198,10 @@ applies.
   `EnforceTarget`. **Verify:** a decide→recycle→kill test proves the new holder is spared.
 
 ### SIEM-8b · Webhook replay protection — P2 · notify · S
+- **✅ SHIPPED D176 (2026-07-22) — pending owner audit.** The webhook HMAC now signs `"<ts>."+body`
+  and sends `X-Openshield-Timestamp`; `VerifySignature` rejects a timestamp outside a 5-min window before
+  the constant-time MAC check. Proven: a captured `(ts,body,sig)` is rejected past the window and under a
+  swapped timestamp; 2 mutation guards. Per-sink secrets already existed.
 - The MAC covers the body only (no timestamp/nonce) and one secret is shared across sinks → a captured
   `(body, sig)` validates forever at any sink. **Fix:** sign `"t=<unix>." + body`, send `t` in a
   header, receiver rejects stale. (Optionally per-sink secrets.)
