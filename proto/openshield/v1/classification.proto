@@ -29,6 +29,10 @@ enum DetectorType {
   // generic type — a free-form per-rule name could leak what it detects, so the closed
   // enum is preserved. Per-rule policy routing (a rule id in the contract) is a follow-up.
   DETECTOR_TYPE_CUSTOM = 12;
+  // US bank routing number (ABA), DLP. A weighted mod-10 checksum (a strong validator like
+  // Luhn) plus the Federal Reserve leading-digit range — evidence between a checksumless
+  // structural rule and a full check-digit scheme.
+  DETECTOR_TYPE_ABA_ROUTING = 13;
 }
 
 // LocalMatch holds matched content. Host-only.

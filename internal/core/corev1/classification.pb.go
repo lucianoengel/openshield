@@ -48,6 +48,10 @@ const (
 	// generic type — a free-form per-rule name could leak what it detects, so the closed
 	// enum is preserved. Per-rule policy routing (a rule id in the contract) is a follow-up.
 	DetectorType_DETECTOR_TYPE_CUSTOM DetectorType = 12
+	// US bank routing number (ABA), DLP. A weighted mod-10 checksum (a strong validator like
+	// Luhn) plus the Federal Reserve leading-digit range — evidence between a checksumless
+	// structural rule and a full check-digit scheme.
+	DetectorType_DETECTOR_TYPE_ABA_ROUTING DetectorType = 13
 )
 
 // Enum value maps for DetectorType.
@@ -66,6 +70,7 @@ var (
 		10: "DETECTOR_TYPE_IBAN",
 		11: "DETECTOR_TYPE_HEALTH_DATA",
 		12: "DETECTOR_TYPE_CUSTOM",
+		13: "DETECTOR_TYPE_ABA_ROUTING",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":    0,
@@ -81,6 +86,7 @@ var (
 		"DETECTOR_TYPE_IBAN":           10,
 		"DETECTOR_TYPE_HEALTH_DATA":    11,
 		"DETECTOR_TYPE_CUSTOM":         12,
+		"DETECTOR_TYPE_ABA_ROUTING":    13,
 	}
 )
 
@@ -330,7 +336,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xf2\x02\n" +
+	"matchCount*\x91\x03\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -345,7 +351,8 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x12DETECTOR_TYPE_IBAN\x10\n" +
 	"\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_HEALTH_DATA\x10\v\x12\x18\n" +
-	"\x14DETECTOR_TYPE_CUSTOM\x10\fB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x14DETECTOR_TYPE_CUSTOM\x10\f\x12\x1d\n" +
+	"\x19DETECTOR_TYPE_ABA_ROUTING\x10\rB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once

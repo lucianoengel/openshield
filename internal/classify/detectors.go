@@ -144,3 +144,42 @@ func (email) Scan(text []byte) (int, float64) {
 	valid := func(string) bool { return true } // the regex IS the validator
 	return countValid(emailRe, text, norm, valid), confEmail
 }
+
+// --- US bank routing number (ABA) ---
+
+// confABA sits above the checksumless structural detectors and below the two-check-digit
+// schemes: an ABA number has one weighted mod-10 checksum plus a constrained leading range,
+// which filters the great majority of random 9-digit runs but not as strongly as CPF's two
+// check digits.
+const confABA = 0.75
+
+type abaRouting struct{}
+
+// Candidate: a bare 9-digit run. The word boundaries keep it from matching inside a longer
+// digit run (a 10-digit phone, a 16-digit card), and the checksum below does the real filtering
+// — a bare 9-digit run alone is far too common to report.
+var abaRe = regexp.MustCompile(`\b\d{9}\b`)
+
+func (abaRouting) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_ABA_ROUTING }
+func (abaRouting) Scan(text []byte) (int, float64) {
+	return countValid(abaRe, text, stripNonDigits, validABA), confABA
+}
+
+// validABA checks the Federal Reserve leading-digit range AND the ABA weighted mod-10 checksum.
+// Both are required: the checksum alone passes ~1 in 10 random 9-digit runs, and the leading
+// range alone is far too weak, so together they make a bare 9-digit run reportable.
+func validABA(s string) bool {
+	if len(s) != 9 {
+		return false
+	}
+	// Routing symbol (first two digits) must be an assigned Federal Reserve range:
+	// 00–12 (government / FRB), 21–32, 61–72 (thrift/electronic), 80 (traveler's cheque).
+	lead := int(s[0]-'0')*10 + int(s[1]-'0')
+	inRange := lead <= 12 || (lead >= 21 && lead <= 32) || (lead >= 61 && lead <= 72) || lead == 80
+	if !inRange {
+		return false
+	}
+	d := func(i int) int { return int(s[i] - '0') }
+	sum := 3*(d(0)+d(3)+d(6)) + 7*(d(1)+d(4)+d(7)) + (d(2) + d(5) + d(8))
+	return sum%10 == 0
+}

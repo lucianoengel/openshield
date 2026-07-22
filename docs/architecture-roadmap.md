@@ -176,11 +176,11 @@ the XDR fork.
 > as a discrete, actionable ticket. Items above (Phases A–F) describe the *shape* of the work;
 > the items here are the *specific* work.
 >
-> **⚠️ Staleness warning.** This queue was written against the 2026-07-21 audit snapshot, and the
-> repo moves fast — a builder is committing concurrently and **D103–D108 landed the same day**
-> (alert search, correlation→incidents, case workflow, syslog ingest+listener), closing or
-> narrowing several tickets below (marked _[verify — may be landed]_ / ✅ LANDED). **Before
-> proposing ANY ticket, re-verify against `HEAD` that the gap still exists.**
+> **⚠️ Staleness warning.** This queue is written against audit snapshots and the repo moves fast
+> (a builder commits concurrently). **The authoritative current status is the "Round-31 audit
+> update" section below** (verified through D136): it supersedes the ✅/status notes on the Bucket
+> S/H/feature tickets. **Before proposing ANY ticket, re-verify against `HEAD` that the gap still
+> exists**, and consult the R31 next-order queue for what to pick up.
 
 ## How the builder worker should consume this
 
@@ -215,17 +215,174 @@ the XDR fork.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| Zero Trust (ZTNA) | ~45% | Real client-cert access broker + microseg + posture/risk policy inputs; posture **self-reported**, OIDC **unwired**, one credential, no client. |
-| DLP | ~35% core | Strong sandboxed detection core; **observe-only in prod** (no enforcers wired), one channel, no EDM/OCR/ML, no endpoint enforcement/coaching. |
-| NIPS / NTPS | ~15% | Forward-proxy egress DLP + opt-in TLS interception. **Not an IPS**: no inline/transparent, no signatures/threat-intel, request-body only. |
-| SIEM | ~15% | Alert `/search` (D103), correlation→incidents (D104), case workflow w/ four-eyes (D105/D107), syslog ingest+listener (D106/D108) all landed. Still missing: *event* search (telemetry is opaque BYTEA), persisted incidents/rules, cross-host key, external formats beyond syslog, UI. |
-| HIPS | 0% | Unbuilt. No exec producer, no behavioral classifier, no exec-control actions. |
+| Zero Trust (ZTNA) | ~50% | Access broker + microseg + posture/risk inputs; posture now has a **signed producer** (HON-4) but on a **shared fleet key** (agent-to-agent forgery, SEC-12); no hardware attestation, no ZTNA client. |
+| DLP | ~40% core | Strong sandboxed detection core; enforcement now **wired behind `OPENSHIELD_ENFORCE`** (HON-3); +phone detector; still one channel, no EDM/OCR/ML, no coaching. |
+| NIPS / NTPS | ~25% | Forward-proxy egress DLP + TLS interception + a live **DNS observe listener** (D128/D133). SMTP listener built-not-wired (+ OOM/slowloris bugs). Still no inline/transparent, no signatures/threat-intel. |
+| SIEM | ~25% | Event search (built but `/events` **404s** — SIEM-1 reopen), cross-host correlation (host col landed), alert lifecycle+ack, notify retry, case workflow, syslog. Still: no persisted incidents, no UI, no external formats beyond syslog. |
+| HIPS | ~10% | Phase E **contract + detectors + enforcers landed but UNWIRED** — no producer runs, engine never extracts the pid, DENY_EXEC is a stub; detectors have 1-char bypasses. Scaffolding, not runnable (HIPS-5/6/7). |
 | NAC | 0% | Absent. Posture-as-policy-input ≠ network admission control. Off-pipeline (see T4). |
 | VPN | 0% | Absent. No tunnel. "Zero-Trust VPN" is a mislabel for the ZTNA proxy. Off-pipeline (see T4). |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external
 anchoring is real end-to-end and is the platform's strongest asset. Several Bucket-S items
 exist to keep it honest — do not regress it.
+
+---
+
+## Round-31 audit update (2026-07-22) — D109–D136 verified
+
+> Between the R30 backlog and now, the builder cleared essentially all of Bucket S + Bucket H and
+> shipped HIPS Phase E, SIEM search/correlation/lifecycle, NIPS-3 DNS/SMTP listeners, a phone
+> detector, and Prometheus metrics. A three-agent adversarial re-audit (HIPS action-set; SEC/HON
+> fix-verification with **mutation-reintroduction of the P0 vulns on live Postgres/NATS/TLS**;
+> new SIEM/NIPS surfaces) verified the work and found the residuals below. **These statuses
+> SUPERSEDE the Bucket S/H/feature entries further down.** The next-order at the end of this
+> subsection is the worker's queue.
+
+### ✅ Verified genuinely fixed (mutation-confirmed where P0) — do NOT re-open
+SEC-1 (sign/verify risk+posture; deleting the `ed25519.Verify` makes the test FAIL), SEC-2 (enroll
+`DO NOTHING`+`ErrAgentExists`; restoring `DO UPDATE` FAILs the test), SEC-3+SEC-11 (verified-only
+roster LEFT JOIN; dropping `verified` filter FAILs), SEC-4 (`SetPendingLimits`+counted
+`ErrorHandler`, real flood test), SEC-5 (purge honors `legal_holds`), SEC-7 (no-follow opener),
+SEC-8 (/search 400s+caps), SEC-9 (header hygiene + injected verified subject), SEC-10 (monotonic
+context_version); HON-1 (worker loads+verifies signed rules), HON-2 (case-open places the legal
+hold SEC-5 consumes), HON-3 (engine registers enforcers under `OPENSHIELD_ENFORCE`; real file
+moved), HON-4 (agent-signed posture producer — the missing publisher); PLAT-4 (metrics,
+low-cardinality); DLP-7 (phone); SIEM-6 (ack behind operator mTLS, severity derived-not-mutable),
+SIEM-8 (bounded-backoff retry); SIEM-2 cross-host `agent_id` column (from the verified envelope,
+not payload). **Do not re-propose these.**
+
+### ⚠️ Shipped-but-not-closed — pick these up FIRST
+- **SEC-6 → PLAT-6b (P1, effort S).** The restricted `openshield_writer` role (migration 013) is
+  real and tested, but **no shipped config uses it** — `compose.yaml`, every `deploy/systemd/*.service`,
+  and the e2e scripts still connect as the table **owner** (`openshield:dev`), so the append-only
+  trigger stays owner-bypassable in the running product (the audit's actual condition). Fix is the
+  wiring only (below).
+- **SIEM-1 REOPEN (P1, effort XS).** Event search is correct and injection-safe, but `/events` is
+  registered on the handler's inner mux and **never mounted on the served TLS mux** (`enroll_http.go`
+  mounts /alerts,/search,/incidents,/overdue, not /events) → an operator GET `/events` 404s. Tests
+  called `SearchTelemetry`/`parseEventFilter` directly and never exercised the served router
+  ("verifies against its own assumptions"). Fix: mount it + a served-mux test (operator cert reaches
+  /events, agent cert 403s).
+
+### 🆕 New tickets from this round
+
+**HIPS Phase E is scaffolding, not runnable:**
+
+**HIPS-5 · Wire Phase E end-to-end** — P1 · wiring · effort M
+- Nothing runs the feature: no binary tails auditd (execaudit is a pure parser with no source);
+  `registerEnforcers` (cmd/openshield-engine) omits the process enforcers; and `engine.enforce`
+  passes `ev.GetFilesystem().GetResolvedPath()` — for a process event that's `""`, so a registered
+  `KillEnforcer` self-refuses. `DENY_EXEC`'s `ExecController` is an unimplemented stub.
+- Fix: (a) an exec producer source (auditd netlink/log tail → execaudit → Event); (b) engine
+  target-selection BY EVENT KIND — extract `ProcessSubject.pid` for process events (the fitness test
+  hand-supplies `"4242"`; that extraction does not exist); (c) register Kill/Deny enforcers under
+  `OPENSHIELD_ENFORCE` (observe-only default preserved); (d) implement `ExecController` or explicitly
+  mark `DENY_EXEC` deferred (KILL is post-exec; true inline deny needs `FAN_OPEN_EXEC_PERM` =
+  env-gated like B2).
+- Verify: binary-level e2e — real exec → producer → behavioral ALERT → (enforce-on) KILL of that
+  real pid, audited; observe-only leaves it running.
+
+**HIPS-6 · Behavioral detector hardening (close the 1-char bypasses)** — P1 · classify · effort S–M
+- Flagship detectors have trivial evasions: encoded-PowerShell matches only literal
+  `-enc`/`-e`/`-encodedcommand`/`/enc`, but PowerShell accepts ANY unambiguous prefix (`-ec`,
+  `-encod`, …) — none matched; pipe/cradle needs literal `| bash` (`curl x|/bin/bash`, `wget -O- x|zsh`
+  evade); auditd **hex-encoded argv is left undecoded**, so real cradles (any arg with spaces, which
+  auditd hex-encodes) arrive as an unmatched blob — the "e2e" test dodges this with a spaceless
+  payload; LOLBins are exact-basename so `copy powershell.exe a.exe` bypasses.
+- Fix: prefix-match the encoded-flag family, hex-decode auditd values in `unquote`, broaden
+  pipe/cradle handling, anchor LOLBins beyond basename. Tests must use the REAL evasions.
+- Verify: each evasion variant detected; mutation reverting to literal-token match FAILs.
+
+**HIPS-7 · KILL_PROCESS safety hardening** — P2 · enforcer · effort S–M
+- Self-protection guards only the engine's own pid + `pid≤1` — not the privileged agent, worker,
+  sshd, DB, or systemd; no pid-reuse revalidation (`platformKill` may kill a recycled pid);
+  `ParseExecve` loops on untrusted `argc` (O(n·argc) → CPU DoS).
+- Fix: critical-process allowlist (or own-fleet/cgroup check) before kill; pidfd/start-time
+  revalidation between decide and kill; bound `argc`.
+- Verify: refuses a seeded critical pid; a recycled pid isn't killed; a forged huge argc is bounded.
+
+**SIEM & engine:**
+
+**SIEM-11 · Materialize incidents** — P1 · pipeline extension · effort M
+- Correlation still runs on every GET (computed-on-read); incidents have no id/state, so SIEM-6 ack
+  attaches to alerts only — an incident can't be triaged as a unit. Persist incidents (id, state,
+  linked alerts) so lifecycle + case-linking (D107) attach. Also fix `count(DISTINCT agent_id)`:
+  legacy `''` counts as a host → false "lateral movement" from a mixed old/new alert set → use
+  `count(DISTINCT NULLIF(agent_id,''))`. And 400 on malformed `/incidents`+`/overdue` params (they
+  over-broaden silently — the SEC-8 rule, unapplied here).
+- Verify: incident persists with a stable id an ack can target; a subject with one real host + legacy
+  `''` rows does NOT reach `MinHosts=2`.
+
+**SIEM-12 · Move notify off the ingest path + idempotency** — P2 · notify · effort S
+- Notify+retry is synchronous inside telemetry handling (`handleSigned→observePeer→emit`) — worst
+  case ~15.6s stall per alert; a client-timeout-after-server-success retries with no idempotency key
+  → double page. Deliver via a goroutine/queue; add a notification id the receiver can dedupe.
+
+**ENG-1 · Network-content classification path (BLOCKS SMTP body DLP)** — P1 · engine · effort M
+- The D134 fix hard-codes "network event ⇒ skip content classification" (right for DNS, metadata-only).
+  But SMTP **body** DLP is a network event WITH content that must reach the **sandboxed worker**
+  (D29/D35). As-is, wiring SMTP silently no-ops email-body classification. Add a third `classifyStage`
+  branch: network event carrying content → worker classify. **Blocking precondition for the SMTP
+  source wiring — not a follow-up.**
+- Verify: an SMTP body with a CPF is classified in the worker + audited; a DNS event still skips
+  content; a pathless file event still errors (D134 preserved).
+
+**NIPS-3-SMTP · Harden the SMTP listener before wiring it** — P1 · connector · effort S
+- The (built, not-yet-wired) SMTP listener reads with `ReadString('\n')` and checks the 32MiB bound
+  only AFTER a full line → a no-newline stream OOMs; `handle` sets no read deadline and spawns an
+  untracked goroutine per accept (slowloris: N idle conns × 32MiB). Fix with a bounded reader +
+  per-conn deadline + accept semaphore, BEFORE the SMTP source is wired.
+- Verify: a no-newline flood is bounded; idle conns time out; concurrency is capped.
+
+**NIPS-7 · Shared listener-hardening contract** — P2 · connectors · effort M
+- syslog/DNS/SMTP each hand-roll (or omit) deadlines, connection caps, per-source rate limits, and
+  panic-recovery. Extract a shared listener contract. Include a per-source rate limit / sampling so a
+  UDP flood can't grow the audit ledger at wire speed (DNS mints a ledger write per spoofable query
+  today, with attacker-chosen names + spoofed `SrcIp`), and a `recover` in each Serve loop (a parser
+  panic crashes the engine today).
+
+**ENG-2 · Re-derive the engine's sandbox profile** — P1 · hardening · effort M
+- The privileged engine now legitimately opens network sockets (DNS listener) and parses untrusted
+  wire bytes in-process — its D35 confinement assumptions ("no network in the privileged domain")
+  must be re-derived, not just noted. Decide: hardened profile + `recover` for metadata-only parsers
+  in the engine, or move even metadata parsing behind a boundary. Document the deviation.
+
+**SEC-12 · Bind posture signatures to the reporting agent's identity** — P2 · gateway · effort M
+- HON-4 residual: the fleet shares ONE posture signing key and the gateway verifies against ONE
+  pubkey, so any agent (or one compromised endpoint) can sign a `PostureUpdate` with
+  `subject=<another agent>` and forge that victim's `Compliant=true`. SEC-1 closed unsigned/past-mTLS
+  forgery; agent-to-agent forgery remains. Fix: verify posture against the reporting agent's own
+  enrolled identity key (subject↔key binding), not a shared key.
+
+**PLAT-6b · Wire the restricted DB role (closes SEC-6)** — P1 · deploy · effort S
+- Provision an `openshield_writer` LOGIN role and point `OPENSHIELD_DSN` at it in compose + all
+  systemd units + e2e; reserve the owner for migrations (`fullyMigrated` already supports a read-only
+  connect). The role + boundary are done and tested; only the wiring is missing — until it lands the
+  tested append-only boundary protects nothing in the running product.
+
+**PLAT-4b · Metrics auth + bind guard** — P2 · observability · effort S
+- `/metrics` has no auth and nothing stops a non-loopback bind; exposed it leaks fleet operational
+  tempo (rejected/gapped-telemetry counts = replay-attempt recon). Warn loudly on a non-loopback
+  bind; add optional auth. Do this before per-host (gateway/engine) metrics start the
+  identity/cardinality clock.
+
+**DEPLOY-1 · DNS listener is tap/mirror-only** — P2 · docs/deploy · effort S
+- The observe-only DNS listener never answers queries; the deferred "transparent :53 redirect"
+  deployment would blackhole fleet DNS. Write into the deploy spec that it must be a mirror/tee
+  (SPAN/eBPF), never an inline redirect.
+
+Minor (fold into the owning ticket, no separate proposal): DLP-7 phone `+`-decimal FP (tighten the
+E.164 char class — `+3.14159265358979` currently matches); `parseEventFilter` accepts `limit≤0` +
+unvalidated `kind` (match `parseAlertFilter`'s 400); `AcknowledgeAlert` maps a DB error → 404
+(distinguish transient failure from not-found).
+
+### Revised next-order for the autonomous worker
+All unblocked (no owner gate): **PLAT-6b (closes SEC-6) → SIEM-1 mount → ENG-1 (unblocks SMTP) →
+NIPS-3-SMTP hardening → HIPS-5 (wire) → HIPS-6 (detectors) → SIEM-11 (incidents) → ENG-2 (sandbox)
+→ SEC-12 → HIPS-7 → SIEM-12 → NIPS-7 → PLAT-4b → DEPLOY-1.** Then resume the prior feature order
+(DLP-2/3 channels+EDM, NIPS-1/2 inline+signatures, ZT-1 attestation, SIEM-4 CEF/WEF). UI (PLAT-1)
+and NAC/VPN remain owner-gated.
 
 ## T4 — the fourth tension: categories that do NOT fit the frozen pipeline
 
