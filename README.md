@@ -111,11 +111,12 @@ contracts, and the ledger — stays fixed. New capability lands as a new event s
 a new policy input, or one deliberate new action, never as a change to the core. That discipline is
 what lets a single codebase span seven security domains instead of fragmenting into seven products.
 
-**How it deploys** — the control plane runs inside a **protected inner network**. End users reach the
-internet directly, but **agent telemetry and control traffic transit the gateway** — the controlled
-ingress (ZTNA / reverse proxy) — because that is the only path into the inner network where the control
-plane runs. Inside, the server correlates across domains, writes tamper-evident evidence, and publishes
-risk and response *context* back out to the agents over the same path:
+**How it deploys** — internal apps, data, and the control plane sit in a **protected inner network**
+behind the gateway. End users reach the internet directly, but **access to internal resources goes
+through the gateway**, where traffic is inspected inline (DLP) and brokered (ZTNA) — allow, block, or
+redirect. Agent telemetry and control traffic transit the same gateway to reach the control plane,
+which correlates, writes tamper-evident evidence, and publishes risk and response *context* back to
+the agents:
 
 ```mermaid
 flowchart LR
@@ -125,12 +126,13 @@ flowchart LR
     EP["🖥️ Endpoint · agent + engine<br/><i>files · processes · USB · local enforcement</i>"]
   end
 
-  GW["🌐 Gateway<br/>ZTNA · reverse proxy · DNS · SMTP<br/><b>controlled ingress</b>"]
+  GW["🌐 Gateway<br/><b>inline DLP · ZTNA · reverse proxy</b><br/>DNS · SMTP · controlled ingress"]
 
   subgraph INNER["Inner network — protected"]
     direction TB
-    BUS(["signed telemetry bus · mTLS"])
+    APPS["🗄️ Internal resources<br/>apps · data · services"]
     SRV["Fleet server<br/>ingest · correlate · incidents · notify"]
+    BUS(["signed telemetry bus · mTLS"])
     LEDGER[("Audit ledger")]
     ANC["Anchor · external witness"]
   end
@@ -138,9 +140,11 @@ flowchart LR
   OP["👤 Analyst / operator"]
 
   EP -->|"internet — direct"| NET
+  EP ==>|"access internal resources"| GW
+  GW ==>|"DLP: allow · block · redirect"| APPS
   EP <-->|"agent telemetry &amp; control · mTLS"| GW
   OP -->|"ZTNA access"| GW
-  GW <-->|"the only path in"| BUS
+  GW <--> BUS
   BUS --> SRV
   SRV --> LEDGER --> ANC
   SRV -.->|"risk &amp; response context"| BUS
