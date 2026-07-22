@@ -524,8 +524,11 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     endpoint `TPM2_ActivateCredential`. swtpm-proven: same-TPM activates, a different TPM's EK cannot,
     a substituted AK breaks the name binding. Closes D183's raw-AK-trust gap (EK-cert-chain validation
     scoped as the production step).
-  - **Increment 3 · Measured-boot event log + PCR policy** — parse the boot log, replay PCRs, apply an
-    expected-state policy over the attested PCR digest.
+  - ✅ **Increment 3 · Measured-boot PCR policy (D185)** — SHIPPED. Read a golden PCR baseline, compute
+    the aggregate digest the TPM commits to in pure Go, and gate a verified quote against it
+    (`ErrPCRMismatch` on drift). swtpm-proven: pure-Go digest matches the TPM's; golden state compliant,
+    a drifted PCR rejected. Event-log *attribution* (`binary_bios_measurements`) deferred — diagnostic,
+    not gating; go-tpm has no parser and go-tpm-tools is barred (D183).
   - **Increment 4 · Posture wiring** — proto field + posture producer/verifier + `DevicePosture.Attested`
     + a posture-gated policy.
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
