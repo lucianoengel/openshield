@@ -41,6 +41,9 @@ enum DetectorType {
   // or 2 and carries a Luhn checksum over the 80840-prefixed number — a real check-digit
   // scheme, so a hit is strong evidence.
   DETECTOR_TYPE_NPI = 15;
+  // UK NHS number, healthcare DLP. A 10-digit patient id in the conventional 3-3-4 spaced
+  // grouping with a weighted mod-11 check digit — strong, low-FP evidence.
+  DETECTOR_TYPE_UK_NHS = 16;
 }
 
 // LocalMatch holds matched content. Host-only.

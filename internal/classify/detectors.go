@@ -268,3 +268,41 @@ func validNPI(s string) bool {
 	}
 	return sum%10 == 0
 }
+
+// --- UK NHS number ---
+
+// confNHS: a weighted mod-11 check digit over the distinctive 3-3-4 spaced grouping — strong,
+// low-FP evidence comparable to the other grouped-checksum PII.
+const confNHS = 0.85
+
+type ukNHS struct{}
+
+// Candidate: the conventional 3-3-4 SPACE-separated grouping. Space (not hyphen) is deliberate —
+// it is the canonical NHS presentation and avoids overlap with the hyphen/dot phone format.
+var nhsRe = regexp.MustCompile(`\b\d{3} \d{3} \d{4}\b`)
+
+func (ukNHS) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_UK_NHS }
+func (ukNHS) Scan(text []byte) (int, float64) {
+	return countValid(nhsRe, text, stripNonDigits, validNHS), confNHS
+}
+
+// validNHS applies the NHS weighted mod-11 check: weights 10..2 over the first nine digits, the
+// tenth is the check digit. A remainder giving a check of 10 marks an INVALID number (no valid
+// NHS number has that check), and 11 maps to 0.
+func validNHS(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	sum := 0
+	for i := 0; i < 9; i++ {
+		sum += int(s[i]-'0') * (10 - i)
+	}
+	check := 11 - (sum % 11)
+	if check == 11 {
+		check = 0
+	}
+	if check == 10 {
+		return false // not a valid check digit → not an NHS number
+	}
+	return check == int(s[9]-'0')
+}

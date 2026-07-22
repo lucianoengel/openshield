@@ -60,6 +60,9 @@ const (
 	// or 2 and carries a Luhn checksum over the 80840-prefixed number — a real check-digit
 	// scheme, so a hit is strong evidence.
 	DetectorType_DETECTOR_TYPE_NPI DetectorType = 15
+	// UK NHS number, healthcare DLP. A 10-digit patient id in the conventional 3-3-4 spaced
+	// grouping with a weighted mod-11 check digit — strong, low-FP evidence.
+	DetectorType_DETECTOR_TYPE_UK_NHS DetectorType = 16
 )
 
 // Enum value maps for DetectorType.
@@ -81,6 +84,7 @@ var (
 		13: "DETECTOR_TYPE_ABA_ROUTING",
 		14: "DETECTOR_TYPE_CA_SIN",
 		15: "DETECTOR_TYPE_NPI",
+		16: "DETECTOR_TYPE_UK_NHS",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":    0,
@@ -99,6 +103,7 @@ var (
 		"DETECTOR_TYPE_ABA_ROUTING":    13,
 		"DETECTOR_TYPE_CA_SIN":         14,
 		"DETECTOR_TYPE_NPI":            15,
+		"DETECTOR_TYPE_UK_NHS":         16,
 	}
 )
 
@@ -348,7 +353,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xc2\x03\n" +
+	"matchCount*\xdc\x03\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -366,7 +371,8 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x14DETECTOR_TYPE_CUSTOM\x10\f\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_ABA_ROUTING\x10\r\x12\x18\n" +
 	"\x14DETECTOR_TYPE_CA_SIN\x10\x0e\x12\x15\n" +
-	"\x11DETECTOR_TYPE_NPI\x10\x0fB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x11DETECTOR_TYPE_NPI\x10\x0f\x12\x18\n" +
+	"\x14DETECTOR_TYPE_UK_NHS\x10\x10B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once
