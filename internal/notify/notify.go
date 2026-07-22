@@ -63,20 +63,26 @@ func NewWebhook(url string) *Webhook {
 func (w *Webhook) Notify(ctx context.Context, n Notification) error {
 	body, err := json.Marshal(n)
 	if err != nil {
-		return err
+		return Permanent(err) // a notification that will not serialize will not serialize on retry
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return Permanent(err) // a bad URL is not fixed by retrying
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := w.Client.Do(req)
 	if err != nil {
-		return err
+		return err // transport error (timeout, refused) — transient, retryable
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("notify: webhook returned %d", resp.StatusCode)
+		werr := fmt.Errorf("notify: webhook returned %d", resp.StatusCode)
+		// A 4xx (except 429 Too Many Requests) is a client error — a bad URL, auth, or payload —
+		// that retrying will not fix, so mark it permanent. 429 and 5xx are transient.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return Permanent(werr)
+		}
+		return werr
 	}
 	return nil
 }

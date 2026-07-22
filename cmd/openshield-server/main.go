@@ -94,7 +94,11 @@ func main() {
 	// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
 	// deduplicated (once per silence) and run on a timer.
 	if hook := os.Getenv("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
-		srv.SetNotifier(notify.NewWebhook(hook))
+		// SIEM-8: wrap the webhook in bounded retry so a transient blip (a 5xx, a timeout during
+		// a deploy) does not silently drop the page. Attempts are configurable; a 4xx is not
+		// retried (see notify.Permanent).
+		attempts := envInt("OPENSHIELD_ALERT_RETRIES", 3)
+		srv.SetNotifier(notify.NewRetrying(notify.NewWebhook(hook), attempts, 200*time.Millisecond))
 		overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
 		overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
 		go retain.Loop(ctx, overdueInterval, func(ctx context.Context) {
@@ -247,6 +251,15 @@ func envDuration(k string, def time.Duration) time.Duration {
 	if v := os.Getenv(k); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return def
+}
+
+func envInt(k string, def int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
 		}
 	}
 	return def
