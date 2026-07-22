@@ -65,7 +65,7 @@ func TestSignedTelemetryVerified(t *testing.T) {
 	defer conn.Close()
 	pub := signedAgent(t, srv, conn, "agent-signed")
 
-	if err := pub.PublishEvent(context.Background(), &corev1.Event{EventId: "sev-1", AgentId: "agent-signed"}); err != nil {
+	if err := pub.PublishEvent(context.Background(), &corev1.Event{EventId: "sev-1", AgentId: "agent-signed", Subject: &corev1.Subject{PseudonymousId: "sub_signed"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
@@ -148,7 +148,7 @@ func TestSignedGapRecorded(t *testing.T) {
 	id, _ := identity.Generate("agent-gap")
 	_ = srv.Enroll(ctx, tok, "agent-gap", id.PublicKey(), time.Now())
 
-	payload, _ := proto.Marshal(&corev1.Event{EventId: "g1", AgentId: "agent-gap"})
+	payload, _ := proto.Marshal(&corev1.Event{EventId: "g1", AgentId: "agent-gap", Subject: &corev1.Subject{PseudonymousId: "sub_gap"}})
 	env := &corev1.SignedTelemetry{AgentId: "agent-gap", Sequence: 5, Kind: "event", // jump to 5 (expected 1)
 		Payload: payload, Signature: id.Sign(5, payload)}
 	b, _ := proto.Marshal(env)

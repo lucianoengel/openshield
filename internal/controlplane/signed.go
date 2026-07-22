@@ -57,6 +57,18 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 	if res.Gap {
 		s.Gaps.Add(1)
 	}
+	// R34-12: enforce the subject contract at INGEST (server-side), not only in the
+	// endpoint's engine.attribute (client-side) — a legacy or rogue agent must not be
+	// able to persist a subject-less event straight into fleet_telemetry. A verified
+	// but subject-less event is rejected (permanent: the same bytes won't gain a
+	// subject on redelivery), counted, and never stored.
+	if env.GetKind() == "event" {
+		var ev corev1.Event
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil || ev.GetSubject().GetPseudonymousId() == "" {
+			s.RejectedTelemetry.Add(1)
+			return ingestPermanent
+		}
+	}
 	eventID := eventIDFor(env.GetKind(), env.GetPayload())
 	if err := s.insert(ctx, env.GetKind(), env.GetAgentId(), eventID, env.GetPayload(), true); err != nil {
 		// A persist failure is transient (a full/down database) — count it (observable) and retry.

@@ -51,7 +51,7 @@ func TestJetStreamDurableIngestSurvivesDownConsumer(t *testing.T) {
 	}
 	const N = 5
 	for i := 0; i < N; i++ {
-		if err := pub.PublishEvent(ctx, &corev1.Event{EventId: fmt.Sprintf("js-ev-%d", i), AgentId: "agent-js"}); err != nil {
+		if err := pub.PublishEvent(ctx, &corev1.Event{EventId: fmt.Sprintf("js-ev-%d", i), AgentId: "agent-js", Subject: &corev1.Subject{PseudonymousId: "sub_js"}}); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}

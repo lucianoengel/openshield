@@ -89,6 +89,10 @@ type Server struct {
 	// delivery runs OFF the ingest path so a slow webhook never stalls telemetry ingest.
 	notifyQ    chan notify.Notification
 	notifyOnce sync.Once
+	// notifyRunning is true once the delivery loop has been started (by SetNotifier).
+	// emit enqueues only when it is true, so an unconfigured server never fills the
+	// queue (R34-9).
+	notifyRunning atomic.Bool
 	// notifyDedupe is a bounded set of recently-emitted notification ids, so the same logical
 	// alert delivers once even if it is re-detected and re-emitted (SIEM-12). Bounded (FIFO
 	// eviction) so it cannot grow without limit.

@@ -113,6 +113,7 @@ func TestTelemetryRoundTrip(t *testing.T) {
 
 	if err := tr.PublishEvent(context.Background(), &corev1.Event{
 		EventId: "e1", AgentId: "agent-A", Kind: corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
+		Subject: &corev1.Subject{PseudonymousId: "sub_agent_a"}, // R34-12: ingest requires a subject
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +238,7 @@ func TestMalformedIsCountedNotSilent(t *testing.T) {
 	// The subscription still works: a valid event afterward lands.
 	tr, _ := natsx.Connect(url)
 	defer tr.Close()
-	_ = tr.PublishEvent(context.Background(), &corev1.Event{EventId: "e-after", AgentId: "agent-B"})
+	_ = tr.PublishEvent(context.Background(), &corev1.Event{EventId: "e-after", AgentId: "agent-B", Subject: &corev1.Subject{PseudonymousId: "sub_agent_b"}})
 	waitFor(t, func() bool {
 		rows, _ := srv.TelemetryForEvent(context.Background(), "e-after")
 		return len(rows) == 1

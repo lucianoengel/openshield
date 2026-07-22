@@ -38,7 +38,7 @@ func TestRestartedAgentNotReplayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pub1.PublishEvent(ctx, &corev1.Event{EventId: "ev-pre", AgentId: "agent-restart"}); err != nil {
+	if err := pub1.PublishEvent(ctx, &corev1.Event{EventId: "ev-pre", AgentId: "agent-restart", Subject: &corev1.Subject{PseudonymousId: "sub_restart"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
@@ -52,7 +52,7 @@ func TestRestartedAgentNotReplayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pub2.PublishEvent(ctx, &corev1.Event{EventId: "ev-post", AgentId: "agent-restart"}); err != nil {
+	if err := pub2.PublishEvent(ctx, &corev1.Event{EventId: "ev-post", AgentId: "agent-restart", Subject: &corev1.Subject{PseudonymousId: "sub_restart"}}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -192,7 +192,7 @@ func TestTLSDoesNotBypassSigning(t *testing.T) {
 	// A VALIDLY-signed message over the same channel IS accepted — proving the
 	// rejection above was the signature layer, not the TLS layer.
 	pub := natsx.NewSignedPublisher("tls-signed", id, conn)
-	if err := pub.PublishEvent(ctx, &corev1.Event{EventId: "good-tls", AgentId: "tls-signed"}); err != nil {
+	if err := pub.PublishEvent(ctx, &corev1.Event{EventId: "good-tls", AgentId: "tls-signed", Subject: &corev1.Subject{PseudonymousId: "sub_tls"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {

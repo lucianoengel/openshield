@@ -1,10 +1,12 @@
 package controlplane
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/lucianoengel/openshield/internal/notify"
 )
 
 // NewLeaderForTest builds a Leader with a fast poll interval so the election/failover test runs
@@ -29,3 +31,7 @@ func RequireTierForTest(minRole string) http.Handler {
 		w.WriteHeader(http.StatusOK)
 	}))
 }
+
+// EmitForTest exposes the unexported emit so a test can prove an unconfigured server
+// never fills its notify queue (R34-9).
+func (s *Server) EmitForTest(n notify.Notification) { s.emit(context.Background(), n) }

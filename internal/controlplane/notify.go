@@ -57,7 +57,7 @@ func (d *dedupeSet) markNew(id string) bool {
 // never stalls telemetry ingest (handleSigned → observePeer → emit).
 func (s *Server) SetNotifier(n notify.Notifier) {
 	s.notifier = n
-	s.notifyOnce.Do(func() { go s.deliverLoop() })
+	s.notifyOnce.Do(func() { s.notifyRunning.Store(true); go s.deliverLoop() })
 }
 
 // deliverLoop delivers queued notifications one at a time, off the ingest path. It runs for the
@@ -82,7 +82,11 @@ func (s *Server) deliverLoop() {
 // delivery backlog), the notification is DROPPED and counted — losing a page degrades responsiveness,
 // never the record, and never blocks ingest.
 func (s *Server) emit(_ context.Context, n notify.Notification) {
-	if s.notifier == nil {
+	// R34-9: enqueue ONLY when a delivery loop is actually running. New() sets a
+	// non-nil Nop notifier but does NOT start the loop, so gating on `notifier != nil`
+	// let every alert pile into a never-drained queue ("queue full" spam + inflated
+	// NotifyDropped). The loop starts only in SetNotifier.
+	if !s.notifyRunning.Load() {
 		return
 	}
 	if n.ID == "" {
