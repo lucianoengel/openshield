@@ -94,6 +94,7 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/search", opRead)
 		mux.Handle("/incidents", opRead)
 		mux.Handle("/overdue", opRead)
+		mux.Handle("/subject", opRead) // PLAT-8: DSAR — compile what the platform holds about a subject
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}
