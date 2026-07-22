@@ -617,7 +617,7 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   NIPS-1 (owns `:53`). Do NOT ship the transparent redirect from DEPLOY-1 until this resolver exists.
   *(Explicitly not the tap-based answer/RST-injection hack — that races the real response and loses
   under load; it is not a security control.)*
-- **NIPS-4 · Response-body inspection** — P1 · classify · M. Today only the *request* body is
+- ✅ **NIPS-4 · Response-body inspection (SHIPPED D200, observe-only)** — P1 · classify · M. Today only the *request* body is
   classified; the response is copied through. Add buffered/streamed classification with memory bounds,
   gzip + multipart decode (shared with DLP-8). **Must preserve the deliberate D73/D17 egress fail-open.**
 - **NIPS-5 · HTTP/2 & QUIC interception** — P2 · new work · L. HTTP/1.1 only today.

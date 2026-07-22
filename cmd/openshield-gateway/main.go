@@ -114,6 +114,12 @@ func main() {
 	applyThreatFeed(gw, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
+	// NIPS-4: opt-in response-body inspection (classify + audit the response, not only
+	// the request). Off by default — buffering every response is a deliberate choice.
+	if os.Getenv("OPENSHIELD_INSPECT_RESPONSES") != "" {
+		proxy.SetInspectResponses(true)
+		log.Info("gateway: NIPS-4 response-body inspection enabled (observe-only, fail-open)")
+	}
 
 	// TLS interception is OPT-IN: only when an interception CA is configured. It is
 	// a deliberate, scary capability — the CA can impersonate any site (D75) — so it

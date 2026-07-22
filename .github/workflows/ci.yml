@@ -101,6 +101,8 @@ jobs:
         run: go test -count=1 -v ./internal/engine/ ./internal/enforcers/...
       - name: NIPS-2 threat-intel engine (IOC match + policy blocks a known-bad flow)
         run: go test -count=1 -v ./internal/nips/ && go test -count=1 -run 'GatewayBlocksKnownBad|GatewayAllowsClean|GatewayNoFeed' -v ./internal/gateway/
+      - name: NIPS-4 response-body inspection (classify+audit the response, gzip, over-cap intact, fail-open)
+        run: go test -count=1 -run ResponseInspection -v ./internal/gateway/
       - name: DLP-3 exact-data matching (k-anonymized bloom index, no raw value shipped)
         run: go test -count=1 -run 'EDM|BuildEDM|RecordEDM|IDM' -v ./internal/classify/
       - name: DLP-7 context-proximity detection (passport/DL fire only near a context keyword)

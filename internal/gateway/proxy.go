@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/enforcers/flow"
 )
 
@@ -47,7 +49,18 @@ type Proxy struct {
 	minter      *CertMinter
 	noIntercept []string
 	originRT    http.RoundTripper
+
+	// inspectResponses turns on response-body classification (NIPS-4). Off by
+	// default: buffering every response is opt-in, so the default streaming
+	// behavior and performance are unchanged.
+	inspectResponses bool
 }
+
+// SetInspectResponses enables response-body classification (NIPS-4): the forward
+// path buffers the response (memory-bounded), gzip-decodes it, and classifies it
+// through the pipeline as an inbound event — observe-only, always delivering the
+// exact upstream bytes and failing open.
+func (p *Proxy) SetInspectResponses(on bool) { p.inspectResponses = on }
 
 // NewProxy wires a Proxy. enforce turns blocking ON: with it false the proxy is
 // observe-only (D1) — it classifies, decides and audits, but the flow enforcer is
@@ -357,9 +370,55 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, body []byte, tar
 	}
 	defer resp.Body.Close()
 
+	if p.inspectResponses {
+		p.forwardInspected(w, r, resp)
+		return
+	}
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// forwardInspected classifies the response body (NIPS-4) and delivers the exact
+// upstream bytes. Over-cap or on error it fails open (delivers, audits the gap);
+// observe-only, so the response is always delivered.
+func (p *Proxy) forwardInspected(w http.ResponseWriter, r *http.Request, resp *http.Response) {
+	prefix, tooLarge, err := readBoundedKeep(resp.Body, p.maxBody)
+	if err != nil {
+		// Fail open: deliver whatever remains rather than break the client's response.
+		p.logger.Error("gateway: response read error, failing open (delivered uninspected)",
+			"err", err, "host", r.Host)
+		p.deliver(w, resp, io.MultiReader(bytes.NewReader(prefix), resp.Body))
+		return
+	}
+	if tooLarge {
+		// A response over the cap cannot be buffered — deliver it intact, uninspected,
+		// and record the coverage gap (never refuse or truncate the client's response).
+		p.gw.RecordTunnel(r.Context(), hostOnly(r.Host), "response-over-cap-uninspected")
+		p.logger.Warn("gateway: response over cap, delivered uninspected (NIPS-4 gap)",
+			"cap", p.maxBody, "host", r.Host)
+		p.deliver(w, resp, io.MultiReader(bytes.NewReader(prefix), resp.Body))
+		return
+	}
+
+	// Classify the DECODED content (gzip-decoded if needed), but forward the ORIGINAL
+	// bytes so the client's negotiated encoding is honored.
+	plain := maybeGunzip(prefix, resp.Header, p.maxBody)
+	req := requestFromHTTP(newFlowID(), r, plain)
+	req.Direction = corev1.NetworkDirection_NETWORK_DIRECTION_INGRESS
+	if _, perr := p.gw.Process(r.Context(), req); perr != nil {
+		// The failure is audited by Process; deliver the response anyway (fail open).
+		p.logger.Error("gateway: response classify error, failing open (delivered)",
+			"err", perr, "host", r.Host)
+	}
+	p.deliver(w, resp, bytes.NewReader(prefix))
+}
+
+// deliver copies the response headers/status and the given body to the client.
+func (p *Proxy) deliver(w http.ResponseWriter, resp *http.Response, body io.Reader) {
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, body)
 }
 
 // requestFromHTTP builds a gateway.Request from an incoming proxy request. The
@@ -407,6 +466,43 @@ func readBounded(r io.Reader, max int64) (body []byte, tooLarge bool, err error)
 		return nil, true, nil
 	}
 	return b, false, nil
+}
+
+// readBoundedKeep is like readBounded but RETURNS the read prefix even when the
+// input exceeds max — so an over-cap RESPONSE can still be delivered (the prefix
+// plus the unread remainder), unlike a request which is refused.
+func readBoundedKeep(r io.Reader, max int64) (prefix []byte, tooLarge bool, err error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	b, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return b, false, err
+	}
+	if int64(len(b)) > max {
+		return b, true, nil
+	}
+	return b, false, nil
+}
+
+// maybeGunzip returns the decompressed body when the response is gzip-encoded, so
+// the detectors classify the actual content, not compressed noise. Bounded
+// (decompression-bomb safe): at most max bytes are decompressed. A decode failure
+// degrades to the raw bytes — never a failure of delivery.
+func maybeGunzip(body []byte, header http.Header, max int64) []byte {
+	if !strings.Contains(strings.ToLower(header.Get("Content-Encoding")), "gzip") {
+		return body
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return body
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(io.LimitReader(zr, max))
+	if err != nil || len(out) == 0 {
+		return body
+	}
+	return out
 }
 
 // hopHeaders are per-connection headers a proxy must not forward (RFC 7230 §6.1).
