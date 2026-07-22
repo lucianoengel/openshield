@@ -306,3 +306,47 @@ func validNHS(s string) bool {
 	}
 	return check == int(s[9]-'0')
 }
+
+// --- US Employer Identification Number (EIN) ---
+
+// confEIN: a distinctive 2-7 hyphenated format plus the IRS campus-prefix whitelist, but NO
+// checksum — moderate evidence, on par with SSN (structural only).
+const confEIN = 0.60
+
+type ein struct{}
+
+// Candidate: the conventional NN-NNNNNNN grouping (distinct from the SSN 3-2-4 shape).
+var einRe = regexp.MustCompile(`\b\d{2}-\d{7}\b`)
+
+// einPrefixes is the set of IRS-assigned EIN campus prefixes (the first two digits). A number
+// whose prefix is not on this published list is not a validly-issued EIN.
+var einPrefixes = map[string]struct{}{}
+
+func init() {
+	for _, p := range []string{
+		"01", "02", "03", "04", "05", "06", "10", "11", "12", "13", "14", "15", "16",
+		"20", "21", "22", "23", "24", "25", "26", "27", "30", "31", "32", "33", "34",
+		"35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47",
+		"48", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", "61",
+		"62", "63", "64", "65", "66", "67", "68", "71", "72", "73", "74", "75", "76",
+		"77", "80", "81", "82", "83", "84", "85", "86", "87", "88", "90", "91", "92",
+		"93", "94", "95", "98", "99",
+	} {
+		einPrefixes[p] = struct{}{}
+	}
+}
+
+func (ein) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_EIN }
+func (ein) Scan(text []byte) (int, float64) {
+	// The candidate keeps the hyphen; validate the prefix on the whole match, and de-dup on the
+	// digits so a repeated fixture does not inflate the count.
+	norm := func(b []byte) string { return string(b) }
+	valid := func(s string) bool {
+		if len(s) < 2 {
+			return false
+		}
+		_, ok := einPrefixes[s[:2]]
+		return ok
+	}
+	return countValid(einRe, text, norm, valid), confEIN
+}

@@ -44,6 +44,10 @@ enum DetectorType {
   // UK NHS number, healthcare DLP. A 10-digit patient id in the conventional 3-3-4 spaced
   // grouping with a weighted mod-11 check digit — strong, low-FP evidence.
   DETECTOR_TYPE_UK_NHS = 16;
+  // US Employer Identification Number (EIN), DLP. A 2-7 hyphenated tax id whose two-digit
+  // prefix must be an IRS-assigned campus code — structural (no checksum), so a moderate
+  // confidence like SSN.
+  DETECTOR_TYPE_EIN = 17;
 }
 
 // LocalMatch holds matched content. Host-only.
