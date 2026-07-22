@@ -309,6 +309,15 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			log.Info("gateway: OIDC SSO identity enabled — user identity from a verified bearer token (ZT-2)",
 				slog.String("issuer", issuer), slog.Int("keys", len(keys)))
 		}
+		// R34-10: apply a clock-skew leeway (default 60s) and, when turned on, sender-constrained
+		// (DPoP) validation so a stolen bearer token cannot be replayed from a device that lacks the
+		// bound key. DPoP is opt-in because it requires clients to present a proof; a token without a
+		// cnf.jkt is unaffected either way.
+		v.WithLeeway(envDuration("OPENSHIELD_OIDC_LEEWAY", 60*time.Second))
+		if os.Getenv("OPENSHIELD_OIDC_DPOP") != "" {
+			v.EnableDPoP(envInt("OPENSHIELD_OIDC_DPOP_CACHE", 8192))
+			log.Info("gateway: DPoP sender-constrained tokens ENABLED (a cnf.jkt token requires a matching proof)")
+		}
 		ap.SetOIDCVerifier(v)
 	}
 

@@ -98,11 +98,25 @@ func (p *AccessProxy) resolveUser(r *http.Request, deviceID *identity.Identity) 
 	if tok == "" {
 		return nil, http.StatusUnauthorized, errNoBearer
 	}
-	id, err := p.oidc.Verify(tok)
+	// R34-10: pass the DPoP proof (if any) and the request binding so a sender-constrained token
+	// (cnf.jkt) is only accepted from the device that holds the bound key. A non-DPoP token verifies
+	// unchanged. htu is the method-agnostic request URI; scheme+host+path per RFC 9449 (query/fragment
+	// excluded by the proof issuer) — we use the effective request URI the gateway received.
+	id, err := p.oidc.VerifyWithProof(tok, r.Header.Get("DPoP"), r.Method, requestURI(r))
 	if err != nil {
 		return nil, http.StatusForbidden, errBadBearer
 	}
 	return id, 0, nil
+}
+
+// requestURI reconstructs the htu the DPoP proof must be bound to: scheme://host/path with no query
+// or fragment (RFC 9449 §4.3). TLS presence picks the scheme; the Host header names the authority.
+func requestURI(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + r.URL.Path
 }
 
 var (
