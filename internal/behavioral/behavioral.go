@@ -92,11 +92,15 @@ func Analyze(execPath, parentPath string, args []string) Finding {
 // (IEX/DownloadString, or curl|wget piped to a shell).
 func encodedOrDownloadCradle(args []string) bool {
 	joined := strings.ToLower(strings.Join(args, " "))
-	// Encoded PowerShell: -enc, -e, -encodedcommand (each a flag token, to avoid matching
-	// an innocent substring).
+	// Encoded PowerShell: -EncodedCommand. PowerShell accepts ANY unambiguous PREFIX of a
+	// parameter, so -e, -en, -enc, -enco, -encod, … all resolve to -EncodedCommand — a literal
+	// match on just -enc/-e/-encodedcommand missed -encod, -enco, etc. (a 1-char bypass, HIPS-6).
+	// Match a '-'/'/'-prefixed token whose remainder is a non-empty prefix of "encodedcommand".
 	for _, a := range args {
 		la := strings.ToLower(a)
-		if la == "-enc" || la == "-e" || la == "-encodedcommand" || la == "/enc" {
+		// remainder ≥ 2 chars ("en"…): catches -en/-enc/-encod/-encode/…/-encodedcommand while
+		// excluding the extremely common innocent "-e" (echo -e, grep -e), which alone is sub-threshold.
+		if len(la) >= 3 && (la[0] == '-' || la[0] == '/') && strings.HasPrefix("encodedcommand", la[1:]) {
 			return true
 		}
 	}
@@ -110,11 +114,15 @@ func encodedOrDownloadCradle(args []string) bool {
 			return true
 		}
 	}
-	// curl/wget piped straight into a shell.
-	if (strings.Contains(joined, "curl") || strings.Contains(joined, "wget")) &&
-		(strings.Contains(joined, "| sh") || strings.Contains(joined, "|sh") ||
-			strings.Contains(joined, "| bash") || strings.Contains(joined, "|bash")) {
-		return true
+	// A downloader (curl/wget) piped straight into ANY shell. The old check matched only sh/bash,
+	// so `curl x | zsh`, `wget -O- x | dash`, `... |ksh` evaded it (HIPS-6). Match a pipe to any
+	// common shell, with or without a space after the pipe.
+	if strings.Contains(joined, "curl") || strings.Contains(joined, "wget") {
+		for _, sh := range []string{"sh", "bash", "zsh", "dash", "ksh", "fish"} {
+			if strings.Contains(joined, "|"+sh) || strings.Contains(joined, "| "+sh) {
+				return true
+			}
+		}
 	}
 	return false
 }

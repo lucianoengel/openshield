@@ -13,6 +13,7 @@
 package execaudit
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -140,12 +141,36 @@ func field(line, key string) string {
 	}
 }
 
-// unquote strips surrounding double quotes from an audit value (argv items and exe are
-// quoted). A hex-encoded value (auditd uses hex for args with special chars) is left as-is —
-// decoding it is a follow-up; the detector sees the hex, which is still a distinct token.
+// unquote strips surrounding double quotes from an audit value (argv items and exe are quoted),
+// and DECODES auditd's bare-hex encoding used for values with special chars (HIPS-6).
 func unquote(s string) string {
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		return s[1 : len(s)-1]
 	}
+	// auditd emits a value RAW when it is safe, but HEX-ENCODES a value that contains a space,
+	// quote, or control char (bare, no quotes). A real download-and-execute cradle — any arg with
+	// a space — arrives this way, so leaving it undecoded makes the behavioral detector blind to
+	// exactly the commands it exists to catch (HIPS-6). Decode a bare, even-length, all-hex value.
+	if isAuditHex(s) {
+		if b, err := hex.DecodeString(s); err == nil {
+			return string(b)
+		}
+	}
 	return s
+}
+
+// isAuditHex reports whether s is auditd's bare hex encoding: non-empty, even length, all hex
+// digits. A safe printable value is quoted by auditd, so an UNQUOTED all-hex value is hex-encoded
+// (a legitimately-hex printable arg would be quoted and never reach here unquoted).
+func isAuditHex(s string) bool {
+	if len(s) == 0 || len(s)%2 != 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
