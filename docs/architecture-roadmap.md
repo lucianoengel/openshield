@@ -51,7 +51,7 @@ wiring the domains together**, not more breadth.
 | NIPS / NTPS | ~30% | Per-channel: **HTTP is genuinely inline** (forward proxy, terminates TLS, `BLOCK`/`REDIRECT` in-path — real prevention, deliberately fail-open per D73/D17); **DNS is tap/detect-only** (DEPLOY-1 — cannot prevent; inline sinkhole resolver = NIPS-8); **SMTP is a terminating capture endpoint** (parses, does not relay — inline-`5xx`-reject-capable but not yet a filtering MTA hop). So the category is **NIDS today + inline NIPS on HTTP.** Next: transparent inline for HTTP (ADR-8/NIPS-1), signatures/threat-intel (NIPS-2). |
 | SIEM | ~35% | `/events` search **mounted + gated**, **materialized incidents** (id/state), cross-host correlation, alert lifecycle+ack, async multi-sink HMAC webhooks, persisted UEBA baselines, case workflow, syslog. Still: no unified alert-lifecycle schema (ADR-10), notify idempotency broken (SIEM-12), no UI, no CEF/WEF. |
 | HIPS | ~30% | Phase E **runs end-to-end** — real auditd source → real pid → real KILL, behavioral→decision, detector evasions closed (mutation-confirmed). **KILL safety incomplete**: pid-reuse revalidation ineffective + the critical-process allowlist is self-immunizing (HIPS-7/8). `DENY_EXEC` deliberately deferred (needs `FAN_OPEN_EXEC_PERM`). |
-| **SOAR** | ~10% | Has the *evidence + case shell* — four-eyes cases (library-only, **no HTTP surface**), materialized incidents with ack, async multi-sink HMAC webhooks — but **zero orchestration**: incidents never notify, no playbook engine, no enrichment/threat-intel, no bidirectional integrations, no generic approval object, no MTTA/MTTR, correlation only runs on operator GET. Response automation is governed by **ADR-12/T5** (server-side playbooks pipeline-native; signed intent seam + off-pipeline runners owner-gated). SOAR-1…9. |
+| **SOAR** | ~10% | Has the *evidence + case shell* — four-eyes cases (library-only, **no HTTP surface**), materialized incidents with ack, async multi-sink HMAC webhooks — but **zero orchestration**: incidents never notify, no playbook engine, no enrichment/threat-intel, no bidirectional integrations, no generic approval object, no MTTA/MTTR, correlation only runs on operator GET. Response automation is governed by **ADR-12/T5** (server-side playbooks pipeline-native; signed intent seam + off-pipeline runners **owner-approved 2026-07-22**). SOAR-1…9. |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. Not in the headline category set (XDR/DLP/HIPS/NTPS/SIEM/ZT/SOAR). |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring
@@ -208,10 +208,12 @@ near-term queue clears (several are already unblocked and can interleave):
 - **XDR lane** (see *Backlog → XDR*): the entity graph and cross-domain correlation. **XDR-1 is
   unblocked the moment IDENT-1 lands** (it's the same canonical-identity work), so this lane starts
   early. Spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 (after SIEM-6b) → XDR-4 → XDR-5 → XDR-6/XDR-7.
-- **SOAR lane** (see *Backlog → SOAR*): **Tier-1 (SOAR-1/2/3/4/5/6/9) is pipeline-native and needs no
-  owner sign-off** — SOAR-1/2 (incidents notify + run on a ticker) are quick wins that can land beside
-  the near-term queue. **SOAR-7 (intent seam) and SOAR-8 (runners) are OWNER-GATED** (ADR-12 Tier-2/3) —
-  do not start until signed off. XDR-6 (coordinated response) depends on SOAR-7.
+- **SOAR lane** (see *Backlog → SOAR*): Tier-1 (SOAR-1/2/3/4/5/6/9) is pipeline-native — SOAR-1/2
+  (incidents notify + run on a ticker) are quick wins that can land beside the near-term queue.
+  **SOAR-7 (intent seam) and SOAR-8 (runners) are now OWNER-APPROVED (2026-07-22)** and queued per the
+  spine (after SOAR-4). XDR-6 (coordinated response) depends on SOAR-7. Discipline stays: any *new*
+  intent verb beyond the initial three (`ELEVATE_SCRUTINY`/`CONTAIN`/`REVOKE_TRUST`) is a one-at-a-time
+  owner gate; four-eyes on Tier-3 is non-waivable.
 
 ### Minor (fold into the owning ticket, no separate proposal)
 `/incidents?limit=` still silently defaults instead of 400ing (finish the SEC-8 rule on that param) ·
@@ -310,7 +312,7 @@ keeps the sentence "the server coordinates, it does not control" literally true 
   playbook composes registered steps; it cannot express a shell command or an arbitrary-URL call — the
   D14 argument one level up), and **every step transition is appended to the audit ledger** (an
   automated action is exactly as evidentiary as a human one). Covers SOAR-1/2/3/4/5/6/9.
-- **Tier 2 — a bounded new seam: signed Response Intent (OWNER-GATED).** For live containment, the
+- **Tier 2 — a bounded new seam: signed Response Intent (OWNER-APPROVED 2026-07-22).** For live containment, the
   server does what T2 already taught it: **publish signed typed data, let local policy decide.** A
   `ResponseIntent{subject, intent, version, issued_at, ttl}` where `intent` is a **closed, parameterless
   vocabulary** (initially `ELEVATE_SCRUTINY`, `CONTAIN`, `REVOKE_TRUST`), ed25519-signed with the SEC-1
@@ -323,8 +325,9 @@ keeps the sentence "the server coordinates, it does not control" literally true 
   four-eyes before publication**; a **blast-radius guard** (an intent batch touching >N subjects or
   >x% of the fleet needs four-eyes regardless); mandatory **TTL** (containment decays unless renewed);
   publication and each local enactment **ledgered with the intent id**. Covers SOAR-7 / XDR-6.
-  Expands one intent verb at a time — a T1-style per-capability owner gate.
-- **Tier 3 — third-party actuation: off-pipeline by construction (OWNER-GATED).** "Disable user in
+  **Owner approved the seam + the initial three-verb vocabulary (2026-07-22);** any *new* intent verb
+  beyond those three still expands one at a time — a T1-style per-capability owner gate.
+- **Tier 3 — third-party actuation: off-pipeline by construction (OWNER-APPROVED 2026-07-22).** "Disable user in
   Okta / quarantine VLAN / purge mail" actuate infrastructure with no local OpenShield policy engine.
   Mirroring ADR-0: **integration runners are separately-scoped off-pipeline processes** (own
   least-privilege third-party creds) that **subscribe to the same signed, approved intent stream** and
@@ -426,13 +429,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 - **SOAR-6 · MTTA/MTTR + analyst metrics** — srv · S. Derive from existing timestamps
   (`detected_at`/`acknowledged_at`/`opened_at`/`closed_at`), expose via PLAT-4 Prometheus + a report
   endpoint. *Accept: `/metrics` exposes mtta/mttr histograms that move when an incident is acked/closed.*
-- **SOAR-7 · Response-Intent seam** — X + existing A · L · **OWNER-GATED (ADR-12 Tier-2).** Closed intent
+- **SOAR-7 · Response-Intent seam** — X + existing A · L · **APPROVED (ADR-12 Tier-2, owner 2026-07-22).** Closed intent
   vocabulary + `PublishIntent` mirroring `riskpub.go` (ed25519-signed, versioned, TTL), consumed as typed
   policy context; high-impact intents gated on SOAR-3 approvals + blast-radius guard. *Accept: approved
   `CONTAIN(subject)` → gateway policy locally BLOCKs that subject's flows; an expired/unsigned/replayed
   intent changes nothing; an endpoint whose policy ignores intents is unaffected.*
-- **SOAR-8 · Integration runners v1** — off-pipeline · M (ITSM) / L (IdP) · **OWNER-GATED (ADR-12
-  Tier-3).** (a) ITSM/ticketing bidirectional (incident→ticket, status sync-back); (b) IdP responder
+- **SOAR-8 · Integration runners v1** — off-pipeline · M (ITSM) / L (IdP) · **APPROVED (ADR-12
+  Tier-3, owner 2026-07-22).** (a) ITSM/ticketing bidirectional (incident→ticket, status sync-back); (b) IdP responder
   (disable-user/revoke-sessions) as an intent *subscriber* with a per-connector closed verb set, four-eyes
   always. *Accept: (a) closing the ticket transitions the incident; (b) an unapproved intent is never
   executed, and the runner's ledger entry links intent-id→API call.*
@@ -581,8 +584,9 @@ that is the signal to stop and re-examine — the D26/D69 fitness tests apply.
   *local* policy enacts (the T2 publish-and-decide seam, not a command); third-party actuation (IdP/
   ITSM) is **off-pipeline** intent-subscriber runners with least-privilege creds + non-waivable
   four-eyes. **Arbitrary endpoint command execution and remote content pull are permanently out** — the
-  D14/D10 red line. *Tier-1 proceeds; the intent seam (Tier-2) and runners (Tier-3) are owner-gated,
-  one intent verb at a time (a T1-style gate).*
+  D14/D10 red line. *Tier-1 proceeds; the intent seam (Tier-2) and runners (Tier-3) are **owner-approved
+  (2026-07-22)** and queued — new intent verbs beyond the initial three still expand one at a time (a
+  T1-style gate).*
 
 ### Phased plan (original design sequence, for context)
 
