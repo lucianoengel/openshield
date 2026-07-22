@@ -176,6 +176,27 @@ func main() {
 			slog.String("listen", dl.Addr().String()))
 	}
 
+	// Optional exec-event source: the auditd exec connector (HIPS-5c). When OPENSHIELD_EXEC_AUDIT_LOG
+	// names a readable stream (a tailed audit log, a fifo, or the audit socket), process executions
+	// enter the SAME pipeline — additive, observe-only (D1) unless a KILL policy + OPENSHIELD_ENFORCE
+	// are set. Tracked in wg so events is not closed while it produces.
+	if execLog := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_AUDIT_LOG")); execLog != "" {
+		f, err := os.Open(execLog)
+		if err != nil {
+			fatal(log, "opening exec audit log", err)
+		}
+		defer f.Close()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := execSource(ctx, f, events, log); err != nil {
+				log.Error("exec source", slog.String("err", err.Error()))
+			}
+		}()
+		log.Info("engine: exec connector ENABLED — process executions enter the pipeline (HIPS-5)",
+			slog.String("source", execLog))
+	}
+
 	go func() { wg.Wait(); close(events) }()
 
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
