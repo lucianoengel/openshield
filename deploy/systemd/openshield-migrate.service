@@ -1,0 +1,26 @@
+# OpenShield schema migration + app-role provisioning (PLAT-6b / SEC-6).
+#
+# A ONE-SHOT run as the database OWNER: it applies migrations and provisions the non-owner
+# application login role (openshield_app). The long-running units (server/engine/gateway/anchor)
+# depend on this and connect as the NON-OWNER role, so the append-only ledger trigger is not
+# owner-bypassable in the running product. Owner credentials live only in this unit.
+[Unit]
+Description=OpenShield schema migration + non-owner app-role provisioning
+Documentation=https://github.com/lucianoengel/openshield
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/bin/openshield-server migrate
+User=openshield
+Group=openshield
+# OWNER DSN — migrations only. Set OPENSHIELD_APP_PASSWORD to a real secret in production
+# (this dev default matches compose; change it before deploying).
+Environment=OPENSHIELD_DSN=postgres://openshield:dev@127.0.0.1:5432/openshield?sslmode=disable
+Environment=OPENSHIELD_APP_ROLE=openshield_app
+Environment=OPENSHIELD_APP_PASSWORD=app
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

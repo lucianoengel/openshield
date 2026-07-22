@@ -97,3 +97,69 @@ func fullyMigrated(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
 	}
 	return applied >= want, nil
 }
+
+// validRoleName restricts an app-role name to a plain SQL identifier so it can be interpolated
+// into role DDL (which cannot be parameterized) without injection risk.
+func validRoleName(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (i > 0 && c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// EnsureAppLogin idempotently provisions a NON-OWNER LOGIN role that is a member of
+// openshield_writer — the identity the application binaries connect as (PLAT-6b). It is created
+// by the OWNER during migration; the app then connects as this role and, being a non-owner, cannot
+// disable the append-only trigger (and, unlike SET ROLE from the owner, cannot RESET back to the
+// owner). The password is escaped as a literal; the role name is a validated identifier.
+func EnsureAppLogin(ctx context.Context, pool *pgxpool.Pool, role, password string) error {
+	if !validRoleName(role) {
+		return fmt.Errorf("invalid app role name %q", role)
+	}
+	if password == "" {
+		return fmt.Errorf("app role password must not be empty")
+	}
+	lit := "'" + strings.ReplaceAll(password, "'", "''") + "'"
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)`, role).Scan(&exists); err != nil {
+		return fmt.Errorf("checking app role: %w", err)
+	}
+	if !exists {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD %s IN ROLE openshield_writer`, role, lit)); err != nil {
+			return fmt.Errorf("creating app role: %w", err)
+		}
+		return nil
+	}
+	// Existing role: ensure it can log in with the configured password and holds the membership,
+	// but never escalate it (no SUPERUSER/CREATEROLE/ownership is ever granted here).
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s LOGIN PASSWORD %s`, role, lit)); err != nil {
+		return fmt.Errorf("altering app role: %w", err)
+	}
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`GRANT openshield_writer TO %s`, role)); err != nil {
+		return fmt.Errorf("granting app role membership: %w", err)
+	}
+	return nil
+}
+
+// MigrateIfNeeded runs Migrate only when the database is not already fully migrated. It lets a
+// binary that may connect as the NON-OWNER application role start safely: on a fresh database
+// (owner) it migrates; on an already-migrated one (app role, which cannot CREATE) it skips via the
+// read-only fullyMigrated check. The owner-only migration path (openshield-server migrate) calls
+// Migrate directly.
+func MigrateIfNeeded(ctx context.Context, pool *pgxpool.Pool) error {
+	done, err := fullyMigrated(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	return Migrate(ctx, pool)
+}

@@ -9,7 +9,8 @@
 # subprocess and the real ledger, which package tests cannot.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$REPO"
-DSN="postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable"
+DSN="postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable"          # OWNER — migrations only
+APP_DSN="postgres://openshield_app:app@127.0.0.1:55432/openshield?sslmode=disable"  # NON-OWNER app role (SEC-6)
 WORK="$(mktemp -d)"
 psql(){ podman exec openshield-pg psql -U openshield -tAqc "$1"; }
 
@@ -22,6 +23,7 @@ trap cleanup EXIT
 echo "==> building the shipped binaries"
 go build -o "$WORK/openshield-engine" ./cmd/openshield-engine
 go build -o "$WORK/openshield-worker" ./cmd/openshield-worker
+go build -o "$WORK/openshield-server" ./cmd/openshield-server
 go build -o "$WORK/openshield-anchor" ./cmd/openshield-anchor
 go build -o "$WORK/openshield-provision" ./cmd/openshield-provision
 go build -o "$WORK/openshieldctl" ./cmd/openshieldctl
@@ -31,10 +33,15 @@ podman start openshield-pg >/dev/null 2>&1 || true
 for i in $(seq 1 30); do podman exec openshield-pg pg_isready -U openshield >/dev/null 2>&1 && break; sleep 1; done
 psql 'DROP TABLE IF EXISTS audit_entries, key_epochs, anchors, schema_migrations CASCADE' >/dev/null
 
+echo "==> migrating as OWNER + provisioning the non-owner app role (SEC-6/PLAT-6b)"
+OPENSHIELD_DSN="$DSN" OPENSHIELD_APP_ROLE=openshield_app OPENSHIELD_APP_PASSWORD=app \
+  "$WORK/openshield-server" migrate
+
+
 WATCH="$WORK/watch"; mkdir -p "$WATCH"
 
 echo "==> starting the engine binary (observe path, unprivileged notify-mode)"
-OPENSHIELD_DSN="$DSN" \
+OPENSHIELD_DSN="$APP_DSN" \
 OPENSHIELD_WORKER_BIN="$WORK/openshield-worker" \
 OPENSHIELD_SIGNER_FILE="$WORK/signer.state" \
 OPENSHIELD_WATCH_DIRS="$WATCH" \

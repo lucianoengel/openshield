@@ -61,8 +61,10 @@ podman run -d --name "$NATS" --network "$NET" -v "$CERTS:/certs:ro,Z" docker.io/
   --tls --tlscert /certs/server-cert.pem --tlskey /certs/server-key.pem \
   --tlsverify --tlscacert /certs/ca.pem >/dev/null
 for i in $(seq 1 30); do podman exec "$PG" pg_isready -U openshield >/dev/null 2>&1 && break; sleep 1; done
+echo "==> migrating as OWNER + provisioning the non-owner app role (SEC-6/PLAT-6b)"
+podman run --rm --network "$NET" -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" -e OPENSHIELD_APP_ROLE=openshield_app -e OPENSHIELD_APP_PASSWORD=app openshield-server:fleet openshield-server migrate
 podman run -d --name "$SRV" --network "$NET" -p 18080:8080 -v "$CERTS:/certs:ro,Z" \
-  -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" \
+  -e OPENSHIELD_DSN="postgres://openshield_app:app@$PG:5432/openshield?sslmode=disable" \
   -e OPENSHIELD_NATS_URL="tls://$NATS:4222" -e OPENSHIELD_HTTP_ADDR=":8080" \
   -e OPENSHIELD_TLS_CA=/certs/ca.pem -e OPENSHIELD_TLS_CERT=/certs/server-cert.pem -e OPENSHIELD_TLS_KEY=/certs/server-key.pem \
   openshield-server:fleet >/dev/null

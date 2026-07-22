@@ -36,8 +36,10 @@ podman network create "$NET" >/dev/null 2>&1 || true
 podman run -d --name "$PG" --network "$NET" -e POSTGRES_USER=openshield -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=openshield docker.io/library/postgres:16 >/dev/null
 podman run -d --name "$NATS" --network "$NET" docker.io/library/nats:2 >/dev/null
 for i in $(seq 1 30); do podman exec "$PG" pg_isready -U openshield >/dev/null 2>&1 && break; sleep 1; done
+echo "==> migrating as OWNER + provisioning the non-owner app role (SEC-6/PLAT-6b)"
+podman run --rm --network "$NET" -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" -e OPENSHIELD_APP_ROLE=openshield_app -e OPENSHIELD_APP_PASSWORD=app openshield-server:fleet openshield-server migrate
 podman run -d --name "$SRV" --network "$NET" \
-  -e OPENSHIELD_DSN="postgres://openshield:dev@$PG:5432/openshield?sslmode=disable" \
+  -e OPENSHIELD_DSN="postgres://openshield_app:app@$PG:5432/openshield?sslmode=disable" \
   -e OPENSHIELD_NATS_URL="nats://$NATS:4222" -e OPENSHIELD_HTTP_ADDR=":8080" \
   -e OPENSHIELD_PEER_UEBA_THRESHOLD="0.6" -e OPENSHIELD_PEER_UEBA_COOLDOWN="1h" \
   openshield-server:fleet >/dev/null

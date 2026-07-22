@@ -36,6 +36,8 @@ func main() {
 			os.Exit(issueToken(dsn, os.Args[2:]))
 		case "revoke":
 			os.Exit(revokeAgent(dsn, os.Args[2:]))
+		case "migrate":
+			os.Exit(runMigrate(dsn))
 		}
 	}
 	natsURL := env("OPENSHIELD_NATS_URL", "nats://127.0.0.1:4222")
@@ -51,7 +53,7 @@ func main() {
 	if err := pool.Ping(ctx); err != nil {
 		fatal("Postgres unreachable: %v", err)
 	}
-	if err := postgres.Migrate(ctx, pool); err != nil {
+	if err := postgres.MigrateIfNeeded(ctx, pool); err != nil {
 		fatal("migrating: %v", err)
 	}
 
@@ -188,6 +190,36 @@ func main() {
 	fmt.Fprintln(os.Stderr, "openshield-server: shut down")
 }
 
+// runMigrate applies migrations as the OWNER and provisions the non-owner application LOGIN role
+// (PLAT-6b). The deploy runs this once with the owner DSN; the app binaries then connect as the
+// provisioned non-owner role (fullyMigrated lets them skip Migrate). Provisioning is skipped when
+// no OPENSHIELD_APP_PASSWORD is set, so a dev that runs everything as the owner is unaffected.
+func runMigrate(dsn string) int {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "migrate:", err)
+		return 1
+	}
+	defer pool.Close()
+	if err := postgres.Migrate(ctx, pool); err != nil {
+		fmt.Fprintln(os.Stderr, "migrate:", err)
+		return 1
+	}
+	role := env("OPENSHIELD_APP_ROLE", "openshield_app")
+	pass := os.Getenv("OPENSHIELD_APP_PASSWORD")
+	if pass == "" {
+		fmt.Fprintln(os.Stderr, "migrate: schema up to date; OPENSHIELD_APP_PASSWORD unset, skipping non-owner app-role provisioning")
+		return 0
+	}
+	if err := postgres.EnsureAppLogin(ctx, pool, role, pass); err != nil {
+		fmt.Fprintln(os.Stderr, "migrate: provisioning app role:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "migrate: schema up to date; provisioned non-owner app role %q\n", role)
+	return 0
+}
+
 func issueToken(dsn string, args []string) int {
 	ttl := 3600
 	if len(args) > 0 {
@@ -202,7 +234,7 @@ func issueToken(dsn string, args []string) int {
 		return 1
 	}
 	defer pool.Close()
-	if err := postgres.Migrate(ctx, pool); err != nil {
+	if err := postgres.MigrateIfNeeded(ctx, pool); err != nil {
 		fmt.Fprintln(os.Stderr, "issue-token migrate:", err)
 		return 1
 	}

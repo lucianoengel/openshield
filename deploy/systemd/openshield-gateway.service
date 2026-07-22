@@ -15,7 +15,8 @@
 [Unit]
 Description=OpenShield network gateway (proxy; holds the ledger signer + interception CA)
 Documentation=https://github.com/lucianoengel/openshield
-After=network-online.target
+After=network-online.target openshield-migrate.service
+Wants=openshield-migrate.service
 
 [Service]
 Type=simple
@@ -37,7 +38,7 @@ StateDirectoryMode=0700
 Environment=OPENSHIELD_SIGNER_FILE=/var/lib/openshield-gateway/gateway-signer.state
 Environment=OPENSHIELD_WORKER_BIN=/usr/local/bin/openshield-worker
 Environment=OPENSHIELD_LISTEN=127.0.0.1:8080
-Environment=OPENSHIELD_DSN=postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable
+Environment=OPENSHIELD_DSN=postgres://openshield_app:app@127.0.0.1:55432/openshield?sslmode=disable
 # Observe-only by default (D1). To ENFORCE, set OPENSHIELD_ENFORCE=1. To INTERCEPT
 # HTTPS, set OPENSHIELD_INTERCEPT_CA_CERT/KEY to files under the StateDirectory (D75);
 # the do-not-intercept list is OPENSHIELD_NO_INTERCEPT (D75).

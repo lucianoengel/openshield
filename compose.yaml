@@ -33,7 +33,11 @@ services:
     ports:
       - "127.0.0.1:4222:4222"         # client port, localhost only
 
-  server:
+  # One-shot: run migrations AS THE OWNER and provision the non-owner application login role
+  # (PLAT-6b / SEC-6). The long-running services then connect as that non-owner role, so the
+  # append-only ledger trigger is not owner-bypassable in the running stack. Owner credentials
+  # are used only here.
+  migrate:
     build:
       context: .
       dockerfile: Containerfile
@@ -41,7 +45,23 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      OPENSHIELD_DSN: "postgres://openshield:dev@postgres:5432/openshield?sslmode=disable"
+      OPENSHIELD_DSN: "postgres://openshield:dev@postgres:5432/openshield?sslmode=disable"  # OWNER — migrations only
+      OPENSHIELD_APP_ROLE: "openshield_app"
+      OPENSHIELD_APP_PASSWORD: "app"     # DEV ONLY — never a real deployment
+    command: ["openshield-server", "migrate"]
+    restart: "no"
+
+  server:
+    build:
+      context: .
+      dockerfile: Containerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      # NON-OWNER application role: can write the aggregate + append the ledger, but cannot ALTER
+      # the schema or disable the append-only trigger (SEC-6). Owner is reserved for `migrate`.
+      OPENSHIELD_DSN: "postgres://openshield_app:app@postgres:5432/openshield?sslmode=disable"
       OPENSHIELD_NATS_URL: "nats://nats:4222"
     restart: on-failure
 
