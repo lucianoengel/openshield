@@ -82,7 +82,18 @@ func main() {
 		}
 	})
 
-	pol, err := policy.NewDefault(ctx)
+	// DLP-5: select a compliance pack (pci|hipaa|gdpr) via OPENSHIELD_POLICY_PACK, else the
+	// observe-only default. An unknown pack aborts startup — a compliance control must not silently
+	// fall back to a permissive policy.
+	var pol *policy.Stage
+	if pack := os.Getenv("OPENSHIELD_POLICY_PACK"); pack != "" {
+		pol, err = policy.NewPack(ctx, pack)
+		if err == nil {
+			log.Info("policy: compliance pack loaded (DLP-5)", slog.String("pack", pack))
+		}
+	} else {
+		pol, err = policy.NewDefault(ctx)
+	}
 	if err != nil {
 		fatal(log, "loading policy", err)
 	}
