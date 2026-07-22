@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/lucianoengel/openshield/internal/core"
+	"github.com/lucianoengel/openshield/internal/behavioral"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
@@ -106,6 +107,19 @@ func buildInput(st *core.State) map[string]interface{} {
 			args = append(args, a)
 		}
 		event["args"] = args
+		// HIPS behavioral analysis (Phase E, HIPS-5): the LOLBin / suspicious-lineage / encoded-
+		// command detection runs HERE, in the engine, on process METADATA only — it is pure and
+		// content-free, so it needs no sandboxed worker (D29 is about content parsing, not
+		// metadata). Its verdict is exposed as a typed policy input; the POLICY decides the action
+		// (ALERT/KILL — the closed set, T1), never the detector. This is the seam that turns the
+		// built-but-unwired behavioral detectors into a running detection path.
+		f := behavioral.Analyze(ps.GetExecPath(), ps.GetParentPath(), ps.GetArgs())
+		event["behavioral"] = map[string]interface{}{
+			"score":              f.Score,
+			"lolbin":             f.LOLBin,
+			"suspicious_lineage": f.SuspiciousLineage,
+			"encoded_command":    f.EncodedCommand,
+		}
 	}
 	return map[string]interface{}{
 		"purpose":        st.Event.GetPurpose().String(),
