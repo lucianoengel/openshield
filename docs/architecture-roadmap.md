@@ -766,7 +766,7 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 - **NIPS-6 · Raw TCP/L4 metadata connector + anomaly/beaconing detection** — P2 · P + C · L.
 
 ### SIEM
-- **SIEM-4 · External log ingestion beyond syslog** — P1 · connector class · M. CEF / WEF / cloud-JSON
+- ✅ **SIEM-4 · External log ingestion — CEF parser (SHIPPED D202)** — P1 · connector class · M. CEF / WEF / cloud-JSON
   formats; wire ingested logs into the *verified* ingest + search/correlation path (not just a
   listener). Syslog precedent landed.
 - ✅ **SIEM-7 · MITRE ATT&CK mapping (SHIPPED D201)** — P1 · classify metadata · M. Tag detections with techniques.

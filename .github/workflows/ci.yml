@@ -105,6 +105,8 @@ jobs:
         run: go test -count=1 -run ResponseInspection -v ./internal/gateway/
       - name: SIEM-7 MITRE ATT&CK mapping (signal→technique; policy routes on a technique)
         run: go test -count=1 -v ./internal/attack/ && go test -count=1 -run TestAttackTechniqueAwarePolicy -v ./internal/policy/
+      - name: SIEM-4 CEF log parser (headers + extension escaping; malformed rejected)
+        run: go test -count=1 -v ./internal/connectors/cef/
       - name: DLP-3 exact-data matching (k-anonymized bloom index, no raw value shipped)
         run: go test -count=1 -run 'EDM|BuildEDM|RecordEDM|IDM' -v ./internal/classify/
       - name: DLP-7 context-proximity detection (passport/DL fire only near a context keyword)
