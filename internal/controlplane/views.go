@@ -58,8 +58,28 @@ func (s *Server) View(ctx context.Context, viewer, eventID string) ([]TelemetryR
 // policy OID instead of OU.
 const (
 	RoleAgent    = "agent"
-	RoleOperator = "operator"
+	RoleOperator = "operator" // legacy full-access operator; ranks as admin (PLAT-3)
+	// Operator tiers (PLAT-3/ADR-4), ordered analyst < responder < admin.
+	RoleAnalyst   = "analyst"
+	RoleResponder = "responder"
+	RoleAdmin     = "admin"
 )
+
+// roleRank orders the operator tiers so a higher tier satisfies a lower requirement (PLAT-3/ADR-4).
+// The legacy `operator` role ranks as admin (full access, backward compatible). `agent` and any
+// unknown/absent role rank 0 — authorized for NO operator route (deny by default).
+func roleRank(role string) int {
+	switch role {
+	case RoleAnalyst:
+		return 1
+	case RoleResponder:
+		return 2
+	case RoleAdmin, RoleOperator:
+		return 3
+	default:
+		return 0
+	}
+}
 
 // certRole returns the first recognised role in the verified peer certificate's
 // OU, or "" (an unknown/absent role is authorized for nothing — deny by default).
@@ -68,7 +88,8 @@ func certRole(state *tls.ConnectionState) string {
 		return ""
 	}
 	for _, ou := range state.PeerCertificates[0].Subject.OrganizationalUnit {
-		if ou == RoleAgent || ou == RoleOperator {
+		switch ou {
+		case RoleAgent, RoleOperator, RoleAnalyst, RoleResponder, RoleAdmin:
 			return ou
 		}
 	}
@@ -88,6 +109,26 @@ func requireRole(role string, h http.Handler) http.Handler {
 		if certRole(r.TLS) != role {
 			// Authenticated, but this identity is not allowed here (403 ≠ 401).
 			http.Error(w, "forbidden: certificate role not authorized for this endpoint", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// requireTier gates a handler on a MINIMUM operator tier (PLAT-3/ADR-4): 401 when there is no
+// verified cert, 403 when the cert's role ranks BELOW minRole, else it serves h. A higher tier
+// satisfies a lower requirement (admin ≥ responder ≥ analyst), and the legacy `operator` role ranks
+// as admin so existing operator certificates keep full access. The role comes from the certificate,
+// never the request (D58).
+func requireTier(minRole string, h http.Handler) http.Handler {
+	min := roleRank(minRole)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+			http.Error(w, "client certificate required", http.StatusUnauthorized)
+			return
+		}
+		if roleRank(certRole(r.TLS)) < min {
+			http.Error(w, "forbidden: certificate role tier not authorized for this endpoint", http.StatusForbidden)
 			return
 		}
 		h.ServeHTTP(w, r)

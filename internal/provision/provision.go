@@ -31,12 +31,28 @@ import (
 const (
 	RoleAgent    = "agent"
 	RoleOperator = "operator"
+	// Operator RBAC tiers (PLAT-3/ADR-4): analyst < responder < admin. Issued via IssueCert like
+	// agent/operator; the control-plane gate ranks them (legacy operator ranks as admin).
+	RoleAnalyst   = "analyst"
+	RoleResponder = "responder"
+	RoleAdmin     = "admin"
 	// RoleClient marks a Zero-Trust CLIENT certificate (D86) — a human or workload
 	// authenticating to the access gateway. Distinct from agent/operator so a client
 	// cert can never be replayed as an agent onboarding or an operator investigation
 	// login at the D58 role gate. Issued via IssueClientCert, never IssueCert.
 	RoleClient = "client"
 )
+
+// validCertRole reports whether role is one IssueCert may stamp into a leaf OU (PLAT-3): the agent,
+// the legacy operator, or an operator tier. RoleClient has its own issuance path (IssueClientCert).
+func validCertRole(role string) bool {
+	switch role {
+	case RoleAgent, RoleOperator, RoleAnalyst, RoleResponder, RoleAdmin:
+		return true
+	default:
+		return false
+	}
+}
 
 // CertValidity bounds an issued certificate's lifetime. There is no revocation
 // (the minimal-PKI limit), so a leaked cert is valid until it expires; keep it
@@ -179,8 +195,8 @@ func InterceptionCA() (caCertPEM, caKeyPEM []byte, err error) {
 // the given SANs (host names and/or IPs). An unknown role is rejected — the
 // enforcer never issues a cert with a role the gate will not recognise.
 func IssueCert(caCertPEM, caKeyPEM []byte, cn, role string, sans []string) (certPEM, keyPEM []byte, err error) {
-	if role != RoleAgent && role != RoleOperator {
-		return nil, nil, fmt.Errorf("provision: unknown role %q (want %q or %q)", role, RoleAgent, RoleOperator)
+	if !validCertRole(role) {
+		return nil, nil, fmt.Errorf("provision: unknown role %q (want agent/operator/analyst/responder/admin)", role)
 	}
 	caCert, caKey, err := parseCA(caCertPEM, caKeyPEM)
 	if err != nil {

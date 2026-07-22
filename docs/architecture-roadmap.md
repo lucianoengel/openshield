@@ -228,6 +228,10 @@ applies.
   new detector writes the lifecycle fields from day one. (Do NOT re-add `agent_id`/ack.)
 
 ### PLAT-3 (RBAC) · Per-route analyst RBAC tiers — P1 · authz · M — implements ADR-4
+- **✅ SHIPPED D179 (2026-07-22) — pending owner audit.** analyst<responder<admin tiers on the
+  `requireTier` seam (legacy operator=admin, back-compat); reads=analyst, acks=responder, /view=admin;
+  provisioning issues the new roles. Proven (unit + served-mTLS with provisioned tier certs) + 2 mutation
+  guards. Org multi-tenancy + OIDC-group backing deferred. Unblocks the PLAT-1 UI.
 - Add read-only-analyst / responder / admin tiers on the existing `requireRole` seam, optionally
   OIDC-group-backed (ZT-2 gives a real verifier). Defer org multi-tenancy (XL). Unblocks the PLAT-1 UI,
   which needs its authz model fixed before design.

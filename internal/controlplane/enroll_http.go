@@ -85,18 +85,19 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 	mux := http.NewServeMux()
 	if tlsCfg != nil {
 		mux.Handle("/enroll", requireRole(RoleAgent, s.EnrollHandler()))
-		mux.Handle("/view", requireRole(RoleOperator, s.ViewHandler()))
-		// Operator read surface (D82): the fleet's peer alerts and overdue agents,
-		// behind the SAME operator-role gate as /view — read-only, forge-nothing.
-		opRead := requireRole(RoleOperator, s.OperatorReadHandler())
-		mux.Handle("/alerts", opRead)
-		mux.Handle("/alerts/ack", opRead) // SIEM-6: acknowledge an alert (POST), operator-attributed
-		mux.Handle("/search", opRead)
-		mux.Handle("/events", opRead) // SIEM-1: event search over the fleet aggregate
-		mux.Handle("/incidents", opRead)
-		mux.Handle("/incidents/ack", opRead) // SIEM-11b: acknowledge an incident (POST)
-		mux.Handle("/overdue", opRead)
-		mux.Handle("/subject", opRead) // PLAT-8: DSAR — compile what the platform holds about a subject
+		// PLAT-3/ADR-4: per-route RBAC tiers on the operator surface. The full investigation view is
+		// the most sensitive read → admin; the read queue → analyst; the mutating acks → responder.
+		// A higher tier satisfies a lower one, and a legacy `operator` cert ranks as admin (unchanged).
+		mux.Handle("/view", requireTier(RoleAdmin, s.ViewHandler()))
+		opRead := s.OperatorReadHandler() // one inner mux; the outer mount applies the tier gate per route
+		mux.Handle("/alerts", requireTier(RoleAnalyst, opRead))
+		mux.Handle("/alerts/ack", requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)
+		mux.Handle("/search", requireTier(RoleAnalyst, opRead))
+		mux.Handle("/events", requireTier(RoleAnalyst, opRead)) // SIEM-1: event search over the fleet aggregate
+		mux.Handle("/incidents", requireTier(RoleAnalyst, opRead))
+		mux.Handle("/incidents/ack", requireTier(RoleResponder, opRead)) // SIEM-11b: acknowledge an incident (POST)
+		mux.Handle("/overdue", requireTier(RoleAnalyst, opRead))
+		mux.Handle("/subject", requireTier(RoleAnalyst, opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}

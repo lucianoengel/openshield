@@ -10,3 +10,11 @@ func RequireRoleForTest(role string) http.Handler {
 		w.WriteHeader(http.StatusOK)
 	}))
 }
+
+// RequireTierForTest exposes the tiered RBAC gate (PLAT-3) so a test can assert the
+// 401/403/200 outcomes of a minimum-tier requirement directly.
+func RequireTierForTest(minRole string) http.Handler {
+	return requireTier(minRole, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+}
