@@ -142,7 +142,11 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
 - **R34-12 · ✅ DONE (874875b) · Ingest does not enforce the subject contract — P3 (MED) · controlplane handleSigned.** XDR-3
   validates only inside `engine.attribute`; a legacy/rogue agent can ship subject-less events straight
   into `fleet_telemetry`. *Fix:* validate at ingest (server-side), not just client-side.
-- **R34-13 · Minor/LOW (fold in):** incidents never `emit` a notification (`incidents.go`) — this **is**
+- **R34-13 · 🟡 MOSTLY DONE (e8f12d6) · Minor/LOW (fold in):** ✅ NIPS `matchURI` min-length,
+  ✅ `procIdentityOf` tested, ✅ `EnsureAppLogin` re-asserts NOSUPERUSER/NOCREATEROLE/etc, ✅
+  "k-anonymized" privacy claim corrected (honest membership-oracle limit). ⏳ still open (feature-
+  scale): SIEM-12 durable dedup (persist `dedup_key` so a restart does not double-page) · incidents
+  never `emit` = **promote SOAR-1**. Original text:  incidents never `emit` a notification (`incidents.go`) — this **is**
   SOAR-1, promote it · SIEM-12 dedup is per-process memory (restart double-pages; `dedup_key` exists —
   make it durable) · "k-anonymized" overstates privacy (unsalted SHA-256 → offline membership recovery
   on low-entropy values; document or per-index salt) · NIPS `matchURI` accepts `uri /` (matches every
