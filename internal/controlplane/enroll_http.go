@@ -92,6 +92,7 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/alerts", opRead)
 		mux.Handle("/alerts/ack", opRead) // SIEM-6: acknowledge an alert (POST), operator-attributed
 		mux.Handle("/search", opRead)
+		mux.Handle("/events", opRead) // SIEM-1: event search over the fleet aggregate
 		mux.Handle("/incidents", opRead)
 		mux.Handle("/overdue", opRead)
 		mux.Handle("/subject", opRead) // PLAT-8: DSAR — compile what the platform holds about a subject
