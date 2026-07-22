@@ -115,9 +115,10 @@ what lets a single codebase span seven security domains instead of fragmenting i
 and one evidence ledger**: on the **host** (file DLP, HIPS process control, device posture, local
 enforcement), at the **network gateway** (inline DLP *as* NIPS across HTTP/DNS/SMTP, plus ZTNA access
 brokering), and in the **control plane** (SIEM correlation, XDR cross-domain incidents, SOAR response).
-Users reach internal apps, file servers, and databases *through* the gateway — inspected and brokered;
-agents report over a signed bus into the protected inner network; and the control plane feeds risk and
-coordinated-response context back out to every enforcement point.
+Users reach internal apps, file servers, and databases *through* the gateway — inspected and brokered.
+The **host agent's monitoring and the gateway's network detections stream as signed events** into the
+control plane, where SIEM/XDR correlate them (with external syslog as an additional feed); and the
+control plane feeds risk and coordinated-response context back out to every enforcement point.
 
 ```mermaid
 flowchart TB
@@ -159,16 +160,16 @@ flowchart TB
   GW ==>|"inspected · brokered"| APPS
   OPS ==>|"ZTNA access"| GW
 
-  %% management plane — telemetry into the inner network
-  HOST <-->|"signed telemetry &amp; control · mTLS"| GW
+  %% management plane — signed events into the inner network (the SIEM/XDR feed)
+  HOST <-->|"signed host events &amp; telemetry · mTLS"| GW
   GW <-->|"the only path in"| BUS
-  BUS --> SRV
+  BUS ==>|"host + network events → SIEM / XDR"| SRV
   SRV --> LED --> ANC
 
   %% identity / zero trust
   PKI -.->|"enrolls · issues identity"| HOST
   IDP -.->|"SSO · JWT"| GW
-  LOGS -.->|"SIEM ingest"| SRV
+  LOGS -.->|"additional log sources"| SRV
 
   %% coordinated response — XDR / SOAR feedback
   SRV -.->|"published risk · signed response-intent"| BUS
