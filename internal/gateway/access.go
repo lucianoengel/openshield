@@ -75,33 +75,29 @@ func NewAccessProxy(gw *Gateway, catalog *Catalog, maxBody int64, logger *slog.L
 	return &AccessProxy{gw: gw, catalog: catalog, maxBody: maxBody, logger: logger}
 }
 
-// resolveIdentity determines the request's authenticated identity. When an OIDC verifier is
-// configured (ZT-2, SSO), the USER identity comes from a verified bearer token — required and
-// verified, layered on the mTLS device cert; otherwise the client CERTIFICATE is the identity. It
-// returns an HTTP status to send on failure. Error messages are generic (no token/verifier detail).
-func (p *AccessProxy) resolveIdentity(r *http.Request) (*identity.Identity, int, error) {
-	if p.oidc != nil {
-		tok := bearerToken(r.Header.Get("Authorization"))
-		if tok == "" {
-			return nil, http.StatusUnauthorized, errNoBearer
-		}
-		id, err := p.oidc.Verify(tok)
-		if err != nil {
-			return nil, http.StatusForbidden, errBadBearer
-		}
-		return id, 0, nil
+// resolveUser determines the request's USER identity given the already-resolved DEVICE identity
+// (ZT-3, dual-credential). When an OIDC verifier is configured (ZT-2, SSO), the user comes from a
+// verified bearer token — required and verified; otherwise the device certificate IS the user
+// (single-credential). Error messages are generic (no token/verifier detail leaked).
+func (p *AccessProxy) resolveUser(r *http.Request, deviceID *identity.Identity) (*identity.Identity, int, error) {
+	if p.oidc == nil {
+		return deviceID, 0, nil // single-credential: the device cert is the identity
 	}
-	id, err := identity.FromClientCert(r.TLS.PeerCertificates[0])
+	tok := bearerToken(r.Header.Get("Authorization"))
+	if tok == "" {
+		return nil, http.StatusUnauthorized, errNoBearer
+	}
+	id, err := p.oidc.Verify(tok)
 	if err != nil {
-		return nil, http.StatusForbidden, errBadClientID
+		return nil, http.StatusForbidden, errBadBearer
 	}
 	return id, 0, nil
 }
 
 var (
-	errNoBearer    = errAccess("bearer token required")
-	errBadBearer   = errAccess("invalid bearer token")
-	errBadClientID = errAccess("not a valid client identity")
+	errNoBearer      = errAccess("bearer token required")
+	errBadBearer     = errAccess("invalid bearer token")
+	errDeviceUnknown = errAccess("device not enrolled")
 )
 
 type errAccess string
@@ -127,7 +123,15 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "client certificate required", http.StatusUnauthorized)
 		return
 	}
-	id, status, err := p.resolveIdentity(r)
+	// The DEVICE credential (ZT-3): the enrolled client certificate. Required always — dual
+	// credential means BOTH a valid device AND (when OIDC is on) a valid user.
+	deviceID, err := identity.FromClientCert(r.TLS.PeerCertificates[0])
+	if err != nil {
+		http.Error(w, errDeviceUnknown.Error(), http.StatusForbidden)
+		return
+	}
+	// The USER credential: a verified OIDC token (ZT-2) or the device cert itself (single-credential).
+	id, status, err := p.resolveUser(r, deviceID)
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return
@@ -163,11 +167,13 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			idCtx.HasRiskScore = true
 		}
 	}
-	// Enrich device posture (D92): a subject with published posture gets it (with
-	// HasPosture=true); a subject with NONE keeps HasPosture=false and a
-	// posture-requiring policy denies it — the D85 tamper-lockout.
+	// Enrich device posture (D92), keyed by the DEVICE certificate — NOT the user (ZT-3). Posture is
+	// about the device the user connects FROM (the agent reports its own device's posture, keyed by
+	// the device identity, SEC-12). So a user with a valid token on an UNATTESTED device is still
+	// denied by a posture-requiring policy: dual credential requires a valid user AND a compliant
+	// device. A device with NO published posture keeps HasPosture=false — the D85 tamper-lockout.
 	if p.posture != nil {
-		if dp, ok := p.posture.Get(id.Subject); ok {
+		if dp, ok := p.posture.Get(deviceID.Subject); ok {
 			idCtx.DevicePosture = dp
 		}
 	}
