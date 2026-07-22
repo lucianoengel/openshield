@@ -38,3 +38,16 @@ message SignedRuleBundle {
   bytes bundle = 1;    // the marshaled RuleBundle
   bytes signature = 2; // Ed25519 signature over `bundle`
 }
+
+// SignedIndex wraps a serialized, k-anonymized DLP detection index (EDM single-value,
+// multi-cell record, or IDM document-fingerprint — each already hash-only) with an
+// Ed25519 signature the node verifies against a trusted operator public key before loading
+// it into the sandbox (ADR-9). `kind` binds the index type into the signature, so a signed
+// index of one kind cannot be presented as another. As with SignedRuleBundle, a compromised
+// control plane may DISTRIBUTE this message but cannot FORGE the signature — so it cannot
+// inject or poison the detection data the DLP detector matches against (T2/D14).
+message SignedIndex {
+  string kind = 1;    // "edm" | "record" | "idm"
+  bytes index = 2;    // the serialized index (the existing Marshal() bytes)
+  bytes signature = 3; // Ed25519 signature over a domain-separated (kind, index)
+}

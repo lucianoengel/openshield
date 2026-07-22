@@ -53,12 +53,13 @@ func main() {
 	// index is k-anonymized (hashes only), so shipping it into the sandbox never
 	// carries the raw dataset (ADR-9). A malformed index aborts — a silently-missing
 	// EDM detector would read as "no exact-data leaks" when none were checked.
+	// DLP-3 / ADR-9: when an operator index public key is configured, every index shipped into the
+	// sandbox MUST be operator-SIGNED and verify against it before loading — a poisoned or swapped
+	// index cannot silently disable (or overwhelm) exfil detection. Without the key, the legacy
+	// unsigned load is preserved but warned about (opt-in-closed per deployment, like signed rules).
+	indexPub := loadIndexPubKey()
 	if ep := os.Getenv("OPENSHIELD_EDM_INDEX"); ep != "" {
-		blob, err := os.ReadFile(ep)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "openshield-worker: reading EDM index %q: %v\n", ep, err)
-			os.Exit(1)
-		}
+		blob := loadIndexBytes(ep, classify.IndexKindEDM, indexPub)
 		idx, err := classify.LoadEDMIndex(blob)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "openshield-worker: bad EDM index %q: %v\n", ep, err)
@@ -71,11 +72,7 @@ func main() {
 	// record co-occur — far lower false-positive than single-value. Also
 	// k-anonymized (hashes only), safe to ship into the sandbox. Malformed aborts.
 	if rp := os.Getenv("OPENSHIELD_EDM_RECORD_INDEX"); rp != "" {
-		blob, err := os.ReadFile(rp)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "openshield-worker: reading EDM record index %q: %v\n", rp, err)
-			os.Exit(1)
-		}
+		blob := loadIndexBytes(rp, classify.IndexKindRecord, indexPub)
 		ridx, err := classify.LoadRecordIndex(blob)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "openshield-worker: bad EDM record index %q: %v\n", rp, err)
@@ -88,11 +85,7 @@ func main() {
 	// substantial portion of a sensitive document (excerpt/reformat tolerant).
 	// k-anonymized (shingle hashes only), safe to ship into the sandbox. Malformed aborts.
 	if dp := os.Getenv("OPENSHIELD_IDM_INDEX"); dp != "" {
-		blob, err := os.ReadFile(dp)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "openshield-worker: reading IDM index %q: %v\n", dp, err)
-			os.Exit(1)
-		}
+		blob := loadIndexBytes(dp, classify.IndexKindIDM, indexPub)
 		didx, err := classify.LoadDocumentIndex(blob)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "openshield-worker: bad IDM index %q: %v\n", dp, err)
@@ -157,4 +150,43 @@ func loadClassifier() *classify.Classifier {
 	}
 	fmt.Fprintf(os.Stderr, "openshield-worker: loaded %d signed custom rule(s) (HON-1)\n", len(rules))
 	return base.WithRules(rules)
+}
+
+// loadIndexPubKey reads the trusted operator public key for DLP index verification
+// (OPENSHIELD_DLP_INDEX_PUBKEY, ADR-9), or nil when unset (legacy unsigned mode). A configured
+// but unreadable/wrong-size key ABORTS: an operator asked for verification, so silently falling
+// back to unsigned would defeat the control.
+func loadIndexPubKey() ed25519.PublicKey {
+	p := os.Getenv("OPENSHIELD_DLP_INDEX_PUBKEY")
+	if p == "" {
+		return nil
+	}
+	pub, err := os.ReadFile(p)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		fmt.Fprintf(os.Stderr, "openshield-worker: bad DLP index public key %q (%v) — refusing to start\n", p, err)
+		os.Exit(1)
+	}
+	return ed25519.PublicKey(pub)
+}
+
+// loadIndexBytes reads an index file and returns the bytes to load. When pub is set, the file MUST
+// be an operator-signed index of the expected kind and verify — otherwise the worker ABORTS
+// (fail-closed, ADR-9): a poisoned/unsigned index that silently disabled or overwhelmed detection
+// is the exact gap signing closes. When pub is nil, the raw bytes load unsigned with a loud warning.
+func loadIndexBytes(path, kind string, pub ed25519.PublicKey) []byte {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-worker: reading %s index %q: %v\n", kind, path, err)
+		os.Exit(1)
+	}
+	if pub == nil {
+		fmt.Fprintf(os.Stderr, "openshield-worker: WARNING loading UNVERIFIED %s index %q — set OPENSHIELD_DLP_INDEX_PUBKEY to require an operator signature (ADR-9)\n", kind, path)
+		return blob
+	}
+	index, err := classify.VerifyIndex(blob, pub, kind)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-worker: %s index %q rejected (%v) — refusing to load an unverified index (ADR-9)\n", kind, path, err)
+		os.Exit(1)
+	}
+	return index
 }

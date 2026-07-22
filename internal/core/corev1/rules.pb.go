@@ -252,6 +252,73 @@ func (x *SignedRuleBundle) GetSignature() []byte {
 	return nil
 }
 
+// SignedIndex wraps a serialized, k-anonymized DLP detection index (EDM single-value,
+// multi-cell record, or IDM document-fingerprint — each already hash-only) with an
+// Ed25519 signature the node verifies against a trusted operator public key before loading
+// it into the sandbox (ADR-9). `kind` binds the index type into the signature, so a signed
+// index of one kind cannot be presented as another. As with SignedRuleBundle, a compromised
+// control plane may DISTRIBUTE this message but cannot FORGE the signature — so it cannot
+// inject or poison the detection data the DLP detector matches against (T2/D14).
+type SignedIndex struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`           // "edm" | "record" | "idm"
+	Index         []byte                 `protobuf:"bytes,2,opt,name=index,proto3" json:"index,omitempty"`         // the serialized index (the existing Marshal() bytes)
+	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"` // Ed25519 signature over a domain-separated (kind, index)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedIndex) Reset() {
+	*x = SignedIndex{}
+	mi := &file_openshield_v1_rules_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedIndex) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedIndex) ProtoMessage() {}
+
+func (x *SignedIndex) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_rules_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedIndex.ProtoReflect.Descriptor instead.
+func (*SignedIndex) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_rules_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *SignedIndex) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *SignedIndex) GetIndex() []byte {
+	if x != nil {
+		return x.Index
+	}
+	return nil
+}
+
+func (x *SignedIndex) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
 var File_openshield_v1_rules_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_rules_proto_rawDesc = "" +
@@ -270,7 +337,11 @@ const file_openshield_v1_rules_proto_rawDesc = "" +
 	"\tissued_at\x18\x02 \x01(\x03R\bissuedAt\"H\n" +
 	"\x10SignedRuleBundle\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\fR\x06bundle\x12\x1c\n" +
-	"\tsignature\x18\x02 \x01(\fR\tsignature*A\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"U\n" +
+	"\vSignedIndex\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x14\n" +
+	"\x05index\x18\x02 \x01(\fR\x05index\x12\x1c\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature*A\n" +
 	"\rRuleValidator\x12\x17\n" +
 	"\x13RULE_VALIDATOR_NONE\x10\x00\x12\x17\n" +
 	"\x13RULE_VALIDATOR_LUHN\x10\x01B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
@@ -288,12 +359,13 @@ func file_openshield_v1_rules_proto_rawDescGZIP() []byte {
 }
 
 var file_openshield_v1_rules_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_openshield_v1_rules_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_openshield_v1_rules_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_openshield_v1_rules_proto_goTypes = []any{
 	(RuleValidator)(0),       // 0: openshield.v1.RuleValidator
 	(*DetectorRule)(nil),     // 1: openshield.v1.DetectorRule
 	(*RuleBundle)(nil),       // 2: openshield.v1.RuleBundle
 	(*SignedRuleBundle)(nil), // 3: openshield.v1.SignedRuleBundle
+	(*SignedIndex)(nil),      // 4: openshield.v1.SignedIndex
 }
 var file_openshield_v1_rules_proto_depIdxs = []int32{
 	0, // 0: openshield.v1.DetectorRule.validator:type_name -> openshield.v1.RuleValidator
@@ -316,7 +388,7 @@ func file_openshield_v1_rules_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_rules_proto_rawDesc), len(file_openshield_v1_rules_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
