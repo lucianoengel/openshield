@@ -67,6 +67,23 @@ func main() {
 		cls.AddEDM(idx)
 		fmt.Fprintf(os.Stderr, "openshield-worker: DLP-3 EDM active (%d fingerprints)\n", idx.Size())
 	}
+	// DLP-3 multi-cell EDM: a record index fires only when several cells of the SAME
+	// record co-occur — far lower false-positive than single-value. Also
+	// k-anonymized (hashes only), safe to ship into the sandbox. Malformed aborts.
+	if rp := os.Getenv("OPENSHIELD_EDM_RECORD_INDEX"); rp != "" {
+		blob, err := os.ReadFile(rp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: reading EDM record index %q: %v\n", rp, err)
+			os.Exit(1)
+		}
+		ridx, err := classify.LoadRecordIndex(blob)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: bad EDM record index %q: %v\n", rp, err)
+			os.Exit(1)
+		}
+		cls.AddRecordEDM(ridx)
+		fmt.Fprintf(os.Stderr, "openshield-worker: DLP-3 multi-cell EDM active (%d records)\n", ridx.Size())
+	}
 	c := worker.Classifier(cls)
 	in, out := os.Stdin, os.Stdout
 
