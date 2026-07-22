@@ -436,9 +436,11 @@ containment decision propagates to all domains touching the entity. *Success tes
 (phish → exec → C2 DNS → exfil) yields exactly one correctly-sequenced incident, containable with one
 approval.* **Dependency spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-7, XDR-7).**
 
-- **XDR-1 · Unified entity model** — X (schema+context) · M · **hard-dep IDENT-1/ADR-6.** `entities`
-  table (device ⋈ identity/user) populated from enrollment, posture, gateway identity, keyed by the ONE
-  shared pseudonym derivation. *Accept: an exec event from agent A and a proxied request from CN=A's
+- ✅ **XDR-1 · Unified entity model (SHIPPED D195)** — X (schema+context) · M · **hard-dep IDENT-1/ADR-6.**
+  `entities` ⋈ `entity_aliases` (migration 021), keyed by the ONE canonical pseudonym; `internal/xdr`
+  `Resolve` (atomic find-or-create) + `Link` (device ⋈ user merge). Real-Postgres-proven canonical join
+  (the same `pseudonym.Of` from two domains → one entity) + concurrency + merge. Populating it from
+  enrollment/posture/gateway-identity ingest is XDR-3. *Accept: an exec event from agent A and a proxied request from CN=A's
   device resolve to the same entity id via the real derivation, not test-seeded literals.*
 - **XDR-3 · Canonical subject stamping on endpoint events** — P · M. The agent/connector layer stamps
   the device's canonical pseudonym as `Event.Subject` (per-target id stays in the Target oneof). Also

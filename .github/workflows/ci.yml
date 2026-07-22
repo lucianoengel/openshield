@@ -145,6 +145,10 @@ jobs:
         run: go test -run 'TestUnreachableLedger|TestTimeoutIsRecorded|TestNoDecisionIsStillRecorded' -v ./internal/core/
       - name: CLI verifies, never hides a break, and separates its exit codes
         run: go test -count=1 -v ./internal/cli/
+      - name: XDR-1 entity model — canonical-pseudonym join + atomic resolve/merge (real Postgres)
+        env:
+          OPENSHIELD_REQUIRE_POSTGRES: "1"
+        run: go test -count=1 -v ./internal/xdr/
       - name: control plane persists agent telemetry (embedded NATS + Postgres)
         env:
           OPENSHIELD_REQUIRE_POSTGRES: "1"
