@@ -43,7 +43,7 @@ center of gravity. Every domain below is partial; the work is depth-per-domain, 
 |---|---|---|
 | Zero Trust (ZTNA) | ~55% | Access broker + microseg + **real OIDC/JWT on-path** (alg-confusion rejected) + dual-credential logic + agent-signed posture bound to the reporting key. **But the posture chain is INERT in production** — publisher and proxy derive the subject key differently, so every compliant device reads `HasPosture=false` (IDENT-1, the top of the queue). No hardware attestation, no JWKS rotation, no ZTNA client. |
 | DLP | ~45% core | Strong sandboxed detection core; enforcement wired behind `OPENSHIELD_ENFORCE`; compliance packs (PCI/HIPAA/GDPR) load and change decisions — **but packs REPLACE the default policy**, so enabling one silently disables HIPS + out-of-scope detectors (DLP-5b). +EIN/NPI/NHS/SIN/ABA/routing/phone detectors. Still one channel, no EDM/OCR/ML. |
-| NIPS / NTPS | ~30% | Forward-proxy egress DLP + TLS interception + live **DNS + SMTP listeners wired** with a shared rate-limiter and panic-recover. SMTP body DLP reaches the sandboxed worker. Still no inline/transparent (ADR-8), no signatures/threat-intel (NIPS-2). |
+| NIPS / NTPS | ~30% | Per-channel: **HTTP is genuinely inline** (forward proxy, terminates TLS, `BLOCK`/`REDIRECT` in-path — real prevention, deliberately fail-open per D73/D17); **DNS is tap/detect-only** (DEPLOY-1 — cannot prevent; inline sinkhole resolver = NIPS-8); **SMTP is a terminating capture endpoint** (parses, does not relay — inline-`5xx`-reject-capable but not yet a filtering MTA hop). So the category is **NIDS today + inline NIPS on HTTP.** Next: transparent inline for HTTP (ADR-8/NIPS-1), signatures/threat-intel (NIPS-2). |
 | SIEM | ~35% | `/events` search **mounted + gated**, **materialized incidents** (id/state), cross-host correlation, alert lifecycle+ack, async multi-sink HMAC webhooks, persisted UEBA baselines, case workflow, syslog. Still: no unified alert-lifecycle schema (ADR-10), notify idempotency broken (SIEM-12), no UI, no CEF/WEF. |
 | HIPS | ~30% | Phase E **runs end-to-end** — real auditd source → real pid → real KILL, behavioral→decision, detector evasions closed (mutation-confirmed). **KILL safety incomplete**: pid-reuse revalidation ineffective + the critical-process allowlist is self-immunizing (HIPS-7/8). `DENY_EXEC` deliberately deferred (needs `FAN_OPEN_EXEC_PERM`). |
 | NAC | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. |
@@ -321,6 +321,16 @@ Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane, or
 - **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
   YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS. **Sequence
   with NIPS-1.**
+- **NIPS-8 · Inline DNS sinkhole resolver — turn DNS from detect to prevent** — P1 · new data-plane
+  (D) · L. DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
+  inline `:53` redirect over a non-resolver would blackhole all fleet name resolution. To make DNS
+  *preventive* it must become a **real resolver**: local cache + upstream forwarding + failover, then
+  **sinkhole/NXDOMAIN the malicious query (RPZ-style)** on a classify verdict, feeding the same
+  pipeline. **Must fail open** (resolver error → forward upstream, never blackhole — the D73/D17
+  discipline) and carry a bypass watchdog (resolver down → traffic still resolves). External-gated like
+  NIPS-1 (owns `:53`). Do NOT ship the transparent redirect from DEPLOY-1 until this resolver exists.
+  *(Explicitly not the tap-based answer/RST-injection hack — that races the real response and loses
+  under load; it is not a security control.)*
 - **NIPS-4 · Response-body inspection** — P1 · classify · M. Today only the *request* body is
   classified; the response is copied through. Add buffered/streamed classification with memory bounds,
   gzip + multipart decode (shared with DLP-8). **Must preserve the deliberate D73/D17 egress fail-open.**
