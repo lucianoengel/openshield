@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/agent/watchdog"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/enforcers/safeio"
 )
 
 // classifier is the subset of the worker the decider needs — the SAME interface the
@@ -66,7 +66,12 @@ const DefaultPrefixBytes = 64 * 1024
 // DefaultPartialDeadline bounds the classify+policy dispatch inside the permission window.
 const DefaultPartialDeadline = 50 * time.Millisecond
 
-func openFile(path string) (io.ReadCloser, error) { return os.Open(path) }
+// openFile opens the prefix source with O_NOFOLLOW + regular-file-only (SEC-7): the inline
+// prefilter reads a permission-window target, so it must apply the SAME TOCTOU discipline as
+// the enforcers (D65) — an attacker who swaps the flagged path for a symlink must not
+// redirect the read. safeio returns a *os.File (an io.ReadCloser) so the prefix read stays
+// bounded (only maxBytes is read), not the whole file.
+func openFile(path string) (io.ReadCloser, error) { return safeio.OpenRegularNoFollow(path) }
 
 // DecidePartial reads a bounded prefix of the event's target, classifies it in the
 // worker, runs the policy, and returns the Decision. A read/parse failure is an error,

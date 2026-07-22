@@ -13,6 +13,18 @@ import (
 // (O_NOFOLLOW) does not — acceptable because these platforms are not endpoint
 // targets (D65).
 func ReadRegularNoFollow(path string) ([]byte, error) {
+	f, err := OpenRegularNoFollow(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// OpenRegularNoFollow is the non-unix fallback opener (lstat-reject a symlink, require a
+// regular file). It carries the same small lstat→open TOCTOU as ReadRegularNoFollow — these
+// platforms are not endpoint targets (D65).
+func OpenRegularNoFollow(path string) (*os.File, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return nil, fmt.Errorf("safeio: lstat %s: %w", path, err)
@@ -23,5 +35,5 @@ func ReadRegularNoFollow(path string) ([]byte, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("safeio: %s is not a regular file (mode %s) — refusing", path, fi.Mode())
 	}
-	return os.ReadFile(path)
+	return os.Open(path)
 }

@@ -1,9 +1,6 @@
-# inline-prevention Specification
+# inline-prevention delta
 
-## Purpose
-The synchronous tier of two-tier inline prevention: the decision logic that answers a fanotify permission event within its hard budget, turning post-decision containment into true prevention for the cases it can cheaply prove. It plugs into the fail-open watchdog as its evaluator, submits the full-file classification job to the asynchronous engine on every event, and produces an inline block only for a high-confidence bounded partial decision — deferring everything else to asynchronous containment. It never parses content itself; the bounded partial classification runs in the sandboxed worker. The privileged permission-mode syscall adapter and the fd-passing plumbing are external-gated to a host with genuine init-namespace CAP_SYS_ADMIN.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: A two-tier prefilter answers the permission window, inline-blocking only high-confidence hits
 The synchronous prefilter MUST submit the full-file classification job to the asynchronous
@@ -14,7 +11,8 @@ a lower-confidence partial deny MUST allow the open and rely on asynchronous con
 failure to produce a partial decision MUST fail open, surfacing the error so it is audited,
 never blocking the open. The prefilter MUST NOT parse content itself. The partial decision
 MUST come from a BOUNDED prefix of the target classified in the sandboxed worker and the
-same policy the asynchronous tier runs, and MUST NOT write an audit record.
+same policy the asynchronous tier runs, and MUST NOT write an audit record. The prefix read
+MUST use a no-follow, regular-file-only open, refusing a symlinked or special-file target.
 
 #### Scenario: A high-confidence partial deny blocks inline while a low-confidence one does not
 - **WHEN** the prefilter evaluates a permission event

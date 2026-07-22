@@ -22,17 +22,32 @@ import (
 // parent-directory-component swap needs openat2 RESOLVE_NO_SYMLINKS, and the
 // strongest fix carries an fd from classification through enforcement.
 func ReadRegularNoFollow(path string) ([]byte, error) {
+	f, err := OpenRegularNoFollow(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// OpenRegularNoFollow opens path with the SAME guarantees as ReadRegularNoFollow — no
+// final-component symlink (O_NOFOLLOW) and a regular file only — but returns the open file
+// so a caller that needs a BOUNDED read (e.g. the inline prefilter reading only a prefix,
+// SEC-7) gets the TOCTOU protection without reading the whole file into memory. The caller
+// owns the returned handle and must Close it.
+func OpenRegularNoFollow(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("safeio: opening %s (refusing to follow a symlink): %w", path, err)
 	}
-	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
+		f.Close()
 		return nil, fmt.Errorf("safeio: stat %s: %w", path, err)
 	}
 	if !fi.Mode().IsRegular() {
+		f.Close()
 		return nil, fmt.Errorf("safeio: %s is not a regular file (mode %s) — refusing", path, fi.Mode())
 	}
-	return io.ReadAll(f)
+	return f, nil
 }
