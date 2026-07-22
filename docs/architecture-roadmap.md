@@ -519,7 +519,11 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     AK public key with an anti-replay nonce gate. Built on `go-tpm` (not the heavy `go-tpm-tools`
     tree); tested against real `swtpm`, gated like Postgres, run in a new CI `attestation` job.
     Scope caveat: trusts the AK by raw public key — EK binding is increment 2.
-  - **Increment 2 · EK→AK credential activation** — bind the AK to a genuine TPM at enrollment.
+  - ✅ **Increment 2 · EK→AK credential activation (D184)** — SHIPPED. Bind the AK to a genuine TPM
+    via credential activation: server-side `MakeCredential` in pure Go (go-tpm `CreateCredential`),
+    endpoint `TPM2_ActivateCredential`. swtpm-proven: same-TPM activates, a different TPM's EK cannot,
+    a substituted AK breaks the name binding. Closes D183's raw-AK-trust gap (EK-cert-chain validation
+    scoped as the production step).
   - **Increment 3 · Measured-boot event log + PCR policy** — parse the boot log, replay PCRs, apply an
     expected-state policy over the attested PCR digest.
   - **Increment 4 · Posture wiring** — proto field + posture producer/verifier + `DevicePosture.Attested`

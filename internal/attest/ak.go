@@ -115,6 +115,10 @@ func (t *TPM) Flush(ak *AK) error {
 // PublicKey returns the AK's verification key.
 func (ak *AK) PublicKey() *ecdsa.PublicKey { return ak.pub }
 
+// Name returns the AK's TPM name, which a credential-activation challenge is
+// bound to so activation proves control of this specific AK.
+func (ak *AK) Name() []byte { return ak.name.Buffer }
+
 // PublicKeyBytes marshals the AK's TPM public area. A server persists these
 // bytes at enrollment and later reconstructs the verification key with
 // ParseAKPublicKey to check quotes — no TPM required on the server side.
