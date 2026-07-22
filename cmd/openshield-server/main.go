@@ -77,170 +77,176 @@ func main() {
 		fmt.Fprintf(os.Stderr, "openshield-server: signed risk publishing enabled (SEC-1)\n")
 	}
 
-	// Enforce the fleet-aggregate retention window (D81): purge received telemetry
-	// and derived peer alerts older than the window, on a timer. The aggregate is a
-	// derived view, so this is a hard delete (the evidentiary ledger tombstones
-	// instead). Without it, personal-adjacent telemetry accrues forever (D20).
-	retInterval := envDuration("OPENSHIELD_RETENTION_INTERVAL", 24*time.Hour)
-	fleetRetention := envDuration("OPENSHIELD_FLEET_RETENTION", 90*24*time.Hour)
-	go retain.Loop(ctx, retInterval, func(ctx context.Context) {
-		n, err := srv.PurgeOlderThan(ctx, time.Now().Add(-fleetRetention))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "openshield-server: retention purge failed: %v\n", err)
-			return
+	// PLAT-2b/ADR-3: run the singleton work (telemetry consumer, peer analytics, maintenance loops)
+	// under an active-passive leader lease — exactly one instance is leader; a standby waits and takes
+	// over on leader failure. A single deployed instance becomes leader immediately (unchanged).
+	leader := controlplane.NewLeader(pool)
+	_ = leader.Run(ctx, func(leaderCtx context.Context) {
+		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
+		// and derived peer alerts older than the window, on a timer. The aggregate is a
+		// derived view, so this is a hard delete (the evidentiary ledger tombstones
+		// instead). Without it, personal-adjacent telemetry accrues forever (D20).
+		retInterval := envDuration("OPENSHIELD_RETENTION_INTERVAL", 24*time.Hour)
+		fleetRetention := envDuration("OPENSHIELD_FLEET_RETENTION", 90*24*time.Hour)
+		go retain.Loop(leaderCtx, retInterval, func(ctx context.Context) {
+			n, err := srv.PurgeOlderThan(ctx, time.Now().Add(-fleetRetention))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: retention purge failed: %v\n", err)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
+		})
+
+		// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
+		// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
+		// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
+		// deduplicated (once per silence) and run on a timer.
+		if hook := os.Getenv("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
+			// SIEM-8: wrap EACH webhook in bounded retry so a transient blip (a 5xx, a timeout during
+			// a deploy) does not silently drop the page (a 4xx is not retried, see notify.Permanent),
+			// then fan out to all of them via Multi — the retry is INNER so a retry re-attempts only the
+			// failed sink, never re-paging a sink that already succeeded. OPENSHIELD_ALERT_WEBHOOK may be
+			// a comma-separated list; OPENSHIELD_ALERT_WEBHOOK_SECRET (optional) HMAC-signs each body so a
+			// receiver can verify the alert came from this control plane (unset = unsigned, unchanged).
+			attempts := envInt("OPENSHIELD_ALERT_RETRIES", 3)
+			secret := []byte(os.Getenv("OPENSHIELD_ALERT_WEBHOOK_SECRET"))
+			var sinks []notify.Notifier
+			for _, u := range strings.Split(hook, ",") {
+				u = strings.TrimSpace(u)
+				if u == "" {
+					continue
+				}
+				w := notify.NewWebhook(u)
+				if len(secret) > 0 {
+					w.Secret = secret
+				}
+				sinks = append(sinks, notify.NewRetrying(w, attempts, 200*time.Millisecond))
+			}
+			srv.SetNotifier(notify.NewMulti(sinks...))
+			overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
+			overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
+			go retain.Loop(leaderCtx, overdueInterval, func(ctx context.Context) {
+				if n, err := srv.NotifyOverdue(ctx, overdueThreshold); err != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: overdue check failed: %v\n", err)
+				} else if n > 0 {
+					fmt.Fprintf(os.Stderr, "openshield-server: notified %d newly-overdue agent(s)\n", n)
+				}
+			})
+			fmt.Fprintf(os.Stderr, "openshield-server: alert delivery enabled (webhook)\n")
 		}
-		fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
+
+		// Server-side peer-UEBA (D54), OFF unless a threshold is configured — enabling
+		// it is the operator's D23 consent/DPIA decision, never a default. It observes
+		// the verified fleet stream and records peer alerts; it does not control agents.
+		peerUEBAEnabled := false
+		if v := os.Getenv("OPENSHIELD_PEER_UEBA_THRESHOLD"); v != "" {
+			threshold, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				fatal("OPENSHIELD_PEER_UEBA_THRESHOLD=%q: %v", v, err)
+			}
+			cooldown := 1 * time.Hour
+			if c := os.Getenv("OPENSHIELD_PEER_UEBA_COOLDOWN"); c != "" {
+				if d, err := time.ParseDuration(c); err == nil {
+					cooldown = d
+				}
+			}
+			srv.EnablePeerUEBA(threshold, cooldown)
+			peerUEBAEnabled = true
+			fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA enabled (threshold %.2f, cooldown %s)\n", threshold, cooldown)
+
+			// SIEM-5: persist the baseline periodically so a restart resumes it (EnablePeerUEBA
+			// reloads it). Best-effort — a failed persist only shortens the next restart's warm
+			// window, never breaks ingest. A final persist on shutdown runs after Run returns.
+			persistInterval := envDuration("OPENSHIELD_UEBA_PERSIST_INTERVAL", 5*time.Minute)
+			go retain.Loop(leaderCtx, persistInterval, func(ctx context.Context) {
+				if err := srv.PersistBaselines(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA baseline persist failed: %v\n", err)
+				}
+			})
+		}
+
+		// Mutual TLS on the agent-facing channels (D55), OFF unless configured —
+		// enabling it is a deliberate deployment step. A partial or unreadable
+		// configuration fails loudly here, never silently to plaintext.
+		tlsConf, err := tlsconf.LoadFromEnv()
+		if err != nil {
+			fatal("TLS configuration: %v", err)
+		}
+		if tlsConf != nil {
+			// This presents a client cert and verifies the NATS server's cert against
+			// the CA. It does NOT make the broker demand a client cert from AGENTS —
+			// that is the broker's own `--tlsverify --tlscacert`, a DEPLOYMENT
+			// requirement (D55). Without it, mutual auth on the telemetry leg does not
+			// hold even though this logs "enabled"; D50 signing still protects evidence.
+			srv.SetNATSOptions(nats.Secure(tlsConf.ClientConfig()))
+			fmt.Fprintln(os.Stderr, "openshield-server: mutual TLS enabled on the enrollment endpoint; "+
+				"NATS mutual auth requires the broker's --tlsverify (D55)")
+		}
+
+		// Optional enrollment endpoint (D44 over the wire). Served over mutual TLS
+		// when configured; the token travels in the body. Token issuance is NOT
+		// exposed — an admin-local operation.
+		if addr := os.Getenv("OPENSHIELD_HTTP_ADDR"); addr != "" {
+			go func() {
+				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint on %s\n", addr)
+				var serveErr error
+				if tlsConf != nil {
+					serveErr = srv.ServeHTTPTLS(leaderCtx, addr, tlsConf.ServerConfig())
+				} else {
+					serveErr = srv.ServeHTTP(leaderCtx, addr)
+				}
+				if serveErr != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint: %v\n", serveErr)
+				}
+			}()
+		}
+
+		// Optional Prometheus metrics endpoint (PLAT-4), on a SEPARATE address — the "no silent
+		// loss" counters (dropped/rejected/gapped telemetry) so an operator can alert on them.
+		// Unauthenticated by convention (a scrape target); put it on an internal/firewalled addr.
+		if maddr := os.Getenv("OPENSHIELD_METRICS_ADDR"); maddr != "" {
+			// PLAT-4b: /metrics leaks fleet operational tempo (rejected/gapped-telemetry counts reveal
+			// replay-attempt recon). Require a bearer token when OPENSHIELD_METRICS_TOKEN is set, and
+			// warn LOUDLY if bound beyond loopback without one — a scrape target on a public interface
+			// with no auth is a reconnaissance surface.
+			var metricsHandler http.Handler = srv.MetricsHandler()
+			hasToken := false
+			if tok := os.Getenv("OPENSHIELD_METRICS_TOKEN"); tok != "" {
+				metricsHandler = controlplane.RequireBearerToken(tok, metricsHandler)
+				hasToken = true
+				fmt.Fprintln(os.Stderr, "openshield-server: metrics endpoint requires a bearer token (PLAT-4b)")
+			}
+			if controlplane.IsNonLoopbackBind(maddr) && !hasToken {
+				fmt.Fprintf(os.Stderr, "openshield-server: WARNING — metrics endpoint bound to a NON-LOOPBACK "+
+					"address %q with NO auth; this leaks fleet operational tempo (replay recon). Bind to "+
+					"loopback or set OPENSHIELD_METRICS_TOKEN.\n", maddr)
+			}
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", metricsHandler)
+			msrv := &http.Server{Addr: maddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+			go func() {
+				fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint on %s/metrics\n", maddr)
+				if err := msrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint: %v\n", err)
+				}
+			}()
+			go func() { <-leaderCtx.Done(); _ = msrv.Close() }()
+		}
+
+		fmt.Fprintf(os.Stderr, "openshield-server: subscribing to telemetry on %s\n", natsURL)
+		if err := srv.Run(leaderCtx, natsURL); err != nil && leaderCtx.Err() == nil {
+			fatal("control plane: %v", err)
+		}
+		// SIEM-5: a final baseline persist on shutdown, so a clean restart resumes the freshest
+		// baseline. ctx is already cancelled here (shutdown), so use a short fresh deadline.
+		if peerUEBAEnabled {
+			pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := srv.PersistBaselines(pctx); err != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: final peer-UEBA baseline persist failed: %v\n", err)
+			}
+			pcancel()
+		}
 	})
-
-	// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
-	// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
-	// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
-	// deduplicated (once per silence) and run on a timer.
-	if hook := os.Getenv("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
-		// SIEM-8: wrap EACH webhook in bounded retry so a transient blip (a 5xx, a timeout during
-		// a deploy) does not silently drop the page (a 4xx is not retried, see notify.Permanent),
-		// then fan out to all of them via Multi — the retry is INNER so a retry re-attempts only the
-		// failed sink, never re-paging a sink that already succeeded. OPENSHIELD_ALERT_WEBHOOK may be
-		// a comma-separated list; OPENSHIELD_ALERT_WEBHOOK_SECRET (optional) HMAC-signs each body so a
-		// receiver can verify the alert came from this control plane (unset = unsigned, unchanged).
-		attempts := envInt("OPENSHIELD_ALERT_RETRIES", 3)
-		secret := []byte(os.Getenv("OPENSHIELD_ALERT_WEBHOOK_SECRET"))
-		var sinks []notify.Notifier
-		for _, u := range strings.Split(hook, ",") {
-			u = strings.TrimSpace(u)
-			if u == "" {
-				continue
-			}
-			w := notify.NewWebhook(u)
-			if len(secret) > 0 {
-				w.Secret = secret
-			}
-			sinks = append(sinks, notify.NewRetrying(w, attempts, 200*time.Millisecond))
-		}
-		srv.SetNotifier(notify.NewMulti(sinks...))
-		overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
-		overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
-		go retain.Loop(ctx, overdueInterval, func(ctx context.Context) {
-			if n, err := srv.NotifyOverdue(ctx, overdueThreshold); err != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: overdue check failed: %v\n", err)
-			} else if n > 0 {
-				fmt.Fprintf(os.Stderr, "openshield-server: notified %d newly-overdue agent(s)\n", n)
-			}
-		})
-		fmt.Fprintf(os.Stderr, "openshield-server: alert delivery enabled (webhook)\n")
-	}
-
-	// Server-side peer-UEBA (D54), OFF unless a threshold is configured — enabling
-	// it is the operator's D23 consent/DPIA decision, never a default. It observes
-	// the verified fleet stream and records peer alerts; it does not control agents.
-	peerUEBAEnabled := false
-	if v := os.Getenv("OPENSHIELD_PEER_UEBA_THRESHOLD"); v != "" {
-		threshold, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			fatal("OPENSHIELD_PEER_UEBA_THRESHOLD=%q: %v", v, err)
-		}
-		cooldown := 1 * time.Hour
-		if c := os.Getenv("OPENSHIELD_PEER_UEBA_COOLDOWN"); c != "" {
-			if d, err := time.ParseDuration(c); err == nil {
-				cooldown = d
-			}
-		}
-		srv.EnablePeerUEBA(threshold, cooldown)
-		peerUEBAEnabled = true
-		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA enabled (threshold %.2f, cooldown %s)\n", threshold, cooldown)
-
-		// SIEM-5: persist the baseline periodically so a restart resumes it (EnablePeerUEBA
-		// reloads it). Best-effort — a failed persist only shortens the next restart's warm
-		// window, never breaks ingest. A final persist on shutdown runs after Run returns.
-		persistInterval := envDuration("OPENSHIELD_UEBA_PERSIST_INTERVAL", 5*time.Minute)
-		go retain.Loop(ctx, persistInterval, func(ctx context.Context) {
-			if err := srv.PersistBaselines(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA baseline persist failed: %v\n", err)
-			}
-		})
-	}
-
-	// Mutual TLS on the agent-facing channels (D55), OFF unless configured —
-	// enabling it is a deliberate deployment step. A partial or unreadable
-	// configuration fails loudly here, never silently to plaintext.
-	tlsConf, err := tlsconf.LoadFromEnv()
-	if err != nil {
-		fatal("TLS configuration: %v", err)
-	}
-	if tlsConf != nil {
-		// This presents a client cert and verifies the NATS server's cert against
-		// the CA. It does NOT make the broker demand a client cert from AGENTS —
-		// that is the broker's own `--tlsverify --tlscacert`, a DEPLOYMENT
-		// requirement (D55). Without it, mutual auth on the telemetry leg does not
-		// hold even though this logs "enabled"; D50 signing still protects evidence.
-		srv.SetNATSOptions(nats.Secure(tlsConf.ClientConfig()))
-		fmt.Fprintln(os.Stderr, "openshield-server: mutual TLS enabled on the enrollment endpoint; "+
-			"NATS mutual auth requires the broker's --tlsverify (D55)")
-	}
-
-	// Optional enrollment endpoint (D44 over the wire). Served over mutual TLS
-	// when configured; the token travels in the body. Token issuance is NOT
-	// exposed — an admin-local operation.
-	if addr := os.Getenv("OPENSHIELD_HTTP_ADDR"); addr != "" {
-		go func() {
-			fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint on %s\n", addr)
-			var serveErr error
-			if tlsConf != nil {
-				serveErr = srv.ServeHTTPTLS(ctx, addr, tlsConf.ServerConfig())
-			} else {
-				serveErr = srv.ServeHTTP(ctx, addr)
-			}
-			if serveErr != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint: %v\n", serveErr)
-			}
-		}()
-	}
-
-	// Optional Prometheus metrics endpoint (PLAT-4), on a SEPARATE address — the "no silent
-	// loss" counters (dropped/rejected/gapped telemetry) so an operator can alert on them.
-	// Unauthenticated by convention (a scrape target); put it on an internal/firewalled addr.
-	if maddr := os.Getenv("OPENSHIELD_METRICS_ADDR"); maddr != "" {
-		// PLAT-4b: /metrics leaks fleet operational tempo (rejected/gapped-telemetry counts reveal
-		// replay-attempt recon). Require a bearer token when OPENSHIELD_METRICS_TOKEN is set, and
-		// warn LOUDLY if bound beyond loopback without one — a scrape target on a public interface
-		// with no auth is a reconnaissance surface.
-		var metricsHandler http.Handler = srv.MetricsHandler()
-		hasToken := false
-		if tok := os.Getenv("OPENSHIELD_METRICS_TOKEN"); tok != "" {
-			metricsHandler = controlplane.RequireBearerToken(tok, metricsHandler)
-			hasToken = true
-			fmt.Fprintln(os.Stderr, "openshield-server: metrics endpoint requires a bearer token (PLAT-4b)")
-		}
-		if controlplane.IsNonLoopbackBind(maddr) && !hasToken {
-			fmt.Fprintf(os.Stderr, "openshield-server: WARNING — metrics endpoint bound to a NON-LOOPBACK "+
-				"address %q with NO auth; this leaks fleet operational tempo (replay recon). Bind to "+
-				"loopback or set OPENSHIELD_METRICS_TOKEN.\n", maddr)
-		}
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", metricsHandler)
-		msrv := &http.Server{Addr: maddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-		go func() {
-			fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint on %s/metrics\n", maddr)
-			if err := msrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint: %v\n", err)
-			}
-		}()
-		go func() { <-ctx.Done(); _ = msrv.Close() }()
-	}
-
-	fmt.Fprintf(os.Stderr, "openshield-server: subscribing to telemetry on %s\n", natsURL)
-	if err := srv.Run(ctx, natsURL); err != nil && ctx.Err() == nil {
-		fatal("control plane: %v", err)
-	}
-	// SIEM-5: a final baseline persist on shutdown, so a clean restart resumes the freshest
-	// baseline. ctx is already cancelled here (shutdown), so use a short fresh deadline.
-	if peerUEBAEnabled {
-		pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := srv.PersistBaselines(pctx); err != nil {
-			fmt.Fprintf(os.Stderr, "openshield-server: final peer-UEBA baseline persist failed: %v\n", err)
-		}
-		pcancel()
-	}
 	fmt.Fprintln(os.Stderr, "openshield-server: shut down")
 }
 

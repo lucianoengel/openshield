@@ -246,6 +246,10 @@ applies.
      proven no-loss over a down consumer (real JS) + 2 mutation guards. Default-flip + full-suite migration = follow-on.
 2. **PLAT-2b · Active-passive HA** (ADR-3) — Postgres leader lease + Postgres HA + JetStream. Decide
    before more in-memory state accretes.
+   - **SHIPPED D181 (2026-07-22) - pending owner audit.** Leader elects via a Postgres SESSION advisory
+     lock (pg_try_advisory_lock; auto-release on conn death = failover, no TTL); the cmd runs the singleton
+     loops + srv.Run inside leaderCtx; standby waits. Proven (real PG, 2 pools) + 2 mutation guards. PG-HA +
+     client routing deferred (ops).
 3. **ZT-2b · Live JWKS refresher** (ADR-7) → **ZT-1 · Hardware attestation** — do ZT-1 *after* IDENT-1
    fixes the identity it binds to.
 4. **NIPS-1 · TPROXY inline connector** (ADR-8) **with NIPS-2 · signatures/threat-intel** — sequence

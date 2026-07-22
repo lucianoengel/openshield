@@ -445,3 +445,19 @@ monotonic-sequence check) without holding the agent-identity row lock across the
 #### Scenario: A persisted message is acked, a transient failure is redelivered, a replay is not looped
 - **WHEN** durable ingest is enabled and, in turn, a valid message is persisted, a message hits a transient persist failure, and an already-applied message is redelivered
 - **THEN** the persisted message is acknowledged, the transient one is negatively-acknowledged and later redelivered (not lost), and the already-applied replay is acknowledged as terminal and counted rather than redelivered forever — and concurrent messages for one agent still enforce the monotonic sequence
+
+### Requirement: The singleton work runs under an active-passive leader lease
+
+The control plane MUST run its singleton work — the telemetry consumer, the in-memory peer analytics,
+and the periodic maintenance loops — under a leader lease so that at most ONE instance performs it at
+a time (active-passive). Leadership MUST be held via a Postgres SESSION-scoped advisory lock on a
+dedicated connection, so the single-holder guarantee is the database's and a leader that dies (its
+connection drops) releases leadership automatically, without a time-to-live or heartbeat. A standby
+instance MUST wait, acquiring leadership only when it becomes free, and MUST then run the singleton
+work; on a graceful step-down the leader MUST release the lock explicitly so a standby can take over
+promptly. A single deployed instance MUST become leader immediately and behave exactly as a
+non-HA deployment.
+
+#### Scenario: Exactly one leader, and a standby takes over on release
+- **WHEN** two instances contend for leadership against the same database, and later the leader steps down
+- **THEN** exactly one is elected while the other waits (never both), and when the leader releases the waiting instance is elected and runs the singleton work — a takeover, not a split-brain

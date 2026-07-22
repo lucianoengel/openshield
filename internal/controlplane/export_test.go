@@ -1,6 +1,17 @@
 package controlplane
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// NewLeaderForTest builds a Leader with a fast poll interval so the election/failover test runs
+// quickly (PLAT-2b).
+func NewLeaderForTest(pool *pgxpool.Pool, poll time.Duration) *Leader {
+	return &Leader{pool: pool, key: leaderLockKey, poll: poll}
+}
 
 // RequireRoleForTest exposes the unexported role gate to the external test
 // package, wrapping a handler that writes 200 on success — so a test can assert
