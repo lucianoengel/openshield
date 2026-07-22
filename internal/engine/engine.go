@@ -32,23 +32,45 @@ type classifier interface {
 	Classify(ctx context.Context, req *corev1.ClassifyRequest) (*corev1.ClassifyResponse, error)
 }
 
-// classifyStage hands a file to the unprivileged worker and puts the result on
-// the pipeline State. It receives detector hits — type + confidence + count —
-// NEVER matched content: LocalClassification's matched text stays in the worker
-// (D29), so the classification this builds carries empty matched_text.
-type classifyStage struct{ w classifier }
+// ContentResolver yields the bytes to classify for a network event that carries content
+// out-of-band — an SMTP message body — or nil for a metadata-only event (a DNS query). It is how
+// content reaches the sandboxed worker WITHOUT entering the Event (D10/D29): a connector buffers
+// the body, the engine forwards it to the worker over IPC, and the engine itself never parses it
+// (the RCE-prone parsing stays in the worker sandbox, ENG-1).
+type ContentResolver func(ev *corev1.Event) []byte
+
+// contentHolder is a mutable indirection shared between the Engine and its classify stage, so a
+// content resolver can be installed after New (like SetTelemetry) without changing New's signature.
+type contentHolder struct{ resolve ContentResolver }
+
+// classifyStage hands a subject to the unprivileged worker and puts the result on the pipeline
+// State. It receives detector hits — type + confidence + count — NEVER matched content:
+// LocalClassification's matched text stays in the worker (D29), so the classification this builds
+// carries empty matched_text.
+type classifyStage struct {
+	w       classifier
+	content *contentHolder
+}
 
 func (classifyStage) Name() string { return "classify" }
 
 func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, error) {
 	fs := s.Event.GetFilesystem()
 	if fs == nil {
-		// A non-file event (a DNS query, an HTTP request, a process exec, a USB insert)
-		// carries no file CONTENT to classify — the policy decides on its metadata (the
-		// queried name, the exec path) via buildInput. Hand the policy an EMPTY
-		// classification and continue; the content worker is not called. This is NOT a
-		// skipped scan masquerading as "found nothing": there is genuinely no content for
-		// this event kind, and a file event that reaches classify must still have a path.
+		// A non-file event. It MAY still carry content out-of-band (an SMTP body): if a content
+		// resolver yields bytes, classify them in the worker via inline Content (ENG-1) — the
+		// engine forwards the bytes but does not parse them (D29). Otherwise it is a metadata-only
+		// event (DNS/HTTP/exec/USB) and the policy decides on its metadata via buildInput — hand it
+		// an EMPTY classification (D134). Not a skipped scan masquerading as "found nothing":
+		// metadata-only events genuinely have no content, and a file event must still have a path.
+		if c.content != nil && c.content.resolve != nil {
+			if body := c.content.resolve(s.Event); len(body) > 0 {
+				return c.classify(ctx, s, &corev1.ClassifyRequest{
+					RequestId: s.Event.GetEventId(), EventId: s.Event.GetEventId(),
+					Subject: &corev1.ClassifyRequest_Content{Content: body},
+				})
+			}
+		}
 		s.Classification = &corev1.LocalClassification{EventId: s.Event.GetEventId()}
 		return core.Continue(), nil
 	}
@@ -56,10 +78,15 @@ func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, er
 	if path == "" {
 		return core.Outcome{}, fmt.Errorf("classify: file event carries no resolvable path")
 	}
-	resp, err := c.w.Classify(ctx, &corev1.ClassifyRequest{
+	return c.classify(ctx, s, &corev1.ClassifyRequest{
 		RequestId: s.Event.GetEventId(), EventId: s.Event.GetEventId(),
 		Subject: &corev1.ClassifyRequest_Path{Path: path},
 	})
+}
+
+// classify runs one worker request and builds a content-free LocalClassification from its hits.
+func (c classifyStage) classify(ctx context.Context, s *core.State, req *corev1.ClassifyRequest) (core.Outcome, error) {
+	resp, err := c.w.Classify(ctx, req)
 	if err != nil {
 		// A worker failure is NOT "nothing found" — surface it so a failed parse
 		// is auditable, never a silent clean result (D17).
@@ -68,10 +95,8 @@ func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, er
 	if resp.GetError() != "" {
 		return core.Outcome{}, fmt.Errorf("classify: worker reported: %s", resp.GetError())
 	}
-
-	// Build a content-free LocalClassification: one match per hit occurrence,
-	// carrying detector type and confidence but EMPTY matched_text. The policy
-	// aggregates by type into type+confidence+count, which is all it reads.
+	// One match per hit occurrence, carrying detector type and confidence but EMPTY matched_text.
+	// The policy aggregates by type into type+confidence+count, which is all it reads.
 	lc := &corev1.LocalClassification{EventId: s.Event.GetEventId()}
 	for _, h := range resp.GetHits() {
 		for i := uint32(0); i < h.GetCount(); i++ {
@@ -103,13 +128,19 @@ type Engine struct {
 	// and enforces nothing. Registering an enforcer turns enforcement on, per
 	// action. Enforcement is CONTAINMENT after detection, not prevention (D16).
 	Enforcers []core.Enforcer
+
+	// content backs SetContentResolver: the classify stage consults it to obtain the body of a
+	// network-content event (an SMTP message) for worker classification. nil resolve = no content
+	// source (the default): network events are metadata-only (D134). Shared with classifyStage.
+	content *contentHolder
 }
 
 // New assembles the pipeline: classify (via the worker) → policy → decide, with
 // the audit sink recording every terminal outcome and the logger correlating it.
 func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Engine {
+	content := &contentHolder{}
 	var reg core.Registry
-	reg.Register(classifyStage{w: w})
+	reg.Register(classifyStage{w: w, content: content})
 	reg.Register(policy)
 	disp := core.NewDispatcher(&reg, stageDeadline)
 	disp.OnOutcome = core.NewAuditSink(ledger).Record
@@ -117,8 +148,13 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Engine{disp: disp, ledger: ledger, now: time.Now, logger: logger}
+	return &Engine{disp: disp, ledger: ledger, now: time.Now, logger: logger, content: content}
 }
+
+// SetContentResolver installs the source of out-of-band content for network events (ENG-1): when a
+// network connector (e.g. SMTP) delivers a message with a body, the resolver returns that body so
+// the classify stage sends it to the sandboxed worker. Without it, network events are metadata-only.
+func (e *Engine) SetContentResolver(r ContentResolver) { e.content.resolve = r }
 
 // Process runs one event through the pipeline, records the Decision, then — if an
 // enforcer can carry out its action — enforces it POST-DECISION. The order is
