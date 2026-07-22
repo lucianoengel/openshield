@@ -110,6 +110,11 @@ func parseEventFilter(r *http.Request) (EventFilter, error) {
 	q := r.URL.Query()
 	f := EventFilter{AgentID: q.Get("agent"), Kind: q.Get("kind"), EventID: q.Get("event")}
 
+	// A kind typo returns zero rows, which reads as "nothing happened" — a wrong answer that looks
+	// authoritative (the SEC-8 family). Reject an unknown kind rather than silently over-narrowing.
+	if f.Kind != "" && f.Kind != "event" && f.Kind != "classification" && f.Kind != "decision" {
+		return f, fmt.Errorf("kind %q is not one of event/classification/decision", f.Kind)
+	}
 	if v := q.Get("verified"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -134,8 +139,10 @@ func parseEventFilter(r *http.Request) (EventFilter, error) {
 	f.Limit = 100
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil {
-			return f, fmt.Errorf("limit: %w", err)
+		if err != nil || n <= 0 {
+			// A non-positive limit is a malformed request, not "no limit" — reject it (match
+			// parseAlertFilter) rather than fall through to the default and look authoritative.
+			return f, fmt.Errorf("limit %q is not a positive integer", v)
 		}
 		f.Limit = n
 	}

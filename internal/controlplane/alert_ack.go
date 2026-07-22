@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ErrAlertNotFound is returned when an ack targets a peer alert id that does not exist —
@@ -28,10 +30,16 @@ func (s *Server) AcknowledgeAlert(ctx context.Context, id int64, operator string
 	if tag.RowsAffected() == 1 {
 		return true, nil
 	}
-	// Zero rows: either the alert is already acknowledged, or it does not exist. Disambiguate.
+	// Zero rows: either the alert is already acknowledged, or it does not exist. Disambiguate — but
+	// a genuine DB error here must NOT masquerade as "not found" (SEC-11 error-vs-absence honesty):
+	// only pgx.ErrNoRows means the alert does not exist; any other error is infrastructure failure.
 	var exists bool
-	if err := s.pool.QueryRow(ctx, `SELECT true FROM peer_alerts WHERE id = $1`, id).Scan(&exists); err != nil {
+	err = s.pool.QueryRow(ctx, `SELECT true FROM peer_alerts WHERE id = $1`, id).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrAlertNotFound
+	}
+	if err != nil {
+		return false, err // a down DB is not "no such alert"
 	}
 	return false, nil // exists but was already acknowledged — idempotent no-op
 }

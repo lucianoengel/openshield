@@ -28,6 +28,7 @@ func TestPhoneDetector(t *testing.T) {
 		"the code 123-45 is short", // too few digits
 		"account 12.34.56 balance", // too few digits, wrong shape
 		"ref +1 ----------- 9 end", // matches the +format but only 2 digits — the validator must reject
+		"pi is +3.14159265358979 exactly", // a decimal, not a phone — E.164 has no '.' (R31 fold-in)
 	} {
 		if scanFor2(t, s, corev1.DetectorType_DETECTOR_TYPE_PHONE) {
 			t.Errorf("false positive: phone detected in %q", s)

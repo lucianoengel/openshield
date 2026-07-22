@@ -21,7 +21,9 @@ type phone struct{}
 //
 // The separators/prefix are what make it a phone rather than an arbitrary number.
 var phoneRe = regexp.MustCompile(
-	`\+\d[\d\s().-]{7,17}\d` + // +country ... (7–17 more chars incl. separators)
+	`\+\d[\d\s()-]{7,17}\d` + // +country ... (7–17 more chars incl. separators; NO '.' — a
+	// decimal like +3.14159265358979 is not a phone, and E.164 uses space/hyphen/parens, not dots;
+	// the dotted NANP form is the third alternative)
 		`|\(\d{3}\)\s*\d{3}[.\-\s]\d{4}` + // (NXX) NXX-XXXX
 		`|\b\d{3}[.\-]\d{3}[.\-]\d{4}\b`) // NXX-NXX-XXXX / NXX.NXX.XXXX
 

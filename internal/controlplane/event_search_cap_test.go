@@ -30,3 +30,18 @@ func TestParseEventFilterCapsLimit(t *testing.T) {
 		t.Error("a non-numeric limit must error, not silently fall back")
 	}
 }
+
+// R31 fold-in: parseEventFilter rejects a non-positive limit and an unknown kind (matching
+// parseAlertFilter's SEC-8 discipline) rather than silently over-narrowing/over-broadening.
+func TestParseEventFilterRejectsBadLimitAndKind(t *testing.T) {
+	for _, q := range []string{"/events?limit=0", "/events?limit=-3", "/events?kind=bogus"} {
+		if _, err := parseEventFilter(httptest.NewRequest("GET", q, nil)); err == nil {
+			t.Errorf("parseEventFilter(%q) accepted a malformed filter, want an error", q)
+		}
+	}
+	// A valid kind is honored.
+	f, err := parseEventFilter(httptest.NewRequest("GET", "/events?kind=decision&limit=5", nil))
+	if err != nil || f.Kind != "decision" || f.Limit != 5 {
+		t.Errorf("valid filter mis-parsed: %+v err=%v", f, err)
+	}
+}
