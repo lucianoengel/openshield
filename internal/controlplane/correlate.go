@@ -2,7 +2,9 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -56,11 +58,11 @@ func (s *Server) Correlate(ctx context.Context, rule CorrelationRule, now time.T
 	cutoff := now.Add(-window)
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT subject_id, count(*), max(risk_score), count(DISTINCT agent_id), min(detected_at), max(detected_at)
+		`SELECT subject_id, count(*), max(risk_score), count(DISTINCT NULLIF(agent_id, '')), min(detected_at), max(detected_at)
 		   FROM peer_alerts
 		  WHERE risk_score >= $1 AND detected_at >= $2
 		  GROUP BY subject_id
-		 HAVING count(*) >= $3 AND count(DISTINCT agent_id) >= $4
+		 HAVING count(*) >= $3 AND count(DISTINCT NULLIF(agent_id, '')) >= $4
 		  ORDER BY max(risk_score) DESC`, rule.MinRisk, cutoff, minAlerts, minHosts)
 	if err != nil {
 		return nil, err
@@ -84,16 +86,34 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	rule := CorrelationRule{MinAlerts: queryInt(r, "min_alerts", 3), MinHosts: queryInt(r, "min_hosts", 1)}
-	if v := r.URL.Query().Get("window"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			rule.Window = d
-		}
+	// SEC-8: a malformed correlation param is a 400, not a silent fall-back to the default — a
+	// silently-ignored bad window/min_risk widens the result and looks authoritative.
+	q := r.URL.Query()
+	var rule CorrelationRule
+	var err error
+	if rule.MinAlerts, err = intParam(q, "min_alerts", 3); err != nil {
+		http.Error(w, "bad min_alerts: "+err.Error(), http.StatusBadRequest)
+		return
 	}
-	if v := r.URL.Query().Get("min_risk"); v != "" {
-		if x, err := strconv.ParseFloat(v, 64); err == nil {
-			rule.MinRisk = x
+	if rule.MinHosts, err = intParam(q, "min_hosts", 1); err != nil {
+		http.Error(w, "bad min_hosts: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if v := q.Get("window"); v != "" {
+		d, derr := time.ParseDuration(v)
+		if derr != nil {
+			http.Error(w, "bad window: "+derr.Error(), http.StatusBadRequest)
+			return
 		}
+		rule.Window = d
+	}
+	if v := q.Get("min_risk"); v != "" {
+		x, ferr := strconv.ParseFloat(v, 64)
+		if ferr != nil {
+			http.Error(w, "bad min_risk: "+ferr.Error(), http.StatusBadRequest)
+			return
+		}
+		rule.MinRisk = x
 	}
 	incidents, err := s.Correlate(r.Context(), rule, time.Now())
 	if err != nil {
@@ -101,4 +121,18 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, incidents)
+}
+
+// intParam reads a positive-integer query param, returning def when absent and an error when
+// present-but-malformed or non-positive (SEC-8 fail-loud).
+func intParam(q url.Values, key string, def int) (int, error) {
+	v := q.Get(key)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%q is not a positive integer", v)
+	}
+	return n, nil
 }

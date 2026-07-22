@@ -214,9 +214,13 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		}
 		threshold := 15 * time.Minute
 		if v := r.URL.Query().Get("threshold"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				threshold = d
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				// SEC-8: a malformed threshold is a 400, not a silent fall-back to the default.
+				http.Error(w, "bad threshold: "+err.Error(), http.StatusBadRequest)
+				return
 			}
+			threshold = d
 		}
 		overdue, err := s.Overdue(r.Context(), threshold, time.Now())
 		if err != nil {

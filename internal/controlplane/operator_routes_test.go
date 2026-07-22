@@ -44,3 +44,34 @@ func TestOperatorReadRoutesMountedAndGated(t *testing.T) {
 		t.Errorf("agent GET /events = %d, want 403", resp.StatusCode)
 	}
 }
+
+// SIEM-11 (SEC-8): /incidents and /overdue reject a malformed param with 400, not a silent
+// fall-back to the default that widens the result and looks authoritative.
+func TestIncidentsAndOverdueRejectBadParams(t *testing.T) {
+	srv := controlplane.New(requireDB(t))
+	ca := newOneCA(t)
+	addr := serveRoleGated(t, srv, ca)
+	op := clientWith(t, ca, "alice", "operator")
+
+	for _, path := range []string{
+		"/incidents?window=notaduration",
+		"/incidents?min_alerts=0",
+		"/incidents?min_risk=abc",
+		"/overdue?threshold=notaduration",
+	} {
+		resp, err := op.Get("https://" + addr + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET %s = %d, want 400 (malformed param silently accepted)", path, resp.StatusCode)
+		}
+	}
+	// A well-formed request still succeeds.
+	resp, _ := op.Get("https://" + addr + "/incidents?window=1h&min_alerts=3")
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("valid /incidents = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
