@@ -86,18 +86,20 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
 
 ### Net-new issues (R34) — fold each into the owning ticket; ordered by severity
 
-> **Remediation status (updated 2026-07-22).** ✅ DONE: R34-1, R34-3, R34-4, R34-5, R34-7,
-> R34-8, R34-9, R34-11, R34-12 (commits 77ce96c batch-1, 874875b, df65e94, 2ec84fa). ⏳ TODO:
-> R34-2 (HIGH, EK-chain gated by swtpm vendor-cert; enroll pre-auth token buildable), R34-6
-> (leader backoff), R34-10 (bearer jti/DPoP), R34-13 (LOW bundle). Test proposals: #2/#3/#4/#6
-> landed with their fixes; #1/#5/#7 pending with R34-2/R34-6.
+> **Remediation status (updated 2026-07-22).** ✅ DONE: R34-1, R34-3, R34-4, R34-5, R34-6,
+> R34-7, R34-8, R34-9, R34-10, R34-11, R34-12, and R34-2 **part 1** (pre-auth token) — commits
+> 77ce96c batch-1, 874875b, df65e94, 2ec84fa, 4c793aa, ee92316, 79d873a. ⏳ TODO: R34-2 **part 2**
+> (EK-cert-chain to manufacturer roots — swtpm has no vendor cert so the positive path is
+> untestable here; needs EK-cert-from-NV + a roots pool; carries test proposal #5), R34-13 (LOW
+> bundle). Test proposals: #2/#3/#4/#6/#7 landed with their fixes; #1 (entity-join E2E) and #5
+> (EK-cert refusal) pending.
 
 - **R34-1 · ✅ DONE (77ce96c) · Attestation verdict never expires — P1 (HIGH) · gateway/attestation.go.** `IsAttested`
   never TTLs; a compromised endpoint that simply *stops* attesting stays `Attested=true` forever
   (`AttestLoop` logs failures, never drops the gateway verdict). *Fix:* stamp `attested_at`, expire
   after N miss-intervals; a drifted/silent device loses attestation within one cycle. *Mutation:* attest
   once, stop, advance clock → `IsAttested` must flip false.
-- **R34-2 · No EK-cert-chain anchor + no enroll authorization — P1 (HIGH) · attest/ek.go,
+- **R34-2 · 🟡 PART 1 DONE (ee92316: pre-auth token) · No EK-cert-chain anchor + no enroll authorization — P1 (HIGH) · attest/ek.go,
   attestenrollnet.go.** `handleEnroll` trusts any EK bytes + any device-chosen `Subject`; credential
   activation only proves EK/AK co-residence, so **any device with its own co-resident TPM (incl. swtpm)
   self-enrolls under any pseudonym**. *Fix:* validate the EK cert to manufacturer roots + require an
@@ -114,7 +116,7 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   engine.go:251.** Zeroing `StartTicks` at the source **or** short-circuiting the engine's `pid:ticks`
   build passes the entire suite green — nothing proves the real event carries the ticks the enforcer
   revalidates, so the kill silently degrades to best-effort. *Fix:* the R34 test below.
-- **R34-6 · Leader abandons contention on a transient DB blip — P2 (MED/HIGH) · ha/leader.go:43,
+- **R34-6 · ✅ DONE (4c793aa) · Leader abandons contention on a transient DB blip — P2 (MED/HIGH) · ha/leader.go:43,
   main.go:84.** `acquire()` returns on any error and `main.go` swallows it, so a momentary Postgres blip
   drops the instance out of the election permanently; conn-death failover (the ticket's core claim) is
   untested; no fencing token. *Fix:* retry-with-backoff on transient errors; add the failover test below.
@@ -129,7 +131,7 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   sets `notify.Nop{}` (non-nil) but `deliverLoop` only starts in `SetNotifier`; with no webhook
   configured every peer alert enqueues into a never-drained 256-slot queue → "queue full" stderr spam +
   inflated `NotifyDropped`. *Fix:* only enqueue when a real delivery loop runs.
-- **R34-10 · Bearer tokens replayable across devices — P2 (MED) · identity/oidc.go.** Alg allow-list is
+- **R34-10 · ✅ DONE (79d873a) · Bearer tokens replayable across devices — P2 (MED) · identity/oidc.go.** Alg allow-list is
   correct (rejects `none`/HS*), but no jti/replay tracking, no clock-skew leeway, no device binding
   (cnf/DPoP) — any enrolled device replays another user's token until exp. *Fix:* jti seen-set + DPoP/cnf
   device binding + small skew leeway.
