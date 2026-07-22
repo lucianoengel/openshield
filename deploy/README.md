@@ -94,3 +94,25 @@ telemetry, liveness, the **dead-man's-switch** on a killed agent, and
 restores the dev Postgres. Fanotify permission mode is NOT simulable in rootless
 podman (it needs init-namespace CAP_SYS_ADMIN), so this proves the fleet CONTROL
 path, not kernel eventing.
+
+## Network connectors — the DNS listener MUST be a mirror, never inline (DEPLOY-1)
+
+The engine's DNS connector (`OPENSHIELD_DNS_LISTEN`) is **observe-only**: it parses queries and
+feeds them into the pipeline, but it **never answers a query** — it is a monitoring endpoint, not a
+resolver. Deploy it on a **tap / mirror** of DNS traffic, so the fleet's real resolver still answers:
+
+- **A SPAN/mirror port** (switch port mirroring), or
+- **An eBPF / `AF_PACKET` tap** that copies query datagrams to the listener,
+
+sending a **copy** of each query to `OPENSHIELD_DNS_LISTEN` while the production resolver is
+untouched.
+
+**Do NOT** steer real `:53` traffic to the listener with a transparent redirect (nftables/iptables
+`REDIRECT`/`DNAT` to the listener port). Because the listener does not reply, an inline redirect
+would **blackhole the fleet's DNS** — every lookup would hang and time out. The listener's admission
+rate limit (NIPS-7) bounds ledger writes under a flood, but that is a safety bound, not a licence to
+put it inline. Answering queries (a real resolver/forwarder mode) is a separate, deliberate build;
+until then, mirror-only.
+
+The same applies to the syslog and SMTP connectors: they are capture endpoints fed a copy of the
+traffic (or a dedicated capture destination), not inline elements the fleet depends on for delivery.

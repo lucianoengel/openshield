@@ -160,6 +160,8 @@ func main() {
 	// Optional network source: the DNS query connector (NIPS-3). When OPENSHIELD_DNS_LISTEN
 	// is set, live resolution enters the SAME pipeline as file events — additive to file
 	// watching, and observe-only (D1). Tracked in wg so events is not closed while it produces.
+	// DEPLOY: this listener NEVER answers a query — feed it a MIRROR/TAP of DNS traffic (SPAN/eBPF),
+	// never an inline :53 redirect, which would blackhole the fleet's DNS (see deploy/README.md).
 	if dnsAddr := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_LISTEN")); dnsAddr != "" {
 		dl, err := dnsListener(ctx, dnsAddr, events, log)
 		if err != nil {
