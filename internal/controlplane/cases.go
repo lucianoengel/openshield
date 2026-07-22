@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Case / investigation workflow (Phase F3). An operator opens a case on a pseudonymous
@@ -57,6 +59,10 @@ func (s *Server) OpenCaseForIncident(ctx context.Context, inc Incident, operator
 		id, "system:correlation", note); err != nil {
 		return 0, err
 	}
+	// HON-2: hold the subject's evidence for the open investigation (same tx as the case).
+	if err := placeLegalHoldTx(ctx, tx, inc.SubjectID, operator, "case opened from incident"); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
@@ -89,16 +95,64 @@ type CaseNote struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// placeLegalHoldTx records an active legal hold for a subject within a transaction (HON-2):
+// while the hold is active, a purge MUST NOT erase the subject's evidence (SEC-5). Placing a
+// hold twice for the same subject is idempotent (the active-subject unique index makes the
+// second insert a no-op via ON CONFLICT). It does NOT mutate the immutable ledger rows — the
+// hold is a separate registry the purge consults.
+func placeLegalHoldTx(ctx context.Context, tx interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, subjectID, heldBy, reason string) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO legal_holds (subject_id, held_by, reason) VALUES ($1,$2,$3)
+		 ON CONFLICT (subject_id) WHERE released_at IS NULL DO NOTHING`,
+		subjectID, heldBy, reason)
+	return err
+}
+
+// ReleaseLegalHold ends a subject's active hold (recorded, not deleted, so the hold history
+// stays auditable). Called when an investigation closes.
+func (s *Server) ReleaseLegalHold(ctx context.Context, subjectID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE legal_holds SET released_at = now() WHERE subject_id = $1 AND released_at IS NULL`,
+		subjectID)
+	return err
+}
+
+// IsUnderLegalHold reports whether a subject has an active hold — the query the purge uses.
+func (s *Server) IsUnderLegalHold(ctx context.Context, subjectID string) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM legal_holds WHERE subject_id = $1 AND released_at IS NULL`, subjectID).Scan(&n)
+	return n > 0, err
+}
+
 // OpenCase starts an investigation of a subject, attributed to the opening operator.
 func (s *Server) OpenCase(ctx context.Context, subjectID, operator string) (int64, error) {
 	if subjectID == "" || operator == "" {
 		return 0, fmt.Errorf("cases: subject and operator are required")
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
 	var id int64
-	err := s.pool.QueryRow(ctx,
+	if err := tx.QueryRow(ctx,
 		`INSERT INTO cases (subject_id, opened_by) VALUES ($1,$2) RETURNING id`,
-		subjectID, operator).Scan(&id)
-	return id, err
+		subjectID, operator).Scan(&id); err != nil {
+		return 0, err
+	}
+	// HON-2: opening a case HOLDS the subject's evidence — a purge cannot erase it while the
+	// investigation is open. Placed in the SAME transaction as the case: a case without its
+	// hold would leave evidence purgeable.
+	if err := placeLegalHoldTx(ctx, tx, subjectID, operator, "case opened"); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // AssignCase assigns an open case to an operator.
