@@ -142,6 +142,38 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Allowed: reverse-proxy to the resolved internal service with the body reset.
+	// SEC-9: strip any client-supplied identity/forwarding headers so a backend cannot be
+	// fed a SPOOFED identity, and inject the gateway-authoritative verified subject so the
+	// backend can consume the REAL (pseudonymous, D23) identity. A client that sets
+	// X-Authenticated-User (or pre-sets X-OpenShield-Subject) must not have it trusted.
+	sanitizeIdentityHeaders(r.Header)
+	r.Header.Set(subjectHeader, id.Subject)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	svc.proxy.ServeHTTP(w, r)
+}
+
+// subjectHeader is the gateway-authoritative verified-subject header injected for backends.
+const subjectHeader = "X-Openshield-Subject"
+
+// spoofableIdentityHeaders are client-supplied headers a backend might mistake for an
+// authenticated identity or a trustworthy forwarding chain. The access proxy STRIPS them
+// (SEC-9) so only the gateway-injected subjectHeader carries identity.
+var spoofableIdentityHeaders = []string{
+	"X-Openshield-Subject", // never let a client pre-set the trusted header
+	"X-Authenticated-User",
+	"X-Auth-User",
+	"X-User",
+	"X-Remote-User",
+	"X-Forwarded-For",
+	"X-Forwarded-Host",
+	"X-Forwarded-Proto",
+	"X-Forwarded-User",
+	"X-Real-Ip",
+	"Forwarded",
+}
+
+func sanitizeIdentityHeaders(h http.Header) {
+	for _, name := range spoofableIdentityHeaders {
+		h.Del(name)
+	}
 }
