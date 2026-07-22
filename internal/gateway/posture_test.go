@@ -11,10 +11,10 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/gateway"
 	"github.com/lucianoengel/openshield/internal/policy"
+	"github.com/lucianoengel/openshield/internal/posture"
 )
 
 // SEC-12: each posture update is verified against the REPORTING AGENT's OWN enrolled key (bound to
@@ -117,8 +117,11 @@ decision := {"action":"BLOCK","reason":"unattested device","confidence":0.9} if 
 		t.Error("an unattested device reached the service")
 	}
 
-	// Publish COMPLIANT posture for this subject → attested → ALLOWED.
-	ps.Set(subjectOf(t, financeCert), core.DevicePosture{Compliant: true, DiskEncrypted: true, AgentPresent: true})
+	// Publish COMPLIANT posture through the REAL producer→subscriber→store path (not a direct
+	// store.Set at the proxy's key — the false premise IDENT-1 exposed). The finance cert's CN is
+	// "alice@corp", so real posture published for that agent identity lands under the same canonical
+	// pseudonym the proxy derives from the cert.
+	publishRealPosture(t, ps, "alice@corp", posture.Report{Compliant: true, DiskEncrypted: true, AgentPresent: true})
 	resp2, err := client.Get("https://" + addr + "/")
 	if err != nil {
 		t.Fatal(err)

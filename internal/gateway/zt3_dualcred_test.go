@@ -13,6 +13,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/gateway"
 	"github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/policy"
+	"github.com/lucianoengel/openshield/internal/posture"
 )
 
 // ZT-3: dual credential — the USER identity comes from the OIDC token, the DEVICE posture from the
@@ -66,12 +67,12 @@ decision := {"action":"BLOCK","reason":"deny","confidence":0.9} if { not ok }`)
 		return resp.StatusCode
 	}
 
-	// The user's pseudonym (what the token resolves to) and the device's pseudonym (the cert).
+	// The user's pseudonym (what the token resolves to); the device's posture is keyed by the
+	// device cert's identity, published through the real chain below.
 	userID, err := verifier.Verify(tok)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deviceSubject := subjectOf(t, deviceCert)
 
 	// Valid finance token but NO device posture → DENIED (dual-cred: valid user, unattested device).
 	hit.Store(false)
@@ -88,8 +89,10 @@ decision := {"action":"BLOCK","reason":"deny","confidence":0.9} if { not ok }`)
 		t.Error("the upstream was reached without device posture")
 	}
 
-	// Publish COMPLIANT posture for the DEVICE → both credentials satisfied → ALLOWED.
-	ps.Set(deviceSubject, core.DevicePosture{Compliant: true})
+	// Publish COMPLIANT posture for the DEVICE through the REAL producer→subscriber→store path
+	// (device cert CN = "device-42"), so this positive case cannot pass by sharing the proxy's keying
+	// premise. Both credentials satisfied → ALLOWED.
+	publishRealPosture(t, ps, "device-42", posture.Report{Compliant: true, DiskEncrypted: true, AgentPresent: true})
 	if code := get(); code != http.StatusOK || !hit.Load() {
 		t.Errorf("finance user on a compliant device = %d (hit %v), want 200 + reached", code, hit.Load())
 	}

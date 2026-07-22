@@ -108,6 +108,12 @@ Work top to bottom. All unblocked (no owner gate). Each ticket names the ADR it 
 applies.
 
 ### IDENT-1 · Canonical device identity — fixes the inert posture chain — P0 (HIGH) · gateway+agent+enroll · M
+- **✅ SHIPPED D170 (2026-07-22) — pending owner audit.** New zero-dep `internal/pseudonym.Of` is the one
+  shared derivation used by the posture publisher, the roster loader (`LoadPostureRoster` keys by
+  `pseudonym.Of(agentID)`), and the proxy (`identity.pseudonym`); the fleet-agent publishes posture under
+  `pseudonym.Of(agentID)`; device certs carry `CN = agentID` (ADR-6). Proven on the REAL path (no seeded
+  literal) + three mutation guards (roster/producer/proxy each flips the e2e to FAIL); the two
+  false-premise tests were repaired to drive producer→subscriber→store. Unblocks ZT-3 in prod + ZT-1/XDR-1.
 - **Confirmed by three independent agents.** SEC-12's signature binding is correct, but the feature is
   **dead on the real path**: the fleet-agent stores posture under the raw `OPENSHIELD_SUBJECT`
   (default = raw agentID — `cmd/openshield-fleet-agent/main.go:44,133`, stored raw at

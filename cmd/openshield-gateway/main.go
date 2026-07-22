@@ -315,9 +315,10 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			log.Warn("gateway: OPENSHIELD_RISK_PUBKEY unset — risk continuous-verification inert (unsigned risk is never applied, SEC-1)")
 		}
 		// SEC-12: posture is verified PER AGENT against its OWN enrolled key, from a roster the
-		// gateway loads (OPENSHIELD_POSTURE_ROSTER: "<subject> <base64-pubkey>" per line). A single
-		// shared posture key let any agent forge another's Compliant=true; the roster + subject↔key
-		// binding closes that. No roster → the channel is inert (posture never applied; a
+		// gateway loads (OPENSHIELD_POSTURE_ROSTER: "<agent-identity> <base64-pubkey>" per line; the
+		// loader keys it by the canonical pseudonym so it matches the published subject, IDENT-1). A
+		// single shared posture key let any agent forge another's Compliant=true; the roster +
+		// subject↔key binding closes that. No roster → the channel is inert (posture never applied; a
 		// posture-requiring policy denies on absent posture, D85).
 		if rp := os.Getenv("OPENSHIELD_POSTURE_ROSTER"); rp != "" {
 			resolver, err := gateway.LoadPostureRoster(rp)

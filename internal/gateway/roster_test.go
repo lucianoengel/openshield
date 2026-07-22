@@ -9,10 +9,13 @@ import (
 	"testing"
 
 	"github.com/lucianoengel/openshield/internal/gateway"
+	"github.com/lucianoengel/openshield/internal/pseudonym"
 )
 
-// SEC-12: LoadPostureRoster parses a "<subject> <base64-pubkey>" file into a resolver, and rejects a
-// malformed line or a bad key rather than silently loading a partial roster.
+// SEC-12 + IDENT-1: LoadPostureRoster parses a "<agent-identity> <base64-pubkey>" file into a
+// resolver keyed by the CANONICAL pseudonym (so it matches the subject the publisher signs and the
+// proxy resolves), and rejects a malformed line or a bad key rather than silently loading a partial
+// roster.
 func TestLoadPostureRoster(t *testing.T) {
 	pubA, _, _ := ed25519.GenerateKey(rand.Reader)
 	dir := t.TempDir()
@@ -23,10 +26,15 @@ func TestLoadPostureRoster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if k, ok := resolve("agent-A"); !ok || string(k) != string(pubA) {
-		t.Errorf("agent-A key not resolved")
+	// The roster lists the human identity "agent-A"; it resolves under the canonical pseudonym
+	// (what an incoming posture update carries), NOT the raw identity.
+	if k, ok := resolve(pseudonym.Of("agent-A")); !ok || string(k) != string(pubA) {
+		t.Errorf("agent-A key not resolved under its canonical pseudonym")
 	}
-	if _, ok := resolve("agent-Z"); ok {
+	if _, ok := resolve("agent-A"); ok {
+		t.Errorf("the raw identity resolved to a key — the roster must key by the canonical pseudonym")
+	}
+	if _, ok := resolve(pseudonym.Of("agent-Z")); ok {
 		t.Errorf("an unlisted subject resolved to a key")
 	}
 

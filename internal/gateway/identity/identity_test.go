@@ -8,6 +8,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/provision"
+	"github.com/lucianoengel/openshield/internal/pseudonym"
 )
 
 func leafFromPEM(t *testing.T, certPEM []byte) *x509.Certificate {
@@ -51,6 +52,28 @@ func TestFromClientCertResolvesPseudonymousSubject(t *testing.T) {
 	// The raw identity MUST NOT appear in the pseudonymous subject (D23).
 	if strings.Contains(id.Subject, "alice") || strings.Contains(id.Subject, "corp") {
 		t.Errorf("subject %q leaks the raw identity — it must be pseudonymised (D23)", id.Subject)
+	}
+}
+
+// IDENT-1/ADR-6 provisioning join: a DEVICE client certificate issued with CN = the enrolled
+// agent identity resolves, at the proxy, to the SAME canonical pseudonym the device-posture
+// producer publishes under (pseudonym.Of(agentID)). This is the equality that makes the posture
+// chain match; if IssueClientCert or FromClientCert stopped routing through the shared derivation,
+// the device's published posture would never be found.
+func TestDeviceClientCertSubjectEqualsPostureKey(t *testing.T) {
+	caCert, caKey := newCA(t)
+	const agentID = "device-42"
+	certPEM, _, err := provision.IssueClientCert(caCert, caKey, agentID, "finance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity.FromClientCert(leafFromPEM(t, certPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := pseudonym.Of(agentID); id.Subject != want {
+		t.Errorf("device cert subject = %q, want %q (== the canonical posture key for the agent) — "+
+			"the proxy and the posture producer would key posture differently", id.Subject, want)
 	}
 }
 

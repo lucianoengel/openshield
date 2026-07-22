@@ -86,6 +86,14 @@ func InitCA() (caCertPEM, caKeyPEM []byte, err error) {
 // authorizes on). clientAuth only — a client cert is not a server. The CN is the raw
 // identity; the identity producer pseudonymises it at the boundary (D23), so it never
 // enters the pipeline.
+//
+// DEVICE-authentication convention (ADR-6/IDENT-1): when this cert authenticates a
+// DEVICE that also reports device posture, `identity` MUST be that device's enrolled
+// AGENT IDENTITY. The access proxy derives the device's posture-lookup subject as
+// pseudonym(CN), and the posture producer publishes under pseudonym(agentID); issuing
+// the cert with CN = agentID is what makes those two subjects equal, so the device's
+// published posture is actually found. A device cert issued with an unrelated CN leaves
+// the posture chain inert for that device (HasPosture=false → fail-closed).
 func IssueClientCert(caCertPEM, caKeyPEM []byte, identity, group string) (certPEM, keyPEM []byte, err error) {
 	if identity == "" || group == "" {
 		return nil, nil, fmt.Errorf("provision: client cert needs a non-empty identity and group")

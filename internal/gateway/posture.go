@@ -15,6 +15,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	canonid "github.com/lucianoengel/openshield/internal/pseudonym"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
@@ -115,11 +116,14 @@ func (p *PostureSubscriber) Subscribe(conn *nats.Conn) (*nats.Subscription, erro
 	})
 }
 
-// LoadPostureRoster reads a posture-key roster from a file — one "<subject> <base64-ed25519-pubkey>"
-// per line (blank lines and #-comments ignored) — and returns a resolver over it, so the gateway
-// verifies each agent's posture against that agent's OWN enrolled key (SEC-12) instead of a single
-// shared key. Distributing the roster to the gateway (exported from the control-plane enrollment
-// records) is a deployment step; keeping it in sync automatically from the control plane is a follow-up.
+// LoadPostureRoster reads a posture-key roster from a file — one
+// "<agent-identity> <base64-ed25519-pubkey>" per line (blank lines and #-comments ignored) — and
+// returns a resolver over it, so the gateway verifies each agent's posture against that agent's OWN
+// enrolled key (SEC-12) instead of a single shared key. The file lists the human-readable agent
+// identity; the resolver is keyed by the CANONICAL pseudonym (pseudonym.Of, ADR-6/IDENT-1), because
+// the update's subject arrives as that pseudonym — operators write identities, not opaque hashes,
+// and the loader canonicalizes. Distributing the roster to the gateway (exported from the
+// control-plane enrollment records) is a deployment step; auto-syncing it is a follow-up.
 func LoadPostureRoster(path string) (PostureKeyResolver, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -141,7 +145,9 @@ func LoadPostureRoster(path string) (PostureKeyResolver, error) {
 		if err != nil || len(key) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("gateway: bad pubkey for %q in roster", fields[0])
 		}
-		roster[fields[0]] = ed25519.PublicKey(key)
+		// field 0 is the agent identity; key the resolver by its canonical pseudonym so it
+		// matches the subject the publisher signs and the proxy resolves (ADR-6/IDENT-1).
+		roster[canonid.Of(fields[0])] = ed25519.PublicKey(key)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err

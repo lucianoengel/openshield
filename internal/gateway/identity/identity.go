@@ -10,13 +10,12 @@
 package identity
 
 import (
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/provision"
+	canonid "github.com/lucianoengel/openshield/internal/pseudonym"
 )
 
 // Identity is a resolved, verified Zero-Trust subject. Subject is pseudonymous (D23)
@@ -78,9 +77,11 @@ func hasClientRole(leaf *x509.Certificate) bool {
 }
 
 // pseudonym one-way-hashes the raw identity so it never enters the pipeline (D23).
-// The reverse mapping (pseudonym → real identity) is a deployer concern behind an
-// audited lookup (D23/D47).
+// It routes through the shared internal/pseudonym derivation (ADR-6/IDENT-1) so the
+// subject the proxy derives from a certificate CN is byte-identical to the one the
+// device-posture publisher and the posture roster derive from the agent identity —
+// the mismatch that made the posture chain inert. The reverse mapping (pseudonym →
+// real identity) is a deployer concern behind an audited lookup (D23/D47).
 func pseudonym(identity string) string {
-	sum := sha256.Sum256([]byte("zt-client-subject:" + identity))
-	return "sub_" + hex.EncodeToString(sum[:12])
+	return canonid.Of(identity)
 }

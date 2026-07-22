@@ -28,6 +28,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/posture"
+	"github.com/lucianoengel/openshield/internal/pseudonym"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"github.com/lucianoengel/openshield/internal/transport/queue"
 )
@@ -42,6 +43,13 @@ func main() {
 	// how many events it emits per tick — a high burst makes an agent a peer-UEBA
 	// OUTLIER relative to the fleet (D54).
 	subject := env("OPENSHIELD_SUBJECT", agentID)
+	// Device posture is keyed by the CANONICAL pseudonym of the enrolled agent
+	// identity (ADR-6/IDENT-1), NOT the raw agentID or OPENSHIELD_SUBJECT. The access
+	// proxy resolves posture under pseudonym(cert-CN) and the roster verifies under
+	// the same derivation; keying the publish side identically is what makes the
+	// posture chain actually match in production. OPENSHIELD_SUBJECT still only shapes
+	// this agent's own event attribution (above), never its posture key.
+	postureSubject := pseudonym.Of(agentID)
 	burst := envInt("OPENSHIELD_BURST", 1)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -105,8 +113,10 @@ func main() {
 
 	// HON-4: opt-in device-posture reporting. When OPENSHIELD_POSTURE_SIGNING_KEY is set, the
 	// agent detects its device posture and publishes it SIGNED so the gateway can verify it
-	// (SEC-1) — the producer that finally gives the D85 tamper-lockout real data. The subject
-	// is this agent's own pseudonym: a posture update is bound to the reporting agent.
+	// (SEC-1) — the producer that finally gives the D85 tamper-lockout real data. It publishes
+	// under postureSubject = the canonical pseudonym of this agent's identity (ADR-6), the same
+	// key the gateway roster verifies under and the proxy looks up — a posture update is bound to
+	// the reporting agent AND actually found for it.
 	var postureKey ed25519.PrivateKey
 	if kp := os.Getenv("OPENSHIELD_POSTURE_SIGNING_KEY"); kp != "" {
 		key, err := os.ReadFile(kp)
@@ -130,7 +140,7 @@ func main() {
 			}
 			_ = pub.PublishHeartbeat(ctx, &corev1.Heartbeat{AgentId: agentID, ObservedAt: timestamppb.Now()})
 			if postureKey != nil {
-				if err := posture.Publish(conn, subject, posture.Detect(), postureKey); err != nil {
+				if err := posture.Publish(conn, postureSubject, posture.Detect(), postureKey); err != nil {
 					fmt.Fprintf(os.Stderr, "fleet-agent %s: posture publish failed: %v\n", agentID, err)
 				}
 			}

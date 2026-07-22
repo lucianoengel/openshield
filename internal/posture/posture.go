@@ -102,6 +102,12 @@ func Build(subject string, r Report, priv ed25519.PrivateKey) ([]byte, error) {
 // Publish reports the current posture: it builds a signed update for the subject and
 // publishes it on the posture subject. Best-effort — a publish failure is returned, never
 // fatal (like risk publishing, it must not break the agent).
+//
+// The subject MUST be the CANONICAL pseudonym of the reporting agent's identity
+// (pseudonym.Of(agentID), ADR-6/IDENT-1) — the gateway roster verifies and the access
+// proxy resolves posture under that same derivation, so a raw agent id here leaves the
+// posture stored under a key nothing ever queries (the inert-posture bug). Publish takes
+// the subject it is given; the caller owns the canonicalization.
 func Publish(conn *nats.Conn, subject string, r Report, priv ed25519.PrivateKey) error {
 	data, err := Build(subject, r, priv)
 	if err != nil {
