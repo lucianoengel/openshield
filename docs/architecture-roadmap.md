@@ -576,6 +576,12 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 - **DLP-2 · Real exfiltration-channel producers** — P0-for-product · producers (+ maybe actions) · XL,
   per-OS. Clipboard, print, screenshot, removable-media file-copy (content-aware), cloud-sync/CASB. A
   DLP that watches directories but not the channels users exfiltrate through is not a DLP.
+  **Channel-awareness foundation SHIPPED (D194):** `internal/exfil` tags a file event with its exfil
+  channel (removable / cloud-sync / local, path-derived and content-free) and a policy escalates a
+  sensitive write to an exfil channel over a local one. Covers the FILE-BASED channels (removable +
+  cloud-sync folders, via the existing fanotify/filewatch producers). Remaining: the **per-OS non-file
+  producers** — clipboard, print, screenshot (display/OS-gated) — plus content-aware CASB and runtime
+  mount-table resolution.
 - **DLP-3 · EDM / IDM / OCR** — P1 · classify (server-side) · XL. Exact-data-match, doc fingerprinting,
   OCR. **Placement fixed by ADR-9** — server-side / signed index into the sandbox; never break D10/D11.
   **EDM single-value SHIPPED (D193):** `internal/classify` fingerprints an operator dataset into a

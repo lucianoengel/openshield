@@ -10,6 +10,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/behavioral"
+	"github.com/lucianoengel/openshield/internal/exfil"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
@@ -96,6 +97,15 @@ func buildInput(st *core.State) map[string]interface{} {
 		event["host"] = ns.GetSniHost()
 		event["method"] = ns.GetHttpMethod()
 		event["path"] = ns.GetHttpPath()
+	}
+	// For a filesystem event, expose the exfil channel of the write (DLP-2): a
+	// content-free derivation of the path (like the behavioral analysis below), so a
+	// policy can escalate a sensitive write to a cloud-sync/removable channel
+	// differently from a local one. Path-derived only — no content, no file access.
+	if fs := st.Event.GetFilesystem(); fs != nil {
+		if p := fs.GetResolvedPath(); p != "" {
+			event["exfil_channel"] = exfil.Classify(p).String()
+		}
 	}
 	// For a process-exec event, expose the exec path, args, and parent path so a
 	// behavioral policy can decide on LOLBins and process lineage (Phase E, HIPS). Exec
