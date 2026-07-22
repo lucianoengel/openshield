@@ -171,8 +171,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y swtpm
       - name: TPM quote generate + nonce-fresh verify + EK activation + PCR policy (real swtpm)
         run: go test -race -count=1 -v ./internal/attest/
-      - name: gateway attestation verifier + attested access + NATS transport (real swtpm)
-        run: go test -race -count=1 -run Attestation -v ./internal/gateway/
+      - name: gateway attestation verifier + attested access + NATS transport + enrollment (real swtpm)
+        run: go test -race -count=1 -run 'Attestation|Enrollment' -v ./internal/gateway/
 
   # Still to come, each its own ticket:
   #

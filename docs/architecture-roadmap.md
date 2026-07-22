@@ -550,8 +550,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   - ✅ **Transport (D188)** — SHIPPED. A NATS challenge/report channel drives the verifier on live data:
     a device requests a nonce, quotes, publishes; the gateway issues the nonce and verifies, flipping it
     to attested. The report self-authenticates (it's a TPM-signed quote — no extra signature). Proven
-    embedded-NATS + real-swtpm end-to-end. Remaining ZT-1 operability: **enrollment distribution**
-    (populate the verifier with each device's AK + golden baseline) + the endpoint re-attestation loop.
+    embedded-NATS + real-swtpm end-to-end.
+  - ✅ **Enrollment distribution (D189)** — SHIPPED. Capture a device's AK + golden PCR baseline into a
+    JSON file (posture-roster model) and load it into the gateway verifier (atomic, fail-closed on a bad
+    record); `cmd/openshield-gateway` loads it via `OPENSHIELD_ATTEST_ENROLLMENTS`. swtpm-proven: a
+    distributed enrollment attests a real device end to end. The ZT-1 chain now runs with real devices.
+    Remaining operability: an **automated network enrollment** (live credential activation over the wire)
+    + the endpoint re-attestation loop.
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
   it is server-side reverse-proxy only.
 - **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an

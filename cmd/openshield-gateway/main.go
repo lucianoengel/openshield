@@ -353,6 +353,19 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		// unattested — a policy requiring attestation fails closed (D85/D186).
 		if os.Getenv("OPENSHIELD_ATTEST") != "" {
 			av := gateway.NewAttestationVerifier()
+			// Load device enrollments (each device's AK public key + golden PCR
+			// baseline) so the verifier can attest real devices. Without a file the
+			// verifier is empty and every device is unattested — a policy requiring
+			// attestation fails closed (D85/D186). A malformed file aborts startup.
+			if ef := os.Getenv("OPENSHIELD_ATTEST_ENROLLMENTS"); ef != "" {
+				n, err := gateway.LoadAttestationEnrollments(av, ef)
+				if err != nil {
+					fatal(log, "attestation enrollments", err)
+				}
+				log.Info("gateway: ZT-1 attestation enrollments loaded", slog.Int("devices", n))
+			} else {
+				log.Warn("gateway: OPENSHIELD_ATTEST_ENROLLMENTS unset — attestation verifier empty, every device unattested (fail closed)")
+			}
 			ap.SetAttestationVerifier(av)
 			responder := gateway.NewAttestationResponder(av)
 			if _, err := responder.ServeChallenge(conn); err != nil {
@@ -361,7 +374,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			if _, err := responder.SubscribeReports(conn); err != nil {
 				fatal(log, "attestation report subscribe", err)
 			}
-			log.Warn("gateway: ZT-1 attestation transport active — enrollment distribution pending, verifier empty until devices are enrolled (fail closed)")
+			log.Info("gateway: ZT-1 attestation transport active")
 		}
 	}
 
