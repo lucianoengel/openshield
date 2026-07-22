@@ -130,6 +130,12 @@ applies.
   hits; a compliant device reaches a posture-gated upstream; a non-compliant device is denied.
 
 ### DLP-5b · Compose policy packs, don't replace the default — P1 · policy · M
+- **✅ SHIPPED D171 (2026-07-22) — pending owner audit.** `policy.Stage` now holds N members;
+  `NewComposite` composes default + packs + optional operator custom under a most-restrictive-wins
+  data-verb lattice, combined in Go (each module evaluated independently). `SelectFromEnv`
+  (`OPENSHIELD_POLICY_PACK[S]`/`_CUSTOM`) wired into engine+gateway — packs COMPOSE, never replace. A
+  compliance pack emitting a process verb is a hard error. Proven: every pack keeps the default's
+  behavioral + CPF alerts; 3 mutation guards (replace/lattice/pack-guard). Implements ADR-5.
 - `NewPack` swaps `default.rego` wholesale (`internal/policy/embed.go`), and the pack files omit the
   HIPS `behavioral_alert` rule and the CPF/card strong-detector alert — so **enabling PCI silently
   turns off behavioral process alerting** (and each pack drops the detectors outside its scope). No
