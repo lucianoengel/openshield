@@ -85,7 +85,14 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   **conn-death failover untested**.
 
 ### Net-new issues (R34) — fold each into the owning ticket; ordered by severity
-- **R34-1 · Attestation verdict never expires — P1 (HIGH) · gateway/attestation.go.** `IsAttested`
+
+> **Remediation status (updated 2026-07-22).** ✅ DONE: R34-1, R34-3, R34-4, R34-5, R34-7,
+> R34-8, R34-9, R34-11, R34-12 (commits 77ce96c batch-1, 874875b, df65e94, 2ec84fa). ⏳ TODO:
+> R34-2 (HIGH, EK-chain gated by swtpm vendor-cert; enroll pre-auth token buildable), R34-6
+> (leader backoff), R34-10 (bearer jti/DPoP), R34-13 (LOW bundle). Test proposals: #2/#3/#4/#6
+> landed with their fixes; #1/#5/#7 pending with R34-2/R34-6.
+
+- **R34-1 · ✅ DONE (77ce96c) · Attestation verdict never expires — P1 (HIGH) · gateway/attestation.go.** `IsAttested`
   never TTLs; a compromised endpoint that simply *stops* attesting stays `Attested=true` forever
   (`AttestLoop` logs failures, never drops the gateway verdict). *Fix:* stamp `attested_at`, expire
   after N miss-intervals; a drifted/silent device loses attestation within one cycle. *Mutation:* attest
@@ -95,15 +102,15 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   activation only proves EK/AK co-residence, so **any device with its own co-resident TPM (incl. swtpm)
   self-enrolls under any pseudonym**. *Fix:* validate the EK cert to manufacturer roots + require an
   enrollment pre-auth token (who-may-enroll). The ZTNA-vs-toy line for attestation.
-- **R34-3 · JWKS accepts `http://` — P1 (HIGH) · gateway/identity, main.go:~281.** Plaintext JWKS fetch =
+- **R34-3 · ✅ DONE (77ce96c) · JWKS accepts `http://` — P1 (HIGH) · gateway/identity, main.go:~281.** Plaintext JWKS fetch =
   key injection = full auth bypass. *Fix:* enforce `https://` at construction; add failed-fetch backoff
   so an unknown-`kid` flood during an IdP outage can't drive one fetch per trigger.
-- **R34-4 · PLAT-2 JetStream producer unwired — P1 (HIGH for the durability claim) · transport.** No
+- **R34-4 · ✅ DONE (2ec84fa) · PLAT-2 JetStream producer unwired — P1 (HIGH for the durability claim) · transport.** No
   production binary calls `UseJetStream()`; agents publish core NATS (at-most-once), so the "durable, no
   loss" claim is inert in prod. Nak has no backoff (hot-loops on a DB outage). *Fix:* wire the producer
   behind the existing env gate + default-flip plan; add Nak backoff. *Mutation:* `Nak→Ack` survives all
   tests today.
-- **R34-5 · HIPS-7 pid-reuse plumbing has zero mutation coverage — P1 (HIGH) · execaudit/source.go:78,
+- **R34-5 · ✅ DONE (df65e94) · HIPS-7 pid-reuse plumbing has zero mutation coverage — P1 (HIGH) · execaudit/source.go:78,
   engine.go:251.** Zeroing `StartTicks` at the source **or** short-circuiting the engine's `pid:ticks`
   build passes the entire suite green — nothing proves the real event carries the ticks the enforcer
   revalidates, so the kill silently degrades to best-effort. *Fix:* the R34 test below.
@@ -111,14 +118,14 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   main.go:84.** `acquire()` returns on any error and `main.go` swallows it, so a momentary Postgres blip
   drops the instance out of the election permanently; conn-death failover (the ticket's core claim) is
   untested; no fencing token. *Fix:* retry-with-backoff on transient errors; add the failover test below.
-- **R34-7 · Lossy automated-action audit — P2 (MED) · engine.go:276.** `_ = e.ledger.Append(...)` drops
+- **R34-7 · ✅ DONE (77ce96c) · Lossy automated-action audit — P2 (MED) · engine.go:276.** `_ = e.ledger.Append(...)` drops
   the enforcement-audit error silently, violating the `Ledger.Append` contract for exactly the automated
   actions that must be evidentiary. *Fix:* log+count the failure; never silently drop a ledger append.
-- **R34-8 · Untrusted-size allocation in EDM/IDM loaders — P2 (MED) · edm_record.go:227, idm.go:235.** A
+- **R34-8 · ✅ DONE (77ce96c) · Untrusted-size allocation in EDM/IDM loaders — P2 (MED) · edm_record.go:227, idm.go:235.** A
   24-byte malformed blob with `m=0xFFFFFFFF` triggers a ~16 GB `make([]uint32, m)` (OOM/DoS) before any
   length check. *Fix:* bound `m` by remaining blob length (as `LoadEDMIndex` already does). Add the fuzz
   test below.
-- **R34-9 · Unconfigured server leaks the notify queue — P2 (MED) · controlplane/notify.go:84.** `New()`
+- **R34-9 · ✅ DONE (874875b) · Unconfigured server leaks the notify queue — P2 (MED) · controlplane/notify.go:84.** `New()`
   sets `notify.Nop{}` (non-nil) but `deliverLoop` only starts in `SetNotifier`; with no webhook
   configured every peer alert enqueues into a never-drained 256-slot queue → "queue full" stderr spam +
   inflated `NotifyDropped`. *Fix:* only enqueue when a real delivery loop runs.
@@ -126,11 +133,11 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   correct (rejects `none`/HS*), but no jti/replay tracking, no clock-skew leeway, no device binding
   (cnf/DPoP) — any enrolled device replays another user's token until exp. *Fix:* jti seen-set + DPoP/cnf
   device binding + small skew leeway.
-- **R34-11 · DLP-7 `dlValueRe` over-broad — P3 (MED) · classify/context.go:61.** `\b[A-Z0-9]{5,20}\b`
+- **R34-11 · ✅ DONE (77ce96c) · DLP-7 `dlValueRe` over-broad — P3 (MED) · classify/context.go:61.** `\b[A-Z0-9]{5,20}\b`
   counts ordinary all-caps words as license values ("DRIVER LICENSE NUMBER D1234567 EXPIRES SOON" → 3),
   so count-threshold policies over-fire on any all-caps document. *Fix:* require ≥1 digit / drop
   pure-alpha candidates. Add the precision regression below.
-- **R34-12 · Ingest does not enforce the subject contract — P3 (MED) · controlplane handleSigned.** XDR-3
+- **R34-12 · ✅ DONE (874875b) · Ingest does not enforce the subject contract — P3 (MED) · controlplane handleSigned.** XDR-3
   validates only inside `engine.attribute`; a legacy/rogue agent can ship subject-less events straight
   into `fleet_telemetry`. *Fix:* validate at ingest (server-side), not just client-side.
 - **R34-13 · Minor/LOW (fold in):** incidents never `emit` a notification (`incidents.go`) — this **is**
