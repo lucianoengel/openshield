@@ -111,43 +111,70 @@ contracts, and the ledger — stays fixed. New capability lands as a new event s
 a new policy input, or one deliberate new action, never as a change to the core. That discipline is
 what lets a single codebase span seven security domains instead of fragmenting into seven products.
 
-**How it deploys** — internal apps, data, and the control plane sit in a **protected inner network**
-behind the gateway. End users reach the internet directly, but **access to internal resources goes
-through the gateway**, where traffic is inspected inline (DLP) and brokered (ZTNA) — allow, block, or
-redirect. Agent telemetry and control traffic transit the same gateway to reach the control plane,
-which correlates, writes tamper-evident evidence, and publishes risk and response *context* back to
-the agents:
+**The full picture** — OpenShield runs detection-and-response at **three tiers that share one pipeline
+and one evidence ledger**: on the **host** (file DLP, HIPS process control, device posture, local
+enforcement), at the **network gateway** (inline DLP *as* NIPS across HTTP/DNS/SMTP, plus ZTNA access
+brokering), and in the **control plane** (SIEM correlation, XDR cross-domain incidents, SOAR response).
+Users reach internal apps, file servers, and databases *through* the gateway — inspected and brokered;
+agents report over a signed bus into the protected inner network; and the control plane feeds risk and
+coordinated-response context back out to every enforcement point.
 
 ```mermaid
-flowchart LR
-  NET["🌍 Internet"]
+flowchart TB
+  INET["🌍 Internet"]
 
-  subgraph EDGE["User endpoints"]
-    EP["🖥️ Endpoint · agent + engine<br/><i>files · processes · USB · local enforcement</i>"]
+  subgraph EP["🖥️ Endpoints — host detection &amp; response"]
+    HOST["<b>Agent · Engine · sandboxed Worker</b><br/>Host DLP — files · USB<br/>HIPS — process · exec · behavioral<br/>Device posture · Zero-Trust signal<br/>local enforce — quarantine · encrypt · kill"]
   end
 
-  GW["🌐 Gateway<br/><b>inline DLP · ZTNA · reverse proxy</b><br/>DNS · SMTP · controlled ingress"]
-
-  subgraph INNER["Inner network — protected"]
-    direction TB
-    APPS["🗄️ Internal resources<br/>apps · data · services"]
-    SRV["Fleet server<br/>ingest · correlate · incidents · notify"]
-    BUS(["signed telemetry bus · mTLS"])
-    LEDGER[("Audit ledger")]
-    ANC["Anchor · external witness"]
+  subgraph NETP["🌐 Network data plane — Gateway"]
+    GW["<b>Inline DLP + NIPS/NTPS</b> — HTTP · DNS · SMTP · TLS-intercept<br/><b>ZTNA access broker</b> — identity + device posture<br/>allow · block · redirect"]
   end
 
-  OP["👤 Analyst / operator"]
+  subgraph INNER["🔒 Protected inner network"]
+    subgraph RES["Internal resources"]
+      APPS["🗄️ Web apps · file servers · databases"]
+    end
+    subgraph CP["Control plane"]
+      BUS(["📨 Telemetry bus · mTLS"])
+      SRV["<b>Fleet server</b><br/>SIEM — search · correlation · UEBA<br/>XDR — cross-domain incidents<br/>SOAR — cases · playbooks · notify"]
+      LED[("Fleet store +<br/>hash-chained audit ledger")]
+      PKI["Provisioning · PKI<br/>enrollment · identity"]
+      ANC["Anchor ·<br/>external witness"]
+    end
+  end
 
-  EP -->|"internet — direct"| NET
-  EP ==>|"access internal resources"| GW
-  GW ==>|"DLP: allow · block · redirect"| APPS
-  EP <-->|"agent telemetry &amp; control · mTLS"| GW
-  OP -->|"ZTNA access"| GW
-  GW <--> BUS
+  OPS["👤 Analysts / operators<br/>SIEM · SOAR console"]
+
+  subgraph EXT["🔌 External integrations"]
+    IDP["Identity provider<br/>OIDC / SSO"]
+    ITSM["ITSM · ticketing"]
+    TI["Threat-intel feeds"]
+    LOGS["Syslog · external logs"]
+  end
+
+  %% data plane — user access
+  HOST -->|"internet — direct"| INET
+  HOST ==>|"access internal resources"| GW
+  GW ==>|"inspected · brokered"| APPS
+  OPS ==>|"ZTNA access"| GW
+
+  %% management plane — telemetry into the inner network
+  HOST <-->|"signed telemetry &amp; control · mTLS"| GW
+  GW <-->|"the only path in"| BUS
   BUS --> SRV
-  SRV --> LEDGER --> ANC
-  SRV -.->|"risk &amp; response context"| BUS
+  SRV --> LED --> ANC
+
+  %% identity / zero trust
+  PKI -.->|"enrolls · issues identity"| HOST
+  IDP -.->|"SSO · JWT"| GW
+  LOGS -.->|"SIEM ingest"| SRV
+
+  %% coordinated response — XDR / SOAR feedback
+  SRV -.->|"published risk · signed response-intent"| BUS
+  SRV -.->|"enrich"| TI
+  SRV -.->|"disable user"| IDP
+  SRV -.->|"open ticket"| ITSM
 ```
 
 ## 🧩 Components
