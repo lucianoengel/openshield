@@ -70,6 +70,10 @@ type Server struct {
 	// NotifyDropped counts notifications dropped because the async delivery queue was full
 	// (SIEM-12) — a delivery backlog degrades responsiveness but never blocks ingest.
 	NotifyDropped atomic.Int64
+	// NotifyDeduped counts notifications suppressed because the same logical alert (same
+	// deterministic id) was already delivered this window (SIEM-12) — a client-timeout-after-
+	// server-success retry re-detects and re-emits, but pages exactly once.
+	NotifyDeduped atomic.Int64
 	// DroppedMessages counts NATS async errors (above all SlowConsumer overflow) — a
 	// receive-side drop is COUNTED and logged, never silent (SEC-4).
 	DroppedMessages atomic.Int64
@@ -84,6 +88,10 @@ type Server struct {
 	// delivery runs OFF the ingest path so a slow webhook never stalls telemetry ingest.
 	notifyQ    chan notify.Notification
 	notifyOnce sync.Once
+	// notifyDedupe is a bounded set of recently-emitted notification ids, so the same logical
+	// alert delivers once even if it is re-detected and re-emitted (SIEM-12). Bounded (FIFO
+	// eviction) so it cannot grow without limit.
+	notifyDedupe *dedupeSet
 
 	// peer-UEBA (D54) is a SERVER-SIDE analytics consumer of the verified stream,
 	// OFF unless explicitly enabled — enabling it is the D23 consent/DPIA decision.
@@ -107,7 +115,7 @@ type Server struct {
 // New creates a server over an existing pool.
 func New(pool *pgxpool.Pool) *Server {
 	return &Server{pool: pool, now: time.Now, notifier: notify.Nop{}, notifiedOverdue: map[string]bool{},
-		notifyQ: make(chan notify.Notification, 256)}
+		notifyQ: make(chan notify.Notification, 256), notifyDedupe: newDedupeSet(4096)}
 }
 
 // EnablePeerUEBA turns on server-side peer-baseline analytics (D54). This is the

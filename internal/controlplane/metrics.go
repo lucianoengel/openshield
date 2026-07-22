@@ -32,6 +32,7 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_peer_alerts_total", "Server-side peer-UEBA detections recorded.", s.PeerAlerts.Load()},
 			{"openshield_notify_failures_total", "Alert-delivery errors (best-effort delivery).", s.NotifyFailures.Load()},
 		{"openshield_notify_dropped_total", "Notifications dropped because the async delivery queue was full (SIEM-12).", s.NotifyDropped.Load()},
+			{"openshield_notify_deduped_total", "Duplicate notifications suppressed by the server-side idempotency check (SIEM-12).", s.NotifyDeduped.Load()},
 			{"openshield_dropped_messages_total", "NATS async errors / slow-consumer drops (receive-side loss, SEC-4).", s.DroppedMessages.Load()},
 		}
 		for _, m := range metrics {

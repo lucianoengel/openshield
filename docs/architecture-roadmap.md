@@ -146,6 +146,10 @@ applies.
   protections survive every pack.
 
 ### SIEM-12 · Real notification idempotency — P2 · notify · S
+- **✅ SHIPPED D172 (2026-07-22) — pending owner audit.** `notifyID` now derives the id from
+  `kind|subject|agentID|window-bucket(At)`; a bounded FIFO `dedupeSet` on the Server suppresses a
+  re-emitted duplicate in `emit` (counted `openshield_notify_deduped_total`). Proven: a re-detection
+  within the window pages once; 2 mutation guards (dedup-off, raw-timestamp id).
 - The async hand-off is real (`TestEmitDoesNotBlockIngest`), but `newNotifyID()` is `crypto/rand`
   per-emit (`notify.go:59`) and is **never checked server-side**. The scenario it targets — agent
   re-sends telemetry → server re-detects → re-emits — mints a new id each time, so nothing dedupes →

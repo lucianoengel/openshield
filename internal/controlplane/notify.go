@@ -2,14 +2,52 @@ package controlplane
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/notify"
 )
+
+// notifyDedupeWindow buckets a notification's timestamp so a logical alert re-detected within
+// this window derives the SAME idempotency id and delivers once, while a genuinely new occurrence
+// in a later window pages again (SIEM-12).
+const notifyDedupeWindow = 10 * time.Minute
+
+// dedupeSet is a bounded, FIFO-evicting set of recently-seen notification ids. It gives emit a
+// server-side idempotency check without unbounded growth: the window-bucketed id ages out of
+// relevance, and the size cap bounds memory regardless.
+type dedupeSet struct {
+	mu    sync.Mutex
+	seen  map[string]struct{}
+	order []string
+	cap   int
+}
+
+func newDedupeSet(capacity int) *dedupeSet {
+	return &dedupeSet{seen: make(map[string]struct{}, capacity), cap: capacity}
+}
+
+// markNew records id and reports true if it was NOT already present (a genuinely new alert);
+// false means this id was already emitted — a duplicate to suppress.
+func (d *dedupeSet) markNew(id string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.seen[id]; ok {
+		return false
+	}
+	d.seen[id] = struct{}{}
+	d.order = append(d.order, id)
+	if len(d.order) > d.cap {
+		evict := d.order[0]
+		d.order = d.order[1:]
+		delete(d.seen, evict)
+	}
+	return true
+}
 
 // SetNotifier turns on alert delivery (D83). Without it the server records alerts
 // but tells no one (the default Nop). Delivery is best-effort and additive — the
@@ -37,15 +75,24 @@ func (s *Server) deliverLoop() {
 }
 
 // emit QUEUES an alert for async delivery (SIEM-12) — it does not deliver inline, so a slow webhook
-// cannot stall ingest. A stable idempotency id is stamped so the receiver dedupes a retried delivery.
-// If the queue is full (a delivery backlog), the notification is DROPPED and counted — losing a page
-// degrades responsiveness, never the record, and never blocks ingest.
+// cannot stall ingest. It stamps a DETERMINISTIC idempotency id derived from the alert's content and
+// time-window, then suppresses a duplicate server-side: the exact scenario it targets — an agent
+// re-sends telemetry, the server re-detects and re-emits — pages exactly once, and the id it carries
+// lets the receiver dedupe a client-timeout-after-server-success retry too. If the queue is full (a
+// delivery backlog), the notification is DROPPED and counted — losing a page degrades responsiveness,
+// never the record, and never blocks ingest.
 func (s *Server) emit(_ context.Context, n notify.Notification) {
 	if s.notifier == nil {
 		return
 	}
 	if n.ID == "" {
-		n.ID = newNotifyID()
+		n.ID = notifyID(n)
+	}
+	// Server-side idempotency: a logical alert already emitted this window is suppressed, so a
+	// re-detection does not double-page (SIEM-12). markNew is atomic (check-and-record).
+	if s.notifyDedupe != nil && !s.notifyDedupe.markNew(n.ID) {
+		s.NotifyDeduped.Add(1)
+		return
 	}
 	select {
 	case s.notifyQ <- n:
@@ -55,11 +102,15 @@ func (s *Server) emit(_ context.Context, n notify.Notification) {
 	}
 }
 
-// newNotifyID returns a random idempotency key for a notification.
-func newNotifyID() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return "ntf_" + hex.EncodeToString(b[:])
+// notifyID derives a STABLE idempotency key from the alert's identity — kind, subject, agent, and a
+// bucketed timestamp (SIEM-12). The same logical alert re-emitted within notifyDedupeWindow yields
+// the same id (so it dedupes); a new occurrence in a later window yields a new id (so it pages again).
+// A caller that already set Notification.ID keeps it.
+func notifyID(n notify.Notification) string {
+	bucket := n.At.Truncate(notifyDedupeWindow).UTC().Unix()
+	key := fmt.Sprintf("%s|%s|%s|%d", n.Kind, n.Subject, n.AgentID, bucket)
+	sum := sha256.Sum256([]byte(key))
+	return "ntf_" + hex.EncodeToString(sum[:12])
 }
 
 // NotifyOverdue notifies a human about agents that have gone silent past threshold

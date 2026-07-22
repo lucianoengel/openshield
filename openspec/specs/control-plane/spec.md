@@ -198,11 +198,19 @@ control plane queues the notification and delivers it asynchronously, dropping a
 notification only when the delivery queue is saturated. Delivery MUST retry a TRANSIENT failure (a
 5xx, a 429, a timeout, a refused connection) with bounded backoff before giving up, and MUST NOT
 retry a PERMANENT failure (a 4xx client error, a notification that will not serialize). Each
-notification MUST carry a stable idempotency key so a receiver can dedupe a retried delivery.
+notification MUST carry a DETERMINISTIC idempotency key derived from the alert's identity (its kind,
+subject, agent, and a bucketed timestamp), so the same logical alert re-emitted within the bucket
+derives the same key. The control plane MUST additionally suppress a re-emitted duplicate server-side
+against a bounded set of recently-emitted keys, so a re-detected alert (an agent re-sends telemetry,
+the server re-detects) is delivered exactly once; a suppression MUST be counted, never silent.
 
 #### Scenario: A webhook receives an alert as JSON
 - **WHEN** a notification is delivered to a configured webhook
 - **THEN** the sink receives the notification as JSON with its kind, fields, and idempotency id
+
+#### Scenario: A re-detected alert pages exactly once
+- **WHEN** the same logical alert is emitted twice within the dedup window (a re-detection after the agent re-sends telemetry), and separately a genuinely new alert is emitted in a later window
+- **THEN** the re-detection is delivered only once and the suppression is counted, while the new-window alert is delivered with a different idempotency key
 
 #### Scenario: A slow sink does not stall ingest
 - **WHEN** the configured sink blocks or retries during delivery
