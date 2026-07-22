@@ -56,6 +56,10 @@ func (Nop) Notify(context.Context, Notification) error { return nil }
 type Webhook struct {
 	URL    string
 	Client *http.Client
+	// Secret, when non-empty, HMAC-signs the request body (SIEM-8) so a receiver can
+	// verify the alert genuinely came from this control plane. Empty = unsigned (the
+	// body and headers are byte-for-byte unchanged from the pre-signing behavior).
+	Secret []byte
 }
 
 // NewWebhook builds a Webhook with a short timeout, so a slow sink cannot stall the
@@ -74,6 +78,12 @@ func (w *Webhook) Notify(ctx context.Context, n Notification) error {
 		return Permanent(err) // a bad URL is not fixed by retrying
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Authenticate the payload (SIEM-8): sign the EXACT bytes being sent so the receiver
+	// signs the raw body it received and the comparison is unambiguous. Only when a secret
+	// is configured — otherwise no header, unchanged.
+	if len(w.Secret) > 0 {
+		req.Header.Set(SignatureHeader, Sign(w.Secret, body))
+	}
 	resp, err := w.Client.Do(req)
 	if err != nil {
 		return err // transport error (timeout, refused) — transient, retryable

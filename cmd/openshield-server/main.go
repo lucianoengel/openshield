@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -96,11 +97,27 @@ func main() {
 	// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
 	// deduplicated (once per silence) and run on a timer.
 	if hook := os.Getenv("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
-		// SIEM-8: wrap the webhook in bounded retry so a transient blip (a 5xx, a timeout during
-		// a deploy) does not silently drop the page. Attempts are configurable; a 4xx is not
-		// retried (see notify.Permanent).
+		// SIEM-8: wrap EACH webhook in bounded retry so a transient blip (a 5xx, a timeout during
+		// a deploy) does not silently drop the page (a 4xx is not retried, see notify.Permanent),
+		// then fan out to all of them via Multi — the retry is INNER so a retry re-attempts only the
+		// failed sink, never re-paging a sink that already succeeded. OPENSHIELD_ALERT_WEBHOOK may be
+		// a comma-separated list; OPENSHIELD_ALERT_WEBHOOK_SECRET (optional) HMAC-signs each body so a
+		// receiver can verify the alert came from this control plane (unset = unsigned, unchanged).
 		attempts := envInt("OPENSHIELD_ALERT_RETRIES", 3)
-		srv.SetNotifier(notify.NewRetrying(notify.NewWebhook(hook), attempts, 200*time.Millisecond))
+		secret := []byte(os.Getenv("OPENSHIELD_ALERT_WEBHOOK_SECRET"))
+		var sinks []notify.Notifier
+		for _, u := range strings.Split(hook, ",") {
+			u = strings.TrimSpace(u)
+			if u == "" {
+				continue
+			}
+			w := notify.NewWebhook(u)
+			if len(secret) > 0 {
+				w.Secret = secret
+			}
+			sinks = append(sinks, notify.NewRetrying(w, attempts, 200*time.Millisecond))
+		}
+		srv.SetNotifier(notify.NewMulti(sinks...))
 		overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
 		overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
 		go retain.Loop(ctx, overdueInterval, func(ctx context.Context) {
