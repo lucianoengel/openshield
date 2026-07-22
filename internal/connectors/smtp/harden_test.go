@@ -9,10 +9,14 @@ import (
 	smtpc "github.com/lucianoengel/openshield/internal/connectors/smtp"
 )
 
-// NIPS-3-SMTP: a stream with NO newline must not make the listener buffer unbounded (OOM) — the
-// session is bounded and dropped, and the listener stays responsive. We can't assert "did not OOM"
-// directly, so we assert the connection is handled to completion (dropped+counted) within a short
-// bound rather than hanging or growing forever.
+// NIPS-3-SMTP: a stream with NO newline must not make the listener buffer unbounded (OOM). The bound
+// is the per-session SIZE CEILING (io.LimitReader) — the `total > maxBody` check only advances on
+// completed lines, so a newline-less flood is bounded solely by the LimitReader. This test proves
+// THAT guard, not the idle deadline: it sets a small MaxBody and a LARGE IdleTimeout, streams well
+// past the ceiling with no newline and no stall, and asserts the session is bounded+dropped FAST —
+// far inside the idle timeout. Remove the LimitReader and the session blocks on the 30s idle timeout
+// instead, so Dropped stays 0 in the window and this test fails (the old 64 KiB-vs-32 MiB test could
+// not see that — only the deadline ever fired).
 func TestSMTPNoNewlineIsBounded(t *testing.T) {
 	l, err := smtpc.Listen("127.0.0.1:0", func(*smtpc.Message) {
 		t.Error("a no-newline flood was delivered as a valid message")
@@ -20,7 +24,8 @@ func TestSMTPNoNewlineIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.IdleTimeout = 500 * time.Millisecond
+	l.MaxBody = 4 << 10              // small ceiling the flood must trip
+	l.IdleTimeout = 30 * time.Second // large, so only the size ceiling can end it in the window
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = l.Serve(ctx) }()
@@ -31,22 +36,23 @@ func TestSMTPNoNewlineIsBounded(t *testing.T) {
 	}
 	defer conn.Close()
 	buf := make([]byte, 256)
-	conn.Read(buf) // greeting
-	// Send a chunk with NO newline, then stop. The LimitReader + idle deadline must end the session.
-	conn.Write([]byte("MAIL FROM:<a@b> and then a lot of bytes with no newline "))
-	chunk := make([]byte, 64<<10)
-	for i := range chunk {
-		chunk[i] = 'x'
-	}
-	// Write a bit more (still no newline); a bounded reader will stop reading and the deadline fires.
-	_, _ = conn.Write(chunk)
+	_, _ = conn.Read(buf) // greeting
 
-	deadline := time.Now().Add(3 * time.Second)
+	// Stream well past MaxBody with NO newline and no stall (write in a goroutine so a blocked write
+	// on a full socket buffer can't stall the test).
+	flood := make([]byte, 16<<10)
+	for i := range flood {
+		flood[i] = 'x'
+	}
+	go func() { _, _ = conn.Write(flood) }()
+
+	deadline := time.Now().Add(2 * time.Second) // ≪ the 30s idle timeout
 	for l.Dropped() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 	if l.Dropped() < 1 {
-		t.Error("a no-newline session was not bounded/dropped within the timeout (possible unbounded read)")
+		t.Error("a no-newline flood past MaxBody was not bounded by the size ceiling before the idle " +
+			"timeout — the LimitReader is not doing the work")
 	}
 }
 

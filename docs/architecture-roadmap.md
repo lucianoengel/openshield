@@ -159,6 +159,10 @@ applies.
   `deliverLoop`. **Verify:** emit the same logical alert twice → exactly one delivery.
 
 ### NIPS-3-SMTP-TEST · Make the OOM guard's test real — P2 · connector test · XS
+- **✅ SHIPPED D173 (2026-07-22) — pending owner audit.** Exported `Listener.MaxBody` (tunable,
+  default 32 MiB, never disablable); the test now sets a 4 KiB ceiling + 30s idle and streams past it
+  with no newline, asserting a drop within 2s (the size ceiling, not the deadline). Mutation:
+  unbounded LimitReader → the flood blocks on the idle timeout → test FAILs. Guard code unchanged.
 - The bounded reader is correct, but `harden_test.go` streams 64 KiB against the 32 MiB cap, so
   **removing the `io.LimitReader` still ships green** (the idle deadline masks it) — the signature
   false-premise pattern. **Fix:** inject a small `maxBody` + a large idle timeout, stream past the cap

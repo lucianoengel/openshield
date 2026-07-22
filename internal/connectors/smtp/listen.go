@@ -37,11 +37,12 @@ type Listener struct {
 	logger  *slog.Logger
 	dropped atomic.Int64
 	refused atomic.Int64
-	maxBody int64
 
-	// MaxConns caps concurrent sessions; IdleTimeout bounds per-line stall. Both fall back to
-	// their defaults when non-positive, so a caller may tune them before Serve but never disable
-	// the protection. Exported so a test can set aggressive bounds.
+	// MaxBody caps the bytes buffered for ONE session (the anti-OOM ceiling for a no-newline
+	// flood); MaxConns caps concurrent sessions; IdleTimeout bounds per-line stall. All fall back
+	// to their defaults when non-positive, so a caller may tune them before Serve but never disable
+	// the protection. Exported so a test can set aggressive bounds and drive each guard directly.
+	MaxBody     int64
 	MaxConns    int
 	IdleTimeout time.Duration
 	sem         chan struct{}
@@ -59,7 +60,7 @@ func Listen(addr string, sink func(*Message), logger *slog.Logger) (*Listener, e
 	if err != nil {
 		return nil, fmt.Errorf("smtp: listen %q: %w", addr, err)
 	}
-	return &Listener{ln: ln, sink: sink, logger: logger, maxBody: maxMessage,
+	return &Listener{ln: ln, sink: sink, logger: logger, MaxBody: maxMessage,
 		MaxConns: defaultMaxConns, IdleTimeout: defaultIdleTimeout}, nil
 }
 
@@ -118,6 +119,10 @@ func (l *Listener) handle(conn net.Conn) {
 	if idle <= 0 {
 		idle = defaultIdleTimeout
 	}
+	maxBody := l.MaxBody
+	if maxBody <= 0 {
+		maxBody = maxMessage
+	}
 	w := func(s string) { _, _ = conn.Write([]byte(s)) }
 	w("220 openshield.capture ESMTP\r\n")
 
@@ -125,7 +130,7 @@ func (l *Listener) handle(conn net.Conn) {
 	// Bound the TOTAL bytes the session can make us buffer: without this, a stream with no newline
 	// makes ReadString grow its buffer unbounded (OOM). The LimitReader caps it at maxBody, so an
 	// unterminated flood returns EOF at the ceiling instead of exhausting memory.
-	r := bufio.NewReader(io.LimitReader(conn, l.maxBody+1))
+	r := bufio.NewReader(io.LimitReader(conn, maxBody+1))
 	inData := false
 	var total int64
 	for {
@@ -138,7 +143,7 @@ func (l *Listener) handle(conn net.Conn) {
 			break // client closed, timed out, or hit the size ceiling — parse what we have
 		}
 		total += int64(len(line))
-		if total > l.maxBody {
+		if total > maxBody {
 			w("552 message too large\r\n")
 			return
 		}
