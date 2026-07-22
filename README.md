@@ -87,30 +87,53 @@ end-to-end, and the strongest asset — every domain above writes evidence into 
 
 ## 🏗️ Architecture
 
-Everything moves through one pipeline; detection and enforcement are kept strictly separate (an
-Enforcer receives only a `Decision` — never which classifier matched or why):
+**One pipeline, every signal.** Endpoint, network, and identity telemetry all flow through the same
+stages. Detection and enforcement are kept strictly separate — an enforcer receives only a
+*decision*, never which detector matched or why:
 
 ```mermaid
 flowchart LR
-  subgraph EP["Producers"]
-    P1["files · exec · USB"]
-    P2["DNS · SMTP · HTTP"]
-  end
-  P1 & P2 --> C{{"Classify<br/><i>sandboxed worker</i><br/>seccomp · no network"}}
-  C -->|"type + count<br/>metadata only"| POL["Policy<br/>OPA / Rego"]
-  POL --> DEC["Decision<br/><i>closed action set</i>"]
-  DEC --> ENF["Enforce<br/>quarantine · block<br/>redirect · kill"]
-  ENF --> LED[("Audit<br/>hash-chained ledger")]
-  LED --> INV["Investigate<br/>incidents · cases"]
-  INV --> ANL["Analytics<br/>UEBA · correlation"]
-  ANL -.->|"published risk<br/>(context, not commands)"| POL
-  LED -.->|attest| WIT{{"Anchor<br/>external witness"}}
+  EP["🖥️ Endpoint<br/>files · processes · USB"] --> C
+  NW["🌐 Network<br/>HTTP · DNS · SMTP"] --> C
+  ID["🔐 Identity<br/>access · device posture"] --> C
+  C{{"Classify<br/>sandboxed worker · no network"}} -->|"type + count + metadata only"| POL["Policy<br/>rules + risk context"]
+  POL --> DEC["Decision<br/>closed, typed action set"]
+  DEC --> ENF["Enforce<br/>alert · block · quarantine<br/>redirect · encrypt · kill · contain"]
+  ENF --> LED[("Audit<br/>tamper-evident ledger")]
+  LED --> INC["Investigate<br/>incidents · cases"]
+  INC --> RSP["Analyze &amp; respond<br/>UEBA · correlation · playbooks"]
+  RSP -.->|"risk + signed intent<br/>(context, never commands)"| POL
+  LED -.->|attest| WIT{{"External witness"}}
 ```
 
-**The frozen core** — `Dispatcher`, `State`, `Stage`, `Registry`, the `Enforcer` interfaces,
-`OnOutcome`, and the ledger — does not change for new capability. If a feature seems to require a
-core change, that's the signal to stop and re-examine. Capability lands as a producer, a classify
-plugin, typed policy context, or one deliberate action — never a core edit.
+**A stable core, plug-in capability.** The pipeline's core — the dispatcher, the stages, the enforcer
+contracts, and the ledger — stays fixed. New capability lands as a new event source, a new detector,
+a new policy input, or one deliberate new action, never as a change to the core. That discipline is
+what lets a single codebase span seven security domains instead of fragmenting into seven products.
+
+**How it deploys** — lightweight sensors on endpoints and in the network report signed telemetry to a
+central control plane, which correlates across domains, writes tamper-evident evidence, and feeds risk
+and containment *context* back to where enforcement actually happens:
+
+```mermaid
+flowchart TB
+  subgraph FIELD["Endpoints &amp; network"]
+    ENG["Endpoint engine + agent<br/>files · processes"]
+    GW["Network gateway<br/>proxy · DNS · SMTP · ZTNA"]
+  end
+  subgraph CTRL["Control plane"]
+    SRV["Fleet server<br/>ingest · correlate · incidents · notify"]
+    LEDGER[("Audit ledger")]
+    ANC["Anchor · external witness"]
+  end
+  OP["👤 Analyst / operator"]
+  ENG -->|"signed telemetry · mTLS"| SRV
+  GW -->|"signed telemetry · mTLS"| SRV
+  SRV --> LEDGER --> ANC
+  SRV -.->|"published risk · signed response-intent"| ENG
+  SRV -.->|"published risk · signed response-intent"| GW
+  OP -->|"search · cases · approvals"| SRV
+```
 
 ## 🧩 Components
 
@@ -157,46 +180,51 @@ and `OPENSHIELD_DSN` (Postgres). See [`deploy/`](deploy) for compose and systemd
 
 ## 🗺️ Roadmap
 
-The full, continuously-audited plan lives in
-**[`docs/architecture-roadmap.md`](docs/architecture-roadmap.md)** — status table, verified-closed
-list, the prioritized queue, and the architecture decision records (ADRs). The near-term queue:
+**Now — hardening the foundation:**
+- Zero-Trust device identity and posture binding
+- Composable compliance policy (PCI/HIPAA/GDPR packs that add protections without disabling others)
+- SIEM reliability: notification integrity, a unified alert lifecycle, durable behavioral baselines
+- Endpoint process-termination safety hardening
+- Role-based access control for analysts
 
-1. **IDENT-1** — canonical device identity (fixes the inert posture chain; unlocks the XDR entity graph)
-2. **DLP-5b** — compose compliance policy packs instead of replacing the default
-3. **SIEM-12 / SIEM-8b / SIEM-5b / SIEM-6b** — notify idempotency, webhook replay, UEBA pruning, unified alert schema
-4. **HIPS-8 / HIPS-7** — KILL-safety hardening (trusted critical-process identity, pid-reuse revalidation)
-5. **PLAT-3** — per-route analyst RBAC
+**Next — from breadth to depth:**
+- 🧬 **XDR** — a unified entity graph and cross-domain correlation, so one attack surfaces as **one
+  incident** across endpoint, network, and identity, with a full evidence timeline
+- 🤖 **SOAR** — orchestration: automated playbooks, threat-intel enrichment, and a signed
+  response-intent model where the control plane recommends but **never executes arbitrary commands**
+- ⚙️ **Scale & resilience** — durable messaging, active-passive high availability
+- 🌐 **Network prevention** — transparent inline interception plus a signature/threat-intel engine
+- 🔏 **Hardware-backed device attestation**
+- 🖥️ **Cross-platform agents** (Windows / macOS)
 
-**Strategic lanes:** the **XDR** entity-graph + cross-domain correlation, and the **SOAR**
-orchestration layer (server-side playbooks now; signed response-intent seam + integration runners
-approved). Longer term: JetStream durability + HA, transparent inline NIPS + signatures, hardware
-attestation, and cross-platform (Windows/macOS) agents.
+<sub>The detailed engineering plan and design-decision records are maintained in
+[`docs/architecture-roadmap.md`](docs/architecture-roadmap.md).</sub>
 
 ## 🔐 Security model & design principles
 
 OpenShield's guarantees come from a small set of deliberate, documented constraints:
 
-- **Closed, typed action set (`D14`).** The control plane can never express an arbitrary command;
-  actions carry no free-form parameters. This is what makes *"the server coordinates, it does not
-  control"* architectural rather than aspirational.
-- **Content boundary (`D10`/`D29`).** Sensitive content is parsed only inside the sandboxed worker;
-  only type/count/metadata ever cross the IPC boundary.
-- **Observe-by-default.** No enforcer is registered unless `OPENSHIELD_ENFORCE` is set — the default
-  posture is detect-and-audit.
-- **Deliberate egress fail-open (`D73`/`D17`).** Inline network paths fail *to wire*, never
-  fail-closed the network — availability is a conscious choice for egress.
-- **Tamper-evident evidence.** The forward-secure hash-chained ledger + external anchoring means the
-  audit trail can be independently verified, not just trusted.
+- **Closed, typed action set.** The control plane can never express an arbitrary command; actions
+  carry no free-form parameters. This is what makes *"the server coordinates, it does not control"*
+  architectural rather than aspirational.
+- **Content isolation.** Sensitive content is parsed only inside a sandboxed, network-less worker;
+  only type, count, and metadata ever cross the boundary — never the content itself.
+- **Observe by default.** Enforcement is opt-in; out of the box the platform detects and audits
+  rather than blocks.
+- **Deliberate egress fail-open.** Inline network paths fail *to wire*, never fail the network
+  closed — availability is a conscious, documented choice for egress.
+- **Tamper-evident evidence.** The forward-secure, hash-chained ledger with external anchoring can be
+  independently verified, not merely trusted.
 
-See the [threat model](docs/threat-model.md) and [design decisions](docs/decisions.md) for the full
-rationale.
+See the [threat model](docs/threat-model.md) and [design-decision log](docs/decisions.md) for the
+full rationale.
 
 ## 📚 Documentation
 
 | Doc | What's in it |
 |---|---|
-| [Architecture roadmap](docs/architecture-roadmap.md) | Live status, the ticket queue, and all architecture decisions (ADRs) |
-| [Design decisions](docs/decisions.md) | The numbered `D#` decision log that governs the codebase |
+| [Architecture roadmap](docs/architecture-roadmap.md) | Live capability status, the prioritized plan, and the architecture-decision records |
+| [Design decisions](docs/decisions.md) | The architecture-decision log behind the codebase |
 | [Threat model](docs/threat-model.md) | Assets, adversaries, trust boundaries |
 | [Architecture proposal](docs/architecture-proposal.md) | The original pipeline thesis |
 | [DPIA template](docs/dpia-template.md) | Data-protection impact assessment scaffold |
@@ -205,14 +233,12 @@ rationale.
 
 Contributions are welcome. A few house rules that keep the project honest:
 
-- **One change per ticket.** Work follows the OpenSpec flow (`propose → implement → archive`); ticket
-  IDs in the [roadmap](docs/architecture-roadmap.md) are stable handles — reference them in the branch
-  and commit.
+- **Keep pull requests focused** — one self-contained change at a time.
 - **Tests must drive the real runtime path**, never a mock built from the code's own assumptions.
-  For every negative security property, add the mutation that *would* let the bug through and prove
-  the test catches it.
-- **Respect the frozen core.** If a change seems to require editing `core.*` or the content boundary,
-  stop and re-run the fitness reasoning first.
+  For every security property, add an adversarial test that re-introduces the bug and proves the test
+  catches it.
+- **Respect the stable core.** New capability should land as a new event source, detector, policy
+  input, or action — not as a change to the core pipeline.
 - Run `make all` (vet, tests, `-race`, checks, build) before opening a PR.
 
 Use [conventional commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, …).
