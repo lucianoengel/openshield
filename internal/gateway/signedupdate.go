@@ -22,6 +22,22 @@ func SignUpdate(payload []byte, priv ed25519.PrivateKey) ([]byte, error) {
 // contents never reach the store. It returns the verified payload bytes, or an error if the
 // envelope is malformed, unsigned, or the signature does not verify. A caller that receives
 // an error MUST drop and COUNT the update, never apply it (fail-closed).
+// splitSignedUpdate parses the envelope and returns the payload and signature WITHOUT verifying —
+// the caller verifies against the appropriate key. Posture (SEC-12) must verify against the
+// REPORTING AGENT's own enrolled key (bound to the update's subject), not a shared key, so it needs
+// the payload to read the subject before it can pick the key; the security check is still
+// verify-BEFORE-apply. Risk stays on verifySignedUpdate (a single control-plane key, SEC-1).
+func splitSignedUpdate(data []byte) (payload, sig []byte, err error) {
+	var su corev1.SignedUpdate
+	if err := proto.Unmarshal(data, &su); err != nil {
+		return nil, nil, fmt.Errorf("gateway: malformed signed update: %w", err)
+	}
+	if len(su.GetSignature()) == 0 {
+		return nil, nil, fmt.Errorf("gateway: update is unsigned")
+	}
+	return su.GetPayload(), su.GetSignature(), nil
+}
+
 func verifySignedUpdate(data []byte, trustedPub ed25519.PublicKey) ([]byte, error) {
 	if len(trustedPub) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("gateway: trusted publisher key must be %d bytes", ed25519.PublicKeySize)

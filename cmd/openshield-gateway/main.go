@@ -282,17 +282,22 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		} else {
 			log.Warn("gateway: OPENSHIELD_RISK_PUBKEY unset — risk continuous-verification inert (unsigned risk is never applied, SEC-1)")
 		}
-		if pk := os.Getenv("OPENSHIELD_POSTURE_PUBKEY"); pk != "" {
-			pub, err := loadEd25519Pub(pk)
+		// SEC-12: posture is verified PER AGENT against its OWN enrolled key, from a roster the
+		// gateway loads (OPENSHIELD_POSTURE_ROSTER: "<subject> <base64-pubkey>" per line). A single
+		// shared posture key let any agent forge another's Compliant=true; the roster + subject↔key
+		// binding closes that. No roster → the channel is inert (posture never applied; a
+		// posture-requiring policy denies on absent posture, D85).
+		if rp := os.Getenv("OPENSHIELD_POSTURE_ROSTER"); rp != "" {
+			resolver, err := gateway.LoadPostureRoster(rp)
 			if err != nil {
-				fatal(log, "posture pubkey", err)
+				fatal(log, "posture roster", err)
 			}
-			if _, err := gateway.NewPostureSubscriber(postureStore, pub).Subscribe(conn); err != nil {
+			if _, err := gateway.NewPostureSubscriber(postureStore, resolver).Subscribe(conn); err != nil {
 				fatal(log, "posture subscribe", err)
 			}
-			log.Info("gateway: SIGNED device-posture subscription active (SEC-1/D92)")
+			log.Info("gateway: SIGNED device-posture subscription active — per-agent keys (SEC-12/D92)")
 		} else {
-			log.Warn("gateway: OPENSHIELD_POSTURE_PUBKEY unset — posture channel inert (unsigned posture is never applied, SEC-1)")
+			log.Warn("gateway: OPENSHIELD_POSTURE_ROSTER unset — posture channel inert (unsigned/unenrolled posture is never applied, SEC-12)")
 		}
 	}
 

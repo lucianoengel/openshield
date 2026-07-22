@@ -17,13 +17,20 @@ import (
 	"github.com/lucianoengel/openshield/internal/policy"
 )
 
-// SEC-1: a signed posture update is applied; an unsigned/forged one is rejected — so a
-// publisher cannot forge Compliant=true and defeat the D85 tamper-lockout.
-func TestPostureSubscriberVerifies(t *testing.T) {
-	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
+// SEC-12: each posture update is verified against the REPORTING AGENT's OWN enrolled key (bound to
+// the update's subject), so an agent holding only its own key cannot forge Compliant=true for a
+// DIFFERENT agent — the shared-key agent-to-agent forgery SEC-1 left open. An unsigned/malformed/
+// unknown-subject update is rejected.
+func TestPostureSubscriberBindsSubjectToKey(t *testing.T) {
+	pubA, privA, _ := ed25519.GenerateKey(rand.Reader)
+	pubB, privB, _ := ed25519.GenerateKey(rand.Reader)
+	// Roster: agent-A and agent-B each enrolled with their own key.
+	roster := map[string]ed25519.PublicKey{"agent-A": pubA, "agent-B": pubB}
 	store := gateway.NewPostureStore()
-	sub := gateway.NewPostureSubscriber(store, pub)
+	sub := gateway.NewPostureSubscriber(store, func(subject string) (ed25519.PublicKey, bool) {
+		k, ok := roster[subject]
+		return k, ok
+	})
 
 	signPosture := func(signer ed25519.PrivateKey, subject string, compliant bool) []byte {
 		payload, _ := proto.Marshal(&corev1.PostureUpdate{Subject: subject, Compliant: compliant, DiskEncrypted: true})
@@ -31,25 +38,34 @@ func TestPostureSubscriberVerifies(t *testing.T) {
 		return data
 	}
 
-	// Valid signed → applied.
-	if err := sub.Apply(signPosture(priv, "sub_x", true)); err != nil {
-		t.Fatalf("a validly-signed posture update was rejected: %v", err)
+	// A reports its OWN posture, signed with A's key → applied.
+	if err := sub.Apply(signPosture(privA, "agent-A", true)); err != nil {
+		t.Fatalf("agent-A's own signed posture was rejected: %v", err)
 	}
-	dp, ok := store.Get("sub_x")
-	if !ok || !dp.HasPosture || !dp.Compliant {
-		t.Errorf("store = %+v/%v, want present + compliant", dp, ok)
+	if dp, ok := store.Get("agent-A"); !ok || !dp.Compliant {
+		t.Errorf("agent-A store = %+v/%v, want present + compliant", dp, ok)
 	}
 
-	// An attacker forging Compliant=true for a NEW subject with the wrong key is rejected —
-	// the tamper-lockout holds (that subject keeps absent posture and is denied).
-	if err := sub.Apply(signPosture(otherPriv, "sub_attacker", true)); err == nil {
-		t.Error("a wrong-key posture forgery was accepted — the tamper-lockout is defeated")
+	// THE SEC-12 FIX: agent-A (holding only its own key) forges agent-B's Compliant=true — subject
+	// says agent-B but the signature is A's. It MUST be rejected: it does not verify against B's key.
+	if err := sub.Apply(signPosture(privA, "agent-B", true)); err == nil {
+		t.Error("agent-A forged agent-B's posture — subject↔key binding is broken (agent-to-agent forgery)")
 	}
-	if _, ok := store.Get("sub_attacker"); ok {
-		t.Error("a forged posture reached the store")
+	if _, ok := store.Get("agent-B"); ok {
+		t.Error("a forged posture for agent-B reached the store")
 	}
-	// A raw (unsigned) PostureUpdate — not wrapped in a SignedUpdate — is rejected.
-	raw, _ := proto.Marshal(&corev1.PostureUpdate{Subject: "sub_x", Compliant: true})
+	// B reporting its own posture with B's key still works (proves it is not a blanket denial).
+	if err := sub.Apply(signPosture(privB, "agent-B", true)); err != nil {
+		t.Errorf("agent-B's own signed posture was rejected: %v", err)
+	}
+
+	// An unknown subject (not enrolled) → rejected (no key to verify against).
+	_, strangerPriv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := sub.Apply(signPosture(strangerPriv, "agent-Z", true)); err == nil {
+		t.Error("posture for an unenrolled subject was accepted")
+	}
+	// Unsigned / malformed → rejected.
+	raw, _ := proto.Marshal(&corev1.PostureUpdate{Subject: "agent-A", Compliant: true})
 	if err := sub.Apply(raw); err == nil {
 		t.Error("an unsigned posture update was accepted")
 	}
