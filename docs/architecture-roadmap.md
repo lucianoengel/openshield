@@ -32,22 +32,27 @@
 
 ---
 
-## Status at a glance (Round-32, verified through D168)
+## Status at a glance (Round-33, verified through D168)
 
-**OpenShield is a pipeline-native XDR** — one Event→Classify→Policy→Decision→Enforce→Audit pipeline
-spanning **endpoint, network, and identity**, with correlation and response (SIEM incidents/UEBA + the
-hash-chained evidence ledger) above it. DLP is one detection domain among several, not the product's
-center of gravity. Every domain below is partial; the work is depth-per-domain, not more breadth.
+**OpenShield is architected as a pipeline-native XDR + SOAR** — one
+Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
+correlation, case/incident workflow, and a tamper-evident hash-chained evidence ledger above it. DLP is
+one detection domain, not the center of gravity. **Honest caveat (see XDR/SOAR rows):** detection
+*breadth* is cross-domain, but *correlation* is still **single-domain** — only the peer-UEBA/identity
+stream forms incidents today; endpoint/network detections don't correlate into them yet (XDR-2/4). SOAR
+today is a **case+notify shell**, not orchestration (SOAR-1…9). The work is depth-per-domain **and
+wiring the domains together**, not more breadth.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
+| **XDR** (umbrella) | ~25% | Detection breadth spans endpoint/network/identity, but **correlation is single-domain**: `Correlate()` reads only `peer_alerts` (peer-UEBA/identity), while DLP/HIPS/DNS/SMTP/USB detections stop at `fleet_telemetry` and **never form incidents**. No unified entity model (device⋈user), subject keys disjoint per domain. Real XDR needs the entity graph + cross-domain normalization + correlation + coordinated response (XDR-1…7, gated on IDENT-1). |
 | Zero Trust (ZTNA) | ~55% | Access broker + microseg + **real OIDC/JWT on-path** (alg-confusion rejected) + dual-credential logic + agent-signed posture bound to the reporting key. **But the posture chain is INERT in production** — publisher and proxy derive the subject key differently, so every compliant device reads `HasPosture=false` (IDENT-1, the top of the queue). No hardware attestation, no JWKS rotation, no ZTNA client. |
 | DLP | ~45% core | Strong sandboxed detection core; enforcement wired behind `OPENSHIELD_ENFORCE`; compliance packs (PCI/HIPAA/GDPR) load and change decisions — **but packs REPLACE the default policy**, so enabling one silently disables HIPS + out-of-scope detectors (DLP-5b). +EIN/NPI/NHS/SIN/ABA/routing/phone detectors. Still one channel, no EDM/OCR/ML. |
 | NIPS / NTPS | ~30% | Per-channel: **HTTP is genuinely inline** (forward proxy, terminates TLS, `BLOCK`/`REDIRECT` in-path — real prevention, deliberately fail-open per D73/D17); **DNS is tap/detect-only** (DEPLOY-1 — cannot prevent; inline sinkhole resolver = NIPS-8); **SMTP is a terminating capture endpoint** (parses, does not relay — inline-`5xx`-reject-capable but not yet a filtering MTA hop). So the category is **NIDS today + inline NIPS on HTTP.** Next: transparent inline for HTTP (ADR-8/NIPS-1), signatures/threat-intel (NIPS-2). |
 | SIEM | ~35% | `/events` search **mounted + gated**, **materialized incidents** (id/state), cross-host correlation, alert lifecycle+ack, async multi-sink HMAC webhooks, persisted UEBA baselines, case workflow, syslog. Still: no unified alert-lifecycle schema (ADR-10), notify idempotency broken (SIEM-12), no UI, no CEF/WEF. |
 | HIPS | ~30% | Phase E **runs end-to-end** — real auditd source → real pid → real KILL, behavioral→decision, detector evasions closed (mutation-confirmed). **KILL safety incomplete**: pid-reuse revalidation ineffective + the critical-process allowlist is self-immunizing (HIPS-7/8). `DENY_EXEC` deliberately deferred (needs `FAN_OPEN_EXEC_PERM`). |
-| NAC | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. |
-| VPN | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0). |
+| **SOAR** | ~10% | Has the *evidence + case shell* — four-eyes cases (library-only, **no HTTP surface**), materialized incidents with ack, async multi-sink HMAC webhooks — but **zero orchestration**: incidents never notify, no playbook engine, no enrichment/threat-intel, no bidirectional integrations, no generic approval object, no MTTA/MTTR, correlation only runs on operator GET. Response automation is governed by **ADR-12/T5** (server-side playbooks pipeline-native; signed intent seam + off-pipeline runners owner-gated). SOAR-1…9. |
+| NAC · VPN | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. Not in the headline category set (XDR/DLP/HIPS/NTPS/SIEM/ZT/SOAR). |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring
 is real end-to-end and is the platform's strongest asset. Do not regress it.
@@ -197,6 +202,17 @@ applies.
 - **Cross-platform (PLAT-7)** runs in parallel throughout (ADR-11): owner drives cert/entitlement
   procurement; builder lands GOOS skeletons + Windows observation producers now.
 
+### Strategic lanes — XDR & SOAR (the headline deliverables)
+These are the two multi-ticket lanes that make the XDR + SOAR positioning real; run them once the
+near-term queue clears (several are already unblocked and can interleave):
+- **XDR lane** (see *Backlog → XDR*): the entity graph and cross-domain correlation. **XDR-1 is
+  unblocked the moment IDENT-1 lands** (it's the same canonical-identity work), so this lane starts
+  early. Spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 (after SIEM-6b) → XDR-4 → XDR-5 → XDR-6/XDR-7.
+- **SOAR lane** (see *Backlog → SOAR*): **Tier-1 (SOAR-1/2/3/4/5/6/9) is pipeline-native and needs no
+  owner sign-off** — SOAR-1/2 (incidents notify + run on a ticker) are quick wins that can land beside
+  the near-term queue. **SOAR-7 (intent seam) and SOAR-8 (runners) are OWNER-GATED** (ADR-12 Tier-2/3) —
+  do not start until signed off. XDR-6 (coordinated response) depends on SOAR-7.
+
 ### Minor (fold into the owning ticket, no separate proposal)
 `/incidents?limit=` still silently defaults instead of 400ing (finish the SEC-8 rule on that param) ·
 PLAT-4b `main.go` metrics *wiring* has no test (guard tested in isolation) · `EnsureAppLogin`'s
@@ -206,7 +222,7 @@ skew leeway on exp/nbf; bearer tokens replayable until exp and not device-bound 
 
 ---
 
-## Architecture decisions (Round-32) — the closed forks
+## Architecture decisions (Round-32–33) — the closed forks
 
 > The owner asked to "close missing architectural decisions to move forward." These ADRs resolve the
 > forks the audit surfaced so the builder has an unambiguous runway. **ADR-0/-11 are owner decisions;
@@ -283,12 +299,146 @@ user-mode *observation* producers (clipboard/print) that need no attestation.** 
 enforcement, not observation; most enterprise data lives on Windows. (T1 `DENY_EXEC` still needs its
 per-verb owner sign-off before wiring; T2 risk-loop and T1 `KILL_PROCESS` are resolved in code.)
 
+**ADR-12 · SOAR response orchestration without breaking D14 (resolves T5) — three tiers.** SOAR's
+automated response is, on its face, the control-plane-actuates behavior D14 exists to forbid. Resolution
+keeps the sentence "the server coordinates, it does not control" literally true by tiering:
+
+- **Tier 1 — pipeline-native, no tension (most of SOAR's value; PROCEED now).** Playbooks whose steps
+  are enrichment, notification, case/incident mutation, legal holds, tagging, and approval-waits touch
+  no endpoint and actuate nothing — server-side workflow over data the server already owns, the same
+  altitude as SIEM correlation. Two new invariants: the **step registry is CLOSED and typed** (a
+  playbook composes registered steps; it cannot express a shell command or an arbitrary-URL call — the
+  D14 argument one level up), and **every step transition is appended to the audit ledger** (an
+  automated action is exactly as evidentiary as a human one). Covers SOAR-1/2/3/4/5/6/9.
+- **Tier 2 — a bounded new seam: signed Response Intent (OWNER-GATED).** For live containment, the
+  server does what T2 already taught it: **publish signed typed data, let local policy decide.** A
+  `ResponseIntent{subject, intent, version, issued_at, ttl}` where `intent` is a **closed, parameterless
+  vocabulary** (initially `ELEVATE_SCRUTINY`, `CONTAIN`, `REVOKE_TRUST`), ed25519-signed with the SEC-1
+  control-plane key, published beside `SubjectRisk`, consumed by the endpoint/gateway as **typed policy
+  context (X, the D28 seam)**. The endpoint's *local, operator-authored* policy maps `CONTAIN` to verbs
+  it already advertises (`BLOCK`/`DENY_EXEC`/`KILL_PROCESS`) or ignores it. This does **not** widen the
+  D14 threat model — it is exactly the surface T2 conceded when it let published risk feed local policy
+  (a compromised control plane can at worst place subjects under containment/denial; never express
+  exfiltration or execution). Gates: **high-impact intents (`CONTAIN`,`REVOKE_TRUST`) require D36
+  four-eyes before publication**; a **blast-radius guard** (an intent batch touching >N subjects or
+  >x% of the fleet needs four-eyes regardless); mandatory **TTL** (containment decays unless renewed);
+  publication and each local enactment **ledgered with the intent id**. Covers SOAR-7 / XDR-6.
+  Expands one intent verb at a time — a T1-style per-capability owner gate.
+- **Tier 3 — third-party actuation: off-pipeline by construction (OWNER-GATED).** "Disable user in
+  Okta / quarantine VLAN / purge mail" actuate infrastructure with no local OpenShield policy engine.
+  Mirroring ADR-0: **integration runners are separately-scoped off-pipeline processes** (own
+  least-privilege third-party creds) that **subscribe to the same signed, approved intent stream** and
+  map one intent to one call from a **per-connector closed verb set** (the IdP runner knows only
+  `DISABLE_USER`/`REVOKE_SESSIONS` over a typed principal — never a URL or a script). The control plane
+  still only publishes intent; four-eyes is **non-waivable**. Covers SOAR-8.
+- **Permanently out (the red line holds, never "later"):** (1) arbitrary command/script execution on
+  endpoints — the exact capability D14 makes inexpressible; (2) remote live-forensics content pull —
+  forbidden independently by the D10/D29 content boundary. Any pressure for these is pressure to reopen
+  D14 and goes to the owner as such.
+
 ---
 
 ## Backlog by category (after the queue)
 
 Deeper feature work that extends the Phases (A–F, see *Reference*). Pull only after the queue.
 Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane, or off-pipeline.
+
+### XDR — cross-domain correlation & coordinated response (the umbrella; strategic-priority lane)
+
+**Delivery target:** every detection in every domain lands in one normalized, entity-keyed alert stream
+within seconds; a single entity graph (device ⋈ user ⋈ session) ties an exec event, a DNS query, a mail
+send, and a login anomaly to one asset; correlation runs continuously (not on GET) with statistical
+(burst/UEBA) *and* semantic (multi-domain, ATT&CK-sequence) rules producing **one incident per attack**
+with a full cross-domain evidence timeline backed by the hash-chained ledger — the differentiator no
+incumbent XDR has: every timeline entry is tamper-evident evidence, not a log row. Entity risk
+aggregates across domains and feeds every enforcement point's local policy (T2 closed fleet-wide); one
+containment decision propagates to all domains touching the entity. *Success test: a simulated kill-chain
+(phish → exec → C2 DNS → exfil) yields exactly one correctly-sequenced incident, containable with one
+approval.* **Dependency spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-7, XDR-7).**
+
+- **XDR-1 · Unified entity model** — X (schema+context) · M · **hard-dep IDENT-1/ADR-6.** `entities`
+  table (device ⋈ identity/user) populated from enrollment, posture, gateway identity, keyed by the ONE
+  shared pseudonym derivation. *Accept: an exec event from agent A and a proxied request from CN=A's
+  device resolve to the same entity id via the real derivation, not test-seeded literals.*
+- **XDR-3 · Canonical subject stamping on endpoint events** — P · M. The agent/connector layer stamps
+  the device's canonical pseudonym as `Event.Subject` (per-target id stays in the Target oneof). Also
+  resolves the `core/validate.go:103` tension (it requires a top-level subject no endpoint connector
+  currently sets — verify at HEAD; recurring "verifies-own-assumptions"). *Accept: fanotify + execaudit
+  events through real ingest carry the enrolled device pseudonym and pass validation.*
+- **XDR-2 · Cross-domain alert normalization** — srv (schema+writers) · L. Every domain's detections
+  (DLP verdicts, HIPS behavioral, DNS/SMTP classify hits, ZT denials) write the ADR-10 unified alert
+  table with `domain` + entity key, so one correlation engine sees all domains. **Sequence right after
+  SIEM-6b.** *Accept: a HIPS KILL and a DNS classify alert on one host land as unified-alert rows sharing
+  an entity key, via real ingest.*
+- **XDR-4 · Cross-domain correlation rules** — srv · M. Same-entity multi-domain window rule (distinct-
+  domain count ≥ N → incident, severity boosted per domain) + sequence rules (identity-anomaly → exec →
+  DNS within window). Extends `CorrelationRule`. SIEM-7 ATT&CK tags are the sequence vocabulary — reuse,
+  don't re-ticket. *Accept: seeded exec+DNS+auth-anomaly on one entity in 10m → ONE incident
+  `domain_count=3`; the same three on different entities → none.*
+- **XDR-5 · Incident timeline** — srv · M. `incident_alerts` join (incident → contributing alerts, all
+  domains) + ledger refs; `GET /incidents/{id}/timeline`; incidents gain `domains[]`, `entity_id`.
+  *Accept: the timeline of an XDR-4 incident lists all three contributing alerts, cross-domain,
+  time-ordered, each linking its evidence.*
+- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7 + XDR-1.** One
+  approved `CONTAIN(entity)` intent consumed by BOTH gateway (flows) and endpoint (exec) local policies,
+  both enactments ledgered under one intent id. *Accept: CONTAIN on entity E → gateway blocks E's flows
+  AND E's agent denies new execs; one intent id in the ledger; TTL expiry restores both.*
+- **XDR-7 · Entity risk aggregation** — X · M · dep XDR-1/2. `PublishRisk` publishes per-**entity** risk
+  aggregated across domains (today per-gateway-subject only), so a HIPS detection raises the risk the ZT
+  proxy sees — closing the T2 loop *across* domains. *Accept: a high-risk HIPS alert on device A
+  measurably raises the risk the access proxy applies to A's next request, via real pub/sub.*
+
+### SOAR — orchestration & automated response (new category; governed by ADR-12/T5)
+
+**Delivery target:** no incident waits for a human to poll — detection→enrichment→notification→case is
+fully automatic with per-step ledger evidence; playbooks are declarative compositions of a **closed step
+registry**, durable across restarts, with TI enrichment (IOC store shared with NIPS-2) annotating every
+incident before an analyst opens it; response automation follows the **ADR-12 three-tier discipline**
+(server-side steps unrestricted; local actuation via signed TTL'd intents mapped by endpoint policy;
+third-party actuation via least-privilege intent-subscriber runners) with four-eyes on everything
+high-impact and *nothing* able to express an arbitrary command anywhere in the chain; bidirectional
+ITSM/IdP/email integrations close the loop back into incident state; MTTA/MTTR/automation-rate are
+first-class metrics. *The honest differentiator to sell: the SOAR whose **architecture** makes the
+compromised-orchestrator nightmare inexpressible, and whose every automated step is courtroom-grade
+evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-7) → SOAR-8.**
+
+- **SOAR-1 · Incident → notify wiring** — srv · S. A new/escalated incident emits a `Notification`
+  (new `Kind`), id derived from the incident id (rides SIEM-12 idempotency). Today `MaterializeIncidents`
+  never notifies. *Accept: materializing a new incident → exactly one webhook; re-materializing the same
+  open incident → zero.*
+- **SOAR-2 · Scheduled correlation + escalation** — srv · S. Run `MaterializeIncidents` on a
+  `retain.Loop` ticker; add an `open→triaged→contained→closed` state machine on `incidents` (extends the
+  ADR-10 lifecycle). *Accept: with no operator GET, a seeded burst becomes a notified incident within one
+  interval.*
+- **SOAR-3 · Generic four-eyes approval object** — srv · M. Lift D36 from case-close into a typed
+  `approvals` table (subject kinds: playbook-step, response-intent), same atomic requester≠approver
+  predicate. *Accept: a pending approval approved by its own requester is refused (`ErrFourEyes`),
+  atomically under race.*
+- **SOAR-4 · Playbook engine v1 (server-side only)** — srv · L. Declarative playbook = trigger (incident
+  severity/domain/kind) + DAG of steps from a **closed step registry** (enrich, notify, open-case,
+  place-hold, tag, annotate, wait-for-approval). Durable step state in Postgres; every transition
+  ledgered. **No actuation steps in v1** (ADR-12 Tier-1). *Accept: a high-sev incident auto-runs
+  enrich→notify→open-case; killing the server mid-run resumes without duplicating a step.*
+- **SOAR-5 · Enrichment + threat-intel** — srv + C · L. Signed TI feed ingest (STIX/CSV) → local IOC
+  store; enrichment step annotates the incident timeline with IOC hits, EPSS/KEV, geo/ASN. **Shares the
+  IOC store NIPS-2 needs — build once.** *Accept: an incident whose alerts carry a known-bad domain gets
+  a TI annotation; a feed with a bad signature is rejected.*
+- **SOAR-6 · MTTA/MTTR + analyst metrics** — srv · S. Derive from existing timestamps
+  (`detected_at`/`acknowledged_at`/`opened_at`/`closed_at`), expose via PLAT-4 Prometheus + a report
+  endpoint. *Accept: `/metrics` exposes mtta/mttr histograms that move when an incident is acked/closed.*
+- **SOAR-7 · Response-Intent seam** — X + existing A · L · **OWNER-GATED (ADR-12 Tier-2).** Closed intent
+  vocabulary + `PublishIntent` mirroring `riskpub.go` (ed25519-signed, versioned, TTL), consumed as typed
+  policy context; high-impact intents gated on SOAR-3 approvals + blast-radius guard. *Accept: approved
+  `CONTAIN(subject)` → gateway policy locally BLOCKs that subject's flows; an expired/unsigned/replayed
+  intent changes nothing; an endpoint whose policy ignores intents is unaffected.*
+- **SOAR-8 · Integration runners v1** — off-pipeline · M (ITSM) / L (IdP) · **OWNER-GATED (ADR-12
+  Tier-3).** (a) ITSM/ticketing bidirectional (incident→ticket, status sync-back); (b) IdP responder
+  (disable-user/revoke-sessions) as an intent *subscriber* with a per-connector closed verb set, four-eyes
+  always. *Accept: (a) closing the ticket transitions the incident; (b) an unapproved intent is never
+  executed, and the runner's ledger entry links intent-id→API call.*
+- **SOAR-9 · Notification routing/templating** — srv · S. Severity/kind→sink routing table over the
+  existing multi-sink fanout. *Accept: CRITICAL routes to the pager sink only, INFO to the chat sink
+  only, proven with two sinks.*
 
 ### Zero Trust / ZTNA
 - **ZT-1 · Hardware device-posture attestation** — P1 · X + producer · XL. Posture is self-reported
@@ -405,7 +555,7 @@ The core does not change: `core.Dispatcher`, `State`, `Stage`, `Registry`, the
 stays in the classifying process; only type+count+metadata cross). If any work forces a core change,
 that is the signal to stop and re-examine — the D26/D69 fitness tests apply.
 
-### The four tensions (T1–T4) — status
+### The five tensions (T1–T5) — status
 
 - **T1 — Does the closed action set (D14) expand?** *Resolved: expand one typed verb per capability,
   never a parameterised framework.* `KILL_PROCESS` landed as a bounded verb; `DENY_EXEC` still needs
@@ -423,6 +573,16 @@ that is the signal to stop and re-examine — the D26/D69 fitness tests apply.
   (a producer + a classify-domain + at most one deliberate action), never a core change.
 - **T4 — Categories that do NOT fit the pipeline (NAC/VPN).** *Resolved by the owner: PARKED (ADR-0)* —
   they produce no Event and consume no Decision. Off the queue, out of headline claims, tickets staged.
+- **T5 — Does SOAR response orchestration make the server a controller?** SOAR's core artifact — a
+  playbook that fires "isolate host / disable user / block indicator" — is on its face the
+  server-actuates behavior D14 forbids. *Resolved (ADR-12), tiered:* server-side playbooks (enrich/
+  notify/case/tag/approve over a **closed step registry**, every step ledgered) are pipeline-native and
+  land now; live containment goes through a **signed, closed-vocabulary Response-Intent** the endpoint's
+  *local* policy enacts (the T2 publish-and-decide seam, not a command); third-party actuation (IdP/
+  ITSM) is **off-pipeline** intent-subscriber runners with least-privilege creds + non-waivable
+  four-eyes. **Arbitrary endpoint command execution and remote content pull are permanently out** — the
+  D14/D10 red line. *Tier-1 proceeds; the intent seam (Tier-2) and runners (Tier-3) are owner-gated,
+  one intent verb at a time (a T1-style gate).*
 
 ### Phased plan (original design sequence, for context)
 
@@ -460,7 +620,14 @@ into the Done list and the queue above.
   concurrent builder (→ the re-verify-at-HEAD discipline).
 - **Round-31 (through D136)** — mutation-verified the Bucket S/H fixes on live substrate; caught the
   unmounted `/events`, the HIPS scaffolding-not-runnable state, and the SMTP/ENG residuals.
-- **Round-32 (through D168, this file)** — verified the entire R31 queue + the net-new ZT/DLP/SIEM
-  features closed; surfaced IDENT-1 (HIGH, inert posture chain), the DLP-5b policy-replace bug, and the
-  HIPS-7/8 KILL-safety gaps; closed the 11 open architecture forks as ADR-0…ADR-11. Independently
-  double-checked (all findings confirmed; two ADR text errors fixed pre-commit).
+- **Round-32 (through D168)** — verified the entire R31 queue + the net-new ZT/DLP/SIEM features closed;
+  surfaced IDENT-1 (HIGH, inert posture chain), the DLP-5b policy-replace bug, and the HIPS-7/8
+  KILL-safety gaps; closed the 11 open architecture forks as ADR-0…ADR-11. Independently double-checked
+  (all findings confirmed; two ADR text errors fixed pre-commit).
+- **Round-33 (through D168, this file)** — repositioning audit for **XDR + SOAR** (2 new headline
+  dimensions; NAC/VPN dropped from the headline set). Proved XDR correlation is **single-domain** today
+  (only peer-UEBA feeds `peer_alerts`; no entity model) → XDR-1…7 gated on IDENT-1; found SOAR is a
+  case+notify shell → SOAR-1…9; resolved the **T5 tension** (SOAR vs D14) as **ADR-12**'s three tiers
+  (server-side playbooks pipeline-native; signed closed-vocabulary intent seam + off-pipeline runners
+  owner-gated; arbitrary endpoint command execution permanently out). Substrate inventory + gap audit;
+  DLP/HIPS/NTPS/SIEM/ZT gaps not re-derived (Round-32 backlog is current).
