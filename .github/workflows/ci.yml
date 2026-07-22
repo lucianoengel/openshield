@@ -155,6 +155,8 @@ jobs:
         run: go test -count=1 -v ./internal/controlplane/
       - name: agent identity signing (per-agent keys, no shared secret)
         run: go test -count=1 -v ./internal/agent/identity/
+      - name: XDR-3 canonical subject stamping (endpoint events attributed + contract-validated)
+        run: go test -count=1 -run "EngineStamps|EngineRejects|Unconfigured" -v ./internal/engine/
       - name: walking skeleton — one event classify→policy→audit (real worker + Postgres)
         env:
           OPENSHIELD_REQUIRE_POSTGRES: "1"

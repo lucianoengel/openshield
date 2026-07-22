@@ -99,6 +99,12 @@ func main() {
 
 	eng := engine.NewFromWorker(worker, pol, ledger, log, 30*time.Second)
 
+	// XDR-3: attribute endpoint events to this device by its canonical pseudonym, so
+	// fanotify/execaudit events (which the connectors produce target-only) carry the
+	// enrolled device identity and pass the event contract — and resolve to the XDR
+	// entity (D195). Defaults to a stable id so events are always attributed.
+	eng.SetSubject(env("OPENSHIELD_AGENT_ID", "engine"))
+
 	// HON-3: register the file enforcers so the endpoint can CONTAIN a detection, not only
 	// observe it. Observe-only by DEFAULT (D1) — registered ONLY when OPENSHIELD_ENFORCE is
 	// set, mirroring the gateway's opt-in flow enforcer.

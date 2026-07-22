@@ -442,7 +442,7 @@ approval.* **Dependency spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 → XDR-4 �
   (the same `pseudonym.Of` from two domains → one entity) + concurrency + merge. Populating it from
   enrollment/posture/gateway-identity ingest is XDR-3. *Accept: an exec event from agent A and a proxied request from CN=A's
   device resolve to the same entity id via the real derivation, not test-seeded literals.*
-- **XDR-3 · Canonical subject stamping on endpoint events** — P · M. The agent/connector layer stamps
+- ✅ **XDR-3 · Canonical subject stamping (SHIPPED D196)** — P · M. The agent/connector layer stamps
   the device's canonical pseudonym as `Event.Subject` (per-target id stays in the Target oneof). Also
   resolves the `core/validate.go:103` tension (it requires a top-level subject no endpoint connector
   currently sets — verify at HEAD; recurring "verifies-own-assumptions"). *Accept: fanotify + execaudit

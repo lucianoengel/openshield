@@ -25,6 +25,8 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/pseudonym"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // classifier is the subset of the worker the engine needs — an interface so the
@@ -119,6 +121,14 @@ type Engine struct {
 	now    func() time.Time
 	logger *slog.Logger
 
+	// subject is the device's canonical pseudonym (pseudonym.Of(agentID), IDENT-1),
+	// agentID the raw provenance id. When set, Process stamps the Subject (and the
+	// agent_id/observed_at provenance) of endpoint events (which the connectors leave
+	// target-only) and validates them (XDR-3). Empty = unconfigured: no stamping, no
+	// added validation (backward-compatible).
+	subject string
+	agentID string
+
 	// telemetry projects real detections to the control plane. nil = no projection
 	// (the default); the local ledger is the system of record (D30). Set via
 	// SetTelemetry (D80).
@@ -157,12 +167,46 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 // the classify stage sends it to the sandboxed worker. Without it, network events are metadata-only.
 func (e *Engine) SetContentResolver(r ContentResolver) { e.content.resolve = r }
 
+// SetSubject configures the engine's device identity: it stores the CANONICAL
+// pseudonym of agentID (pseudonym.Of, the one derivation the gateway, posture, and
+// the entity model share). When set, Process attributes endpoint events to this
+// device and enforces the event contract (XDR-3).
+func (e *Engine) SetSubject(agentID string) {
+	e.agentID = agentID
+	e.subject = pseudonym.Of(agentID)
+}
+
+// attribute stamps the canonical device subject (and a timestamp) on an event that
+// lacks them, then validates the event — so an endpoint event that the connectors
+// produced target-only is attributed to the device entity and satisfies the
+// contract. An engine with no configured subject leaves the event untouched
+// (backward-compatible). A configured engine REJECTS an event that is still invalid
+// after stamping, rather than processing a malformed one.
+func (e *Engine) attribute(ev *corev1.Event) error {
+	if e.subject == "" {
+		return nil
+	}
+	if ev.GetSubject().GetPseudonymousId() == "" {
+		ev.Subject = &corev1.Subject{PseudonymousId: e.subject}
+	}
+	if ev.GetAgentId() == "" {
+		ev.AgentId = e.agentID
+	}
+	if ev.GetObservedAt() == nil {
+		ev.ObservedAt = timestamppb.New(e.now().UTC())
+	}
+	return core.ValidateEvent(ev)
+}
+
 // Process runs one event through the pipeline, records the Decision, then — if an
 // enforcer can carry out its action — enforces it POST-DECISION. The order is
 // deliberate: the Decision is recorded (by the dispatcher's audit sink) BEFORE
 // enforcement is attempted, so the trail shows what was decided even if
 // enforcement fails or the process dies mid-enforce.
 func (e *Engine) Process(ctx context.Context, ev *corev1.Event) (*corev1.Decision, error) {
+	if err := e.attribute(ev); err != nil {
+		return nil, err
+	}
 	dec, err := e.disp.Dispatch(ctx, ev)
 	if dec != nil {
 		e.enforce(ctx, ev, dec)
