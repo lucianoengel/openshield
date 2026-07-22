@@ -65,6 +65,13 @@ func WithClock(f func() time.Time) Option { return func(a *Analyzer) { a.now = f
 // WithHalfLife overrides the decay half-life (default DefaultHalfLife).
 func WithHalfLife(d time.Duration) Option { return func(a *Analyzer) { a.halfLife = d } }
 
+// WithStartVersion seeds the context-version counter (SEC-10). The version resets to 0 on a
+// process restart, so without a persisted base "ctx-0" from THIS run would collide with
+// "ctx-0" from a PRIOR run — two different populations sharing one context_version, breaking
+// D27's "which context did this Decision see". The control plane reserves a monotonic base
+// per startup and seeds it here, so a version string is unique across restarts.
+func WithStartVersion(base uint64) Option { return func(a *Analyzer) { a.version = base } }
+
 // New returns an empty analyzer.
 func New(opts ...Option) *Analyzer {
 	a := &Analyzer{subjects: map[string]*entry{}, now: time.Now, halfLife: DefaultHalfLife}

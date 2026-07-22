@@ -108,10 +108,57 @@ func New(pool *pgxpool.Pool) *Server {
 // alert. threshold is the peer-relative risk [0,1] at which a subject alerts;
 // cooldown throttles repeat alerts for a still-anomalous subject.
 func (s *Server) EnablePeerUEBA(threshold float64, cooldown time.Duration) {
-	s.analyzer = peerueba.New()
+	// SEC-10: reserve a monotonic context-version BLOCK so this run's versions never collide
+	// with a prior run's (D27). Best-effort — if the reservation fails (e.g. a very old
+	// schema), start at 0 and log; a collision is worse only across restarts, not fatal.
+	base, err := s.reserveVersionBase(context.Background(), versionBlockSize)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA version base reservation failed (%v) — starting at 0\n", err)
+	}
+	s.analyzer = peerueba.New(peerueba.WithStartVersion(base))
 	s.peerThreshold = threshold
 	s.peerCooldown = cooldown
 	s.peerLastAlert = map[string]time.Time{}
+}
+
+// CurrentContextVersion returns the peer-UEBA context version for a subject, or "" when
+// peer-UEBA is disabled. Exposed so an operator (and a test) can see which context version is
+// currently in force — it moves into a new run's reserved block across restarts (SEC-10).
+func (s *Server) CurrentContextVersion(subject string) string {
+	if s.analyzer == nil {
+		return ""
+	}
+	c := s.analyzer.ContextFor(subject)
+	if c == nil {
+		return ""
+	}
+	return c.Version
+}
+
+// ObserveForTest feeds a subject to the peer-UEBA analyzer directly (test seam for SEC-10).
+func (s *Server) ObserveForTest(subject string) {
+	if s.analyzer != nil {
+		s.analyzer.Observe(subject)
+	}
+}
+
+// versionBlockSize is how much context-version space each startup reserves. Large enough that
+// no single run exhausts it, so within a run the counter never overruns into the next run's
+// reserved block.
+const versionBlockSize = 1_000_000_000
+
+// reserveVersionBase atomically reserves the next context-version block and returns its base
+// (SEC-10). The reservation is the same forward-monotonic pattern as the ledger sequence
+// (D66): each call bumps the persisted high-water by the block size and returns the old value.
+func (s *Server) reserveVersionBase(ctx context.Context, block uint64) (uint64, error) {
+	var base int64
+	err := s.pool.QueryRow(ctx,
+		`UPDATE peerueba_version SET next_base = next_base + $1 WHERE id = 1 RETURNING next_base - $1`,
+		int64(block)).Scan(&base)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(base), nil
 }
 
 // NATSOptions are applied to the control plane's NATS connection — used to pass
