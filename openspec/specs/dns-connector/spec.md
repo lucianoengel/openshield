@@ -11,3 +11,13 @@ The connector MUST decode the question of a DNS query into the queried name and 
 #### Scenario: A valid query produces an event and a malformed one is rejected
 - **WHEN** the connector parses a DNS query message
 - **THEN** a valid query yields the queried name in a DNS network event, a malformed or response message is rejected, and a long high-entropy name scores high on the tunneling heuristic while an ordinary name scores low
+
+### Requirement: The DNS connector runs a UDP listener that survives malformed input
+The DNS connector MUST provide a UDP listener that binds a configurable address, parses each
+received datagram into a query, and delivers it to a sink. A datagram that fails to parse MUST
+be dropped and counted, never stopping the receive loop, and the drop count MUST be observable.
+The listener MUST shut down cleanly on context cancellation and MUST refuse a nil sink.
+
+#### Scenario: Valid queries are delivered and garbage is dropped
+- **WHEN** the listener receives valid and malformed DNS datagrams
+- **THEN** the valid queries are parsed and delivered, the malformed one is dropped and counted, monitoring keeps running, and the listener stops cleanly when cancelled
