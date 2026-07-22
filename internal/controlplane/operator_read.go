@@ -206,6 +206,7 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	mux.HandleFunc("/subject", s.subjectHandler)
 
 	mux.HandleFunc("/incidents", s.incidentsHandler)
+	mux.HandleFunc("/incidents/ack", s.incidentAckHandler)
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

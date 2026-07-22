@@ -115,7 +115,14 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rule.MinRisk = x
 	}
-	incidents, err := s.Correlate(r.Context(), rule, time.Now())
+	// SIEM-11b: materialize the current correlation (an idempotent upsert of each subject's open
+	// incident) so incidents carry a stable id + state, then return the stored set. This makes the
+	// list acknowledgeable/case-linkable as units rather than a recomputed-every-GET view.
+	if _, err := s.MaterializeIncidents(r.Context(), rule, time.Now()); err != nil {
+		http.Error(w, "read failed", http.StatusInternalServerError)
+		return
+	}
+	incidents, err := s.RecentIncidents(r.Context(), queryInt(r, "limit", 100))
 	if err != nil {
 		http.Error(w, "read failed", http.StatusInternalServerError)
 		return
