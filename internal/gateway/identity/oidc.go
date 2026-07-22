@@ -37,8 +37,11 @@ type OIDCVerifier struct {
 	issuer    string
 	audience  string
 	roleClaim string
-	keys      map[string]crypto.PublicKey // kid -> RSA or Ed25519 public key
-	now       func() time.Time            // injectable clock (testability, D28-style)
+	// keyFor resolves a key id to its public key. A static verifier closes over a fixed map; a
+	// JWKS-backed verifier (ZT-2b) reads a background-refreshed snapshot. Verify NEVER fetches — the
+	// key SOURCE is the only thing that varies, the verification logic is unchanged.
+	keyFor func(kid string) (crypto.PublicKey, bool)
+	now    func() time.Time // injectable clock (testability, D28-style)
 }
 
 // NewOIDCVerifier builds a verifier. issuer and audience are REQUIRED — a token whose
@@ -54,7 +57,36 @@ func NewOIDCVerifier(issuer, audience, roleClaim string, keys map[string]crypto.
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("identity: OIDC verifier needs at least one signing key")
 	}
-	return &OIDCVerifier{issuer: issuer, audience: audience, roleClaim: roleClaim, keys: keys, now: time.Now}, nil
+	static := make(map[string]crypto.PublicKey, len(keys))
+	for k, v := range keys {
+		static[k] = v
+	}
+	return &OIDCVerifier{issuer: issuer, audience: audience, roleClaim: roleClaim,
+		keyFor: func(kid string) (crypto.PublicKey, bool) { k, ok := static[kid]; return k, ok },
+		now:    time.Now}, nil
+}
+
+// NewOIDCVerifierWithSource builds a verifier whose signing keys come from an external source (e.g. a
+// live JWKS refresher, ZT-2b) rather than a static map — for a provider whose keys rotate. The source's
+// keyFor MUST NOT block on the network (the verify path is HTTP-free). issuer/audience/roleClaim are
+// required exactly as in NewOIDCVerifier; a nil source is a configuration error.
+func NewOIDCVerifierWithSource(issuer, audience, roleClaim string, keyFor func(kid string) (crypto.PublicKey, bool)) (*OIDCVerifier, error) {
+	if issuer == "" || audience == "" || roleClaim == "" {
+		return nil, fmt.Errorf("identity: OIDC verifier needs issuer, audience, and role claim")
+	}
+	if keyFor == nil {
+		return nil, fmt.Errorf("identity: OIDC verifier needs a key source")
+	}
+	return &OIDCVerifier{issuer: issuer, audience: audience, roleClaim: roleClaim, keyFor: keyFor, now: time.Now}, nil
+}
+
+// SetKeySource routes key lookup through an external source — e.g. a live JWKS refresher (ZT-2b) — so
+// an IdP key rotation is picked up without a restart. The source's keyFor MUST NOT block on the network
+// (the verify path is HTTP-free); a JWKSRefresher reads its background-refreshed snapshot. Returns the
+// verifier for chaining.
+func (v *OIDCVerifier) SetKeySource(keyFor func(kid string) (crypto.PublicKey, bool)) *OIDCVerifier {
+	v.keyFor = keyFor
+	return v
 }
 
 // WithClock overrides the clock (for tests). Returns the verifier for chaining.
@@ -89,7 +121,7 @@ func (v *OIDCVerifier) Verify(token string) (*Identity, error) {
 		return nil, err
 	}
 
-	key, ok := v.keys[h.Kid]
+	key, ok := v.keyFor(h.Kid)
 	if !ok {
 		return nil, fmt.Errorf("identity: OIDC token signed by unknown key id %q", h.Kid)
 	}

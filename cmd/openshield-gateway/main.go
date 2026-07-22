@@ -269,18 +269,35 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	// JWKS discovery is a follow-up). A misconfigured OIDC block aborts startup — a ZT gate must not
 	// come up with a broken identity source.
 	if issuer := os.Getenv("OPENSHIELD_OIDC_ISSUER"); issuer != "" {
-		keys, err := identitypkg.LoadOIDCKeys(os.Getenv("OPENSHIELD_OIDC_KEYS_DIR"))
-		if err != nil {
-			fatal(log, "loading OIDC keys", err)
-		}
-		v, err := identitypkg.NewOIDCVerifier(issuer, os.Getenv("OPENSHIELD_OIDC_AUDIENCE"),
-			env("OPENSHIELD_OIDC_ROLE_CLAIM", "groups"), keys)
-		if err != nil {
-			fatal(log, "OIDC verifier", err)
+		audience := os.Getenv("OPENSHIELD_OIDC_AUDIENCE")
+		roleClaim := env("OPENSHIELD_OIDC_ROLE_CLAIM", "groups")
+		var v *identitypkg.OIDCVerifier
+		// ZT-2b/ADR-7: when a JWKS URL is set, source the signing keys from a live JWKS refresher so an
+		// IdP key rotation is picked up without a restart — background refresh, serve-stale on failure,
+		// rate-limited on a kid miss, never fetching on the request path. Else the static PEM keys.
+		if jwksURL := os.Getenv("OPENSHIELD_OIDC_JWKS_URL"); jwksURL != "" {
+			interval := envDuration("OPENSHIELD_OIDC_JWKS_INTERVAL", 5*time.Minute)
+			ref := identitypkg.NewJWKSRefresher(jwksURL, interval)
+			go ref.Start(ctx)
+			v, err = identitypkg.NewOIDCVerifierWithSource(issuer, audience, roleClaim, ref.KeyFor)
+			if err != nil {
+				fatal(log, "OIDC verifier", err)
+			}
+			log.Info("gateway: OIDC SSO identity enabled — keys from a live JWKS endpoint (ZT-2b)",
+				slog.String("issuer", issuer), slog.String("jwks", jwksURL))
+		} else {
+			keys, kerr := identitypkg.LoadOIDCKeys(os.Getenv("OPENSHIELD_OIDC_KEYS_DIR"))
+			if kerr != nil {
+				fatal(log, "loading OIDC keys", kerr)
+			}
+			v, err = identitypkg.NewOIDCVerifier(issuer, audience, roleClaim, keys)
+			if err != nil {
+				fatal(log, "OIDC verifier", err)
+			}
+			log.Info("gateway: OIDC SSO identity enabled — user identity from a verified bearer token (ZT-2)",
+				slog.String("issuer", issuer), slog.Int("keys", len(keys)))
 		}
 		ap.SetOIDCVerifier(v)
-		log.Info("gateway: OIDC SSO identity enabled — user identity from a verified bearer token (ZT-2)",
-			slog.String("issuer", issuer), slog.Int("keys", len(keys)))
 	}
 
 	// Subscribe to published risk (D91) and device posture (D92) — SIGNED and VERIFIED

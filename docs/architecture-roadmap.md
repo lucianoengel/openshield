@@ -251,6 +251,10 @@ applies.
      loops + srv.Run inside leaderCtx; standby waits. Proven (real PG, 2 pools) + 2 mutation guards. PG-HA +
      client routing deferred (ops).
 3. **ZT-2b · Live JWKS refresher** (ADR-7) → **ZT-1 · Hardware attestation** — do ZT-1 *after* IDENT-1
+   - **SHIPPED D182 (2026-07-22) - pending owner audit.** JWKSRefresher sources the OIDC verifier's
+     keys via a keyFor seam: background refresh, serve-stale on failure, rate-limited on kid-miss, NEVER a
+     fetch on the request path; RSA + Ed25519 JWK parsing; env-gated OPENSHIELD_OIDC_JWKS_URL (static PEM
+     preserved). Proven (httptest JWKS) + 2 mutation guards. OIDC discovery deferred. ZT-1 next.
    fixes the identity it binds to.
 4. **NIPS-1 · TPROXY inline connector** (ADR-8) **with NIPS-2 · signatures/threat-intel** — sequence
    together; without signatures it is not an IPS.
