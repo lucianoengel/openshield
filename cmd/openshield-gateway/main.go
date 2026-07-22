@@ -343,6 +343,26 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		} else {
 			log.Warn("gateway: OPENSHIELD_POSTURE_ROSTER unset — posture channel inert (unsigned/unenrolled posture is never applied, SEC-12)")
 		}
+		// ZT-1 hardware attestation transport: the gateway answers attestation
+		// challenges (issuing a fresh nonce) and verifies published reports into an
+		// AttestationVerifier, setting DevicePosture.Attested from its OWN quote
+		// verification — never a self-reported value. Enrollment distribution
+		// (populating the verifier with each device's AK public key + golden PCR
+		// baseline, the output of credential activation, D184) is the remaining
+		// operational piece; until it lands the verifier is empty and every device is
+		// unattested — a policy requiring attestation fails closed (D85/D186).
+		if os.Getenv("OPENSHIELD_ATTEST") != "" {
+			av := gateway.NewAttestationVerifier()
+			ap.SetAttestationVerifier(av)
+			responder := gateway.NewAttestationResponder(av)
+			if _, err := responder.ServeChallenge(conn); err != nil {
+				fatal(log, "attestation challenge serve", err)
+			}
+			if _, err := responder.SubscribeReports(conn); err != nil {
+				fatal(log, "attestation report subscribe", err)
+			}
+			log.Warn("gateway: ZT-1 attestation transport active — enrollment distribution pending, verifier empty until devices are enrolled (fail closed)")
+		}
 	}
 
 	srv := &http.Server{

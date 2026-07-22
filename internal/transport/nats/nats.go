@@ -37,6 +37,12 @@ const (
 	SubjectHeartbeat      = "openshield.v1.heartbeats"
 	SubjectRisk           = "openshield.v1.risk"
 	SubjectPosture        = "openshield.v1.posture"
+	// SubjectAttestChallenge is request/reply: a device sends its subject, the
+	// gateway replies with a fresh attestation nonce (ZT-1).
+	SubjectAttestChallenge = "openshield.v1.attest.challenge"
+	// SubjectAttestReport carries a device's TPM quote (an AttestationReport) to
+	// the gateway, which verifies it against the enrolled AK.
+	SubjectAttestReport = "openshield.v1.attest.report"
 )
 
 // Transport publishes wire-form messages to the control plane.

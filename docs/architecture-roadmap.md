@@ -547,7 +547,7 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     end-to-end incl. the full TLS access proxy admitting an attested device and denying an unverified
     one. The NATS challenge/report transport is the noted follow-up (primitive-then-transport, cf.
     D89→D91).
-  - ✅ **Transport (D187)** — SHIPPED. A NATS challenge/report channel drives the verifier on live data:
+  - ✅ **Transport (D188)** — SHIPPED. A NATS challenge/report channel drives the verifier on live data:
     a device requests a nonce, quotes, publishes; the gateway issues the nonce and verifies, flipping it
     to attested. The report self-authenticates (it's a TPM-signed quote — no extra signature). Proven
     embedded-NATS + real-swtpm end-to-end. Remaining ZT-1 operability: **enrollment distribution**
