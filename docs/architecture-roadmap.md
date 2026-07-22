@@ -177,10 +177,11 @@ the XDR fork.
 > the items here are the *specific* work.
 >
 > **⚠️ Staleness warning.** This queue is written against audit snapshots and the repo moves fast
-> (a builder commits concurrently). **The authoritative current status is the "Round-31 audit
-> update" section below** (verified through D136): it supersedes the ✅/status notes on the Bucket
-> S/H/feature tickets. **Before proposing ANY ticket, re-verify against `HEAD` that the gap still
-> exists**, and consult the R31 next-order queue for what to pick up.
+> (a builder commits concurrently). **The authoritative current status is the "Round-32 audit
+> update" section below** (verified through D168), followed by the "Architecture decisions
+> (Round-32)" records that close the open forks. Round-32 supersedes Round-31, which supersedes the
+> ✅/status notes on the Bucket S/H/feature tickets. **Before proposing ANY ticket, re-verify against
+> `HEAD` that the gap still exists**, and consult the Round-32 next-order queue for what to pick up.
 
 ## How the builder worker should consume this
 
@@ -215,13 +216,13 @@ the XDR fork.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| Zero Trust (ZTNA) | ~50% | Access broker + microseg + posture/risk inputs; posture now has a **signed producer** (HON-4) but on a **shared fleet key** (agent-to-agent forgery, SEC-12); no hardware attestation, no ZTNA client. |
-| DLP | ~40% core | Strong sandboxed detection core; enforcement now **wired behind `OPENSHIELD_ENFORCE`** (HON-3); +phone detector; still one channel, no EDM/OCR/ML, no coaching. |
-| NIPS / NTPS | ~25% | Forward-proxy egress DLP + TLS interception + a live **DNS observe listener** (D128/D133). SMTP listener built-not-wired (+ OOM/slowloris bugs). Still no inline/transparent, no signatures/threat-intel. |
-| SIEM | ~25% | Event search (built but `/events` **404s** — SIEM-1 reopen), cross-host correlation (host col landed), alert lifecycle+ack, notify retry, case workflow, syslog. Still: no persisted incidents, no UI, no external formats beyond syslog. |
-| HIPS | ~10% | Phase E **contract + detectors + enforcers landed but UNWIRED** — no producer runs, engine never extracts the pid, DENY_EXEC is a stub; detectors have 1-char bypasses. Scaffolding, not runnable (HIPS-5/6/7). |
-| NAC | 0% | Absent. Posture-as-policy-input ≠ network admission control. Off-pipeline (see T4). |
-| VPN | 0% | Absent. No tunnel. "Zero-Trust VPN" is a mislabel for the ZTNA proxy. Off-pipeline (see T4). |
+| Zero Trust (ZTNA) | ~55% | Access broker + microseg + **real OIDC/JWT on-path** (ZT-2, alg-confusion rejected) + dual-credential logic (ZT-3) + agent-signed posture bound to the reporting key (SEC-12). **But the posture chain is INERT in production** — publisher stores under the raw subject, the proxy looks up `pseudonym(CN)`; keys never match → every compliant device reads `HasPosture=false` (IDENT-1, HIGH). No hardware attestation, no JWKS rotation, no ZTNA client. |
+| DLP | ~45% core | Strong sandboxed detection core; enforcement wired behind `OPENSHIELD_ENFORCE`; compliance packs (PCI/HIPAA/GDPR) load and change decisions — **but packs REPLACE the default policy**, so enabling one silently disables HIPS + out-of-scope detectors (DLP-5b). +EIN/NPI/NHS/SIN/ABA/routing detectors. Still one channel, no EDM/OCR/ML. |
+| NIPS / NTPS | ~30% | Forward-proxy egress DLP + TLS interception + live **DNS + SMTP listeners wired** with a shared rate-limiter (NIPS-7) and panic-recover (ENG-2). SMTP body DLP reaches the worker (ENG-1). Still no inline/transparent (see ADR-8), no signatures/threat-intel (NIPS-2). |
+| SIEM | ~35% | `/events` search now **mounted + gated** (SIEM-1), **materialized incidents** with id/state (SIEM-11), cross-host correlation, alert lifecycle+ack, async notify + multi-sink HMAC webhook (SIEM-8), persisted UEBA baselines (SIEM-5), case workflow, syslog. Still: no unified alert-lifecycle schema (ADR-10), notify idempotency broken (SIEM-12), no UI, no CEF/WEF. |
+| HIPS | ~30% | Phase E **runs end-to-end** — real auditd source → real pid → real KILL, behavioral→decision, detector evasions closed (HIPS-5/6, mutation-confirmed). **KILL safety incomplete**: pid-reuse revalidation ineffective + the critical-process allowlist is self-immunizing (malware names itself `sshd`/`openshield*` → unkillable) (HIPS-7/8). DENY_EXEC deliberately deferred (needs `FAN_OPEN_EXEC_PERM`). |
+| NAC | 0% | Absent. Posture-as-policy-input ≠ network admission control. Off-pipeline. **Parked** by owner decision (ADR-0) — off the builder's queue and out of headline claims; tickets staged. |
+| VPN | 0% | Absent. No tunnel. "Zero-Trust VPN" is a mislabel for the ZTNA proxy. Off-pipeline. **Parked** by owner decision (ADR-0). |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external
 anchoring is real end-to-end and is the platform's strongest asset. Several Bucket-S items
@@ -384,6 +385,231 @@ NIPS-3-SMTP hardening → HIPS-5 (wire) → HIPS-6 (detectors) → SIEM-11 (inci
 (DLP-2/3 channels+EDM, NIPS-1/2 inline+signatures, ZT-1 attestation, SIEM-4 CEF/WEF). UI (PLAT-1)
 and NAC/VPN remain owner-gated.
 
+## Round-32 audit update (2026-07-22) — D137–D168 verified
+
+> The builder cleared the **entire R31 next-order queue** (D145–D162) and shipped net-new features:
+> OIDC on the access proxy (ZT-2), dual-credential authorization (ZT-3), compliance policy packs
+> (DLP-5), persisted UEBA baselines (SIEM-5), multi-sink HMAC webhooks (SIEM-8), a wired SMTP path,
+> and more DLP detectors. A three-agent adversarial re-audit (net-new features + decision inventory
+> on Fable; two mutation-reintroduction passes on **Opus**, on live Postgres/NATS/TLS) verified the
+> work. **These statuses SUPERSEDE Round-31 and everything below.** The "Architecture decisions
+> (Round-32)" section that follows closes the open forks; the next-order at the end is the queue.
+
+### ✅ Verified genuinely closed (mutation-confirmed on live substrate) — do NOT re-open
+Every R31-queue security/engine fix holds: **PLAT-6b** (all runtime units connect as the non-owner
+`openshield_app`; adding `SUPERUSER` FAILs `TestAppRoleCannotBypassLedgerBoundary` on the live DB —
+the ledger boundary now protects the running product), **SIEM-1** (`/events` mounted on the *served*
+TLS mux behind the operator gate; un-mounting → 404 FAIL; operator 200 / agent 403 through the real
+router), **ENG-1** (third `classifyStage` branch: network-content→worker, DNS→skip, pathless-file→
+error, D134 preserved), **ENG-2** (`recover()` at real per-item boundaries; removing the DNS recover
+crashes the process; D35 in-process deviation documented in decisions.md), **NIPS-7** (token-bucket
+checked before the ledger write; DNS + syslog share one `connectors/limiter`; `if false &&` mutation
+FAILs both flood tests), **PLAT-4b** (`/metrics` behind constant-time bearer auth), **SIEM-11**
+(incidents materialized with stable id/state; `NULLIF(agent_id,'')` host-count; malformed-param 400
+— all four mutations confirmed on live PG). And the whole **HIPS Phase E now RUNS**: **HIPS-5a/b/c**
+(real `execaudit` auditd-log source → `events` chan → engine extracts `ProcessSubject.pid` by event
+kind → real `KillEnforcer` reaps a real spawned `sleep`; reverting to the filesystem-path target
+lets the child survive → FAIL) and **HIPS-6** (encoded-PS prefix match, auditd bare-hex decode of a
+genuinely spaced `curl …|bash` cradle, pipe-to-any-shell; each evasion mutation FAILs). SIEM-8 HMAC
+(constant-time, off-ingest async) and SIEM-5 baseline reload (seeded before ingest, real-PG restart
+test) are solid modulo the residuals below. **Do not re-propose these.**
+
+### 🔴 NOT closed / inert in production — pick these up FIRST
+
+**IDENT-1 · Canonical device identity (fixes the inert posture chain)** — P0 · gateway+agent+enroll · effort M
+- **HIGH, confirmed by two independent agents.** SEC-12's signature binding is *correct* (a forged
+  foreign `subject` is rejected, mutation-confirmed), but the feature is **dead on the real path**:
+  the fleet-agent stores posture under the raw `OPENSHIELD_SUBJECT` (default = raw agentID —
+  `cmd/openshield-fleet-agent/main.go:44,133` → stored raw at `internal/gateway/posture.go:99`), while the access
+  proxy looks it up under `pseudonym(CN)` = `"sub_"+hex(sha256("zt-client-subject:"+CN)[:12])`
+  (`access.go:176`, `identity/identity.go:83`). `rawAgentID ≠ sub_<hash>` → the verified, stored
+  posture is **never found** → `HasPosture=false` → any posture-gated policy denies *every* real
+  compliant device. ZT-3's advertised "finance user on a compliant device → 200" is unreachable.
+  The tests pass only because `zt3_dualcred_test.go` seeds `Set(pseudonym(CN))` and reads the same
+  literal — the **recurring "verifies against its own assumptions"** pattern, masking a HIGH prod bug.
+- Fix: per **ADR-6** — canonicalize on the enrolled agent identity, provision RoleClient certs with
+  `CN = agent identity`, and export ONE shared pseudonym derivation used by enrollment, the posture
+  publisher, AND the access proxy. Verify: an e2e that publishes via the *real* `posture.Publish`
+  and asserts `Get(pseudonym(CN))` hits; a compliant device reaches a posture-gated upstream.
+
+**DLP-5b · Compose policy packs, don't replace the default** — P1 · policy · effort M
+- `NewPack` swaps `default.rego` wholesale (`internal/policy/embed.go`), and the pack files omit the
+  HIPS `behavioral_alert` rule and the CPF/card strong-detector alert — so **enabling PCI silently
+  turns off behavioral process alerting** (and each pack drops the detectors outside its scope). No
+  test asserts the default protections survive pack selection, because they don't. Fix per **ADR-5**:
+  compose default + selected packs + operator custom rules under a most-restrictive-wins lattice;
+  stamp a bundle id/version on the Decision. Verify: PCI pack ON still ALERTs on a behavioral hit and
+  a raw CPF; a test proves default protections survive every pack.
+
+**SIEM-12 REOPEN · Notification idempotency is non-functional** — P2 · notify · effort S
+- The async hand-off is real (`TestEmitDoesNotBlockIngest`), but `newNotifyID()` is `crypto/rand`
+  per-emit (`notify.go:59`) and is **never checked server-side**. The exact scenario it targets —
+  agent re-sends telemetry → server re-detects → re-emits — mints a *new* id each time, so nothing
+  can dedupe → the double-page persists. Fix: derive the id deterministically from alert content
+  (`hash(kind|subject|agentID|window-bucket)`) + a bounded server-side seen-set checked in `emit`/
+  `deliverLoop`. Verify: emit the same logical alert twice → exactly one delivery.
+
+**HIPS-7 REOPEN · pid-reuse revalidation is ineffective** — P2 · enforcer · effort M
+- Critical-allowlist and the argc bound are real (mutation-confirmed), but the headline pid-reuse
+  guard does nothing: `platformKill` calls `PidfdOpen(pid)` **at kill time** (`kill_linux.go:17`),
+  and the event carries only `Pid int32` — no pidfd/start-time captured at observation. On a recycled
+  pid it opens and kills the **new** holder — exactly what the commit claims to prevent. No test
+  drives the real syscall path (`critical_test.go` mocks `kill`), so the property is asserted nowhere
+  — a **design-level "verifies against its own assumptions."** Fix: capture a pidfd (or
+  `/proc/<pid>/stat` starttime) in the exec source when the `ProcessSubject` is built, carry it on the
+  event, revalidate/send via that captured fd in `EnforceTarget`. Verify: a decide→recycle→kill test
+  proves the new holder is spared.
+
+**HIPS-8 · Trusted critical-process identity (KILL containment bypass)** — P2 · enforcer · effort M
+- The safety allowlist keys on kernel `comm`, which a process sets for itself
+  (`prctl(PR_SET_NAME)`/argv[0]); malware that names itself `sshd`/`systemd`/`openshield*` becomes
+  **permanently unkillable** by HIPS — it opts *into* immunity. Worse than the deferred renamed-LOLBin
+  evasion: this grants immunity from *containment*, not just detection. Fix: gate the allowlist on a
+  trusted identity — cgroup/systemd unit, binary hash, or a known-platform pid-set — not self-reported
+  `comm`. Verify: a process that renames itself `sshd` but is not the real unit is still killed.
+
+**NIPS-3-SMTP-TEST · Make the OOM guard's test real** — P2 · connector test · effort XS
+- The bounded reader is correct, but `harden_test.go` streams 64 KiB against the 32 MiB cap, so
+  **removing the `io.LimitReader` still ships green** (the idle deadline masks it) — the signature
+  false-premise pattern. Fix: inject a small `maxBody` + a large idle timeout, stream past the cap
+  with no newline, assert `Dropped>0` without the deadline firing. (Same fix-the-test discipline, no
+  code change to the guard.)
+
+### 🆕 Feature residuals (lower priority, fold where noted)
+- **SIEM-8b · Webhook replay protection** — P2 · notify · S. The MAC covers the body only (no
+  timestamp/nonce) and one secret is shared across sinks → a captured `(body, sig)` validates forever
+  at any sink. Sign `"t=<unix>." + body`, send `t` in a header, receiver rejects stale. (Optionally
+  per-sink secrets.)
+- **SIEM-8c · Per-sink fanout goroutine** — P3 · notify · XS. Fanout is sequential in one delivery
+  worker; one slow sink delays the others and, under sustained slowness, drops the 256-deep queue
+  (counted). Deliver per-sink concurrently.
+- **SIEM-5b · Prune + validate UEBA baselines** — P2 · analytics · S. No TTL/prune (O(N) UPSERTs
+  forever, unbounded row + map growth) and load accepts a NaN/negative `count` or future `last_seen`
+  (decay > 1 inflates the baseline; reachable only with DB write access). Prune decayed-below-ε rows +
+  batch the upsert in a txn; validate on load; persist the `peerLastAlert` cooldown.
+- **ZT-2 residuals** — P2. No clock-skew leeway on exp/nbf; bearer tokens replayable until exp and
+  not device-bound (no jti/DPoP — a stolen token works from any enrolled device). JWKS is **ADR-7**.
+- **Minor (fold into the owning ticket):** `/incidents?limit=` still silently defaults instead of
+  400ing (finish the SEC-8 rule on that one param); PLAT-4b `main.go` metrics *wiring* has no test
+  (guard tested in isolation); `EnsureAppLogin`'s existing-role branch should defensively re-assert
+  `NOSUPERUSER NOCREATEROLE`; SMTP `handle`/`processOne` recover present but not individually tested;
+  `observe-e2e.sh:68` runs anchor as owner (test-only, acceptable).
+
+### The recurring pattern hit THREE times again this round
+The project's signature failure — a test that passes because it shares the code's wrong premise —
+appeared in three of this round's defects: (1) the **posture chain** test seeds and reads the same
+`pseudonym(CN)` literal, hiding that the real publisher uses a different key (IDENT-1, HIGH); (2) the
+**SMTP OOM** test never reaches the 32 MiB cap it claims to defend (NIPS-3-SMTP-TEST); (3) the
+**HIPS-7 pid-reuse** property is asserted by no test because none drives the real `pidfd` syscall. With
+an autonomous builder this is now a *standing* risk, not an anecdote — **every acceptance test must
+drive the real runtime path and every negative security property must be proven by a mutation that
+would let the bug through.** Weight code-review toward "does this test exercise production, or a mock
+of the author's assumption?"
+
+### Revised next-order for the autonomous worker
+All unblocked (no owner gate): **IDENT-1 (unblocks ZT-3 + makes SEC-12 real) → DLP-5b (compose
+policy) → SIEM-12 (real idempotency) → NIPS-3-SMTP-TEST → HIPS-8 (containment) → HIPS-7 (pid-reuse) →
+SIEM-8b (replay) → SIEM-5b (prune) → SIEM-6b/ADR-10 (unified alert schema) → PLAT-3/ADR-4 (per-route
+RBAC).** Then the platform-durability lane per the ADRs (**PLAT-2/ADR-2 JetStream → PLAT-2b/ADR-3
+active-passive HA**), the ZT deepening (**ZT-2b/ADR-7 JWKS → ZT-1 attestation**, now that IDENT-1
+fixes the identity it binds to), then **NIPS-1/ADR-8 (TPROXY inline) with NIPS-2 (signatures)**, and
+**DLP-3/ADR-9 (server-side EDM/OCR) + DLP-2 (channels)**. Cross-platform (**PLAT-7**) runs in parallel
+per ADR-11. UI (PLAT-1) stays owner-reserved; NAC/VPN parked (ADR-0).
+
+## Architecture decisions (Round-32) — closing the open forks
+
+> The owner asked to "close missing architectural decisions to move forward." These ADRs resolve the
+> forks the audit surfaced so the builder has an unambiguous runway. **ADR-0/-11 are owner decisions
+> (recorded below); ADR-2…-10 are technical decisions made to unblock — the owner may override any.**
+> Each ADR names the ticket(s) that implement it. The frozen-core discipline (D26/D69) still governs:
+> where an ADR adds capability it lands as a producer / classify plugin / typed context / one
+> deliberate action, never a change to `core.*` or the D10/D29 boundary.
+
+**ADR-0 · NAC and VPN are PARKED (owner decision, 2026-07-22).** They do not fit the pipeline
+(no Event, no Decision; the access proxy is L7-HTTP-only, categorically not a VPN). Decision: **keep
+them off the builder's queue and out of the headline category claims for now, with `NAC-*`/`VPN-*`
+staged so either can be green-lit later without another audit.** The builder must not start them. If
+green-lit, they are separately-scoped off-pipeline products that reuse the PKI/identity and *feed*
+posture/risk in — not pipeline plugins.
+
+**ADR-2 · Telemetry durability = NATS JetStream (implements PLAT-2, closes SEC-4's root).** Core NATS
+is at-most-once; loss is *detected* (sequence gaps) but unrecoverable, and the agent spool only covers
+broker-unreachable. Decision: **durable JetStream consumers with explicit ack** for the telemetry
+ingest subject; keep the spool as the pre-broker buffer. Pair with replacing the per-message
+`FOR UPDATE` in `VerifySigned` (which hard-serializes ingest) with a per-agent advisory lock or a
+batched verify over the monotonic sequence. This is the prerequisite for any HA/scale work. (Honors
+D12: JetStream is a **bus** for durability of *delivery*, NOT the system-of-record — the hash-chained
+ledger remains the evidence store; do not use stream retention as evidence.)
+
+**ADR-3 · HA topology = active-passive first (implements PLAT-2b).** Single server holds in-memory
+state (UEBA analyzer, notify dedup set, alert cooldowns); SIEM-5 made baselines durable but **not
+multi-writer-safe** (two servers would last-writer-wins clobber snapshots). Decision: **active-passive
+via a Postgres leader lease + Postgres HA + JetStream**; defer stateless-horizontal. Decide now,
+before more in-memory state accretes — each ticket that adds server memory raises the migration cost.
+
+**ADR-4 · Authz = per-route RBAC tiers now, org multi-tenancy deferred (implements PLAT-3).** Today
+there are exactly two cert-OU roles (agent/operator). Decision: **add read-only-analyst / responder /
+admin tiers on the existing `requireRole` seam**, optionally OIDC-group-backed (ZT-2 already gives a
+real verifier); **defer org tenancy** (XL, ties to the open-core/managed-hub boundary) until there is
+demand. This unblocks the PLAT-1 UI, which needs its authz model fixed before design.
+
+**ADR-5 · Policy = compose, most-restrictive-wins (implements DLP-5b).** `policy.New` takes one
+module and packs *replace* the default — dropping protections (see DLP-5b). Decision: **compile
+default + selected compliance packs + operator custom rules together, and stamp a bundle id/version on
+every Decision.** The combine rule is a most-restrictive-wins lattice **scoped to the data-plane verbs
+that can legitimately compete for the same data event**:
+`ALLOW < ALERT < REDIRECT < ENCRYPT_LOCAL < QUARANTINE_LOCAL < BLOCK` (deterministic tiebreak:
+QUARANTINE outranks ENCRYPT — isolation contains more than in-place encryption). **The process-control
+verbs `DENY_EXEC`/`KILL_PROCESS` are NOT in this lattice and MUST NOT be reachable by pack
+composition** — they are decided on a separate axis by the behavioral rule over *process* events
+(`mapping.go`), so a DLP/compliance pack can never silently escalate to killing a process. Modules that
+emit a process verb and modules that emit a data verb never combine (different event kinds); within an
+axis, most-restrictive wins. This is the blocking fork for the whole DLP/policy lane (per-regulation
+packs, DLP-7 keyword rules, D100 custom rules all need stacking).
+
+**ADR-6 · One canonical device identity (implements IDENT-1).** Three parties key differently today
+— enrollment (agent identity), posture publisher (`OPENSHIELD_SUBJECT` env), access proxy
+(`pseudonym(CN)`) — and ZT-1 attestation would add a fourth (EK-bound). Decision: **canonicalize on
+the enrolled agent identity; provision RoleClient certs with `CN = agent identity`; export ONE shared
+pseudonym derivation** imported by enrollment, the posture publisher, and the access proxy. Must land
+*before* ZT-1 — attestation has to bind to whatever identity is chosen, and this is the ZTNA-vs-toy
+line.
+
+**ADR-7 · Live JWKS via a background refresher (implements ZT-2b).** Static PEM keys mean IdP rotation
+= file distribution + restart. Constraint: an inline fetch on the auth path couples availability to
+the IdP. Decision: **a background JWKS refresher that serves-stale-on-fetch-failure, refreshes
+rate-limited on a `kid` miss, and NEVER fetches on the request path.** Unblocks real Okta/Entra
+deployments.
+
+**ADR-8 · NIPS inline = opt-in TPROXY, not L2 bridge (guides NIPS-1).** DNS is already tap/mirror-only
+(DEPLOY-1). For transparent HTTP: decision is **TPROXY/nftables redirect as an opt-in deploy mode with
+a bypass watchdog; reject L2 bridging.** External-gated (root/`CAP_NET_ADMIN`) like B2 — confirm
+empirically and record. The deliberate D73/D17 egress fail-open MUST survive: inline **fails-to-wire,
+never fails-closed-the-network.** Sequence **NIPS-2 signatures *with* NIPS-1** — without signatures it
+is not an IPS.
+
+**ADR-9 · EDM/OCR placement = server-side first, then a signed index into the sandbox (guides
+DLP-3).** D10/D11 forbid content or fingerprints leaving the endpoint. Decision: **server-side EDM/OCR
+for gateway-visible flows first** (content already transits the gateway's sandbox); for endpoints,
+**ship a signed, bloom/k-anonymized EDM index *down* to be evaluated inside the sandboxed classify
+worker** — content and hashes still never leave. Never upload endpoint content or fingerprints.
+
+**ADR-10 · Unified alert/incident lifecycle schema now (implements SIEM-6b).** `peer_alerts` already
+carries `agent_id` (migration 015) and ack columns (016); what it still lacks as first-class columns is
+**severity, a dedup/correlation key, and a status lifecycle beyond ack** (open→triaged→closed).
+Decision: **one migration adding those columns before any further SIEM detection ships**, so each new
+detector writes the lifecycle fields from day one and does not deepen the backfill debt. (Scope note:
+do NOT re-add `agent_id`/ack — they shipped; verify at HEAD.)
+
+**ADR-11 · Cross-platform = owner starts procurement, builder does observation now (owner decision,
+2026-07-22, implements PLAT-7).** Enforcement is externally gated (Windows EV cert + attested
+minifilter; macOS Endpoint Security entitlement — long-lead owner actions). Decision: **the owner
+kicks off cert/entitlement acquisition now; in parallel the builder lands GOOS build-tag skeletons and
+Windows user-mode *observation* producers (clipboard/print) that need no attestation.** Gating limits
+enforcement, not observation — and most enterprise data lives on Windows, so this gates DLP relevance
+more than any single feature. (T1 `DENY_EXEC` still needs its per-verb owner sign-off before wiring;
+T2 risk-loop and T1 `KILL_PROCESS` are resolved in code.)
+
 ## T4 — the fourth tension: categories that do NOT fit the frozen pipeline
 
 The three tensions above (T1 action-set, T2 risk-loop, T3 DLP-vs-XDR) all live *inside* the
@@ -397,13 +623,12 @@ consume no `Decision`:
 - **VPN** is an encrypted L3/L4 tunnel + client. The ZTNA access proxy gives *application-layer*
   reachability to catalogued HTTP services; it cannot carry arbitrary L3 traffic and is not a VPN.
 
-**Decision required from the owner (do not let the worker guess):** for NAC and VPN, either
-(a) build them as **separately-scoped products beside the pipeline** (they reuse the PKI/identity
-and can *feed* posture/risk into it, but they are not pipeline plugins), or (b) **drop them from
-the category claims** and market ZTNA as the access story. The recommendation is **(b) for now** —
-a credible DLP + ZTNA is worth more than shallow NAC/VPN — with the tickets below (`NAC-*`,
-`VPN-*`) recorded as greenfield bets, not default trajectory. **Until the owner decides, the
-worker must not begin `NAC-*`/`VPN-*`.**
+**RESOLVED by the owner (2026-07-22) — see ADR-0: PARKED.** NAC and VPN are kept **off the builder's
+queue and out of the headline category claims for now**, with `NAC-*`/`VPN-*` staged so either can be
+green-lit later without another audit. The worker must not begin them. If green-lit, they are
+**separately-scoped off-pipeline products** that reuse the PKI/identity and *feed* posture/risk into
+the pipeline — not pipeline plugins. (The earlier recommendation was to drop the claims outright; the
+owner chose to park rather than drop, preserving optionality.)
 
 ---
 
