@@ -90,6 +90,7 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// behind the SAME operator-role gate as /view — read-only, forge-nothing.
 		opRead := requireRole(RoleOperator, s.OperatorReadHandler())
 		mux.Handle("/alerts", opRead)
+		mux.Handle("/alerts/ack", opRead) // SIEM-6: acknowledge an alert (POST), operator-attributed
 		mux.Handle("/search", opRead)
 		mux.Handle("/incidents", opRead)
 		mux.Handle("/overdue", opRead)

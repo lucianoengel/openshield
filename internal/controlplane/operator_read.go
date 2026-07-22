@@ -14,11 +14,29 @@ import (
 // subject is pseudonymous (D23) and there is no content — a peer alert is the
 // control plane's own fleet-aggregate detection (D54), not evidence.
 type PeerAlert struct {
-	SubjectID      string    `json:"subject_id"`
-	RiskScore      float64   `json:"risk_score"`
-	ContextVersion string    `json:"context_version"`
-	AgentID        string    `json:"agent_id"` // originating host of the triggering event (SIEM-2); "" if pre-identity
-	DetectedAt     time.Time `json:"detected_at"`
+	ID             int64      `json:"id"`
+	SubjectID      string     `json:"subject_id"`
+	RiskScore      float64    `json:"risk_score"`
+	Severity       string     `json:"severity"` // triage bucket derived from RiskScore (SIEM-6)
+	ContextVersion string     `json:"context_version"`
+	AgentID        string     `json:"agent_id"` // originating host of the triggering event (SIEM-2); "" if pre-identity
+	DetectedAt     time.Time  `json:"detected_at"`
+	AcknowledgedBy string     `json:"acknowledged_by,omitempty"` // verified operator who triaged it (SIEM-6); "" if unacknowledged
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+}
+
+// peerAlertColumns is the shared SELECT list, so every read of peer_alerts returns the same
+// shape and the scan below stays in lockstep with it.
+const peerAlertColumns = `id, subject_id, risk_score, context_version, agent_id, detected_at, acknowledged_by, acknowledged_at`
+
+// scanPeerAlert scans one row in peerAlertColumns order and derives the severity bucket.
+func scanPeerAlert(rows interface{ Scan(...any) error }) (PeerAlert, error) {
+	var a PeerAlert
+	if err := rows.Scan(&a.ID, &a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt, &a.AcknowledgedBy, &a.AcknowledgedAt); err != nil {
+		return a, err
+	}
+	a.Severity = Severity(a.RiskScore)
+	return a, nil
 }
 
 // RecentPeerAlerts returns the most recent peer alerts, newest first.
@@ -27,16 +45,15 @@ func (s *Server) RecentPeerAlerts(ctx context.Context, limit int) ([]PeerAlert, 
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT subject_id, risk_score, context_version, agent_id, detected_at
-		   FROM peer_alerts ORDER BY detected_at DESC LIMIT $1`, limit)
+		`SELECT `+peerAlertColumns+` FROM peer_alerts ORDER BY detected_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []PeerAlert
 	for rows.Next() {
-		var a PeerAlert
-		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt); err != nil {
+		a, err := scanPeerAlert(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -49,11 +66,13 @@ func (s *Server) RecentPeerAlerts(ctx context.Context, limit int) ([]PeerAlert, 
 // operator input is never concatenated into the query, so the search surface is not a SQL
 // injection vector.
 type AlertFilter struct {
-	SubjectID string    // exact pseudonymous subject, or "" for any
-	MinRisk   float64   // only alerts at or above this risk
-	Since     time.Time // only alerts at or after this time (zero = no lower bound)
-	Until     time.Time // only alerts at or before this time (zero = no upper bound)
-	Limit     int       // max rows (default 100)
+	SubjectID          string    // exact pseudonymous subject, or "" for any
+	MinRisk            float64   // only alerts at or above this risk
+	MinSeverity        string    // only alerts at or above this severity bucket (SIEM-6); "" = no constraint
+	UnacknowledgedOnly bool      // only alerts not yet acknowledged — the actionable queue (SIEM-6)
+	Since              time.Time // only alerts at or after this time (zero = no lower bound)
+	Until              time.Time // only alerts at or before this time (zero = no upper bound)
+	Limit              int       // max rows (default 100)
 }
 
 // SearchPeerAlerts returns peer alerts matching the filter, newest first. It builds the
@@ -68,7 +87,7 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	if limit > maxSearchLimit {
 		limit = maxSearchLimit // SEC-8: hard cap even for a direct (non-HTTP) caller
 	}
-	q := `SELECT subject_id, risk_score, context_version, agent_id, detected_at FROM peer_alerts`
+	q := `SELECT ` + peerAlertColumns + ` FROM peer_alerts`
 	var conds []string
 	var args []any
 	add := func(cond string, val any) {
@@ -78,8 +97,20 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	if f.SubjectID != "" {
 		add("subject_id = $%d", f.SubjectID)
 	}
-	if f.MinRisk > 0 {
-		add("risk_score >= $%d", f.MinRisk)
+	// A min-severity constraint is applied as a risk floor (severity is derived from risk), and
+	// combined with an explicit MinRisk by taking the STRONGER (higher) of the two — asking for
+	// "high" must not widen a stricter MinRisk already set.
+	riskFloor := f.MinRisk
+	if f.MinSeverity != "" {
+		if sf, ok := severityFloor(f.MinSeverity); ok && sf > riskFloor {
+			riskFloor = sf
+		}
+	}
+	if riskFloor > 0 {
+		add("risk_score >= $%d", riskFloor)
+	}
+	if f.UnacknowledgedOnly {
+		conds = append(conds, "acknowledged_at IS NULL")
 	}
 	if !f.Since.IsZero() {
 		add("detected_at >= $%d", f.Since)
@@ -100,8 +131,8 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	defer rows.Close()
 	var out []PeerAlert
 	for rows.Next() {
-		var a PeerAlert
-		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt); err != nil {
+		a, err := scanPeerAlert(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -170,6 +201,8 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		writeJSON(w, events)
 	})
 
+	mux.HandleFunc("/alerts/ack", s.alertAckHandler)
+
 	mux.HandleFunc("/incidents", s.incidentsHandler)
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +270,19 @@ func parseAlertFilter(r *http.Request) (AlertFilter, error) {
 			return AlertFilter{}, fmt.Errorf("until %q is not RFC3339 time", v)
 		}
 		f.Until = t
+	}
+	if v := q.Get("min_severity"); v != "" {
+		if _, ok := severityFloor(v); !ok {
+			return AlertFilter{}, fmt.Errorf("min_severity %q is not one of critical/high/medium/low", v)
+		}
+		f.MinSeverity = v
+	}
+	if v := q.Get("unacknowledged"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return AlertFilter{}, fmt.Errorf("unacknowledged %q is not a boolean", v)
+		}
+		f.UnacknowledgedOnly = b
 	}
 	return f, nil
 }

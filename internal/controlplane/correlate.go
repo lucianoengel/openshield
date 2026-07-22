@@ -31,6 +31,7 @@ type Incident struct {
 	SubjectID  string    `json:"subject_id"`
 	AlertCount int       `json:"alert_count"`
 	MaxRisk    float64   `json:"max_risk"`
+	Severity   string    `json:"severity"`   // triage bucket derived from MaxRisk (SIEM-6)
 	HostCount  int       `json:"host_count"` // distinct agents the alerts came from (SIEM-2)
 	FirstSeen  time.Time `json:"first_seen"`
 	LastSeen   time.Time `json:"last_seen"`
@@ -71,6 +72,7 @@ func (s *Server) Correlate(ctx context.Context, rule CorrelationRule, now time.T
 		if err := rows.Scan(&i.SubjectID, &i.AlertCount, &i.MaxRisk, &i.HostCount, &i.FirstSeen, &i.LastSeen); err != nil {
 			return nil, err
 		}
+		i.Severity = Severity(i.MaxRisk)
 		out = append(out, i)
 	}
 	return out, rows.Err()
