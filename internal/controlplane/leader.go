@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,6 +17,12 @@ const leaderLockKey int64 = 0x051EADE7 // "leader"
 // its held connection to detect a lost lease. Small enough for prompt failover, large enough not to
 // hammer the database.
 const defaultLeaderPoll = 3 * time.Second
+
+// leaderMaxBackoff bounds the retry interval when the database is unreachable during election
+// (R34-6): a transient blip must NOT permanently drop an instance out of contention, so acquire
+// retries with a backoff that grows from the poll interval up to this cap and keeps trying until
+// the DB returns or ctx is done.
+const leaderMaxBackoff = 30 * time.Second
 
 // Leader elects exactly one active control-plane instance via a Postgres SESSION-scoped advisory lock
 // (PLAT-2b/ADR-3). The lock is held on a DEDICATED connection for the whole leadership: at most one
@@ -59,21 +67,52 @@ func (l *Leader) Run(ctx context.Context, onElected func(leaderCtx context.Conte
 // acquire polls pg_try_advisory_lock until this instance wins the lock (returning the connection that
 // now HOLDS it — the caller must keep it until step-down) or ctx is done. A non-winning attempt
 // releases its connection and waits one poll interval so a standby does not busy-loop.
+//
+// R34-6: a TRANSIENT database error (pool acquire or the lock query failing — a momentary Postgres
+// restart or network blip) does NOT abandon the election. It is logged, and acquire keeps retrying
+// with a backoff so the instance rejoins contention the moment the database returns; only ctx being
+// done ends the loop. Previously any such error returned up through Run and dropped the instance out
+// of the election permanently — conn-death failover, the ticket's core claim, silently disabled.
 func (l *Leader) acquire(ctx context.Context) (*pgxpool.Conn, error) {
+	backoff := l.poll
+	fail := func(err error) bool { // true if we should keep retrying
+		if ctx.Err() != nil {
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "openshield-server: leader election retrying after transient DB error: %v\n", err)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(backoff):
+		}
+		if backoff < leaderMaxBackoff {
+			if backoff *= 2; backoff > leaderMaxBackoff {
+				backoff = leaderMaxBackoff
+			}
+		}
+		return true
+	}
 	for ctx.Err() == nil {
 		conn, err := l.pool.Acquire(ctx)
 		if err != nil {
-			return nil, err
+			if fail(err) {
+				continue
+			}
+			return nil, ctx.Err()
 		}
 		var got bool
 		if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, l.key).Scan(&got); err != nil {
 			conn.Release()
-			return nil, err
+			if fail(err) {
+				continue
+			}
+			return nil, ctx.Err()
 		}
 		if got {
 			return conn, nil // elected — hold this connection (and its session lock)
 		}
-		conn.Release() // someone else is leader; retry after the poll interval
+		conn.Release()      // someone else is leader; retry after the poll interval
+		backoff = l.poll    // a clean "not leader" is not a failure — reset the backoff
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

@@ -81,7 +81,7 @@ func main() {
 	// under an active-passive leader lease — exactly one instance is leader; a standby waits and takes
 	// over on leader failure. A single deployed instance becomes leader immediately (unchanged).
 	leader := controlplane.NewLeader(pool)
-	_ = leader.Run(ctx, func(leaderCtx context.Context) {
+	lerr := leader.Run(ctx, func(leaderCtx context.Context) {
 		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
 		// and derived peer alerts older than the window, on a timer. The aggregate is a
 		// derived view, so this is a hard delete (the evidentiary ledger tombstones
@@ -247,6 +247,12 @@ func main() {
 			pcancel()
 		}
 	})
+	// R34-6: surface an UNEXPECTED election exit — Run returns nil-equivalent ctx.Err() on a clean
+	// shutdown, so a non-ctx error here means the election machinery itself gave up (it no longer
+	// does on transient DB errors) and must not be swallowed silently.
+	if lerr != nil && ctx.Err() == nil {
+		fatal("leader election: %v", lerr)
+	}
 	fmt.Fprintln(os.Stderr, "openshield-server: shut down")
 }
 

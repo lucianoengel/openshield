@@ -15,6 +15,10 @@ func NewLeaderForTest(pool *pgxpool.Pool, poll time.Duration) *Leader {
 	return &Leader{pool: pool, key: leaderLockKey, poll: poll}
 }
 
+// LeaderLockKey exposes the advisory-lock key so a failover test can find and terminate the backend
+// that HOLDS leadership (R34-6, test proposal #7).
+func LeaderLockKey() int64 { return leaderLockKey }
+
 // RequireRoleForTest exposes the unexported role gate to the external test
 // package, wrapping a handler that writes 200 on success — so a test can assert
 // the 401/403/200 outcomes directly.
