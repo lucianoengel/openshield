@@ -586,7 +586,7 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   mount-table resolution.
 - **DLP-3 · EDM / IDM / OCR** — P1 · classify (server-side) · XL. Exact-data-match, doc fingerprinting,
   OCR. **Placement fixed by ADR-9** — server-side / signed index into the sandbox; never break D10/D11.
-  **EDM SHIPPED (D193 single-value + D197 record-level/multi-cell):** `internal/classify` fingerprints an operator dataset into a
+  **EDM+IDM SHIPPED (D193 single-value + D197 multi-cell + D198 IDM document-fingerprint):** `internal/classify` fingerprints an operator dataset into a
   k-anonymized bloom index (ships into the sandbox, no raw data leaves), and a new `DETECTOR_TYPE_EDM`
   detector matches a specific sensitive value in a flow across formatting (adjacent-token windows),
   worker-loaded via `OPENSHIELD_EDM_INDEX`. Remaining DLP-3: **multi-cell record correlation** (the

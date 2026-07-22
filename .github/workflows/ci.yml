@@ -102,7 +102,7 @@ jobs:
       - name: NIPS-2 threat-intel engine (IOC match + policy blocks a known-bad flow)
         run: go test -count=1 -v ./internal/nips/ && go test -count=1 -run 'GatewayBlocksKnownBad|GatewayAllowsClean|GatewayNoFeed' -v ./internal/gateway/
       - name: DLP-3 exact-data matching (k-anonymized bloom index, no raw value shipped)
-        run: go test -count=1 -run 'EDM|BuildEDM|RecordEDM' -v ./internal/classify/
+        run: go test -count=1 -run 'EDM|BuildEDM|RecordEDM|IDM' -v ./internal/classify/
       - name: DLP-2 exfil-channel awareness (path→channel; policy escalates on an exfil channel)
         run: go test -count=1 -v ./internal/exfil/ && go test -count=1 -run TestExfilChannelAwarePolicy -v ./internal/policy/
       - name: agent process-boundary invariants

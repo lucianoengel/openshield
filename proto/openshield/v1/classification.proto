@@ -53,6 +53,11 @@ enum DetectorType {
   // format. A distinct type because it is a stronger, differently-routed signal than
   // a format hit, and it must not be conflated with the generic CUSTOM rule.
   DETECTOR_TYPE_EDM = 18;
+  // An INDEXED DOCUMENT MATCH (IDM, DLP-3): the content contains a substantial
+  // portion of a fingerprinted sensitive DOCUMENT (a contract, a source file) —
+  // excerpt/reformat tolerant via k-gram shingles. Distinct from EDM (structured
+  // data) so a policy can route a leaked document differently.
+  DETECTOR_TYPE_IDM = 19;
 }
 
 // LocalMatch holds matched content. Host-only.

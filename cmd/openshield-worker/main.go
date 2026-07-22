@@ -84,6 +84,23 @@ func main() {
 		cls.AddRecordEDM(ridx)
 		fmt.Fprintf(os.Stderr, "openshield-worker: DLP-3 multi-cell EDM active (%d records)\n", ridx.Size())
 	}
+	// DLP-3 IDM: a document-fingerprint index fires when content contains a
+	// substantial portion of a sensitive document (excerpt/reformat tolerant).
+	// k-anonymized (shingle hashes only), safe to ship into the sandbox. Malformed aborts.
+	if dp := os.Getenv("OPENSHIELD_IDM_INDEX"); dp != "" {
+		blob, err := os.ReadFile(dp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: reading IDM index %q: %v\n", dp, err)
+			os.Exit(1)
+		}
+		didx, err := classify.LoadDocumentIndex(blob)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: bad IDM index %q: %v\n", dp, err)
+			os.Exit(1)
+		}
+		cls.AddIDM(didx)
+		fmt.Fprintf(os.Stderr, "openshield-worker: DLP-3 IDM active (%d documents)\n", didx.Size())
+	}
 	c := worker.Classifier(cls)
 	in, out := os.Stdin, os.Stdout
 

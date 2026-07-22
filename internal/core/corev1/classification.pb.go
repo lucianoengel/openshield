@@ -72,6 +72,11 @@ const (
 	// format. A distinct type because it is a stronger, differently-routed signal than
 	// a format hit, and it must not be conflated with the generic CUSTOM rule.
 	DetectorType_DETECTOR_TYPE_EDM DetectorType = 18
+	// An INDEXED DOCUMENT MATCH (IDM, DLP-3): the content contains a substantial
+	// portion of a fingerprinted sensitive DOCUMENT (a contract, a source file) —
+	// excerpt/reformat tolerant via k-gram shingles. Distinct from EDM (structured
+	// data) so a policy can route a leaked document differently.
+	DetectorType_DETECTOR_TYPE_IDM DetectorType = 19
 )
 
 // Enum value maps for DetectorType.
@@ -96,6 +101,7 @@ var (
 		16: "DETECTOR_TYPE_UK_NHS",
 		17: "DETECTOR_TYPE_EIN",
 		18: "DETECTOR_TYPE_EDM",
+		19: "DETECTOR_TYPE_IDM",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":    0,
@@ -117,6 +123,7 @@ var (
 		"DETECTOR_TYPE_UK_NHS":         16,
 		"DETECTOR_TYPE_EIN":            17,
 		"DETECTOR_TYPE_EDM":            18,
+		"DETECTOR_TYPE_IDM":            19,
 	}
 )
 
@@ -366,7 +373,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\x8a\x04\n" +
+	"matchCount*\xa1\x04\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -387,7 +394,8 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x11DETECTOR_TYPE_NPI\x10\x0f\x12\x18\n" +
 	"\x14DETECTOR_TYPE_UK_NHS\x10\x10\x12\x15\n" +
 	"\x11DETECTOR_TYPE_EIN\x10\x11\x12\x15\n" +
-	"\x11DETECTOR_TYPE_EDM\x10\x12B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x11DETECTOR_TYPE_EDM\x10\x12\x12\x15\n" +
+	"\x11DETECTOR_TYPE_IDM\x10\x13B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once
