@@ -223,3 +223,48 @@ func validSIN(s string) bool {
 	}
 	return sum%10 == 0
 }
+
+// --- US National Provider Identifier (NPI) ---
+
+// confNPI: a real check-digit scheme (Luhn over the 80840-prefixed number) plus the leading
+// 1-or-2 constraint — strong, though a bare 10-digit run is common enough (it collides with
+// phone numbers) that this sits a touch below the card Luhn.
+const confNPI = 0.80
+
+type npi struct{}
+
+// Candidate: a bare 10-digit run. The word boundaries keep it out of longer runs; the leading
+// digit and Luhn below do the filtering.
+var npiRe = regexp.MustCompile(`\b\d{10}\b`)
+
+func (npi) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_NPI }
+func (npi) Scan(text []byte) (int, float64) {
+	return countValid(npiRe, text, stripNonDigits, validNPI), confNPI
+}
+
+// validNPI checks the NPI's leading digit (every NPI begins with 1 or 2) AND the Luhn checksum
+// over the number prefixed with the fixed issuer id 80840 (the published NPI check). Both are
+// required: the prefix constraint eliminates most non-NPI 10-digit runs the checksum would pass.
+func validNPI(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	if s[0] != '1' && s[0] != '2' {
+		return false
+	}
+	full := "80840" + s
+	sum := 0
+	double := false
+	for i := len(full) - 1; i >= 0; i-- {
+		d := int(full[i] - '0')
+		if double {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+		double = !double
+	}
+	return sum%10 == 0
+}

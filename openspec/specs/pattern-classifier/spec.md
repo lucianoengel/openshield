@@ -209,3 +209,13 @@ confidence reflecting Luhn-over-a-distinctive-grouping — strong, and near the 
 #### Scenario: A grouped Luhn-valid SIN is detected and look-alikes are not
 - **WHEN** the classifier scans text containing grouped SINs and 9-digit look-alikes
 - **THEN** the grouped Luhn-valid numbers are detected while a Luhn-off-by-one, a grouped-but-invalid number, and a bare ungrouped run read clean
+
+### Requirement: The classifier detects US NPIs by leading digit and Luhn checksum
+The classifier MUST detect a US National Provider Identifier by validating a 10-digit candidate
+against BOTH the leading-digit rule (an NPI begins with 1 or 2) AND the Luhn checksum over the
+80840-prefixed number, and MUST NOT report a 10-digit run that fails either check. An NPI hit MUST
+carry a confidence reflecting a real check-digit scheme over a common-length run.
+
+#### Scenario: A valid NPI is detected and near-misses are not
+- **WHEN** the classifier scans text containing valid NPIs and 10-digit look-alikes
+- **THEN** the valid NPIs are detected while a Luhn-off-by-one and a checksum-valid-but-wrong-leading-digit number read clean
