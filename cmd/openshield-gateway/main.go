@@ -37,6 +37,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
+	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/gateway"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
@@ -256,6 +257,26 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	ap.SetRiskStore(riskStore)
 	postureStore := gateway.NewPostureStore()
 	ap.SetPostureStore(postureStore)
+
+	// OIDC SSO identity (ZT-2): when OPENSHIELD_OIDC_ISSUER is set, the access proxy resolves the
+	// USER identity from a verified bearer token (subject+role from the token), layered on the mTLS
+	// DEVICE cert. Keys are loaded from a directory of <kid>.pem public keys (static-key wiring; live
+	// JWKS discovery is a follow-up). A misconfigured OIDC block aborts startup — a ZT gate must not
+	// come up with a broken identity source.
+	if issuer := os.Getenv("OPENSHIELD_OIDC_ISSUER"); issuer != "" {
+		keys, err := identitypkg.LoadOIDCKeys(os.Getenv("OPENSHIELD_OIDC_KEYS_DIR"))
+		if err != nil {
+			fatal(log, "loading OIDC keys", err)
+		}
+		v, err := identitypkg.NewOIDCVerifier(issuer, os.Getenv("OPENSHIELD_OIDC_AUDIENCE"),
+			env("OPENSHIELD_OIDC_ROLE_CLAIM", "groups"), keys)
+		if err != nil {
+			fatal(log, "OIDC verifier", err)
+		}
+		ap.SetOIDCVerifier(v)
+		log.Info("gateway: OIDC SSO identity enabled — user identity from a verified bearer token (ZT-2)",
+			slog.String("issuer", issuer), slog.Int("keys", len(keys)))
+	}
 
 	// Subscribe to published risk (D91) and device posture (D92) — SIGNED and VERIFIED
 	// (SEC-1). Risk is verified against the control-plane key (OPENSHIELD_RISK_PUBKEY);

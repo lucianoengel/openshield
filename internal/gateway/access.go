@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/gateway/identity"
@@ -37,7 +38,17 @@ type AccessProxy struct {
 	// posture keeps HasPosture=false and a posture-requiring policy denies it (the
 	// D85 tamper-lockout). nil = no posture enrichment.
 	posture *PostureStore
+
+	// oidc, when set, resolves the USER identity from a verified OIDC/JWT bearer token (ZT-2, SSO)
+	// — layered on the mTLS DEVICE certificate the connection already requires. nil = the client
+	// certificate is the identity (the pre-SSO behavior).
+	oidc *identity.OIDCVerifier
 }
+
+// SetOIDCVerifier enables SSO identity: the access handler resolves the request's user identity from
+// a verified OIDC/JWT bearer token (ZT-2). The device certificate is still required at the TLS layer;
+// the token supplies the user's subject+role. When set, a request MUST carry a valid token.
+func (p *AccessProxy) SetOIDCVerifier(v *identity.OIDCVerifier) { p.oidc = v }
 
 // SetPostureStore enables device-posture-aware access (D92): the access handler
 // enriches each request's identity context with the connecting subject's published
@@ -64,15 +75,61 @@ func NewAccessProxy(gw *Gateway, catalog *Catalog, maxBody int64, logger *slog.L
 	return &AccessProxy{gw: gw, catalog: catalog, maxBody: maxBody, logger: logger}
 }
 
+// resolveIdentity determines the request's authenticated identity. When an OIDC verifier is
+// configured (ZT-2, SSO), the USER identity comes from a verified bearer token — required and
+// verified, layered on the mTLS device cert; otherwise the client CERTIFICATE is the identity. It
+// returns an HTTP status to send on failure. Error messages are generic (no token/verifier detail).
+func (p *AccessProxy) resolveIdentity(r *http.Request) (*identity.Identity, int, error) {
+	if p.oidc != nil {
+		tok := bearerToken(r.Header.Get("Authorization"))
+		if tok == "" {
+			return nil, http.StatusUnauthorized, errNoBearer
+		}
+		id, err := p.oidc.Verify(tok)
+		if err != nil {
+			return nil, http.StatusForbidden, errBadBearer
+		}
+		return id, 0, nil
+	}
+	id, err := identity.FromClientCert(r.TLS.PeerCertificates[0])
+	if err != nil {
+		return nil, http.StatusForbidden, errBadClientID
+	}
+	return id, 0, nil
+}
+
+var (
+	errNoBearer    = errAccess("bearer token required")
+	errBadBearer   = errAccess("invalid bearer token")
+	errBadClientID = errAccess("not a valid client identity")
+)
+
+type errAccess string
+
+func (e errAccess) Error() string { return string(e) }
+
+// bearerToken extracts the token from an "Authorization: Bearer <token>" header, or "" if absent or
+// not a bearer scheme (case-insensitive scheme, exactly one space).
+func bearerToken(authz string) string {
+	const prefix = "bearer "
+	if len(authz) <= len(prefix) {
+		return ""
+	}
+	if !strings.EqualFold(authz[:len(prefix)], prefix) {
+		return ""
+	}
+	return strings.TrimSpace(authz[len(prefix):])
+}
+
 func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Authenticate: a verified client certificate is required (D86).
+	// Authenticate: a verified client (device) certificate is ALWAYS required at the TLS layer (D86).
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		http.Error(w, "client certificate required", http.StatusUnauthorized)
 		return
 	}
-	id, err := identity.FromClientCert(r.TLS.PeerCertificates[0])
+	id, status, err := p.resolveIdentity(r)
 	if err != nil {
-		http.Error(w, "not a valid client identity", http.StatusForbidden)
+		http.Error(w, err.Error(), status)
 		return
 	}
 

@@ -5,9 +5,14 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -256,4 +261,40 @@ func roleFromClaim(signing []byte, claim string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("identity: OIDC token role claim %q is empty", claim)
+}
+
+// LoadOIDCKeys loads a directory of PEM public keys into a kid→key map for the OIDC verifier (ZT-2).
+// Each file "<kid>.pem" is a PKIX public key (RSA or Ed25519); the filename (minus .pem) is the kid
+// a JWT header must reference. This is the static-key wiring; LIVE JWKS discovery (fetching + caching
+// the issuer's rotating keys) is a conscious follow-up — the gateway is a chokepoint, so an outbound
+// JWKS fetch there wants its own timeout/failure posture, not a silent dependency.
+func LoadOIDCKeys(dir string) (map[string]crypto.PublicKey, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	keys := map[string]crypto.PublicKey{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".pem") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		blk, _ := pem.Decode(b)
+		if blk == nil {
+			return nil, fmt.Errorf("identity: %s is not PEM", name)
+		}
+		pub, err := x509.ParsePKIXPublicKey(blk.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("identity: %s: %w", name, err)
+		}
+		keys[strings.TrimSuffix(name, ".pem")] = pub
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("identity: no .pem keys in %s", dir)
+	}
+	return keys, nil
 }
