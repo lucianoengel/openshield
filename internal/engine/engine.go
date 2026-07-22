@@ -41,9 +41,20 @@ type classifyStage struct{ w classifier }
 func (classifyStage) Name() string { return "classify" }
 
 func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, error) {
-	path := s.Event.GetFilesystem().GetResolvedPath()
+	fs := s.Event.GetFilesystem()
+	if fs == nil {
+		// A non-file event (a DNS query, an HTTP request, a process exec, a USB insert)
+		// carries no file CONTENT to classify — the policy decides on its metadata (the
+		// queried name, the exec path) via buildInput. Hand the policy an EMPTY
+		// classification and continue; the content worker is not called. This is NOT a
+		// skipped scan masquerading as "found nothing": there is genuinely no content for
+		// this event kind, and a file event that reaches classify must still have a path.
+		s.Classification = &corev1.LocalClassification{EventId: s.Event.GetEventId()}
+		return core.Continue(), nil
+	}
+	path := fs.GetResolvedPath()
 	if path == "" {
-		return core.Outcome{}, fmt.Errorf("classify: event carries no resolvable path")
+		return core.Outcome{}, fmt.Errorf("classify: file event carries no resolvable path")
 	}
 	resp, err := c.w.Classify(ctx, &corev1.ClassifyRequest{
 		RequestId: s.Event.GetEventId(), EventId: s.Event.GetEventId(),

@@ -145,6 +145,64 @@ func (l *recLedger) Verify(context.Context, ed25519.PublicKey) (core.VerifyResul
 }
 func (l *recLedger) Close() error { return nil }
 
+func netEvent(id, host string) *corev1.Event {
+	return &corev1.Event{
+		EventId: id, Purpose: corev1.Purpose_PURPOSE_DLP, Kind: corev1.EventKind_EVENT_KIND_DNS_QUERY,
+		Target: &corev1.Event_Network{Network: &corev1.NetworkSubject{
+			SniHost: host, Protocol: "udp", DstPort: 53}},
+	}
+}
+
+// A network event (DNS) has no file CONTENT — the classify stage must SKIP it, handing the
+// policy an empty classification and letting it decide on the metadata (the queried name),
+// NOT error on the missing file path and NOT call the content worker. Before the fix a DNS
+// event errored at classify ("event carries no resolvable path") and never reached
+// policy/decide/audit — so the D133 wiring produced events the engine rejected.
+func TestNetworkEventSkipsClassifyAndDecides(t *testing.T) {
+	// A worker that FAILS if called — a content-free network event must not invoke it.
+	fw := fakeWorker{err: errors.New("worker must not be called for a content-free network event")}
+	var sawEmptyClassification bool
+	capture := stageFunc("policy", func(_ context.Context, s *core.State) (core.Outcome, error) {
+		sawEmptyClassification = s.Classification != nil && len(s.Classification.GetMatches()) == 0
+		return core.Decided(&corev1.Decision{
+			DecisionId: "d", EventId: s.Event.GetEventId(), Action: corev1.Action_ACTION_ALERT}), nil
+	})
+	led := &recLedger{}
+	eng := engine.New(fw, capture, led, nil, time.Second)
+	dec, err := eng.Process(context.Background(), netEvent("dns1", "secret.exfil.example"))
+	if err != nil {
+		t.Fatalf("network event errored in the pipeline: %v", err)
+	}
+	if dec.GetAction() != corev1.Action_ACTION_ALERT {
+		t.Errorf("no decision for the network event: %v", dec)
+	}
+	if !sawEmptyClassification {
+		t.Error("classify stage did not hand the policy an empty (content-free) classification")
+	}
+	if len(led.entries) == 0 {
+		t.Error("no audit entry for the network event — it never reached the ledger")
+	}
+}
+
+// A FILE event that reaches classify with an empty path is a real bug, not a content-free
+// event — it must still error, never be waved through as "nothing to classify". This pins the
+// content-free skip to genuinely non-file events, so the skip cannot mask a broken file event.
+func TestFileEventWithoutPathStillErrors(t *testing.T) {
+	capture := stageFunc("policy", func(_ context.Context, s *core.State) (core.Outcome, error) {
+		return core.Decided(&corev1.Decision{DecisionId: "d", EventId: s.Event.GetEventId(), Action: corev1.Action_ACTION_ALERT}), nil
+	})
+	eng := engine.New(fakeWorker{}, capture, &recLedger{}, nil, time.Second)
+	// A file event whose resolved path is empty.
+	ev := &corev1.Event{
+		EventId: "f0", Kind: corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
+		Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
+			Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: ""}}},
+	}
+	if _, err := eng.Process(context.Background(), ev); err == nil {
+		t.Fatal("a file event with an empty path must error, not be skipped as content-free")
+	}
+}
+
 // The classification built from worker hits carries NO matched text (D29).
 func TestNoContentInPipeline(t *testing.T) {
 	fw := fakeWorker{hits: []*corev1.DetectorHit{
