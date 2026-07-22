@@ -108,6 +108,10 @@ func (f *Feed) matchIP(dstIP string) string {
 	return ""
 }
 
+// minURIIndicator is the shortest a URI IOC may be (R34-13): substring matching on a token shorter
+// than this (e.g. "/") flags nearly all traffic, so such an indicator is rejected at parse time.
+const minURIIndicator = 4
+
 func (f *Feed) matchURI(path string) string {
 	if path == "" {
 		return ""
@@ -163,6 +167,12 @@ func ParseFeed(r io.Reader) (*Feed, error) {
 			}
 			f.cidrs = append(f.cidrs, n)
 		case "uri":
+			// R34-13: a URI IOC is matched by substring, so a degenerate short token like "/"
+			// would match essentially every HTTP path — a feed typo that silently flags all
+			// traffic. Require a discriminating minimum length; a real path/URI IOC is far longer.
+			if len(indicator) < minURIIndicator {
+				return nil, fmt.Errorf("nips: line %d: uri indicator %q too short (min %d chars) — it would match nearly every flow", line, indicator, minURIIndicator)
+			}
 			f.uris = append(f.uris, indicator)
 		default:
 			return nil, fmt.Errorf("nips: line %d: unknown kind %q (want domain|ip|cidr|uri)", line, kind)

@@ -16,7 +16,10 @@ import (
 // require a THRESHOLD of distinct cells of the SAME record to co-occur before firing.
 // Coincidentally matching several specific fields of one record is astronomically
 // unlikely, so this is far lower false-positive than single-value EDM. It stores
-// only hashes and integer ids — never raw values (ADR-9, k-anonymized).
+// only hashes and integer ids — never raw values in cleartext (ADR-9). As with EDMIndex,
+// the hashes are UNSALTED: this stops bulk cleartext exfiltration of the dataset, but a
+// low-entropy cell value remains confirmable by an offline guess-and-hash membership probe
+// (R34-13) — documented honestly, not called "anonymized".
 type RecordIndex struct {
 	cells       map[uint64][]uint32 // cell fingerprint -> record ids containing it
 	recordCells map[uint32]int      // record id -> its distinct-cell count

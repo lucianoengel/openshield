@@ -138,8 +138,11 @@ func EnsureAppLogin(ctx context.Context, pool *pgxpool.Pool, role, password stri
 		return nil
 	}
 	// Existing role: ensure it can log in with the configured password and holds the membership,
-	// but never escalate it (no SUPERUSER/CREATEROLE/ownership is ever granted here).
-	if _, err := pool.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s LOGIN PASSWORD %s`, role, lit)); err != nil {
+	// and ACTIVELY re-assert that it is unprivileged (R34-13). Merely not granting SUPERUSER/CREATEROLE
+	// here leaves a role that acquired them elsewhere (a prior version, a manual GRANT) still
+	// privileged; NOSUPERUSER NOCREATEROLE NOCREATEDB NOBYPASSRLS strips them every startup so the app
+	// login can never be more than a writer.
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOBYPASSRLS PASSWORD %s`, role, lit)); err != nil {
 		return fmt.Errorf("altering app role: %w", err)
 	}
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`GRANT openshield_writer TO %s`, role)); err != nil {

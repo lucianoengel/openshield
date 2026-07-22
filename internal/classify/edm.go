@@ -11,11 +11,19 @@ import (
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
-// EDMIndex is a k-anonymized fingerprint index of an operator's sensitive values:
-// a bloom filter that stores ONLY hashes, never the raw values, with a bounded,
-// computable false-positive rate. That is what lets the index ship into the
-// sandboxed worker (or an endpoint) without the sensitive dataset leaving the
-// operator (ADR-9, D10/D11).
+// EDMIndex is a fingerprint index of an operator's sensitive values: a bloom filter
+// that stores ONLY hashes, never the raw values, with a bounded, computable
+// false-positive rate. That is what lets the index ship into the sandboxed worker (or
+// an endpoint) without the sensitive dataset leaving in cleartext (ADR-9, D10/D11).
+//
+// PRIVACY LIMIT (R34-13, be honest): the hashes are UNSALTED, so this is NOT a secrecy
+// guarantee for LOW-ENTROPY values. An adversary who obtains the index can confirm
+// membership of a guessed value by hashing it and probing the filter (an offline
+// dictionary attack) — so a 9-digit SSN or a short code is recoverable, a high-entropy
+// secret is not. The index protects against BULK exfiltration of the dataset in
+// cleartext, not against confirming a specific guessed value. A future per-index salt
+// (shared with the matcher) would close the membership-oracle for low-entropy values;
+// until then this is documented, not silently called "anonymized".
 type EDMIndex struct {
 	bits []uint64 // bit array, m = len(bits)*64
 	m    uint64   // number of bits
