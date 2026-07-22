@@ -123,10 +123,63 @@ func (s *Server) EnablePeerUEBA(threshold float64, cooldown time.Duration) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA version base reservation failed (%v) — starting at 0\n", err)
 	}
-	s.analyzer = peerueba.New(peerueba.WithStartVersion(base))
+	// SIEM-5: reload the persisted baseline so a restart resumes the warm baseline instead of
+	// cold-starting (which would blind the fleet to peer anomalies for a decay half-life).
+	// Best-effort — a load failure logs and starts cold; failing to ENABLE detection because a
+	// baseline couldn't load would be the worse outcome. Loaded before the analyzer observes any
+	// event (EnablePeerUEBA runs at startup), so there is no race with the ingest stream.
+	opts := []peerueba.Option{peerueba.WithStartVersion(base)}
+	if states, lerr := s.loadBaselines(context.Background()); lerr != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA baseline load failed (%v) — starting cold\n", lerr)
+	} else if len(states) > 0 {
+		opts = append(opts, peerueba.WithSnapshot(states))
+		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA resumed %d persisted baseline(s)\n", len(states))
+	}
+	s.analyzer = peerueba.New(opts...)
 	s.peerThreshold = threshold
 	s.peerCooldown = cooldown
 	s.peerLastAlert = map[string]time.Time{}
+}
+
+// PersistBaselines snapshots the peer-UEBA baseline and UPSERTs it into ueba_baselines (SIEM-5),
+// so a restart can resume it. A no-op when peer-UEBA is disabled. Idempotent per subject
+// (ON CONFLICT). Best-effort at the call site: the caller (a periodic loop / shutdown) logs an
+// error and continues — a failed persist only shortens the next restart's warm window.
+func (s *Server) PersistBaselines(ctx context.Context) error {
+	if s.analyzer == nil {
+		return nil
+	}
+	states := s.analyzer.Snapshot()
+	for _, st := range states {
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO ueba_baselines (subject, count, last_seen, updated_at)
+			 VALUES ($1, $2, $3, now())
+			 ON CONFLICT (subject) DO UPDATE
+			   SET count = EXCLUDED.count, last_seen = EXCLUDED.last_seen, updated_at = now()`,
+			st.Subject, st.Count, st.Last); err != nil {
+			return fmt.Errorf("persisting baseline for a subject: %w", err)
+		}
+	}
+	return nil
+}
+
+// loadBaselines reads the persisted peer-UEBA baseline for restore (SIEM-5). Returns an empty
+// slice (not an error) when the table is empty — a cold fleet.
+func (s *Server) loadBaselines(ctx context.Context) ([]peerueba.SubjectState, error) {
+	rows, err := s.pool.Query(ctx, `SELECT subject, count, last_seen FROM ueba_baselines`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []peerueba.SubjectState
+	for rows.Next() {
+		var st peerueba.SubjectState
+		if err := rows.Scan(&st.Subject, &st.Count, &st.Last); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
 }
 
 // CurrentContextVersion returns the peer-UEBA context version for a subject, or "" when
@@ -148,6 +201,19 @@ func (s *Server) ObserveForTest(subject string) {
 	if s.analyzer != nil {
 		s.analyzer.Observe(subject)
 	}
+}
+
+// PeerRiskForTest returns a subject's current peer-relative risk, or -1 when peer-UEBA is
+// disabled or the subject has no baseline (a test seam for SIEM-5's restart survival).
+func PeerRiskForTest(s *Server, subject string) float64 {
+	if s.analyzer == nil {
+		return -1
+	}
+	c := s.analyzer.ContextFor(subject)
+	if c == nil {
+		return -1
+	}
+	return c.RiskScore
 }
 
 // versionBlockSize is how much context-version space each startup reserves. Large enough that

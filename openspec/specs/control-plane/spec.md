@@ -383,3 +383,14 @@ configured, the webhook MUST send no signature header and the body MUST be byte-
 #### Scenario: A signed body verifies and a tampered body is rejected
 - **WHEN** a webhook is configured with a secret and posts a notification
 - **THEN** the request carries an `X-Openshield-Signature` header over the body that verifies with the same secret, while a tampered body or a wrong secret fails verification
+
+### Requirement: Peer-UEBA baselines survive a restart
+The control plane MUST persist the peer-UEBA baseline and reload it when peer-UEBA is enabled, so a
+restart or deploy does not cold-start analytics and blind the fleet to peer anomalies for a decay
+window. Persistence MUST be best-effort: a failure to load a persisted baseline MUST log and start
+cold rather than block enabling detection, and persistence MUST NOT break or stall ingest.
+Re-persisting MUST be idempotent per subject.
+
+#### Scenario: A subject's baseline survives a simulated restart
+- **WHEN** subjects are observed and baselines are persisted, then a fresh control-plane instance enables peer-UEBA
+- **THEN** the fresh instance loads the persisted baseline so a subject's peer risk is preserved, while an instance with no persisted baseline starts cold with no baseline

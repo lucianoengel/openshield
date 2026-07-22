@@ -133,6 +133,7 @@ func main() {
 	// Server-side peer-UEBA (D54), OFF unless a threshold is configured — enabling
 	// it is the operator's D23 consent/DPIA decision, never a default. It observes
 	// the verified fleet stream and records peer alerts; it does not control agents.
+	peerUEBAEnabled := false
 	if v := os.Getenv("OPENSHIELD_PEER_UEBA_THRESHOLD"); v != "" {
 		threshold, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -145,7 +146,18 @@ func main() {
 			}
 		}
 		srv.EnablePeerUEBA(threshold, cooldown)
+		peerUEBAEnabled = true
 		fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA enabled (threshold %.2f, cooldown %s)\n", threshold, cooldown)
+
+		// SIEM-5: persist the baseline periodically so a restart resumes it (EnablePeerUEBA
+		// reloads it). Best-effort — a failed persist only shortens the next restart's warm
+		// window, never breaks ingest. A final persist on shutdown runs after Run returns.
+		persistInterval := envDuration("OPENSHIELD_UEBA_PERSIST_INTERVAL", 5*time.Minute)
+		go retain.Loop(ctx, persistInterval, func(ctx context.Context) {
+			if err := srv.PersistBaselines(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA baseline persist failed: %v\n", err)
+			}
+		})
 	}
 
 	// Mutual TLS on the agent-facing channels (D55), OFF unless configured —
@@ -219,6 +231,15 @@ func main() {
 	fmt.Fprintf(os.Stderr, "openshield-server: subscribing to telemetry on %s\n", natsURL)
 	if err := srv.Run(ctx, natsURL); err != nil && ctx.Err() == nil {
 		fatal("control plane: %v", err)
+	}
+	// SIEM-5: a final baseline persist on shutdown, so a clean restart resumes the freshest
+	// baseline. ctx is already cancelled here (shutdown), so use a short fresh deadline.
+	if peerUEBAEnabled {
+		pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := srv.PersistBaselines(pctx); err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-server: final peer-UEBA baseline persist failed: %v\n", err)
+		}
+		pcancel()
 	}
 	fmt.Fprintln(os.Stderr, "openshield-server: shut down")
 }

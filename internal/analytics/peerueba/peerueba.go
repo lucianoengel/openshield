@@ -65,6 +65,32 @@ func WithClock(f func() time.Time) Option { return func(a *Analyzer) { a.now = f
 // WithHalfLife overrides the decay half-life (default DefaultHalfLife).
 func WithHalfLife(d time.Duration) Option { return func(a *Analyzer) { a.halfLife = d } }
 
+// SubjectState is a subject's persisted baseline (SIEM-5): its decayed activity Count as of
+// Last. It is the COMPLETE representation an analyzer needs to resume — decay is computed
+// forward from Last at query time, so storing and restoring this pair verbatim reproduces the
+// exact risk. Serializable for the control plane to persist across restarts.
+type SubjectState struct {
+	Subject string
+	Count   float64
+	Last    time.Time
+}
+
+// WithSnapshot seeds a new analyzer with a previously-taken Snapshot (SIEM-5), so a restart
+// resumes the warm baseline instead of cold-starting (which would blind the fleet to peer
+// anomalies for a decay half-life). The stored count/last are restored VERBATIM — no decay is
+// applied here, because ContextFor decays forward from Last at query time; applying it again
+// would double-count. An empty snapshot yields a cold analyzer.
+func WithSnapshot(states []SubjectState) Option {
+	return func(a *Analyzer) {
+		for _, s := range states {
+			if s.Subject == "" {
+				continue
+			}
+			a.subjects[s.Subject] = &entry{count: s.Count, last: s.Last}
+		}
+	}
+}
+
 // WithStartVersion seeds the context-version counter (SEC-10). The version resets to 0 on a
 // process restart, so without a persisted base "ctx-0" from THIS run would collide with
 // "ctx-0" from a PRIOR run — two different populations sharing one context_version, breaking
@@ -166,6 +192,20 @@ func (a *Analyzer) ContextFor(subjectID string) *core.Context {
 		RiskScore:    risk,
 		HasRiskScore: true,
 	}
+}
+
+// Snapshot returns the analyzer's per-subject baseline for persistence (SIEM-5). It copies the
+// stored {count, last} verbatim under the lock — NOT decayed to now — so restoring it reproduces
+// the exact query-time risk (decay is applied at query time from Last). The order is
+// unspecified.
+func (a *Analyzer) Snapshot() []SubjectState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]SubjectState, 0, len(a.subjects))
+	for id, e := range a.subjects {
+		out = append(out, SubjectState{Subject: id, Count: e.count, Last: e.last})
+	}
+	return out
 }
 
 // meanStd of a slice of counts.
