@@ -501,6 +501,11 @@ func (l *Ledger) Purge(ctx context.Context, now time.Time) (int64, error) {
 			continue
 		}
 		cutoff := now.Add(-maxAge)
+		// SEC-5: never tombstone an entry whose subject is under an ACTIVE legal hold
+		// (HON-2's registry), even if its class is routine and its age is past. An entry's
+		// retention_class is immutable (migration 010), so a hold placed AFTER the entry was
+		// written cannot change its class — the registry is the only way to protect it. Age
+		// enforcement stays here; the hold is an override.
 		tag, err := l.pool.Exec(ctx, `
 			UPDATE audit_entries
 			SET tombstoned_at = $1,
@@ -510,7 +515,8 @@ func (l *Ledger) Purge(ctx context.Context, now time.Time) (int64, error) {
 			    outcome_kind = '', outcome_stage = ''
 			WHERE tombstoned_at IS NULL
 			  AND retention_class = $2
-			  AND appended_at < $3`,
+			  AND appended_at < $3
+			  AND subject_id NOT IN (SELECT subject_id FROM legal_holds WHERE released_at IS NULL)`,
 			now.UTC(), int32(class), cutoff.UTC())
 		if err != nil {
 			return total, fmt.Errorf("%w: purge class %d: %v", core.ErrLedgerUnavailable, class, err)

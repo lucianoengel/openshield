@@ -1225,3 +1225,58 @@ func TestAnchoringMovesCompleteness(t *testing.T) {
 		t.Error("reported Anchored without the witness pub — completeness must be UNVERIFIED then")
 	}
 }
+
+// SEC-5: a legal hold placed in the registry (HON-2) protects a subject's evidence from
+// purge EVEN when the entry was written with a routine retention class — because the class is
+// immutable (migration 010), the registry is the only way a later-opened investigation can
+// hold already-written evidence. A subject NOT under hold is still purged.
+func TestPurgeRespectsRegistryLegalHold(t *testing.T) {
+	l, _ := openLedger(t)
+	ctx := context.Background()
+	pool, _ := pgxpool.New(ctx, dsn())
+	defer pool.Close()
+
+	// Two ROUTINE (standard-class) entries — nothing marks them as investigation at write time.
+	for _, subj := range []string{"held_later", "not_held"} {
+		if err := l.Append(ctx, &core.Entry{AppendedAt: time.Now().UTC(), SubjectID: subj,
+			Retention: core.RetentionStandard, Decision: entry(subj).Decision}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A legal hold is placed on one subject AFTER the entry was written (the HON-2 registry).
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO legal_holds (subject_id, held_by) VALUES ('held_later','operator:alice')`); err != nil {
+		t.Fatal(err)
+	}
+	// Both are past the standard age.
+	bypassAppendOnly(t, pool, `UPDATE audit_entries SET appended_at = now() - interval '400 days'`)
+
+	n, err := l.Purge(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("purged %d, want 1 — only not_held should be tombstoned; the held subject is protected", n)
+	}
+	// The held subject's content survives.
+	var survivor string
+	if err := pool.QueryRow(ctx,
+		`SELECT subject_id FROM audit_entries WHERE tombstoned_at IS NULL AND subject_id <> ''`).Scan(&survivor); err != nil {
+		t.Fatal(err)
+	}
+	if survivor != "held_later" {
+		t.Errorf("survivor = %q, want held_later — a registry legal hold must override routine purge (SEC-5)", survivor)
+	}
+
+	// Releasing the hold lets a subsequent purge tombstone it.
+	if _, err := pool.Exec(ctx, `UPDATE legal_holds SET released_at = now() WHERE subject_id = 'held_later'`); err != nil {
+		t.Fatal(err)
+	}
+	n2, err := l.Purge(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n2 != 1 {
+		t.Errorf("after release, purged %d, want 1 — a released hold no longer protects", n2)
+	}
+}
