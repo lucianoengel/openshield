@@ -201,7 +201,13 @@ func (e *Engine) enforce(ctx context.Context, ev *corev1.Event, dec *corev1.Deci
 // enforcer received "" and self-refused — HIPS containment could never act (HIPS-5).
 func enforceTarget(ev *corev1.Event) string {
 	if p := ev.GetProcess(); p != nil {
-		return strconv.FormatInt(int64(p.GetPid()), 10)
+		pid := strconv.FormatInt(int64(p.GetPid()), 10)
+		// Carry the observation-time start-time on the target so the kill enforcer can revalidate the
+		// process identity and spare a recycled pid (HIPS-7). Bare pid when it is unknown (0).
+		if p.GetStartTicks() > 0 {
+			return pid + ":" + strconv.FormatUint(p.GetStartTicks(), 10)
+		}
+		return pid
 	}
 	return ev.GetFilesystem().GetResolvedPath()
 }

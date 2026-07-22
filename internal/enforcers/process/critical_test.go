@@ -30,7 +30,7 @@ func TestKillEnforcerCriticalIdentityIsTrusted(t *testing.T) {
 	}
 	killed := -1
 	enf := process.NewKillEnforcerForTest(999,
-		func(pid int) error { killed = pid; return nil },
+		func(pid int, _ uint64) error { killed = pid; return nil },
 		func(pid int) (process.ProcIdentity, error) { return ids[pid], nil })
 
 	dec := &corev1.Decision{Action: corev1.Action_ACTION_KILL_PROCESS}
@@ -61,7 +61,7 @@ func TestKillEnforcerCriticalIdentityIsTrusted(t *testing.T) {
 // The pid≤1 and self-pid guards are unchanged and independent of identity.
 func TestKillEnforcerRefusesSelfAndInit(t *testing.T) {
 	enf := process.NewKillEnforcerForTest(999,
-		func(int) error { t.Fatal("kill must not be invoked for a refused pid"); return nil },
+		func(int, uint64) error { t.Fatal("kill must not be invoked for a refused pid"); return nil },
 		func(int) (process.ProcIdentity, error) { return process.ProcIdentity{}, nil })
 	dec := &corev1.Decision{Action: corev1.Action_ACTION_KILL_PROCESS}
 	for _, pid := range []string{"1", "0", "999"} {

@@ -124,4 +124,8 @@ message ProcessSubject {
   string exec_path = 3;     // the executable being run
   repeated string args = 4; // the argument vector (metadata for lineage/LOLBin rules)
   string parent_path = 5;   // the parent process's executable (for lineage rules)
+  // The process start-time in clock ticks (/proc/<pid>/stat field 22), captured at OBSERVATION.
+  // With the pid it identifies the specific process instance, so an enforcement can revalidate at
+  // kill time and spare a recycled pid (HIPS-7). 0 = unknown (the process had exited at capture).
+  uint64 start_ticks = 6;
 }

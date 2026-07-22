@@ -774,12 +774,16 @@ func (*Event_Process) isEvent_Target() {}
 // enforcement target: what a KILL_PROCESS enforcer acts on, the process analogue of a
 // file path or a flow_id.
 type ProcessSubject struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Pid           int32                  `protobuf:"varint,1,opt,name=pid,proto3" json:"pid,omitempty"`
-	Ppid          int32                  `protobuf:"varint,2,opt,name=ppid,proto3" json:"ppid,omitempty"`
-	ExecPath      string                 `protobuf:"bytes,3,opt,name=exec_path,json=execPath,proto3" json:"exec_path,omitempty"`       // the executable being run
-	Args          []string               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                               // the argument vector (metadata for lineage/LOLBin rules)
-	ParentPath    string                 `protobuf:"bytes,5,opt,name=parent_path,json=parentPath,proto3" json:"parent_path,omitempty"` // the parent process's executable (for lineage rules)
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Pid        int32                  `protobuf:"varint,1,opt,name=pid,proto3" json:"pid,omitempty"`
+	Ppid       int32                  `protobuf:"varint,2,opt,name=ppid,proto3" json:"ppid,omitempty"`
+	ExecPath   string                 `protobuf:"bytes,3,opt,name=exec_path,json=execPath,proto3" json:"exec_path,omitempty"`       // the executable being run
+	Args       []string               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                               // the argument vector (metadata for lineage/LOLBin rules)
+	ParentPath string                 `protobuf:"bytes,5,opt,name=parent_path,json=parentPath,proto3" json:"parent_path,omitempty"` // the parent process's executable (for lineage rules)
+	// The process start-time in clock ticks (/proc/<pid>/stat field 22), captured at OBSERVATION.
+	// With the pid it identifies the specific process instance, so an enforcement can revalidate at
+	// kill time and spare a recycled pid (HIPS-7). 0 = unknown (the process had exited at capture).
+	StartTicks    uint64 `protobuf:"varint,6,opt,name=start_ticks,json=startTicks,proto3" json:"start_ticks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -849,6 +853,13 @@ func (x *ProcessSubject) GetParentPath() string {
 	return ""
 }
 
+func (x *ProcessSubject) GetStartTicks() uint64 {
+	if x != nil {
+		return x.StartTicks
+	}
+	return 0
+}
+
 var File_openshield_v1_event_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_event_proto_rawDesc = "" +
@@ -902,14 +913,16 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	" \x01(\v2\x19.openshield.v1.UsbSubjectH\x00R\x03usb\x129\n" +
 	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetwork\x129\n" +
 	"\aprocess\x18\f \x01(\v2\x1d.openshield.v1.ProcessSubjectH\x00R\aprocessB\b\n" +
-	"\x06target\"\x88\x01\n" +
+	"\x06target\"\xa9\x01\n" +
 	"\x0eProcessSubject\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x12\n" +
 	"\x04ppid\x18\x02 \x01(\x05R\x04ppid\x12\x1b\n" +
 	"\texec_path\x18\x03 \x01(\tR\bexecPath\x12\x12\n" +
 	"\x04args\x18\x04 \x03(\tR\x04args\x12\x1f\n" +
 	"\vparent_path\x18\x05 \x01(\tR\n" +
-	"parentPath*k\n" +
+	"parentPath\x12\x1f\n" +
+	"\vstart_ticks\x18\x06 \x01(\x04R\n" +
+	"startTicks*k\n" +
 	"\aPurpose\x12\x17\n" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +

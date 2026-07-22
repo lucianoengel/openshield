@@ -66,8 +66,8 @@ func isCriticalProcess(id ProcIdentity) bool {
 // KillEnforcer carries out KILL_PROCESS by terminating a process by pid.
 type KillEnforcer struct {
 	selfPID  int
-	kill     func(pid int) error               // injectable; defaults to the platform (pid-reuse-safe) kill
-	identify func(pid int) (ProcIdentity, error) // trusted identity for the critical-process guard; injectable
+	kill     func(pid int, startTicks uint64) error // injectable; the platform kill, which revalidates startTicks (HIPS-7)
+	identify func(pid int) (ProcIdentity, error)     // trusted identity for the critical-process guard; injectable
 }
 
 // NewKillEnforcer builds the enforcer with the platform's real kill and this process's pid
@@ -85,13 +85,21 @@ func (*KillEnforcer) Enforce(context.Context, *corev1.Decision) error {
 	return fmt.Errorf("process: KILL_PROCESS needs a pid target")
 }
 
-// EnforceTarget kills the process named by target (a pid string). It fail-SAFES: pid ≤ 1
-// (kernel/init) and the enforcer's own pid are REFUSED, and a non-numeric target is an
-// error — a process-killer must never fire on an unparseable or dangerous target.
+// EnforceTarget kills the process named by target — a pid, optionally with the observation-time start
+// identity as "pid:start_ticks" (HIPS-7). It fail-SAFES: pid ≤ 1 (kernel/init) and the enforcer's own
+// pid are REFUSED, and a malformed target is an error — a process-killer must never fire on an
+// unparseable or dangerous target.
 func (k *KillEnforcer) EnforceTarget(_ context.Context, _ *corev1.Decision, target string) error {
-	pid, err := strconv.Atoi(target)
+	pidStr, ticksStr, hasTicks := strings.Cut(target, ":")
+	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
 		return fmt.Errorf("process: KILL_PROCESS target %q is not a pid: %w", target, err)
+	}
+	var startTicks uint64
+	if hasTicks {
+		if startTicks, err = strconv.ParseUint(ticksStr, 10, 64); err != nil {
+			return fmt.Errorf("process: KILL_PROCESS target %q has a bad start-ticks: %w", target, err)
+		}
 	}
 	if pid <= 1 {
 		return fmt.Errorf("process: refusing to kill pid %d (kernel/init)", pid)
@@ -106,7 +114,9 @@ func (k *KillEnforcer) EnforceTarget(_ context.Context, _ *corev1.Decision, targ
 	if id, err := k.identify(pid); err == nil && isCriticalProcess(id) {
 		return fmt.Errorf("process: refusing to kill critical process %q (pid %d)", filepath.Base(id.ExePath), pid)
 	}
-	return k.kill(pid)
+	// The kill revalidates startTicks (HIPS-7): a pid whose current start-time no longer matches was
+	// recycled, and is spared. startTicks==0 (unknown) falls back to a best-effort pid kill.
+	return k.kill(pid, startTicks)
 }
 
 var _ core.TargetedEnforcer = (*KillEnforcer)(nil)

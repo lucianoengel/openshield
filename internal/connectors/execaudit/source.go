@@ -35,10 +35,16 @@ type partial struct {
 type Scanner struct {
 	sink    func(*corev1.Event)
 	dropped atomic.Int64
+	// startTicks captures the process start-time at observation (HIPS-7), so an enforcement can
+	// revalidate the identity and spare a recycled pid. Injectable; defaults to the real /proc reader
+	// (0 when the process already exited — best-effort, honestly no revalidation for that event).
+	startTicks func(pid int32) uint64
 }
 
 // NewScanner builds a scanner delivering paired exec Events to sink.
-func NewScanner(sink func(*corev1.Event)) *Scanner { return &Scanner{sink: sink} }
+func NewScanner(sink func(*corev1.Event)) *Scanner {
+	return &Scanner{sink: sink, startTicks: readStartTicks}
+}
 
 // Dropped reports how many records were dropped (malformed, or evicted unpaired).
 func (s *Scanner) Dropped() int64 { return s.dropped.Load() }
@@ -66,6 +72,11 @@ func (s *Scanner) Scan(ctx context.Context, r io.Reader) error {
 			return
 		}
 		if ev, err := ToEvent(*p.syscall, *p.execve); err == nil {
+			// Capture the process start-time NOW (HIPS-7): with the pid it identifies this exact
+			// process instance, so a later KILL can spare a recycled pid.
+			if ps := ev.GetProcess(); ps != nil && s.startTicks != nil {
+				ps.StartTicks = s.startTicks(ps.GetPid())
+			}
 			s.sink(ev)
 		} else {
 			s.dropped.Add(1)

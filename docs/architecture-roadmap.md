@@ -183,6 +183,12 @@ applies.
   but is not the real unit is still killed.
 
 ### HIPS-7 · pid-reuse revalidation (reopen) — P2 · enforcer · M
+- **✅ SHIPPED D175 (2026-07-22) — pending owner audit.** The process start-time (`/proc/<pid>/stat`
+  field 22) is captured at observation in the execaudit source, carried on a new additive
+  `ProcessSubject.start_ticks`, and revalidated in `platformKill`: a pid whose current start-time no
+  longer matches the captured one is spared (recycled). Proven with a real spawned `sleep` (wrong ticks
+  → spared, correct ticks → killed); 1 mutation guard. Testing lesson recorded: check liveness via a
+  background reap, not `kill(pid,0)` (a zombie still answers it).
 - Critical-allowlist and argc bound are real (mutation-confirmed). But the pid-reuse guard does nothing:
   `platformKill` calls `PidfdOpen(pid)` **at kill time** (`kill_linux.go:17`), and the event carries
   only `Pid int32` — no pidfd/start-time captured at observation. On a recycled pid it opens and kills
