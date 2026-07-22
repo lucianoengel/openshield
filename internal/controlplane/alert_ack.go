@@ -22,7 +22,7 @@ var ErrAlertNotFound = errors.New("controlplane: peer alert not found")
 // tell "you already handled this" from "there is no such alert".
 func (s *Server) AcknowledgeAlert(ctx context.Context, id int64, operator string) (newlyAcked bool, err error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE peer_alerts SET acknowledged_at = now(), acknowledged_by = $1
+		`UPDATE peer_alerts SET acknowledged_at = now(), acknowledged_by = $1, status = 'triaged'
 		  WHERE id = $2 AND acknowledged_at IS NULL`, operator, id)
 	if err != nil {
 		return false, err

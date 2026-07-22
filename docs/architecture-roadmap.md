@@ -218,6 +218,10 @@ applies.
   `peerLastAlert` cooldown.
 
 ### SIEM-6b · Unified alert/incident lifecycle schema — P2 · schema · M — implements ADR-10
+- **✅ SHIPPED D178 (2026-07-22) — pending owner audit.** Migration 020 adds first-class
+  `severity`/`status`(open→triaged→closed)/`dedup_key` to `peer_alerts` (backfilled, indexed; count 19→20);
+  `recordPeerAlert` stamps them, ack advances status→triaged, reads return the stored fields. Proven
+  (real PG) + 2 mutation guards. Trade-off: severity now stored (no free re-bucket on threshold change).
 - `peer_alerts` already carries `agent_id` (mig 015) and ack columns (016); still missing as
   first-class columns: **severity, a dedup/correlation key, and a status lifecycle beyond ack**
   (open→triaged→closed). One migration adds them **before any further SIEM detection ships**, so each

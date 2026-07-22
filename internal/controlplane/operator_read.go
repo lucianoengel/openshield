@@ -17,7 +17,9 @@ type PeerAlert struct {
 	ID             int64      `json:"id"`
 	SubjectID      string     `json:"subject_id"`
 	RiskScore      float64    `json:"risk_score"`
-	Severity       string     `json:"severity"` // triage bucket derived from RiskScore (SIEM-6)
+	Severity       string     `json:"severity"`  // stored triage bucket, stamped at write (SIEM-6b/ADR-10)
+	Status         string     `json:"status"`    // lifecycle: open -> triaged -> closed (SIEM-6b)
+	DedupKey       string     `json:"dedup_key"` // detector-namespaced correlation key (SIEM-6b)
 	ContextVersion string     `json:"context_version"`
 	AgentID        string     `json:"agent_id"` // originating host of the triggering event (SIEM-2); "" if pre-identity
 	DetectedAt     time.Time  `json:"detected_at"`
@@ -27,15 +29,15 @@ type PeerAlert struct {
 
 // peerAlertColumns is the shared SELECT list, so every read of peer_alerts returns the same
 // shape and the scan below stays in lockstep with it.
-const peerAlertColumns = `id, subject_id, risk_score, context_version, agent_id, detected_at, acknowledged_by, acknowledged_at`
+const peerAlertColumns = `id, subject_id, risk_score, context_version, agent_id, detected_at, acknowledged_by, acknowledged_at, severity, status, dedup_key`
 
-// scanPeerAlert scans one row in peerAlertColumns order and derives the severity bucket.
+// scanPeerAlert scans one row in peerAlertColumns order. Severity/status/dedup_key are STORED
+// first-class fields (SIEM-6b/ADR-10), read from the columns rather than derived here.
 func scanPeerAlert(rows interface{ Scan(...any) error }) (PeerAlert, error) {
 	var a PeerAlert
-	if err := rows.Scan(&a.ID, &a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt, &a.AcknowledgedBy, &a.AcknowledgedAt); err != nil {
+	if err := rows.Scan(&a.ID, &a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt, &a.AcknowledgedBy, &a.AcknowledgedAt, &a.Severity, &a.Status, &a.DedupKey); err != nil {
 		return a, err
 	}
-	a.Severity = Severity(a.RiskScore)
 	return a, nil
 }
 

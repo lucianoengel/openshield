@@ -1,10 +1,12 @@
 package controlplane
 
 // Alert severity (SIEM-6). A peer alert's risk_score is a continuous [0,1] signal; an operator
-// triages in BUCKETS. Severity is a pure, derived label over the risk — not stored, so it
-// cannot drift out of sync with the score it summarizes, and a threshold change re-buckets
-// history without a migration. It is the prioritization primitive: the actionable queue is the
-// high/critical, unacknowledged alerts.
+// triages in BUCKETS. Severity was originally a pure derived label; SIEM-6b/ADR-10 now STORES it as
+// a first-class column (computed at write via this function) so a cross-domain detector without a
+// risk_score can still write a severity and cross-host correlation is uniform. The trade-off: a later
+// threshold change no longer re-buckets history for free (a re-bucket would need a backfill) — accepted
+// per ADR-10. This function stays the single source of the mapping used at write time. It is the
+// prioritization primitive: the actionable queue is the high/critical, unacknowledged alerts.
 //
 // The thresholds are deliberately coarse — four buckets an analyst can hold in their head, not
 // a false-precision scale. They are inclusive lower bounds, so an alert exactly at a threshold

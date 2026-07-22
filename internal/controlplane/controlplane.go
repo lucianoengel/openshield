@@ -241,6 +241,12 @@ func LoadBaselinesForTest(s *Server, ctx context.Context) ([]peerueba.SubjectSta
 	return s.loadBaselines(ctx)
 }
 
+// RecordPeerAlertForTest exposes the peer-alert write path so a test can assert the first-class
+// lifecycle fields it stamps (severity/status/dedup_key, SIEM-6b).
+func RecordPeerAlertForTest(s *Server, ctx context.Context, subject string, risk float64, ctxVersion, agentID string, at time.Time) error {
+	return s.recordPeerAlert(ctx, subject, risk, ctxVersion, agentID, at)
+}
+
 // PeerRiskForTest returns a subject's current peer-relative risk, or -1 when peer-UEBA is
 // disabled or the subject has no baseline (a test seam for SIEM-5's restart survival).
 func PeerRiskForTest(s *Server, subject string) float64 {

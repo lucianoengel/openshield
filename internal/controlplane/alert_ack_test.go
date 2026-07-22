@@ -16,16 +16,17 @@ func TestAcknowledgeAlert(t *testing.T) {
 	srv := controlplane.New(pool)
 	ctx := context.Background()
 
+	// Insert with the stored lifecycle fields (SIEM-6b): severity is now a column, stamped at write.
 	var id int64
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id)
-		 VALUES ('sub_ack', 0.92, 'v1', 'agent-a') RETURNING id`).Scan(&id); err != nil {
+		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id, severity, status, dedup_key)
+		 VALUES ('sub_ack', 0.92, 'v1', 'agent-a', 'critical', 'open', 'peer-ueba:sub_ack') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	// A second, lower-risk alert left UNacknowledged, to prove the queue filter.
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id)
-		 VALUES ('sub_open', 0.80, 'v1', 'agent-a')`); err != nil {
+		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id, severity, status, dedup_key)
+		 VALUES ('sub_open', 0.80, 'v1', 'agent-a', 'high', 'open', 'peer-ueba:sub_open')`); err != nil {
 		t.Fatal(err)
 	}
 

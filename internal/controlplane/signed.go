@@ -90,9 +90,13 @@ func (s *Server) observePeer(ctx context.Context, agentID string, payload []byte
 // recordPeerAlert persists a server-side detection to peer_alerts — a DERIVATION,
 // deliberately apart from received telemetry (D54); it is not the ledger (D38).
 func (s *Server) recordPeerAlert(ctx context.Context, subject string, risk float64, ctxVersion, agentID string, at time.Time) error {
+	// SIEM-6b/ADR-10: stamp the first-class lifecycle fields at write — severity from the risk (so it
+	// is correct for the recorded alert even if thresholds later change), status open, and a
+	// detector-namespaced correlation key. A future cross-domain detector writes the same shape.
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id, detected_at) VALUES ($1,$2,$3,$4,$5)`,
-		subject, risk, ctxVersion, agentID, at.UTC())
+		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id, detected_at, severity, status, dedup_key)
+		 VALUES ($1,$2,$3,$4,$5,$6,'open',$7)`,
+		subject, risk, ctxVersion, agentID, at.UTC(), Severity(risk), "peer-ueba:"+subject)
 	return err
 }
 
