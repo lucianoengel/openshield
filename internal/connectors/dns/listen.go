@@ -6,6 +6,17 @@ import (
 	"log/slog"
 	"net"
 	"sync/atomic"
+
+	"github.com/lucianoengel/openshield/internal/connectors/limiter"
+)
+
+const (
+	// defaultRatePerSec / defaultBurst bound how fast the listener admits datagrams into the
+	// pipeline (NIPS-7). Each admitted query mints a ledger write, so a spoofed-source flood would
+	// grow the audit ledger at wire speed; a global token bucket caps that. Generous enough for
+	// real resolution monitoring, low enough that a flood is bounded — tunable via Limiter.
+	defaultRatePerSec = 2000
+	defaultBurst      = 4000
 )
 
 // Listener is the runnable half of the DNS connector (NIPS-3): a UDP socket that receives
@@ -19,10 +30,15 @@ import (
 // fatal — one bad packet from one host must not stop resolution monitoring (D17). The drop
 // count is observable (D28), so a flood of unparseable input is visible, not silent.
 type Listener struct {
-	conn    *net.UDPConn
-	sink    func(srcIP string, q Query)
-	logger  *slog.Logger
-	dropped atomic.Int64
+	conn        *net.UDPConn
+	sink        func(srcIP string, q Query)
+	logger      *slog.Logger
+	dropped     atomic.Int64
+	rateLimited atomic.Int64
+	// Limiter bounds the rate at which datagrams are admitted to the pipeline (NIPS-7); a flood
+	// beyond it is rate-dropped (counted), so the audit-ledger write rate is capped. Defaults on;
+	// set to nil before Serve to disable, or replace to tune.
+	Limiter *limiter.Limiter
 }
 
 // Listen binds a UDP socket at addr and delivers each parsed query — with the datagram's
@@ -43,11 +59,15 @@ func Listen(addr string, sink func(srcIP string, q Query), logger *slog.Logger) 
 	if err != nil {
 		return nil, fmt.Errorf("dns: listen %q: %w", addr, err)
 	}
-	return &Listener{conn: conn, sink: sink, logger: logger}, nil
+	return &Listener{conn: conn, sink: sink, logger: logger,
+		Limiter: limiter.New(defaultRatePerSec, defaultBurst)}, nil
 }
 
 // Addr is the bound address (useful when the caller passed :0 for an ephemeral port).
 func (l *Listener) Addr() *net.UDPAddr { return l.conn.LocalAddr().(*net.UDPAddr) }
+
+// RateLimited reports how many datagrams were dropped by the admission rate limit (NIPS-7).
+func (l *Listener) RateLimited() int64 { return l.rateLimited.Load() }
 
 // Dropped reports how many datagrams failed to parse.
 func (l *Listener) Dropped() int64 { return l.dropped.Load() }
@@ -69,6 +89,13 @@ func (l *Listener) Serve(ctx context.Context) error {
 				return nil // clean shutdown
 			}
 			return fmt.Errorf("dns: read: %w", err)
+		}
+		// Admission rate limit (NIPS-7): beyond the sustained rate, drop the datagram BEFORE it
+		// mints a pipeline event + ledger write, so a spoofed-source flood cannot grow the ledger
+		// at wire speed. Counted separately so a flood is observable, not silent (D28).
+		if l.Limiter != nil && !l.Limiter.Allow() {
+			l.rateLimited.Add(1)
+			continue
 		}
 		srcIP := ""
 		if addr != nil {
