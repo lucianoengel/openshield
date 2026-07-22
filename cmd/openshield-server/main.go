@@ -171,8 +171,24 @@ func main() {
 	// loss" counters (dropped/rejected/gapped telemetry) so an operator can alert on them.
 	// Unauthenticated by convention (a scrape target); put it on an internal/firewalled addr.
 	if maddr := os.Getenv("OPENSHIELD_METRICS_ADDR"); maddr != "" {
+		// PLAT-4b: /metrics leaks fleet operational tempo (rejected/gapped-telemetry counts reveal
+		// replay-attempt recon). Require a bearer token when OPENSHIELD_METRICS_TOKEN is set, and
+		// warn LOUDLY if bound beyond loopback without one — a scrape target on a public interface
+		// with no auth is a reconnaissance surface.
+		var metricsHandler http.Handler = srv.MetricsHandler()
+		hasToken := false
+		if tok := os.Getenv("OPENSHIELD_METRICS_TOKEN"); tok != "" {
+			metricsHandler = controlplane.RequireBearerToken(tok, metricsHandler)
+			hasToken = true
+			fmt.Fprintln(os.Stderr, "openshield-server: metrics endpoint requires a bearer token (PLAT-4b)")
+		}
+		if controlplane.IsNonLoopbackBind(maddr) && !hasToken {
+			fmt.Fprintf(os.Stderr, "openshield-server: WARNING — metrics endpoint bound to a NON-LOOPBACK "+
+				"address %q with NO auth; this leaks fleet operational tempo (replay recon). Bind to "+
+				"loopback or set OPENSHIELD_METRICS_TOKEN.\n", maddr)
+		}
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", srv.MetricsHandler())
+		mux.Handle("/metrics", metricsHandler)
 		msrv := &http.Server{Addr: maddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			fmt.Fprintf(os.Stderr, "openshield-server: metrics endpoint on %s/metrics\n", maddr)
