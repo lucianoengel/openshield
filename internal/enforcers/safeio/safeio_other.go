@@ -4,6 +4,7 @@ package safeio
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 

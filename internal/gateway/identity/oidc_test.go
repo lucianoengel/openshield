@@ -39,6 +39,26 @@ func signJWT(t *testing.T, alg, kid string, key crypto.PrivateKey, claims map[st
 	return signing + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
+// tamperSig flips one bit of a JWT's signature, yielding a guaranteed-invalid but
+// well-formed token. It replaces an older "overwrite the last two base64 chars with
+// AA" trick, which was a silent no-op whenever the signature's final byte already
+// encoded to "AA" (~1/256 of Ed25519 keys) — the valid token then survived unchanged
+// and was correctly accepted, making this fail-closed assertion flaky on CI.
+func tamperSig(t *testing.T, tok string) string {
+	t.Helper()
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("not a 3-part JWT: %q", tok)
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(sig) == 0 {
+		t.Fatalf("decoding signature to tamper: %v", err)
+	}
+	sig[len(sig)-1] ^= 0x01
+	parts[2] = base64.RawURLEncoding.EncodeToString(sig)
+	return strings.Join(parts, ".")
+}
+
 func baseClaims(now time.Time) map[string]any {
 	return map[string]any{
 		"iss":    "https://issuer.example",
@@ -88,14 +108,8 @@ func TestOIDCVerify(t *testing.T) {
 	// Every adversarial token is REJECTED (fail-closed), each for its own reason.
 	edKid, edKey := "ed1", edPriv
 	bad := map[string]string{
-		"tampered signature (EdDSA)": func() string {
-			tok := signJWT(t, "EdDSA", edKid, edKey, baseClaims(now))
-			return tok[:len(tok)-2] + "AA" // corrupt the trailing signature bytes
-		}(),
-		"tampered signature (RS256)": func() string {
-			tok := signJWT(t, "RS256", "rsa1", rsaPriv, baseClaims(now))
-			return tok[:len(tok)-2] + "AA" // corrupt the trailing RSA signature bytes
-		}(),
+		"tampered signature (EdDSA)": tamperSig(t, signJWT(t, "EdDSA", edKid, edKey, baseClaims(now))),
+		"tampered signature (RS256)": tamperSig(t, signJWT(t, "RS256", "rsa1", rsaPriv, baseClaims(now))),
 		"wrong issuer": func() string {
 			c := baseClaims(now)
 			c["iss"] = "https://evil.example"

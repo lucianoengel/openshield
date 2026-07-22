@@ -184,10 +184,16 @@ func TestNoCatastrophicBacktracking(t *testing.T) {
 		_, _ = classify.New().Classify(context.Background(), strings.NewReader(adversarial))
 		close(done)
 	}()
+	// The deadline only has to separate linear from exponential. RE2 scans this
+	// ~440 KB in well under a second; a backtracking engine would need longer than
+	// the age of the universe. The ceiling is set generously (not tight) because
+	// the discriminating gap is astronomical and CI runs this under -race on shared
+	// runners, where the linear pass alone can take several seconds — a tight bound
+	// there flakes without adding any signal (it took 3s under -race locally).
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("classification did not finish in 5s on adversarial input — a " +
+	case <-time.After(30 * time.Second):
+		t.Fatal("classification did not finish in 30s on adversarial input — a " +
 			"backtracking engine is a fail-open (D17) primitive")
 	}
 }
