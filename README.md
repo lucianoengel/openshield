@@ -111,27 +111,43 @@ contracts, and the ledger — stays fixed. New capability lands as a new event s
 a new policy input, or one deliberate new action, never as a change to the core. That discipline is
 what lets a single codebase span seven security domains instead of fragmenting into seven products.
 
-**How it deploys** — lightweight sensors on endpoints and in the network report signed telemetry to a
-central control plane, which correlates across domains, writes tamper-evident evidence, and feeds risk
-and containment *context* back to where enforcement actually happens:
+**How it deploys** — on-host sensors observe endpoint activity, while the network gateway sits
+**inline** in traffic (forward proxy, DNS, SMTP, ZTNA). Both enforce locally and publish signed
+telemetry over a message bus to the control plane, which correlates across domains, writes
+tamper-evident evidence, and publishes risk and containment *context* back to the data plane:
 
 ```mermaid
-flowchart TB
-  subgraph FIELD["Endpoints &amp; network"]
-    ENG["Endpoint engine + agent<br/>files · processes"]
-    GW["Network gateway<br/>proxy · DNS · SMTP · ZTNA"]
+flowchart LR
+  USR["👥 Users &amp;<br/>workloads"]
+  APPS["🔗 Apps &amp;<br/>internet"]
+
+  subgraph DP["Data plane — sensors &amp; inline enforcement"]
+    direction TB
+    ENG["🖥️ Endpoint engine + agent<br/><i>files · processes · USB</i>"]
+    GW["🌐 Network gateway<br/><i>proxy · DNS · SMTP · ZTNA</i>"]
   end
-  subgraph CTRL["Control plane"]
+
+  BUS(["📨 signed telemetry bus · mTLS"])
+
+  subgraph CP["Control plane"]
+    direction TB
     SRV["Fleet server<br/>ingest · correlate · incidents · notify"]
     LEDGER[("Audit ledger")]
     ANC["Anchor · external witness"]
   end
-  OP["👤 Analyst / operator"]
-  ENG -->|"signed telemetry · mTLS"| SRV
-  GW -->|"signed telemetry · mTLS"| SRV
+
+  OP["👤 Analyst /<br/>operator"]
+
+  USR -->|"activity"| ENG
+  USR -->|"network traffic"| GW
+  GW -->|"allow · block · redirect"| APPS
+  ENG --> BUS
+  GW --> BUS
+  BUS --> SRV
   SRV --> LEDGER --> ANC
-  SRV -.->|"published risk · signed response-intent"| ENG
-  SRV -.->|"published risk · signed response-intent"| GW
+  SRV -.->|"risk &amp; response context"| BUS
+  BUS -.-> ENG
+  BUS -.-> GW
   OP -->|"search · cases · approvals"| SRV
 ```
 
