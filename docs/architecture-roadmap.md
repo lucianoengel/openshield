@@ -34,6 +34,11 @@
 
 ## Status at a glance (Round-32, verified through D168)
 
+**OpenShield is a pipeline-native XDR** — one Event→Classify→Policy→Decision→Enforce→Audit pipeline
+spanning **endpoint, network, and identity**, with correlation and response (SIEM incidents/UEBA + the
+hash-chained evidence ledger) above it. DLP is one detection domain among several, not the product's
+center of gravity. Every domain below is partial; the work is depth-per-domain, not more breadth.
+
 | Category | Maturity | One-line reality |
 |---|---|---|
 | Zero Trust (ZTNA) | ~55% | Access broker + microseg + **real OIDC/JWT on-path** (alg-confusion rejected) + dual-credential logic + agent-signed posture bound to the reporting key. **But the posture chain is INERT in production** — publisher and proxy derive the subject key differently, so every compliant device reads `HasPosture=false` (IDENT-1, the top of the queue). No hardware attestation, no JWKS rotation, no ZTNA client. |
@@ -333,7 +338,7 @@ Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane, or
 - *(SIEM event-search deepening: `fleet_telemetry` payloads are still opaque proto `BYTEA`; typed/JSONB
   columns at ingest would enable field-level hunting — larger surface, pull after the queue.)*
 
-### HIPS (the explicit XDR fork — T3)
+### HIPS (endpoint-behavioral domain — Phase E, landed and hardening)
 - **HIPS-3 (remainder) · `DENY_EXEC`** — P0 · action expansion (A, T1) · L. True inline deny needs
   `FAN_OPEN_EXEC_PERM` + per-verb owner sign-off on T1. `KILL_PROCESS` already landed.
 - **HIPS-4 · FIM, memory/injection detection, ransomware canary, application whitelisting** — each a
@@ -398,9 +403,14 @@ that is the signal to stop and re-examine — the D26/D69 fitness tests apply.
 - **T2 — Does risk flow back to enforcement (the D54 dead-end)?** *Resolved in code: the server
   computes+publishes risk; the endpoint/gateway reads it as typed Policy context (D28) and decides
   locally.* The server informs; it never actuates (D14 preserved).
-- **T3 — One product or a platform (DLP → XDR)?** *Standing recommendation: stay DLP-centric and deep
-  before XDR-broad.* HIPS/NDR are explicit, separately-scoped bets. Phase E has since landed as a
-  deliberate bet — keep the discipline.
+- **T3 — One product or a platform (DLP → XDR)?** *Resolved: the platform bet is made — OpenShield is
+  an XDR.* Detection-and-response now spans **endpoint** (file DLP + HIPS behavioral/KILL), **network**
+  (forward-proxy + DNS/SMTP NDR), and **identity** (ZTNA/OIDC), correlated server-side (SIEM
+  incidents/UEBA + the ledger) on one pipeline. **DLP is one classify-domain, not the whole product.**
+  The discipline shifts from "don't go broad" to **"keep each domain credible — depth beats shallow
+  breadth"**: the domains sit at 30–55% today (see the status table), so the standing risk is now
+  half-built breadth, not scope creep. New domains still enter as explicit, separately-scoped bets
+  (a producer + a classify-domain + at most one deliberate action), never a core change.
 - **T4 — Categories that do NOT fit the pipeline (NAC/VPN).** *Resolved by the owner: PARKED (ADR-0)* —
   they produce no Event and consume no Decision. Off the queue, out of headline claims, tickets staged.
 
@@ -419,7 +429,8 @@ Ordered by leverage-per-architectural-risk; much of A/C/E/F has since landed (se
   IDS-signature classify plugin (NIPS-2).
 - **Phase D — Detection depth (C).** Document-structure parsing (PDF landed); secrets/health/national-ID
   detectors (largely landed); admin-authorable signed detectors (landed); optional ML/EDM (ADR-9).
-- **Phase E — HIPS (P + a bounded A + C) — the XDR bet.** Exec producer + behavioral classifier +
+- **Phase E — HIPS (P + a bounded A + C) — the endpoint-behavioral domain (the platform bet, now
+  taken).** Exec producer + behavioral classifier +
   `KILL_PROCESS`/`DENY_EXEC`. *Runs end-to-end; hardening in the queue (HIPS-7/8), `DENY_EXEC` deferred.*
 - **Phase F — SIEM/analytics depth (server-side).** Search API (landed), correlation/rules (landed),
   case workflow (landed), dashboards/UI (PLAT-1, parked), third-party log ingest (syslog landed;
