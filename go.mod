@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/elastic/go-seccomp-bpf v1.6.0
+	github.com/google/go-tpm v0.9.8
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/nats-io/nats-server/v2 v2.14.3
@@ -21,7 +22,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
-	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

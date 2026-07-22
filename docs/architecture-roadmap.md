@@ -513,7 +513,17 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 - **ZT-1 · Hardware device-posture attestation** — P1 · X + producer · XL. Posture is self-reported
   booleans; a compromised-but-alive agent signs `Compliant=true`. Add TPM/measured-boot signed quotes
   verified at the gateway (`google/go-tpm` is `// indirect` today — greenfield). **Must follow IDENT-1
-  (ADR-6).** The ZTNA-vs-toy line.
+  (ADR-6).** The ZTNA-vs-toy line. Multi-increment:
+  - ✅ **Increment 1 · Attestation core (D183)** — SHIPPED. `internal/attest`: create a restricted
+    ECDSA-P256 AK, generate a nonce-bound `TPM2_Quote` over PCRs, and verify it server-side against the
+    AK public key with an anti-replay nonce gate. Built on `go-tpm` (not the heavy `go-tpm-tools`
+    tree); tested against real `swtpm`, gated like Postgres, run in a new CI `attestation` job.
+    Scope caveat: trusts the AK by raw public key — EK binding is increment 2.
+  - **Increment 2 · EK→AK credential activation** — bind the AK to a genuine TPM at enrollment.
+  - **Increment 3 · Measured-boot event log + PCR policy** — parse the boot log, replay PCRs, apply an
+    expected-state policy over the attested PCR digest.
+  - **Increment 4 · Posture wiring** — proto field + posture producer/verifier + `DevicePosture.Attested`
+    + a posture-gated policy.
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
   it is server-side reverse-proxy only.
 - **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an

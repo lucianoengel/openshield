@@ -154,6 +154,24 @@ jobs:
           OPENSHIELD_REQUIRE_POSTGRES: "1"
         run: go test -count=1 -v ./internal/connectors/fanotify/
 
+  attestation:
+    # The TPM attestation core (internal/attest, ZT-1) is tested against a REAL
+    # software TPM. swtpm speaks the same TPM 2.0 protocol as a hardware TPM, so
+    # the quote generate/verify path — including the nonce anti-replay and the
+    # ECDSA signature check — runs for real, not against a mock that would agree
+    # with the code. requireSWTPM skips these tests where swtpm is absent (macOS,
+    # Windows), so this job installs it to make the skip a real run in CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: install swtpm
+        run: sudo apt-get update && sudo apt-get install -y swtpm
+      - name: TPM quote generate + nonce-fresh verify (real swtpm)
+        run: go test -race -count=1 -v ./internal/attest/
+
   # Still to come, each its own ticket:
   #
   # These substitute for the line-level review depth a non-coding maintainer
