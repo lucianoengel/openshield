@@ -209,20 +209,34 @@ func main() {
 			if !ok {
 				return
 			}
-			dec, err := eng.Process(ctx, ev)
-			if err != nil {
-				// A processing error is auditable, not silent (D17) — the engine's
-				// audit sink records the outcome; here we surface it operationally.
-				log.Error("process", slog.String("event", ev.GetEventId()), slog.String("err", err.Error()))
-				continue
-			}
-			if dec != nil {
-				log.Info("decision",
-					slog.String("event", ev.GetEventId()),
-					slog.String("action", dec.GetAction().String()),
-					slog.String("path", ev.GetFilesystem().GetResolvedPath()))
-			}
+			processOne(ctx, eng, ev, log)
 		}
+	}
+}
+
+// processOne runs one event through the engine, RECOVERING from any panic (ENG-2). The engine now
+// ingests attacker-influenced events from network/exec sources, and a panic in a stage on one
+// crafted event must be contained to that event — logged, the event dropped — never crash the
+// engine and take down observation of the whole fleet.
+func processOne(ctx context.Context, eng *engine.Engine, ev *corev1.Event, log *slog.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("recovered from panic processing event",
+				slog.String("event", ev.GetEventId()), slog.Any("panic", r))
+		}
+	}()
+	dec, err := eng.Process(ctx, ev)
+	if err != nil {
+		// A processing error is auditable, not silent (D17) — the engine's audit sink records the
+		// outcome; here we surface it operationally.
+		log.Error("process", slog.String("event", ev.GetEventId()), slog.String("err", err.Error()))
+		return
+	}
+	if dec != nil {
+		log.Info("decision",
+			slog.String("event", ev.GetEventId()),
+			slog.String("action", dec.GetAction().String()),
+			slog.String("path", ev.GetFilesystem().GetResolvedPath()))
 	}
 }
 

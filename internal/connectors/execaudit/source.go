@@ -83,19 +83,21 @@ func (s *Scanner) Scan(ctx context.Context, r io.Reader) error {
 		}
 	}
 
-	for sc.Scan() {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-		line := sc.Text()
+	// handleLine parses one record and pairs it, RECOVERING from any panic (ENG-2): the engine
+	// parses attacker-influenced audit text in-process, so a panic on a crafted record must be
+	// contained (dropped + counted), never crash the engine.
+	handleLine := func(line string) {
+		defer func() {
+			if r := recover(); r != nil {
+				s.dropped.Add(1)
+			}
+		}()
 		switch {
 		case strings.Contains(line, "type=SYSCALL"):
 			rec, err := ParseSyscall(line)
 			if err != nil {
 				s.dropped.Add(1)
-				continue
+				return
 			}
 			get(rec.AuditID).syscall = &rec
 			emitIfComplete(rec.AuditID)
@@ -103,11 +105,20 @@ func (s *Scanner) Scan(ctx context.Context, r io.Reader) error {
 			rec, err := ParseExecve(line)
 			if err != nil {
 				s.dropped.Add(1)
-				continue
+				return
 			}
 			get(rec.AuditID).execve = &rec
 			emitIfComplete(rec.AuditID)
 		}
+	}
+
+	for sc.Scan() {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		handleLine(sc.Text())
 		evict()
 	}
 	return sc.Err()

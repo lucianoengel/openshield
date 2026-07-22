@@ -106,6 +106,14 @@ func (l *Listener) Serve(ctx context.Context) error {
 // command lines into a transcript, then parses it on QUIT/close and delivers the message.
 func (l *Listener) handle(conn net.Conn) {
 	defer conn.Close()
+	// RECOVER from any panic parsing a crafted session (ENG-2): a panic in one session's parsing
+	// must be contained (dropped + counted), never crash the engine that hosts this listener.
+	defer func() {
+		if r := recover(); r != nil {
+			l.dropped.Add(1)
+			l.logger.Error("smtp: recovered from panic handling a session", "panic", r)
+		}
+	}()
 	idle := l.IdleTimeout
 	if idle <= 0 {
 		idle = defaultIdleTimeout

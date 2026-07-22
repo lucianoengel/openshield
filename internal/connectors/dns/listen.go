@@ -70,15 +70,28 @@ func (l *Listener) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("dns: read: %w", err)
 		}
-		q, perr := ParseQuery(buf[:n])
-		if perr != nil {
-			l.dropped.Add(1)
-			continue
-		}
 		srcIP := ""
 		if addr != nil {
 			srcIP = addr.IP.String()
 		}
-		l.sink(srcIP, q)
+		l.handleDatagram(buf[:n], srcIP)
 	}
+}
+
+// handleDatagram parses one datagram and delivers it, RECOVERING from any panic (ENG-2): the engine
+// now parses attacker-controlled wire bytes IN-PROCESS, so a panic in the parser or the sink on a
+// crafted datagram must be contained to that datagram (dropped + counted), never crash the engine.
+func (l *Listener) handleDatagram(datagram []byte, srcIP string) {
+	defer func() {
+		if r := recover(); r != nil {
+			l.dropped.Add(1)
+			l.logger.Error("dns: recovered from panic handling a datagram", "panic", r)
+		}
+	}()
+	q, perr := ParseQuery(datagram)
+	if perr != nil {
+		l.dropped.Add(1)
+		return
+	}
+	l.sink(srcIP, q)
 }
