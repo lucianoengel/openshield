@@ -10,6 +10,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/behavioral"
+	"github.com/lucianoengel/openshield/internal/attack"
 	"github.com/lucianoengel/openshield/internal/exfil"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
@@ -150,13 +151,54 @@ func buildInput(st *core.State) map[string]interface{} {
 		}
 		threat = map[string]interface{}{"matches": matches, "categories": cats}
 	}
+	// MITRE ATT&CK techniques (SIEM-7): a content-free derivation of the SAME signals
+	// above — credential detector types, threat categories, the exfil channel, and
+	// the behavioral findings — so a policy can route on a technique and SIEM/XDR can
+	// group by it. Absent when no signal maps to a technique.
+	var attackTechs interface{}
+	if ids := attack.IDs(attackSignals(st)); len(ids) > 0 {
+		techs := make([]interface{}, len(ids))
+		for i, id := range ids {
+			techs[i] = id
+		}
+		attackTechs = map[string]interface{}{"techniques": techs}
+	}
 	return map[string]interface{}{
 		"purpose":        st.Event.GetPurpose().String(),
 		"event":          event,
 		"classification": hits,
 		"context":        ctx,
 		"threat":         threat,
+		"attack":         attackTechs,
 	}
+}
+
+// attackSignals gathers the content-free detection signals from the state for the
+// ATT&CK mapping (SIEM-7).
+func attackSignals(st *core.State) attack.Signals {
+	var s attack.Signals
+	if lc := st.Classification; lc != nil {
+		for _, m := range lc.GetMatches() {
+			s.DetectorTypes = append(s.DetectorTypes, m.GetDetectorType())
+		}
+	}
+	if tc := st.Threats; tc != nil {
+		for _, m := range tc.GetMatches() {
+			s.ThreatCategories = append(s.ThreatCategories, m.GetCategory())
+		}
+	}
+	if fs := st.Event.GetFilesystem(); fs != nil {
+		if p := fs.GetResolvedPath(); p != "" {
+			s.ExfilChannel = exfil.Classify(p).String()
+		}
+	}
+	if ps := st.Event.GetProcess(); ps != nil {
+		f := behavioral.Analyze(ps.GetExecPath(), ps.GetParentPath(), ps.GetArgs())
+		s.LOLBin = f.LOLBin != ""
+		s.EncodedCommand = f.EncodedCommand
+		s.SuspiciousLineage = f.SuspiciousLineage
+	}
+	return s
 }
 
 // confidenceFrom takes the policy's confidence if it supplied one, else the
