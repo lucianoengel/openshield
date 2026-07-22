@@ -558,9 +558,14 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   - ✅ **Continuous re-attestation (D190)** — SHIPPED. `posture.AttestLoop` re-attests on an interval so
     the gateway's Attested signal tracks the device's current state; wired into `cmd/openshield-fleet-agent`
     (`OPENSHIELD_ATTEST_PCRS`). swtpm-proven continuous verification: a good device stays attested, a
-    drifted device loses attestation within a cycle. **The ZT-1 live loop — enroll → attest → re-attest →
-    policy-gate — is complete for real devices.** Last operability follow-up: **automated network
-    enrollment** (live credential activation over the wire vs the file-based distribution).
+    drifted device loses attestation within a cycle.
+  - ✅ **Automated network enrollment (D191)** — SHIPPED. A device proves its AK genuine-TPM-resident by a
+    live credential-activation handshake over NATS and self-enrolls — no operator file. swtpm-proven: a
+    genuine device enrolls + attests over the wire; a fake device (EK/AK on different TPMs) or a tampered
+    activation is refused. **ZT-1 operability is now COMPLETE** (core → EK activation → PCR policy →
+    posture wiring → transport → file enrollment → continuous re-attestation → network enrollment).
+    Remaining notes: EK-cert-chain anchoring + enrollment-authorization + TOFU-vs-operator-vouched baseline
+    are documented alternatives/follow-ups, not gaps in the working chain.
 - **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
   it is server-side reverse-proxy only.
 - **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an

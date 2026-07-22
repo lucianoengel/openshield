@@ -374,7 +374,16 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			if _, err := responder.SubscribeReports(conn); err != nil {
 				fatal(log, "attestation report subscribe", err)
 			}
-			log.Info("gateway: ZT-1 attestation transport active")
+			// Automated network enrollment: a device proves its AK genuine-TPM-resident
+			// by credential activation and self-enrolls over the wire (no operator file).
+			enroller := gateway.NewEnrollmentResponder(av)
+			if _, err := enroller.ServeEnroll(conn); err != nil {
+				fatal(log, "attestation enroll serve", err)
+			}
+			if _, err := enroller.ServeActivate(conn); err != nil {
+				fatal(log, "attestation activate serve", err)
+			}
+			log.Info("gateway: ZT-1 attestation transport + network enrollment active")
 		}
 	}
 

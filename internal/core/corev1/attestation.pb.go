@@ -108,6 +108,256 @@ func (x *AttestationReport) GetQuoteSigS() []byte {
 	return nil
 }
 
+// AttestationEnrollRequest is step 1 of automated network enrollment (ZT-1): a
+// device submits its EK, AK, and PCR state to enroll. The gateway proves the AK is
+// genuine-TPM-resident by credential activation before recording it.
+type AttestationEnrollRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Subject       string                 `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
+	EkPublic      []byte                 `protobuf:"bytes,2,opt,name=ek_public,json=ekPublic,proto3" json:"ek_public,omitempty"`                                                        // marshaled EK TPM2B_PUBLIC
+	AkPublic      []byte                 `protobuf:"bytes,3,opt,name=ak_public,json=akPublic,proto3" json:"ak_public,omitempty"`                                                        // marshaled AK TPM2B_PUBLIC
+	AkName        []byte                 `protobuf:"bytes,4,opt,name=ak_name,json=akName,proto3" json:"ak_name,omitempty"`                                                              // the AK's TPM name (the challenge binds to it)
+	Golden        map[uint32][]byte      `protobuf:"bytes,5,rep,name=golden,proto3" json:"golden,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // PCR index -> value, the device's baseline (TOFU)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestationEnrollRequest) Reset() {
+	*x = AttestationEnrollRequest{}
+	mi := &file_openshield_v1_attestation_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestationEnrollRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestationEnrollRequest) ProtoMessage() {}
+
+func (x *AttestationEnrollRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_attestation_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestationEnrollRequest.ProtoReflect.Descriptor instead.
+func (*AttestationEnrollRequest) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_attestation_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *AttestationEnrollRequest) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *AttestationEnrollRequest) GetEkPublic() []byte {
+	if x != nil {
+		return x.EkPublic
+	}
+	return nil
+}
+
+func (x *AttestationEnrollRequest) GetAkPublic() []byte {
+	if x != nil {
+		return x.AkPublic
+	}
+	return nil
+}
+
+func (x *AttestationEnrollRequest) GetAkName() []byte {
+	if x != nil {
+		return x.AkName
+	}
+	return nil
+}
+
+func (x *AttestationEnrollRequest) GetGolden() map[uint32][]byte {
+	if x != nil {
+		return x.Golden
+	}
+	return nil
+}
+
+// AttestationEnrollChallenge is the gateway's reply to step 1: a credential-
+// activation challenge the device's TPM must activate. A non-empty error means the
+// request was rejected (bad EK, etc.) and no enrollment is pending.
+type AttestationEnrollChallenge struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	CredentialBlob  []byte                 `protobuf:"bytes,1,opt,name=credential_blob,json=credentialBlob,proto3" json:"credential_blob,omitempty"`
+	EncryptedSecret []byte                 `protobuf:"bytes,2,opt,name=encrypted_secret,json=encryptedSecret,proto3" json:"encrypted_secret,omitempty"`
+	Error           string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AttestationEnrollChallenge) Reset() {
+	*x = AttestationEnrollChallenge{}
+	mi := &file_openshield_v1_attestation_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestationEnrollChallenge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestationEnrollChallenge) ProtoMessage() {}
+
+func (x *AttestationEnrollChallenge) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_attestation_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestationEnrollChallenge.ProtoReflect.Descriptor instead.
+func (*AttestationEnrollChallenge) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_attestation_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *AttestationEnrollChallenge) GetCredentialBlob() []byte {
+	if x != nil {
+		return x.CredentialBlob
+	}
+	return nil
+}
+
+func (x *AttestationEnrollChallenge) GetEncryptedSecret() []byte {
+	if x != nil {
+		return x.EncryptedSecret
+	}
+	return nil
+}
+
+func (x *AttestationEnrollChallenge) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// AttestationActivation is step 2: the device returns the secret it recovered by
+// activating the challenge with its TPM.
+type AttestationActivation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Subject       string                 `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
+	Secret        []byte                 `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestationActivation) Reset() {
+	*x = AttestationActivation{}
+	mi := &file_openshield_v1_attestation_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestationActivation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestationActivation) ProtoMessage() {}
+
+func (x *AttestationActivation) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_attestation_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestationActivation.ProtoReflect.Descriptor instead.
+func (*AttestationActivation) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_attestation_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AttestationActivation) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *AttestationActivation) GetSecret() []byte {
+	if x != nil {
+		return x.Secret
+	}
+	return nil
+}
+
+// AttestationEnrollResult is the gateway's reply to step 2: enrolled is true only
+// when the recovered secret matched, proving the AK genuine-TPM-resident.
+type AttestationEnrollResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enrolled      bool                   `protobuf:"varint,1,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttestationEnrollResult) Reset() {
+	*x = AttestationEnrollResult{}
+	mi := &file_openshield_v1_attestation_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttestationEnrollResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttestationEnrollResult) ProtoMessage() {}
+
+func (x *AttestationEnrollResult) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_attestation_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttestationEnrollResult.ProtoReflect.Descriptor instead.
+func (*AttestationEnrollResult) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_attestation_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *AttestationEnrollResult) GetEnrolled() bool {
+	if x != nil {
+		return x.Enrolled
+	}
+	return false
+}
+
+func (x *AttestationEnrollResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_openshield_v1_attestation_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_attestation_proto_rawDesc = "" +
@@ -118,7 +368,26 @@ const file_openshield_v1_attestation_proto_rawDesc = "" +
 	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12!\n" +
 	"\fquote_attest\x18\x03 \x01(\fR\vquoteAttest\x12\x1e\n" +
 	"\vquote_sig_r\x18\x04 \x01(\fR\tquoteSigR\x12\x1e\n" +
-	"\vquote_sig_s\x18\x05 \x01(\fR\tquoteSigSB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\vquote_sig_s\x18\x05 \x01(\fR\tquoteSigS\"\x8f\x02\n" +
+	"\x18AttestationEnrollRequest\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\tR\asubject\x12\x1b\n" +
+	"\tek_public\x18\x02 \x01(\fR\bekPublic\x12\x1b\n" +
+	"\tak_public\x18\x03 \x01(\fR\bakPublic\x12\x17\n" +
+	"\aak_name\x18\x04 \x01(\fR\x06akName\x12K\n" +
+	"\x06golden\x18\x05 \x03(\v23.openshield.v1.AttestationEnrollRequest.GoldenEntryR\x06golden\x1a9\n" +
+	"\vGoldenEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\rR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\x86\x01\n" +
+	"\x1aAttestationEnrollChallenge\x12'\n" +
+	"\x0fcredential_blob\x18\x01 \x01(\fR\x0ecredentialBlob\x12)\n" +
+	"\x10encrypted_secret\x18\x02 \x01(\fR\x0fencryptedSecret\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"I\n" +
+	"\x15AttestationActivation\x12\x18\n" +
+	"\asubject\x18\x01 \x01(\tR\asubject\x12\x16\n" +
+	"\x06secret\x18\x02 \x01(\fR\x06secret\"K\n" +
+	"\x17AttestationEnrollResult\x12\x1a\n" +
+	"\benrolled\x18\x01 \x01(\bR\benrolled\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05errorB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_attestation_proto_rawDescOnce sync.Once
@@ -132,16 +401,22 @@ func file_openshield_v1_attestation_proto_rawDescGZIP() []byte {
 	return file_openshield_v1_attestation_proto_rawDescData
 }
 
-var file_openshield_v1_attestation_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_openshield_v1_attestation_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_openshield_v1_attestation_proto_goTypes = []any{
-	(*AttestationReport)(nil), // 0: openshield.v1.AttestationReport
+	(*AttestationReport)(nil),          // 0: openshield.v1.AttestationReport
+	(*AttestationEnrollRequest)(nil),   // 1: openshield.v1.AttestationEnrollRequest
+	(*AttestationEnrollChallenge)(nil), // 2: openshield.v1.AttestationEnrollChallenge
+	(*AttestationActivation)(nil),      // 3: openshield.v1.AttestationActivation
+	(*AttestationEnrollResult)(nil),    // 4: openshield.v1.AttestationEnrollResult
+	nil,                                // 5: openshield.v1.AttestationEnrollRequest.GoldenEntry
 }
 var file_openshield_v1_attestation_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	5, // 0: openshield.v1.AttestationEnrollRequest.golden:type_name -> openshield.v1.AttestationEnrollRequest.GoldenEntry
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_attestation_proto_init() }
@@ -155,7 +430,7 @@ func file_openshield_v1_attestation_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_attestation_proto_rawDesc), len(file_openshield_v1_attestation_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

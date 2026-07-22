@@ -22,3 +22,37 @@ message AttestationReport {
   bytes quote_sig_r = 4;
   bytes quote_sig_s = 5;
 }
+
+// AttestationEnrollRequest is step 1 of automated network enrollment (ZT-1): a
+// device submits its EK, AK, and PCR state to enroll. The gateway proves the AK is
+// genuine-TPM-resident by credential activation before recording it.
+message AttestationEnrollRequest {
+  string subject = 1;
+  bytes ek_public = 2;   // marshaled EK TPM2B_PUBLIC
+  bytes ak_public = 3;   // marshaled AK TPM2B_PUBLIC
+  bytes ak_name = 4;     // the AK's TPM name (the challenge binds to it)
+  map<uint32, bytes> golden = 5; // PCR index -> value, the device's baseline (TOFU)
+}
+
+// AttestationEnrollChallenge is the gateway's reply to step 1: a credential-
+// activation challenge the device's TPM must activate. A non-empty error means the
+// request was rejected (bad EK, etc.) and no enrollment is pending.
+message AttestationEnrollChallenge {
+  bytes credential_blob = 1;
+  bytes encrypted_secret = 2;
+  string error = 3;
+}
+
+// AttestationActivation is step 2: the device returns the secret it recovered by
+// activating the challenge with its TPM.
+message AttestationActivation {
+  string subject = 1;
+  bytes secret = 2;
+}
+
+// AttestationEnrollResult is the gateway's reply to step 2: enrolled is true only
+// when the recovered secret matched, proving the AK genuine-TPM-resident.
+message AttestationEnrollResult {
+  bool enrolled = 1;
+  string error = 2;
+}

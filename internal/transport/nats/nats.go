@@ -43,6 +43,13 @@ const (
 	// SubjectAttestReport carries a device's TPM quote (an AttestationReport) to
 	// the gateway, which verifies it against the enrolled AK.
 	SubjectAttestReport = "openshield.v1.attest.report"
+	// SubjectAttestEnroll is request/reply step 1 of automated enrollment: a device
+	// submits its EK/AK/PCR state and the gateway replies a credential-activation
+	// challenge (ZT-1).
+	SubjectAttestEnroll = "openshield.v1.attest.enroll"
+	// SubjectAttestActivate is request/reply step 2: the device returns the secret
+	// it recovered by activating the challenge, and the gateway enrolls it.
+	SubjectAttestActivate = "openshield.v1.attest.activate"
 )
 
 // Transport publishes wire-form messages to the control plane.
