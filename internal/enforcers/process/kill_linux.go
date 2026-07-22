@@ -4,7 +4,7 @@ package process
 
 import (
 	"os"
-	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -26,14 +26,25 @@ func platformKill(pid int) error {
 	return unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0)
 }
 
-// procComm reads a process's kernel comm from /proc/<pid>/comm (world-readable for a live process),
-// for the critical-process guard. A read error means the process is gone or unreadable.
-func procComm(pid int) (string, error) {
-	b, err := os.ReadFile("/proc/" + itoa(pid) + "/comm")
+// procIdentityOf reads a process's TRUSTED identity for the critical-process guard (HIPS-8): its real
+// executable via /proc/<pid>/exe (the kernel's record of the actual binary — a process can change its
+// comm/argv[0] but not make this point at a different file without exec'ing it), plus that binary's
+// ownership. A read error means the process is gone or unreadable.
+func procIdentityOf(pid int) (ProcIdentity, error) {
+	exe, err := os.Readlink("/proc/" + itoa(pid) + "/exe")
 	if err != nil {
-		return "", err
+		return ProcIdentity{}, err
 	}
-	return strings.TrimSpace(string(b)), nil
+	// Stat the real binary (follow the link) for its ownership and permissions.
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return ProcIdentity{}, err
+	}
+	id := ProcIdentity{ExePath: exe, OtherWritable: fi.Mode().Perm()&0o022 != 0}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		id.RootOwned = st.Uid == 0
+	}
+	return id, nil
 }
 
 func itoa(n int) string {

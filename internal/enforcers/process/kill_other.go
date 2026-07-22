@@ -10,7 +10,7 @@ func platformKill(int) error {
 	return fmt.Errorf("process: KILL_PROCESS is not supported on this platform")
 }
 
-// procComm is unsupported off Unix — the critical-process guard is Linux-first (D8).
-func procComm(int) (string, error) {
-	return "", fmt.Errorf("process: comm lookup unsupported on this platform")
+// procIdentityOf is unsupported off Unix — the critical-process guard is Linux-first (D8).
+func procIdentityOf(int) (ProcIdentity, error) {
+	return ProcIdentity{}, fmt.Errorf("process: identity lookup unsupported on this platform")
 }

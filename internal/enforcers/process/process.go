@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -25,34 +26,54 @@ import (
 
 // criticalNames are processes that must NEVER be killed by a HIPS verdict — killing one takes down
 // the host (init/systemd), locks out remote access (sshd/login), or destroys the platform itself
-// (the data store, the container runtime). Names are the kernel `comm` (world-readable, ≤15 chars).
+// (the data store, the container runtime). These are matched against the REAL executable's basename
+// (from /proc/<pid>/exe, HIPS-8), not the self-settable kernel `comm`, so the full binary names are
+// used (e.g. systemd-journald, not the 15-char-truncated comm).
 var criticalNames = map[string]bool{
 	"systemd": true, "init": true, "sshd": true, "login": true, "agetty": true,
 	"postgres": true, "postmaster": true, "dbus-daemon": true, "systemd-logind": true,
-	"systemd-journal": true, "containerd": true, "dockerd": true, "kubelet": true, "conmon": true,
+	"systemd-journald": true, "containerd": true, "dockerd": true, "kubelet": true, "conmon": true,
+	"runc": true, "crio": true,
 }
 
-// isCriticalProcess reports whether a process comm must be protected from KILL. The fleet's OWN
-// binaries (comm begins "openshield") are always protected so a verdict cannot make the platform
-// kill its own agent/worker/engine/gateway (HIPS-7).
-func isCriticalProcess(comm string) bool {
-	if strings.HasPrefix(comm, "openshield") {
+// ProcIdentity is a process's TRUSTED identity for the critical-process guard: its real executable
+// path and that binary's ownership. The exe comes from /proc/<pid>/exe, which the kernel maintains
+// and the process cannot forge (unlike comm/argv[0]). Exported so a test can inject one without /proc
+// or root.
+type ProcIdentity struct {
+	ExePath       string
+	RootOwned     bool // the executable file is owned by uid 0
+	OtherWritable bool // the executable file is writable by group or other (mode & 022)
+}
+
+// isCriticalProcess reports whether a process must be protected from KILL, keyed on its TRUSTED
+// identity (HIPS-8): only a ROOT-OWNED, non-other-writable executable whose basename is a critical
+// name — or a fleet binary (basename begins "openshield") — is protected. A non-root attacker cannot
+// create a root-owned binary, so cannot gain immunity by renaming its process to a critical name (the
+// self-immunization the comm-based guard allowed). A root attacker is outside the host-control model
+// (D16) and can defeat the enforcer regardless.
+func isCriticalProcess(id ProcIdentity) bool {
+	if !id.RootOwned || id.OtherWritable {
+		return false
+	}
+	base := filepath.Base(id.ExePath)
+	if strings.HasPrefix(base, "openshield") {
 		return true
 	}
-	return criticalNames[comm]
+	return criticalNames[base]
 }
 
 // KillEnforcer carries out KILL_PROCESS by terminating a process by pid.
 type KillEnforcer struct {
-	selfPID int
-	kill    func(pid int) error          // injectable; defaults to the platform (pid-reuse-safe) kill
-	nameOf  func(pid int) (string, error) // process comm for the critical-process guard; injectable
+	selfPID  int
+	kill     func(pid int) error               // injectable; defaults to the platform (pid-reuse-safe) kill
+	identify func(pid int) (ProcIdentity, error) // trusted identity for the critical-process guard; injectable
 }
 
 // NewKillEnforcer builds the enforcer with the platform's real kill and this process's pid
 // as the self-protection guard.
 func NewKillEnforcer() *KillEnforcer {
-	return &KillEnforcer{selfPID: os.Getpid(), kill: platformKill, nameOf: procComm}
+	return &KillEnforcer{selfPID: os.Getpid(), kill: platformKill, identify: procIdentityOf}
 }
 
 func (*KillEnforcer) Capabilities() []corev1.Action {
@@ -78,11 +99,12 @@ func (k *KillEnforcer) EnforceTarget(_ context.Context, _ *corev1.Decision, targ
 	if pid == k.selfPID {
 		return fmt.Errorf("process: refusing to kill self (pid %d)", pid)
 	}
-	// Critical-process guard (HIPS-7): refuse to kill init/systemd/sshd/the DB/the fleet's own
-	// binaries. If the name can't be read the process is almost certainly already gone (comm is
-	// world-readable for a live process), and the pid-reuse-safe kill below no-ops a dead instance.
-	if name, err := k.nameOf(pid); err == nil && isCriticalProcess(name) {
-		return fmt.Errorf("process: refusing to kill critical process %q (pid %d)", name, pid)
+	// Critical-process guard (HIPS-8): refuse to kill init/systemd/sshd/the DB/the fleet's own
+	// binaries, identified by the TRUSTED executable identity (not the self-settable comm) so a
+	// process cannot rename itself into immunity. If the identity can't be read the process is almost
+	// certainly already gone, and the pid-reuse-safe kill below no-ops a dead instance.
+	if id, err := k.identify(pid); err == nil && isCriticalProcess(id) {
+		return fmt.Errorf("process: refusing to kill critical process %q (pid %d)", filepath.Base(id.ExePath), pid)
 	}
 	return k.kill(pid)
 }

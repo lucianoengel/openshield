@@ -169,6 +169,11 @@ applies.
   with no newline, assert `Dropped>0` without the deadline firing. (Test-only; the guard is correct.)
 
 ### HIPS-8 · Trusted critical-process identity — KILL containment bypass — P2 · enforcer · M
+- **✅ SHIPPED D174 (2026-07-22) — pending owner audit.** The critical guard now keys on the real
+  executable (`/proc/<pid>/exe`, kernel-maintained) + root-ownership (`RootOwned && !OtherWritable &&
+  basename∈critical||openshield*`), not the self-settable `comm` — a non-root process can't own a root
+  binary, so renaming to `sshd` no longer grants immunity. Injectable `identify` seam
+  (`ProcIdentity`); 2 mutation guards. cgroup-unit identity noted as a future option.
 - The safety allowlist keys on kernel `comm`, which a process sets for itself
   (`prctl(PR_SET_NAME)`/argv[0]) — `internal/enforcers/process/process.go:29-43`. Malware that names
   itself `sshd`/`systemd`/`openshield*` becomes **permanently unkillable** by HIPS; it opts *into*

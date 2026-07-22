@@ -11,5 +11,7 @@ import (
 // is Linux-first (D8). macOS support exists for the CI matrix, not as a shipped enforcer.
 func platformKill(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
 
-// procComm is unsupported on macOS (no /proc) — the critical-process guard is Linux-first (D8).
-func procComm(int) (string, error) { return "", fmt.Errorf("process: comm lookup unsupported on this platform") }
+// procIdentityOf is unsupported on macOS (no /proc) — the critical-process guard is Linux-first (D8).
+func procIdentityOf(int) (ProcIdentity, error) {
+	return ProcIdentity{}, fmt.Errorf("process: identity lookup unsupported on this platform")
+}
