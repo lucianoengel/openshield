@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"sync"
 
@@ -19,6 +20,7 @@ type pendingEnroll struct {
 	akPublic       []byte
 	golden         map[int][]byte
 	expectedSecret []byte
+	token          string // the pre-auth token this enrollment was authorized by (R34-2); consumed on success
 }
 
 // EnrollmentResponder is the gateway side of automated network enrollment (ZT-1):
@@ -29,11 +31,48 @@ type EnrollmentResponder struct {
 	verifier *AttestationVerifier
 	mu       sync.Mutex
 	pending  map[string]pendingEnroll
+	// tokens is the set of operator-provisioned pre-auth tokens still unused (R34-2). When
+	// requireToken is set, an enroll request MUST present a token in this set; the token is
+	// consumed on a SUCCESSFUL enrollment (single-use), so a leaked challenge cannot be replayed
+	// to enroll a second device. Empty + requireToken=false preserves the legacy (unauthenticated)
+	// behavior for a deployment that has not turned pre-auth on.
+	tokens       map[string]struct{}
+	requireToken bool
 }
 
 // NewEnrollmentResponder wires a responder to a verifier.
 func NewEnrollmentResponder(v *AttestationVerifier) *EnrollmentResponder {
-	return &EnrollmentResponder{verifier: v, pending: map[string]pendingEnroll{}}
+	return &EnrollmentResponder{verifier: v, pending: map[string]pendingEnroll{}, tokens: map[string]struct{}{}}
+}
+
+// RequireEnrollTokens turns on pre-authorization (R34-2): only a device presenting one of these
+// operator-provisioned tokens may enroll, and each token authorizes exactly ONE enrollment. Calling
+// it with no tokens turns enforcement on with an empty set — every enrollment is then refused, which
+// is the safe failure (a misconfigured operator denies rather than admits).
+func (e *EnrollmentResponder) RequireEnrollTokens(toks ...string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.requireToken = true
+	for _, t := range toks {
+		if t != "" {
+			e.tokens[t] = struct{}{}
+		}
+	}
+}
+
+// tokenValid reports whether tok is a currently-unused pre-auth token, comparing in constant time so
+// a timing side-channel does not reveal a valid token prefix. Caller holds e.mu.
+func (e *EnrollmentResponder) tokenValid(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	ok := false
+	for known := range e.tokens {
+		if subtle.ConstantTimeCompare([]byte(known), []byte(tok)) == 1 {
+			ok = true
+		}
+	}
+	return ok
 }
 
 // ServeEnroll answers step 1: build a credential-activation challenge for the
@@ -58,6 +97,16 @@ func (e *EnrollmentResponder) handleEnroll(data []byte) (*corev1.AttestationEnro
 	if req.GetSubject() == "" {
 		return nil, fmt.Errorf("enroll request has no subject")
 	}
+	// R34-2: pre-authorization. Credential activation (below) proves the AK is genuine-TPM-resident,
+	// but NOT that this device is authorized to enroll under this subject — without a token check any
+	// device with a co-resident TPM (incl. swtpm) self-enrolls under any pseudonym. Reject an
+	// unrecognized token BEFORE issuing a challenge or storing any pending state.
+	e.mu.Lock()
+	if e.requireToken && !e.tokenValid(req.GetEnrollToken()) {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("enrollment not pre-authorized")
+	}
+	e.mu.Unlock()
 	challenge, secret, err := attest.NewChallenge(req.GetEkPublic(), req.GetAkName())
 	if err != nil {
 		return nil, fmt.Errorf("building challenge: %w", err)
@@ -67,7 +116,7 @@ func (e *EnrollmentResponder) handleEnroll(data []byte) (*corev1.AttestationEnro
 		golden[int(k)] = v
 	}
 	e.mu.Lock()
-	e.pending[req.GetSubject()] = pendingEnroll{akPublic: req.GetAkPublic(), golden: golden, expectedSecret: secret}
+	e.pending[req.GetSubject()] = pendingEnroll{akPublic: req.GetAkPublic(), golden: golden, expectedSecret: secret, token: req.GetEnrollToken()}
 	e.mu.Unlock()
 	return &corev1.AttestationEnrollChallenge{
 		CredentialBlob:  challenge.CredentialBlob,
@@ -109,6 +158,11 @@ func (e *EnrollmentResponder) handleActivate(data []byte) *corev1.AttestationEnr
 	}
 	e.mu.Lock()
 	delete(e.pending, act.GetSubject())
+	// R34-2: consume the pre-auth token on SUCCESS — single-use, so a captured token cannot enroll a
+	// second device. A failed activation above leaves the token spendable (a legitimate retry).
+	if e.requireToken && p.token != "" {
+		delete(e.tokens, p.token)
+	}
 	e.mu.Unlock()
 	return &corev1.AttestationEnrollResult{Enrolled: true}
 }

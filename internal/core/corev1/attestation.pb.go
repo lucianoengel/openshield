@@ -112,12 +112,17 @@ func (x *AttestationReport) GetQuoteSigS() []byte {
 // device submits its EK, AK, and PCR state to enroll. The gateway proves the AK is
 // genuine-TPM-resident by credential activation before recording it.
 type AttestationEnrollRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Subject       string                 `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
-	EkPublic      []byte                 `protobuf:"bytes,2,opt,name=ek_public,json=ekPublic,proto3" json:"ek_public,omitempty"`                                                        // marshaled EK TPM2B_PUBLIC
-	AkPublic      []byte                 `protobuf:"bytes,3,opt,name=ak_public,json=akPublic,proto3" json:"ak_public,omitempty"`                                                        // marshaled AK TPM2B_PUBLIC
-	AkName        []byte                 `protobuf:"bytes,4,opt,name=ak_name,json=akName,proto3" json:"ak_name,omitempty"`                                                              // the AK's TPM name (the challenge binds to it)
-	Golden        map[uint32][]byte      `protobuf:"bytes,5,rep,name=golden,proto3" json:"golden,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // PCR index -> value, the device's baseline (TOFU)
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Subject  string                 `protobuf:"bytes,1,opt,name=subject,proto3" json:"subject,omitempty"`
+	EkPublic []byte                 `protobuf:"bytes,2,opt,name=ek_public,json=ekPublic,proto3" json:"ek_public,omitempty"`                                                        // marshaled EK TPM2B_PUBLIC
+	AkPublic []byte                 `protobuf:"bytes,3,opt,name=ak_public,json=akPublic,proto3" json:"ak_public,omitempty"`                                                        // marshaled AK TPM2B_PUBLIC
+	AkName   []byte                 `protobuf:"bytes,4,opt,name=ak_name,json=akName,proto3" json:"ak_name,omitempty"`                                                              // the AK's TPM name (the challenge binds to it)
+	Golden   map[uint32][]byte      `protobuf:"bytes,5,rep,name=golden,proto3" json:"golden,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // PCR index -> value, the device's baseline (TOFU)
+	// enroll_token is an operator-provisioned pre-authorization secret (R34-2): the
+	// gateway rejects an enrollment whose token it does not recognize, so a device
+	// cannot self-enroll under an arbitrary subject merely by owning a co-resident TPM
+	// (incl. swtpm). Credential activation proves EK/AK co-residence, NOT who-may-enroll.
+	EnrollToken   string `protobuf:"bytes,6,opt,name=enroll_token,json=enrollToken,proto3" json:"enroll_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -185,6 +190,13 @@ func (x *AttestationEnrollRequest) GetGolden() map[uint32][]byte {
 		return x.Golden
 	}
 	return nil
+}
+
+func (x *AttestationEnrollRequest) GetEnrollToken() string {
+	if x != nil {
+		return x.EnrollToken
+	}
+	return ""
 }
 
 // AttestationEnrollChallenge is the gateway's reply to step 1: a credential-
@@ -368,13 +380,14 @@ const file_openshield_v1_attestation_proto_rawDesc = "" +
 	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12!\n" +
 	"\fquote_attest\x18\x03 \x01(\fR\vquoteAttest\x12\x1e\n" +
 	"\vquote_sig_r\x18\x04 \x01(\fR\tquoteSigR\x12\x1e\n" +
-	"\vquote_sig_s\x18\x05 \x01(\fR\tquoteSigS\"\x8f\x02\n" +
+	"\vquote_sig_s\x18\x05 \x01(\fR\tquoteSigS\"\xb2\x02\n" +
 	"\x18AttestationEnrollRequest\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x1b\n" +
 	"\tek_public\x18\x02 \x01(\fR\bekPublic\x12\x1b\n" +
 	"\tak_public\x18\x03 \x01(\fR\bakPublic\x12\x17\n" +
 	"\aak_name\x18\x04 \x01(\fR\x06akName\x12K\n" +
-	"\x06golden\x18\x05 \x03(\v23.openshield.v1.AttestationEnrollRequest.GoldenEntryR\x06golden\x1a9\n" +
+	"\x06golden\x18\x05 \x03(\v23.openshield.v1.AttestationEnrollRequest.GoldenEntryR\x06golden\x12!\n" +
+	"\fenroll_token\x18\x06 \x01(\tR\venrollToken\x1a9\n" +
 	"\vGoldenEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\rR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\x86\x01\n" +

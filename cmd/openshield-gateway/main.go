@@ -392,6 +392,19 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			// Automated network enrollment: a device proves its AK genuine-TPM-resident
 			// by credential activation and self-enrolls over the wire (no operator file).
 			enroller := gateway.NewEnrollmentResponder(av)
+			// R34-2: pre-authorization. OPENSHIELD_ENROLL_PREAUTH_TOKENS is a comma-separated set of
+			// operator-provisioned single-use tokens; when set, only a device presenting one may
+			// enroll. Without it the transport keeps the legacy (open) behavior — log which mode.
+			if raw := os.Getenv("OPENSHIELD_ENROLL_PREAUTH_TOKENS"); raw != "" {
+				toks := strings.Split(raw, ",")
+				for i := range toks {
+					toks[i] = strings.TrimSpace(toks[i])
+				}
+				enroller.RequireEnrollTokens(toks...)
+				log.Info("gateway: enrollment pre-authorization ENABLED (single-use tokens required)")
+			} else {
+				log.Warn("gateway: enrollment pre-authorization DISABLED — any device with a co-resident TPM can self-enroll; set OPENSHIELD_ENROLL_PREAUTH_TOKENS to require a token (R34-2)")
+			}
 			if _, err := enroller.ServeEnroll(conn); err != nil {
 				fatal(log, "attestation enroll serve", err)
 			}

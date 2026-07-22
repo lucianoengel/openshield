@@ -32,6 +32,11 @@ message AttestationEnrollRequest {
   bytes ak_public = 3;   // marshaled AK TPM2B_PUBLIC
   bytes ak_name = 4;     // the AK's TPM name (the challenge binds to it)
   map<uint32, bytes> golden = 5; // PCR index -> value, the device's baseline (TOFU)
+  // enroll_token is an operator-provisioned pre-authorization secret (R34-2): the
+  // gateway rejects an enrollment whose token it does not recognize, so a device
+  // cannot self-enroll under an arbitrary subject merely by owning a co-resident TPM
+  // (incl. swtpm). Credential activation proves EK/AK co-residence, NOT who-may-enroll.
+  string enroll_token = 6;
 }
 
 // AttestationEnrollChallenge is the gateway's reply to step 1: a credential-
