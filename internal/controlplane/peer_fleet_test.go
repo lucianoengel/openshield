@@ -41,6 +41,19 @@ func peerAlertCount(t *testing.T, subject string) int {
 	return n
 }
 
+// peerAlertHost returns the agent_id recorded on a subject's most recent peer alert.
+func peerAlertHost(t *testing.T, subject string) string {
+	t.Helper()
+	pool := mustPoolCP(t)
+	defer pool.Close()
+	var host string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT agent_id FROM peer_alerts WHERE subject_id=$1 ORDER BY detected_at DESC LIMIT 1`, subject).Scan(&host); err != nil {
+		t.Fatal(err)
+	}
+	return host
+}
+
 // eventFor builds an Event whose behaviour is attributed to a pseudonymous subject.
 func eventFor(id, subject string) *corev1.Event {
 	return &corev1.Event{EventId: id, Subject: &corev1.Subject{PseudonymousId: subject}}
@@ -78,6 +91,12 @@ func TestPeerAlertOnVerifiedOutlier(t *testing.T) {
 	waitFor(t, func() bool { return srv.PeerAlerts.Load() >= 1 })
 	if got := peerAlertCount(t, "outlier"); got < 1 {
 		t.Fatalf("no peer alert for the outlier subject (%d) — the cross-fleet signal did not fire", got)
+	}
+	// SIEM-2: the alert must record the VERIFIED originating agent, threaded from the signed
+	// envelope. If observePeer dropped the agent id, this would be empty and cross-host
+	// correlation would be blind to which host detected the outlier.
+	if host := peerAlertHost(t, "outlier"); host != "agent-peer" {
+		t.Errorf("peer alert host = %q, want agent-peer (the verified originating agent)", host)
 	}
 	for _, s := range []string{"p1", "p2", "p3"} {
 		if got := peerAlertCount(t, s); got != 0 {

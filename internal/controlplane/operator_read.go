@@ -17,6 +17,7 @@ type PeerAlert struct {
 	SubjectID      string    `json:"subject_id"`
 	RiskScore      float64   `json:"risk_score"`
 	ContextVersion string    `json:"context_version"`
+	AgentID        string    `json:"agent_id"` // originating host of the triggering event (SIEM-2); "" if pre-identity
 	DetectedAt     time.Time `json:"detected_at"`
 }
 
@@ -26,7 +27,7 @@ func (s *Server) RecentPeerAlerts(ctx context.Context, limit int) ([]PeerAlert, 
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT subject_id, risk_score, context_version, detected_at
+		`SELECT subject_id, risk_score, context_version, agent_id, detected_at
 		   FROM peer_alerts ORDER BY detected_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func (s *Server) RecentPeerAlerts(ctx context.Context, limit int) ([]PeerAlert, 
 	var out []PeerAlert
 	for rows.Next() {
 		var a PeerAlert
-		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.DetectedAt); err != nil {
+		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -67,7 +68,7 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	if limit > maxSearchLimit {
 		limit = maxSearchLimit // SEC-8: hard cap even for a direct (non-HTTP) caller
 	}
-	q := `SELECT subject_id, risk_score, context_version, detected_at FROM peer_alerts`
+	q := `SELECT subject_id, risk_score, context_version, agent_id, detected_at FROM peer_alerts`
 	var conds []string
 	var args []any
 	add := func(cond string, val any) {
@@ -100,7 +101,7 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	var out []PeerAlert
 	for rows.Next() {
 		var a PeerAlert
-		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.DetectedAt); err != nil {
+		if err := rows.Scan(&a.SubjectID, &a.RiskScore, &a.ContextVersion, &a.AgentID, &a.DetectedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

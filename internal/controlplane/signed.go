@@ -40,7 +40,7 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) {
 	// Order: Observe THEN evaluate, so the subject's own event is in the baseline
 	// it is judged against — matching the endpoint resolver (D53).
 	if s.analyzer != nil && env.GetKind() == "event" {
-		s.observePeer(ctx, env.GetPayload())
+		s.observePeer(ctx, env.GetAgentId(), env.GetPayload())
 	}
 }
 
@@ -48,7 +48,7 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) {
 // analyzer and records a peer alert when the subject's peer-relative risk crosses
 // the threshold — throttled per subject so one outlier does not alert on every
 // event (a rising-edge limiter, not a change to the risk signal).
-func (s *Server) observePeer(ctx context.Context, payload []byte) {
+func (s *Server) observePeer(ctx context.Context, agentID string, payload []byte) {
 	var e corev1.Event
 	if proto.Unmarshal(payload, &e) != nil {
 		return
@@ -72,7 +72,7 @@ func (s *Server) observePeer(ctx context.Context, payload []byte) {
 	s.peerLastAlert[subject] = now
 	s.peerMu.Unlock()
 
-	if err := s.recordPeerAlert(ctx, subject, pc.RiskScore, pc.Version, now); err != nil {
+	if err := s.recordPeerAlert(ctx, subject, pc.RiskScore, pc.Version, agentID, now); err != nil {
 		s.DecodeFailures.Add(1)
 		return
 	}
@@ -89,10 +89,10 @@ func (s *Server) observePeer(ctx context.Context, payload []byte) {
 
 // recordPeerAlert persists a server-side detection to peer_alerts — a DERIVATION,
 // deliberately apart from received telemetry (D54); it is not the ledger (D38).
-func (s *Server) recordPeerAlert(ctx context.Context, subject string, risk float64, ctxVersion string, at time.Time) error {
+func (s *Server) recordPeerAlert(ctx context.Context, subject string, risk float64, ctxVersion, agentID string, at time.Time) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, detected_at) VALUES ($1,$2,$3,$4)`,
-		subject, risk, ctxVersion, at.UTC())
+		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id, detected_at) VALUES ($1,$2,$3,$4,$5)`,
+		subject, risk, ctxVersion, agentID, at.UTC())
 	return err
 }
 
