@@ -199,3 +199,13 @@ that one checksum plus a range is stronger than a structural rule and weaker tha
 #### Scenario: A real routing number is detected and near-misses are not
 - **WHEN** the classifier scans text containing valid routing numbers and 9-digit look-alikes
 - **THEN** the valid routing numbers are detected while a checksum-off-by-one and a valid-checksum-but-out-of-range-lead number read clean
+
+### Requirement: The classifier detects Canadian SINs by grouping and Luhn checksum
+The classifier MUST detect a Canadian Social Insurance Number by validating a conventionally
+grouped candidate (NNN-NNN-NNN, hyphen or space separated) against the Luhn checksum, and MUST NOT
+report a grouped number that fails Luhn nor a bare (ungrouped) 9-digit run. A SIN hit MUST carry a
+confidence reflecting Luhn-over-a-distinctive-grouping — strong, and near the credit-card Luhn.
+
+#### Scenario: A grouped Luhn-valid SIN is detected and look-alikes are not
+- **WHEN** the classifier scans text containing grouped SINs and 9-digit look-alikes
+- **THEN** the grouped Luhn-valid numbers are detected while a Luhn-off-by-one, a grouped-but-invalid number, and a bare ungrouped run read clean

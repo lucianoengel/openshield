@@ -183,3 +183,43 @@ func validABA(s string) bool {
 	sum := 3*(d(0)+d(3)+d(6)) + 7*(d(1)+d(4)+d(7)) + (d(2) + d(5) + d(8))
 	return sum%10 == 0
 }
+
+// --- Canadian Social Insurance Number (SIN) ---
+
+// confSIN: a Luhn checksum over a distinctively grouped number is strong, low-FP evidence —
+// comparable to the credit-card Luhn, a touch lower because the number is shorter (9 vs 13–19
+// digits, so a chance Luhn pass is likelier).
+const confSIN = 0.85
+
+type caSIN struct{}
+
+// Candidate: the conventional grouped form NNN-NNN-NNN (hyphen or space separated). A bare
+// 9-digit SIN is deliberately NOT matched — like a bare SSN, it collides with too much; the
+// grouping is what makes it a SIN rather than an arbitrary number, and the Luhn does the rest.
+var caSINRe = regexp.MustCompile(`\b\d{3}[ -]\d{3}[ -]\d{3}\b`)
+
+func (caSIN) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_CA_SIN }
+func (caSIN) Scan(text []byte) (int, float64) {
+	return countValid(caSINRe, text, stripNonDigits, validSIN), confSIN
+}
+
+// validSIN applies the Luhn checksum over the 9 digits (the published SIN validation).
+func validSIN(s string) bool {
+	if len(s) != 9 {
+		return false
+	}
+	sum := 0
+	double := false
+	for i := len(s) - 1; i >= 0; i-- {
+		d := int(s[i] - '0')
+		if double {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+		double = !double
+	}
+	return sum%10 == 0
+}

@@ -43,7 +43,7 @@ func New() *Classifier {
 	return &Classifier{detectors: []Detector{
 		cpf{}, creditCard{}, ssn{}, email{}, phone{},
 		privateKey{}, awsAccessKey{}, jwt{}, apiToken{},
-		iban{}, healthData{}, abaRouting{},
+		iban{}, healthData{}, abaRouting{}, caSIN{},
 	}}
 }
 

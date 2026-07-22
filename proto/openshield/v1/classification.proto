@@ -33,6 +33,10 @@ enum DetectorType {
   // Luhn) plus the Federal Reserve leading-digit range — evidence between a checksumless
   // structural rule and a full check-digit scheme.
   DETECTOR_TYPE_ABA_ROUTING = 13;
+  // Canadian Social Insurance Number (SIN), DLP. A Luhn checksum over the conventional
+  // grouped format — strong, low-FP evidence (the grouping distinguishes it from a bare
+  // 9-digit run and the checksum filters the rest).
+  DETECTOR_TYPE_CA_SIN = 14;
 }
 
 // LocalMatch holds matched content. Host-only.
