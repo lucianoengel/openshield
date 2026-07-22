@@ -18,7 +18,11 @@ func TestProducerRoundTripsThroughSignedSubscriber(t *testing.T) {
 	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
 
 	store := gateway.NewPostureStore()
-	sub := gateway.NewPostureSubscriber(store, pub)
+	// SEC-12: the subscriber verifies each update against the reporting agent's ENROLLED key,
+	// resolved by subject. Enrolling pub for every subject lets the happy path verify (signed with
+	// priv) while the wrong-key forgery below (signed with otherPriv) still fails verification.
+	keyFor := func(_ string) (ed25519.PublicKey, bool) { return pub, true }
+	sub := gateway.NewPostureSubscriber(store, keyFor)
 
 	// The producer builds a signed posture update for its own subject.
 	r := posture.Report{Compliant: true, DiskEncrypted: true, AgentPresent: true, OSPatchTier: core.PatchCurrent}
