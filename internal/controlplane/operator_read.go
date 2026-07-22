@@ -150,6 +150,26 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		writeJSON(w, alerts)
 	})
 
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// SEC-8: a malformed filter param is a 400, not a silent drop — silently ignoring a
+		// bad since/until/limit returns over-broad results an investigator would trust.
+		f, err := parseEventFilter(r)
+		if err != nil {
+			http.Error(w, "bad filter: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		events, err := s.SearchTelemetry(r.Context(), f)
+		if err != nil {
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, events)
+	})
+
 	mux.HandleFunc("/incidents", s.incidentsHandler)
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
