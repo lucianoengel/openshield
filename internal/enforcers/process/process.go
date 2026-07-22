@@ -17,21 +17,42 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
+// criticalNames are processes that must NEVER be killed by a HIPS verdict — killing one takes down
+// the host (init/systemd), locks out remote access (sshd/login), or destroys the platform itself
+// (the data store, the container runtime). Names are the kernel `comm` (world-readable, ≤15 chars).
+var criticalNames = map[string]bool{
+	"systemd": true, "init": true, "sshd": true, "login": true, "agetty": true,
+	"postgres": true, "postmaster": true, "dbus-daemon": true, "systemd-logind": true,
+	"systemd-journal": true, "containerd": true, "dockerd": true, "kubelet": true, "conmon": true,
+}
+
+// isCriticalProcess reports whether a process comm must be protected from KILL. The fleet's OWN
+// binaries (comm begins "openshield") are always protected so a verdict cannot make the platform
+// kill its own agent/worker/engine/gateway (HIPS-7).
+func isCriticalProcess(comm string) bool {
+	if strings.HasPrefix(comm, "openshield") {
+		return true
+	}
+	return criticalNames[comm]
+}
+
 // KillEnforcer carries out KILL_PROCESS by terminating a process by pid.
 type KillEnforcer struct {
 	selfPID int
-	kill    func(pid int) error // injectable; defaults to the platform kill
+	kill    func(pid int) error          // injectable; defaults to the platform (pid-reuse-safe) kill
+	nameOf  func(pid int) (string, error) // process comm for the critical-process guard; injectable
 }
 
 // NewKillEnforcer builds the enforcer with the platform's real kill and this process's pid
 // as the self-protection guard.
 func NewKillEnforcer() *KillEnforcer {
-	return &KillEnforcer{selfPID: os.Getpid(), kill: platformKill}
+	return &KillEnforcer{selfPID: os.Getpid(), kill: platformKill, nameOf: procComm}
 }
 
 func (*KillEnforcer) Capabilities() []corev1.Action {
@@ -56,6 +77,12 @@ func (k *KillEnforcer) EnforceTarget(_ context.Context, _ *corev1.Decision, targ
 	}
 	if pid == k.selfPID {
 		return fmt.Errorf("process: refusing to kill self (pid %d)", pid)
+	}
+	// Critical-process guard (HIPS-7): refuse to kill init/systemd/sshd/the DB/the fleet's own
+	// binaries. If the name can't be read the process is almost certainly already gone (comm is
+	// world-readable for a live process), and the pid-reuse-safe kill below no-ops a dead instance.
+	if name, err := k.nameOf(pid); err == nil && isCriticalProcess(name) {
+		return fmt.Errorf("process: refusing to kill critical process %q (pid %d)", name, pid)
 	}
 	return k.kill(pid)
 }

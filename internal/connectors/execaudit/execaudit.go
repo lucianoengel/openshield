@@ -21,6 +21,10 @@ import (
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
+// maxArgc bounds how many argv entries ParseExecve will read; a real exec has few args, and an
+// attacker-supplied argc must not turn the per-arg line scan into a CPU denial-of-service (HIPS-7).
+const maxArgc = 1024
+
 // Syscall is the parsed content of an audit SYSCALL record for an exec.
 type Syscall struct {
 	AuditID string // the "timestamp:serial" that links the record pair
@@ -70,6 +74,12 @@ func ParseExecve(line string) (Execve, error) {
 	argc := 0
 	if v := field(line, "argc"); v != "" {
 		argc, _ = strconv.Atoi(v)
+	}
+	// BOUND argc (HIPS-7): each iteration scans the whole line via field(), so an attacker-supplied
+	// argc of a billion turns ParseExecve into an O(argc·len) CPU denial-of-service. A real exec's
+	// argv is small; cap it. A negative argc (garbage) yields no args.
+	if argc > maxArgc {
+		argc = maxArgc
 	}
 	for i := 0; i < argc; i++ {
 		a := field(line, "a"+strconv.Itoa(i))
