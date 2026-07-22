@@ -4,10 +4,21 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
 	"sync/atomic"
+	"time"
+)
+
+const (
+	// defaultMaxConns caps concurrent sessions so a connection flood cannot spawn unbounded
+	// goroutines/buffers. Excess connections are refused (closed + counted), not queued.
+	defaultMaxConns = 128
+	// defaultIdleTimeout bounds how long a session may stall between lines, defeating slowloris —
+	// a client that opens a connection and dribbles (or sends nothing) is dropped, not held.
+	defaultIdleTimeout = 30 * time.Second
 )
 
 // Listener is the runnable half of the SMTP connector (NIPS-3): a minimal SMTP server that
@@ -25,7 +36,15 @@ type Listener struct {
 	sink    func(*Message)
 	logger  *slog.Logger
 	dropped atomic.Int64
+	refused atomic.Int64
 	maxBody int64
+
+	// MaxConns caps concurrent sessions; IdleTimeout bounds per-line stall. Both fall back to
+	// their defaults when non-positive, so a caller may tune them before Serve but never disable
+	// the protection. Exported so a test can set aggressive bounds.
+	MaxConns    int
+	IdleTimeout time.Duration
+	sem         chan struct{}
 }
 
 // Listen binds a TCP socket at addr and delivers each parsed message to sink.
@@ -40,7 +59,8 @@ func Listen(addr string, sink func(*Message), logger *slog.Logger) (*Listener, e
 	if err != nil {
 		return nil, fmt.Errorf("smtp: listen %q: %w", addr, err)
 	}
-	return &Listener{ln: ln, sink: sink, logger: logger, maxBody: maxMessage}, nil
+	return &Listener{ln: ln, sink: sink, logger: logger, maxBody: maxMessage,
+		MaxConns: defaultMaxConns, IdleTimeout: defaultIdleTimeout}, nil
 }
 
 // Addr is the bound address (useful when the caller passed :0 for an ephemeral port).
@@ -49,8 +69,19 @@ func (l *Listener) Addr() net.Addr { return l.ln.Addr() }
 // Dropped reports how many sessions failed to parse.
 func (l *Listener) Dropped() int64 { return l.dropped.Load() }
 
-// Serve accepts sessions until ctx is cancelled, each handled in its own goroutine.
+// Refused reports how many connections were closed unhandled because the concurrency cap was full.
+func (l *Listener) Refused() int64 { return l.refused.Load() }
+
+// Serve accepts sessions until ctx is cancelled. Each session runs in its own goroutine, but the
+// number of concurrent sessions is CAPPED: a connection arriving while the cap is full is refused
+// (closed + counted) rather than queued, so a connection flood cannot grow goroutines/buffers
+// without bound.
 func (l *Listener) Serve(ctx context.Context) error {
+	max := l.MaxConns
+	if max <= 0 {
+		max = defaultMaxConns
+	}
+	l.sem = make(chan struct{}, max)
 	go func() { <-ctx.Done(); _ = l.ln.Close() }()
 	for {
 		conn, err := l.ln.Accept()
@@ -60,7 +91,14 @@ func (l *Listener) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("smtp: accept: %w", err)
 		}
-		go l.handle(conn)
+		select {
+		case l.sem <- struct{}{}:
+			go func() { defer func() { <-l.sem }(); l.handle(conn) }()
+		default:
+			// At capacity — refuse this connection rather than let it accumulate.
+			l.refused.Add(1)
+			_ = conn.Close()
+		}
 	}
 }
 
@@ -68,17 +106,28 @@ func (l *Listener) Serve(ctx context.Context) error {
 // command lines into a transcript, then parses it on QUIT/close and delivers the message.
 func (l *Listener) handle(conn net.Conn) {
 	defer conn.Close()
+	idle := l.IdleTimeout
+	if idle <= 0 {
+		idle = defaultIdleTimeout
+	}
 	w := func(s string) { _, _ = conn.Write([]byte(s)) }
 	w("220 openshield.capture ESMTP\r\n")
 
 	var transcript strings.Builder
-	r := bufio.NewReader(conn)
+	// Bound the TOTAL bytes the session can make us buffer: without this, a stream with no newline
+	// makes ReadString grow its buffer unbounded (OOM). The LimitReader caps it at maxBody, so an
+	// unterminated flood returns EOF at the ceiling instead of exhausting memory.
+	r := bufio.NewReader(io.LimitReader(conn, l.maxBody+1))
 	inData := false
 	var total int64
 	for {
+		// Per-line idle deadline (slowloris defense): a client that stalls between lines is dropped
+		// rather than holding a goroutine + connection indefinitely. Each line resets it, so a slow
+		// but progressing client is fine.
+		_ = conn.SetReadDeadline(time.Now().Add(idle))
 		line, err := r.ReadString('\n')
 		if err != nil {
-			break // client closed (or read error) — parse what we have
+			break // client closed, timed out, or hit the size ceiling — parse what we have
 		}
 		total += int64(len(line))
 		if total > l.maxBody {
