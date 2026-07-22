@@ -26,7 +26,7 @@ audit ledger where *every* decision is courtroom-grade evidence.
 > ### ⚠️ Project status
 > **OpenShield is pre-alpha.** The **observe path runs end-to-end as a binary** — a real file
 > dropped in a watched directory is classified in a sandboxed worker, evaluated against policy, and
-> lands an `ALERT` in the hash-chained ledger ([`deploy/observe-e2e.sh`](deploy)). A fleet control
+> lands an `ALERT` in the hash-chained ledger ([`deploy/observe-e2e.sh`](deploy/observe-e2e.sh)). A fleet control
 > plane, mutual-TLS transport, network gateway, HIPS process pipeline, and server-side correlation
 > are built and tested. **Inline blocking (the privileged permission-mode agent) is deferred**, and
 > the platform is **not yet production-hardened**: no packaged release, single-node durability. The
@@ -41,7 +41,7 @@ plugin, so a network detector, an endpoint process rule, and an identity signal 
 the same stages and land in the same tamper-evident evidence store.
 
 ```
-Event  →  Classify  →  Policy  →  Decision  →  Enforce  →  Audit  →  Investigate  →  Analytics
+Event → Classify → Policy → Decision → Enforce → Audit     ·     (above the pipeline) Investigate · Analyze · Respond
 ```
 
 New capability arrives as a new **Producer** (event source), **Classifier** (detector),
@@ -98,11 +98,11 @@ flowchart LR
   ID["🔐 Identity<br/>access · device posture"] --> C
   C{{"Classify<br/>sandboxed worker · no network"}} -->|"type + count + metadata only"| POL["Policy<br/>rules + risk context"]
   POL --> DEC["Decision<br/>closed, typed action set"]
-  DEC --> ENF["Enforce<br/>alert · block · quarantine<br/>redirect · encrypt · kill · contain"]
+  DEC --> ENF["Enforce<br/>alert · block · quarantine<br/>redirect · encrypt · kill"]
   ENF --> LED[("Audit<br/>tamper-evident ledger")]
   LED --> INC["Investigate<br/>incidents · cases"]
-  INC --> RSP["Analyze &amp; respond<br/>UEBA · correlation · playbooks"]
-  RSP -.->|"risk + signed intent<br/>(context, never commands)"| POL
+  INC --> RSP["Analyze &amp; respond<br/>UEBA · correlation · playbooks (planned)"]
+  RSP -.->|"risk (live) + intent (planned)<br/>(context, never commands)"| POL
   LED -.->|attest| WIT{{"External witness"}}
 ```
 
@@ -138,7 +138,7 @@ flowchart TB
     end
     subgraph CP["Control plane"]
       BUS(["📨 Telemetry bus · mTLS"])
-      SRV["<b>Fleet server</b><br/>SIEM — search · correlation · UEBA<br/>XDR — cross-domain incidents<br/>SOAR — cases · playbooks · notify"]
+      SRV["<b>Fleet server</b><br/>SIEM — search · correlation · UEBA<br/>XDR — cross-domain incidents (planned)<br/>SOAR — cases · notify (playbooks planned)"]
       LED[("Fleet store +<br/>hash-chained audit ledger")]
       PKI["Provisioning · PKI<br/>enrollment · identity"]
       ANC["Anchor ·<br/>external witness"]
@@ -152,6 +152,7 @@ flowchart TB
     ITSM["ITSM · ticketing"]
     TI["Threat-intel feeds"]
     LOGS["Syslog · external logs"]
+    RUN["Response runners (planned)<br/>subscribe to signed intent"]
   end
 
   %% data plane — user access
@@ -161,22 +162,30 @@ flowchart TB
   OPS ==>|"ZTNA access"| GW
 
   %% management plane — signed events into the inner network (the SIEM/XDR feed)
-  HOST <-->|"signed host events &amp; telemetry · mTLS"| GW
-  GW <-->|"the only path in"| BUS
+  HOST <-->|"signed telemetry · mTLS"| GW
+  GW <-->|"controlled ingress"| BUS
   BUS ==>|"host + network events → SIEM / XDR"| SRV
   SRV --> LED --> ANC
+  GW -.->|"operator console · mTLS"| SRV
 
   %% identity / zero trust
   PKI -.->|"enrolls · issues identity"| HOST
   IDP -.->|"SSO · JWT"| GW
   LOGS -.->|"additional log sources"| SRV
 
-  %% coordinated response — XDR / SOAR feedback
-  SRV -.->|"published risk · signed response-intent"| BUS
+  %% coordinated response — risk (live) + response-intent (planned) back to every enforcement point
+  SRV -.->|"risk (live) · intent (planned)"| BUS
+  BUS -.->|"typed context"| HOST
+  BUS -.->|"typed context"| GW
   SRV -.->|"enrich"| TI
-  SRV -.->|"disable user"| IDP
-  SRV -.->|"open ticket"| ITSM
+  SRV -.->|"signed intent (planned)"| RUN
+  RUN -.->|"disable user"| IDP
+  RUN -.->|"open ticket"| ITSM
 ```
+
+<sub><i>Deployment topology (intended). The gateway is the network boundary into the protected zone;
+dashed edges are planned (SOAR response-runners, response-intent, cross-domain XDR). What runs today
+vs. what's planned is spelled out in the capability table above.</i></sub>
 
 ## 🧩 Components
 
@@ -186,10 +195,10 @@ OpenShield ships as focused, single-responsibility binaries (all Go, `cmd/`):
 |---|---|
 | **`openshield-engine`** | The endpoint pipeline. Unprivileged, network-capable; watches directories via notify-mode fanotify, classifies via the worker, evaluates policy, decides, and appends to the ledger. |
 | **`openshield-worker`** | The unprivileged, seccomp-hardened parser. Reads classify requests, opens files with its own credentials, classifies untrusted bytes — holds no network and no secrets. |
-| **`openshield-gateway`** | The network data plane. TLS-intercepting forward proxy (egress DLP), ZTNA access broker, and DNS/SMTP inspection — each request classified in the sandboxed worker. |
+| **`openshield-gateway`** | The network data plane. TLS-intercepting proxy (inline DLP), ZTNA access broker, and DNS/SMTP inspection — each request classified in the sandboxed worker. |
 | **`openshield-server`** | The fleet control plane. Ingests signed telemetry over NATS, persists the fleet aggregate, runs correlation/incidents and alert delivery. It coordinates and observes; it does not control. |
 | **`openshield-fleet-agent`** | The fleet-facing endpoint half: generates a per-agent identity, enrolls, and publishes signed telemetry, heartbeats, and device posture. |
-| **`openshield-agent`** | The privileged inline-enforcement agent (fanotify **permission** mode) — **deferred to Phase 2** (needs `CAP_SYS_ADMIN`; inline blocking, not yet wired). |
+| **`openshield-agent`** | The privileged inline-enforcement agent (fanotify **permission** mode) — **deferred** (needs `CAP_SYS_ADMIN`; inline blocking, not yet wired). |
 | **`openshield-provision`** | Issues the credentials the stack needs (enrollment tokens, client certs). Minimal provisioning for dev and small fleets — not a full PKI. |
 | **`openshield-anchor`** | Witnesses the audit-ledger head and stores an external anchor. It attests to the head; it cannot append — a witness the ledger writer cannot impersonate. |
 | **`openshieldctl`** | Operator CLI for querying and verifying the audit ledger. |
