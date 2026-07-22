@@ -50,7 +50,7 @@ close the trust-bootstrap and durability-wiring holes R34 found), not more bread
 
 | Category | Maturity | One-line reality (R34-verified) |
 |---|---|---|
-| **XDR** (umbrella) | ~30% | Foundations laid but **not wired**: `xdr.Resolve/Link` entity graph (D195) is real & race-tested but **has zero runtime callers** — orphaned store. XDR-3 (D196) stamps the canonical pseudonym on endpoint events *client-side* and `validate.go:103` enforces it — but **ingest does not** (subject contract is trust-the-client). Correlation still single-domain (`correlate.go:63` reads only `peer_alerts`). Spine unchanged: wire ingest→graph → XDR-2 normalize → XDR-4 correlate → XDR-5/6/7. |
+| **XDR** (umbrella) | ~35% | Entity graph now **WIRED (XDR-1-WIRE, D203)**: enrollment + verified ingest populate the device entity, the gateway dual-credential path links device⋈user — the store is no longer orphaned, and two real producers converge (test #1). Ingest now also enforces the subject contract server-side (R34-12). Correlation still single-domain (`correlate.go:63` reads only `peer_alerts`) — next: XDR-2 normalize every domain's alerts onto the entity-keyed table → XDR-4 correlate → XDR-5/6/7. |
 | Zero Trust (ZTNA) | ~65% | **Big jump: full hardware attestation chain (ZT-1, D183–191) is REAL and swtpm-proven** end-to-end — TPM quote, EK→AK credential activation, measured-boot PCR policy, NATS transport, continuous re-attestation, network self-enrollment; `Attested` set only by gateway verification. + live JWKS refresher (D182, off-request-path) + RBAC tiers (D179). **But trust-bootstrap holes cap it (R34):** no EK-cert-chain anchor + no enroll authz (any co-resident TPM self-enrolls as any subject), attestation verdict **never expires** (stop attesting → stay trusted), JWKS accepts `http://`. No ZTNA client (ZT-4), no DPoP/jti. |
 | DLP | ~55% | **Detection depth jumped:** EDM single-value (D193) + multi-cell record (D197) + IDM document-fingerprint (D198) + exfil-channel awareness (D194) + keyword-proximity passport/DL (D199) all **REAL & boundary-honored** (hash-only index into the sandbox; no raw content/fingerprints leave). Still **file+HTTP only**: no clipboard/print/screenshot producers, no OCR, **no operator index-builder tool**, indexes **unsigned** (inconsistent with ADR-9). DLP-6 endpoint coaching absent. |
 | NIPS / NTPS | ~35% | **HTTP is a real inline IPS** — NIPS-2 threat-intel engine (D192) matches flow dest/URI against an operator IOC feed and a policy blocks known-bad, end-to-end proven. NIPS-4 response-body inspection **observe-only (D200, in-flight)**. Still: **DNS tap/detect-only** (no inline sinkhole, NIPS-8), **SMTP parse-only** (not a filtering MTA), no transparent TPROXY (NIPS-1), HTTP/1.1 only, IOC feed **loads once at boot** (no refresh/STIX/TAXII), no JA3/body signatures. |
@@ -251,9 +251,9 @@ Each carries its verifying mutation test from *Round-34 audit findings* above.
 3. **R34-2 · EK-cert-chain anchor + enroll authz** (P1 HIGH) — the attestation-vs-toy line. *Test #5.* (M)
 4. **R34-3 · HTTPS-only JWKS + outage backoff** (P1 HIGH) — plaintext JWKS = auth bypass. (S)
 5. **R34-5 · Prove the HIPS-7 pid-reuse plumbing** (P1 HIGH) — the guard may be silently inert. *Test #3.* (S)
-6. **XDR-1-WIRE · Populate the entity graph** (P1) — call `xdr.Resolve/Link` from enrollment/posture/
-   gateway-identity + endpoint ingest so the shipped D195 store stops being orphaned. *Test #1.* The XDR
-   lane is dead in the water until this lands; it's ~1–2 days because the store is done. **Do before XDR-2.**
+6. **XDR-1-WIRE · Populate the entity graph** ✅ DONE (d0319d0, D203) — enrollment + verified ingest
+   resolve the device entity; the gateway dual-credential path links device⋈user; all best-effort/derived.
+   *Test #1 landed (two real producers converge; kills the TestCanonicalJoin tautology).* **XDR-2 unblocked.**
 7. **R34-6 · Leader failover hardening** (P2) — retry transient DB errors, fencing token, failover test. *Test #7.* (M)
 8. **R34-7/8/9/12 · Correctness cluster** (P2) — ledger-append error not swallowed · loader alloc bound
    (*Test #8*) · notify-queue leak · server-side subject contract (*Test #2*). (S each)
@@ -591,12 +591,12 @@ approval.* **Dependency spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 → XDR-4 �
 - ✅ **XDR-1 · Unified entity model (SHIPPED D195)** — X (schema+context) · M · **hard-dep IDENT-1/ADR-6.**
   `entities` ⋈ `entity_aliases` (migration 021), keyed by the ONE canonical pseudonym; `internal/xdr`
   `Resolve` (atomic find-or-create) + `Link` (device ⋈ user merge). Real-Postgres-proven canonical join
-  + concurrency + merge. **⚠️ R34: the store is REAL but ORPHANED — zero runtime callers; nothing
-  populates it yet, and `TestCanonicalJoin` proves only hash-determinism (both "domains" are two in-test
-  `pseudonym.Of` calls), not that real producers converge. `XDR-1-WIRE` (R34 priority lane) closes both
-  before XDR-2.** Populating from enrollment/posture/gateway-identity ingest is that ticket. *Accept
-  (strengthened): an exec event from agent A and a proxied request from CN=A's device resolve to the same
-  entity id via the REAL producers through real ingest, not two in-test derivations.*
+  + concurrency + merge. **✅ R34 XDR-1-WIRE CLOSED (d0319d0, D203): the store is now POPULATED by real
+  producers** — enrollment + verified telemetry ingest resolve the device entity; the gateway
+  dual-credential path links device⋈user; all best-effort/derived (D38). Test #1 proves two REAL
+  producers (Enroll + `handleSigned`) converge on one entity id through real ingest, killing the
+  `TestCanonicalJoin` tautology. *Accept met. Reading the graph for correlation is XDR-4; normalizing
+  every domain's alerts onto the entity-keyed table is XDR-2 (now unblocked).*
 - ✅ **XDR-3 · Canonical subject stamping (SHIPPED D196)** — P · M. The agent/connector layer stamps
   the device's canonical pseudonym as `Event.Subject` (per-target id stays in the Target oneof). Also
   resolves the `core/validate.go:103` tension (it requires a top-level subject no endpoint connector
