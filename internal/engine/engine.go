@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
@@ -120,6 +121,11 @@ type Engine struct {
 	ledger core.Ledger
 	now    func() time.Time
 	logger *slog.Logger
+
+	// enforceAuditDropped counts enforcement-audit appends that failed (R34-7) — a
+	// silently-dropped ledger append for an automated action would be a hole in the
+	// evidentiary trail, so it is counted and logged instead.
+	enforceAuditDropped atomic.Int64
 
 	// subject is the device's canonical pseudonym (pseudonym.Of(agentID), IDENT-1),
 	// agentID the raw provenance id. When set, Process stamps the Subject (and the
@@ -269,12 +275,20 @@ func (e *Engine) recordEnforcement(ctx context.Context, dec *corev1.Decision, en
 	} else {
 		entry.OutcomeKind = "enforced"
 	}
-	// Best-effort: an audit-append failure here is itself logged by the caller's
-	// logger via the dispatcher path for the decision; the enforcement record is
-	// appended directly. If it fails, the decision is still recorded — the
-	// enforcement outcome record is the additional, not the primary, trail.
-	_ = e.ledger.Append(ctx, entry)
+	// R34-7: never silently drop the enforcement-audit append — these are exactly the
+	// automated actions that must be evidentiary. On failure, LOG and COUNT it (the
+	// decision itself is still recorded by the dispatcher path, so this is the
+	// additional trail — but a dropped append is observable, not silence, D14).
+	if err := e.ledger.Append(ctx, entry); err != nil {
+		e.enforceAuditDropped.Add(1)
+		e.logger.Error("engine: enforcement-audit append failed (recorded as dropped, decision still audited)",
+			slog.Any("err", err), slog.String("outcome", entry.OutcomeKind))
+	}
 }
+
+// EnforceAuditDropped is the count of enforcement-audit appends that failed — a
+// non-zero value means some automated-action outcomes are missing from the trail.
+func (e *Engine) EnforceAuditDropped() int64 { return e.enforceAuditDropped.Load() }
 
 // NewFromWorker is the production constructor: it takes a started *privileged.Worker.
 func NewFromWorker(w *privileged.Worker, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Engine {

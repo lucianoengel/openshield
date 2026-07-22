@@ -60,6 +60,23 @@ func TestDriversLicenseContextGated(t *testing.T) {
 	}
 }
 
+// TestDriversLicenseIgnoresAllCapsWords (R34-11): an all-caps sentence near the
+// keyword must not over-count ordinary words as license values — only the value
+// with a digit counts.
+func TestDriversLicenseIgnoresAllCapsWords(t *testing.T) {
+	det := driversLicense{}
+	// "DRIVER", "LICENSE", "NUMBER", "EXPIRES", "SOON" are all-caps words (no digit);
+	// only D1234567 is a real license value.
+	n, _ := det.Scan([]byte("DRIVER LICENSE NUMBER D1234567 EXPIRES SOON"))
+	if n != 1 {
+		t.Fatalf("all-caps sentence = %d license values, want exactly 1 (the one with a digit) — R34-11", n)
+	}
+	// An all-caps line with the keyword but NO digit-bearing value → 0.
+	if n, _ := det.Scan([]byte("PLEASE BRING YOUR DRIVER LICENSE TODAY")); n != 0 {
+		t.Fatalf("all-caps line with no license number = %d, want 0", n)
+	}
+}
+
 func TestContextDetectorsThroughClassifier(t *testing.T) {
 	c := New()
 	hits, err := c.Classify(context.Background(), strings.NewReader("Passport Number 987654321 on file"))

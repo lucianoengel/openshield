@@ -224,6 +224,11 @@ func LoadRecordIndex(b []byte) (*RecordIndex, error) {
 		fp := binary.BigEndian.Uint64(b[off : off+8])
 		m := int(binary.BigEndian.Uint32(b[off+8 : off+12]))
 		off += 12
+		// R34-8: bound the id count by the bytes actually remaining BEFORE allocating,
+		// so a malformed blob claiming m=0xFFFFFFFF cannot drive a multi-GB make().
+		if m < 0 || m > (len(b)-off)/4 {
+			return nil, fmt.Errorf("classify: record index truncated (ids: claims %d, blob has room for %d)", m, (len(b)-off)/4)
+		}
 		ids := make([]uint32, m)
 		for j := 0; j < m; j++ {
 			if off+4 > len(b) {

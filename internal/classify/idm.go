@@ -232,6 +232,10 @@ func LoadDocumentIndex(b []byte) (*DocumentIndex, error) {
 		fp := binary.BigEndian.Uint64(b[off : off+8])
 		m := int(binary.BigEndian.Uint32(b[off+8 : off+12]))
 		off += 12
+		// R34-8: bound the id count by the remaining blob BEFORE allocating.
+		if m < 0 || m > (len(b)-off)/4 {
+			return nil, fmt.Errorf("classify: document index truncated (ids: claims %d, blob has room for %d)", m, (len(b)-off)/4)
+		}
 		ids := make([]uint32, m)
 		for j := 0; j < m; j++ {
 			if off+4 > len(b) {

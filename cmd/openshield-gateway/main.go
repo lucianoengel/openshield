@@ -286,7 +286,10 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		// rate-limited on a kid miss, never fetching on the request path. Else the static PEM keys.
 		if jwksURL := os.Getenv("OPENSHIELD_OIDC_JWKS_URL"); jwksURL != "" {
 			interval := envDuration("OPENSHIELD_OIDC_JWKS_INTERVAL", 5*time.Minute)
-			ref := identitypkg.NewJWKSRefresher(jwksURL, interval)
+			ref, jerr := identitypkg.NewJWKSRefresher(jwksURL, interval)
+			if jerr != nil {
+				fatal(log, "JWKS refresher", jerr) // https-only (R34-3); a ZT gate never boots on a plaintext key source
+			}
 			go ref.Start(ctx)
 			v, err = identitypkg.NewOIDCVerifierWithSource(issuer, audience, roleClaim, ref.KeyFor)
 			if err != nil {
@@ -362,6 +365,9 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		// unattested — a policy requiring attestation fails closed (D85/D186).
 		if os.Getenv("OPENSHIELD_ATTEST") != "" {
 			av := gateway.NewAttestationVerifier()
+			// R34-1: a verdict expires after the TTL, so a device that stops attesting
+			// loses attestation (continuous re-attestation D190 keeps a healthy device fresh).
+			av.SetTTL(envDuration("OPENSHIELD_ATTEST_TTL", gateway.DefaultAttestationTTL))
 			// Load device enrollments (each device's AK public key + golden PCR
 			// baseline) so the verifier can attest real devices. Without a file the
 			// verifier is empty and every device is unattested — a policy requiring

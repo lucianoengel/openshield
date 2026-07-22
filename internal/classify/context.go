@@ -12,10 +12,15 @@ import (
 // from any keyword never fires, so a bare number does not flood. Counts de-dup on
 // the normalized value (lowercased digits/letters) so a repeated fixture does not
 // inflate the count, and no matched value crosses the boundary (D10).
-func contextNear(valueRe, keywordRe *regexp.Regexp, window int, text []byte) int {
+func contextNear(valueRe, keywordRe *regexp.Regexp, window int, text []byte, valid func(string) bool) int {
 	seen := map[string]struct{}{}
 	for _, loc := range valueRe.FindAllIndex(text, -1) {
 		start, end := loc[0], loc[1]
+		// An optional value validator (R34-11: a driver's license value must contain a
+		// digit, so an all-caps word like "LICENSE" is not counted). nil = always valid.
+		if valid != nil && !valid(string(text[start:end])) {
+			continue
+		}
 		lo := start - window
 		if lo < 0 {
 			lo = 0
@@ -72,7 +77,19 @@ type passport struct{}
 
 func (passport) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_PASSPORT }
 func (passport) Scan(text []byte) (int, float64) {
-	return contextNear(passportValueRe, passportKeyRe, contextWindow, text), confContext
+	// Passport values are numeric ([A-Z]?\d{8,9}) — no extra validator needed.
+	return contextNear(passportValueRe, passportKeyRe, contextWindow, text, nil), confContext
+}
+
+// hasDigit reports whether s contains an ASCII digit — the R34-11 filter that keeps
+// an all-caps word from being counted as a driver's license value.
+func hasDigit(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 // driversLicense detects a driver's license only near a license context keyword.
@@ -83,5 +100,7 @@ func (driversLicense) Type() corev1.DetectorType {
 	return corev1.DetectorType_DETECTOR_TYPE_DRIVERS_LICENSE
 }
 func (driversLicense) Scan(text []byte) (int, float64) {
-	return contextNear(dlValueRe, dlKeyRe, contextWindow, text), confContext
+	// R34-11: require ≥1 digit so ordinary all-caps words ("DRIVER", "LICENSE",
+	// "NUMBER") near the keyword are not counted as license values.
+	return contextNear(dlValueRe, dlKeyRe, contextWindow, text, hasDigit), confContext
 }

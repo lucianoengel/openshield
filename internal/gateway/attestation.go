@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/lucianoengel/openshield/internal/attest"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
@@ -32,19 +33,47 @@ type enrollment struct {
 	nonce []byte
 	// attested is the gateway's verified conclusion for this device.
 	attested bool
+	// attestedAt is when the last valid report was verified. IsAttested treats a
+	// verdict older than the TTL as stale (R34-1): a compromised endpoint that
+	// simply STOPS attesting must lose its verdict, not keep it forever.
+	attestedAt time.Time
 }
+
+// DefaultAttestationTTL is how long a verified attestation stays valid without a
+// fresh report. With continuous re-attestation (D190) a healthy device refreshes
+// well within it; a device that stops (drifted or compromised) loses attestation.
+const DefaultAttestationTTL = 5 * time.Minute
 
 // AttestationVerifier verifies device attestation reports and tracks which devices
 // the gateway has verified as hardware-attested (ZT-1). The attested state it
-// exposes is set ONLY by verifying a TPM quote — never by a device's self-report.
+// exposes is set ONLY by verifying a TPM quote — never by a device's self-report —
+// and EXPIRES after the TTL so a silent device does not stay trusted (R34-1).
 type AttestationVerifier struct {
 	mu      sync.Mutex
 	devices map[string]*enrollment
+	ttl     time.Duration
+	now     func() time.Time
 }
 
-// NewAttestationVerifier returns an empty verifier.
+// NewAttestationVerifier returns an empty verifier with the default TTL.
 func NewAttestationVerifier() *AttestationVerifier {
-	return &AttestationVerifier{devices: map[string]*enrollment{}}
+	return &AttestationVerifier{devices: map[string]*enrollment{}, ttl: DefaultAttestationTTL, now: time.Now}
+}
+
+// SetTTL overrides how long an attestation verdict stays valid without a fresh report.
+func (v *AttestationVerifier) SetTTL(ttl time.Duration) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if ttl > 0 {
+		v.ttl = ttl
+	}
+}
+
+// setClock injects a clock for tests (attestation freshness is time-dependent).
+func (v *AttestationVerifier) setClock(now func() time.Time) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.now = now
 }
 
 // Enroll registers a device's attestation trust anchors: its AK public key (proven
@@ -122,14 +151,18 @@ func (v *AttestationVerifier) VerifyReport(report *corev1.AttestationReport) err
 		return err
 	}
 	e.attested = true
+	e.attestedAt = v.now()
 	return nil
 }
 
 // IsAttested reports whether the gateway has verified the device as hardware-
-// attested. Unknown or unverified devices are not attested (fail closed).
+// attested AND that verdict is still fresh (within the TTL). A device that stopped
+// attesting — drifted, killed, or compromised — falls out of attestation after the
+// TTL rather than staying trusted forever (R34-1). Unknown or unverified devices are
+// not attested (fail closed).
 func (v *AttestationVerifier) IsAttested(subject string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	e, ok := v.devices[subject]
-	return ok && e.attested
+	return ok && e.attested && v.now().Sub(e.attestedAt) < v.ttl
 }

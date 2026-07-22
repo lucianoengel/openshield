@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -47,20 +49,43 @@ type JWKSRefresher struct {
 
 	rateMu      sync.Mutex
 	lastRefresh time.Time
+	lastAttempt time.Time // any fetch attempt (success OR failure) — the backoff anchor (R34-3)
+	failures    int       // consecutive fetch failures, for exponential backoff
 	trigger     chan struct{}
 }
 
 // NewJWKSRefresher builds a refresher over a JWKS URL, refreshing on the given interval.
-func NewJWKSRefresher(url string, interval time.Duration) *JWKSRefresher {
+func NewJWKSRefresher(jwksURL string, interval time.Duration) (*JWKSRefresher, error) {
+	u, err := url.Parse(jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("identity: bad JWKS url: %w", err)
+	}
+	// R34-3: a plaintext JWKS fetch lets a network attacker inject signing keys and
+	// forge any token — a full auth bypass. Require https, except for a loopback host
+	// (which no network attacker can MITM), so dev/tests can use a local http server.
+	if u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
+		return nil, fmt.Errorf("identity: JWKS url must be https (got %q) — plaintext JWKS is a key-injection/auth-bypass vector (R34-3)", jwksURL)
+	}
 	return &JWKSRefresher{
-		url:      url,
+		url:      jwksURL,
 		client:   &http.Client{Timeout: 5 * time.Second},
 		interval: interval,
 		minGap:   defaultJWKSMinGap,
 		now:      time.Now,
 		snapshot: map[string]crypto.PublicKey{},
 		trigger:  make(chan struct{}, 1),
+	}, nil
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback IP.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
 	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // WithMinGap sets the minimum interval between kid-miss-triggered refreshes (the rate limit).
@@ -97,8 +122,14 @@ func (r *JWKSRefresher) Start(ctx context.Context) {
 		case <-t.C:
 			_ = r.doRefresh(ctx)
 		case <-r.trigger:
+			// R34-3: gate on the last ATTEMPT (not the last success) with exponential
+			// backoff on consecutive failures — so a kid-miss flood during an IdP
+			// outage cannot drive one fetch per trigger (a failed fetch used to leave
+			// the window open forever). A healthy refresher (failures==0) is gated by
+			// minGap exactly as before.
 			r.rateMu.Lock()
-			gapOK := r.now().Sub(r.lastRefresh) >= r.minGap
+			backoff := r.minGap << min(r.failures, jwksMaxBackoffShift)
+			gapOK := r.now().Sub(r.lastAttempt) >= backoff
 			r.rateMu.Unlock()
 			if gapOK {
 				_ = r.doRefresh(ctx)
@@ -107,19 +138,32 @@ func (r *JWKSRefresher) Start(ctx context.Context) {
 	}
 }
 
+// jwksMaxBackoffShift caps the exponential backoff at minGap<<8 (256×).
+const jwksMaxBackoffShift = 8
+
 // doRefresh fetches + parses the JWKS and atomically swaps the snapshot. On ANY error it returns the
 // error and LEAVES the previous snapshot in place (serve-stale). lastRefresh is stamped only on a
 // SUCCESS, so a failed fetch does not consume the rate-limit window.
 func (r *JWKSRefresher) doRefresh(ctx context.Context) error {
+	// Every attempt stamps lastAttempt (the backoff anchor) so a FAILED fetch also
+	// consumes a (growing) window — R34-3.
+	r.rateMu.Lock()
+	r.lastAttempt = r.now()
+	r.rateMu.Unlock()
+
 	keys, err := r.fetch(ctx)
 	if err != nil {
-		return err // keep the last-good snapshot
+		r.rateMu.Lock()
+		r.failures++ // back off harder next time
+		r.rateMu.Unlock()
+		return err // keep the last-good snapshot (serve-stale)
 	}
 	r.mu.Lock()
 	r.snapshot = keys
 	r.mu.Unlock()
 	r.rateMu.Lock()
 	r.lastRefresh = r.now()
+	r.failures = 0 // recovered
 	r.rateMu.Unlock()
 	return nil
 }

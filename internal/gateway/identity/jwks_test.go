@@ -60,6 +60,18 @@ func waitSnapshot(t *testing.T, ref *identity.JWKSRefresher, kid string) {
 // ZT-2b: the refresher fetches JWKS, a token signed by a fetched key verifies, a ROTATED key is picked
 // up by a background refresh (no restart), and when the endpoint FAILS the last-good key still serves
 // (serve-stale) — an RSA and an Ed25519 key both round-trip through JWK parsing.
+
+// mustRefresher builds a JWKS refresher, failing the test on error (the https-only
+// check R34-3 permits loopback httptest URLs).
+func mustRefresher(t *testing.T, url string, interval time.Duration) *identity.JWKSRefresher {
+	t.Helper()
+	r, err := identity.NewJWKSRefresher(url, interval)
+	if err != nil {
+		t.Fatalf("NewJWKSRefresher: %v", err)
+	}
+	return r
+}
+
 func TestJWKSRotationAndServeStale(t *testing.T) {
 	rsa1, _ := rsa.GenerateKey(rand.Reader, 2048)
 	rsa2, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -86,7 +98,7 @@ func TestJWKSRotationAndServeStale(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ref := identity.NewJWKSRefresher(srv.URL, 40*time.Millisecond).WithMinGap(10 * time.Millisecond)
+	ref := mustRefresher(t, srv.URL, 40*time.Millisecond).WithMinGap(10 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ref.Start(ctx)
@@ -132,7 +144,7 @@ func TestJWKSKeyForNeverFetches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ref := identity.NewJWKSRefresher(srv.URL, time.Hour) // not started — no background fetch
+	ref := mustRefresher(t, srv.URL, time.Hour) // not started — no background fetch
 	for i := 0; i < 100; i++ {
 		if _, ok := ref.KeyFor("any-kid"); ok {
 			t.Fatal("KeyFor resolved a key from an unprimed snapshot")
@@ -155,7 +167,7 @@ func TestJWKSKidMissRateLimited(t *testing.T) {
 	defer srv.Close()
 
 	// Long interval (no periodic refresh during the test) + a large min-gap (rate limit).
-	ref := identity.NewJWKSRefresher(srv.URL, time.Hour).WithMinGap(time.Hour)
+	ref := mustRefresher(t, srv.URL, time.Hour).WithMinGap(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ref.Start(ctx)
