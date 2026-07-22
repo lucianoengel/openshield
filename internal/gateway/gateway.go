@@ -30,6 +30,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/nips"
 )
 
 // classifier is the subset of the worker the gateway needs — the SAME private
@@ -80,6 +81,11 @@ type Gateway struct {
 	// nil = no projection (the default); the local ledger is the system of record
 	// (D30). Set via SetTelemetry.
 	telemetry Projector
+
+	// threatFeed, when set, is the NIPS-2 threat-intel engine: a threat-classify
+	// stage matches each flow's destination/request metadata against it so the
+	// policy can block a flow to a known-bad indicator. nil = no threat matching.
+	threatFeed *nips.Feed
 
 	// Enforcers carry out Decisions post-decision. EMPTY by default — observe-only
 	// (D1): the gateway decides and records, and enforces nothing until a flow
@@ -205,6 +211,54 @@ func (s bodyClassifyStage) Run(ctx context.Context, st *core.State) (core.Outcom
 	return core.Continue(), nil
 }
 
+// SetThreatFeed enables the NIPS-2 threat-intel engine: a threat-classify stage
+// matches each flow's destination/request metadata against the feed, so the policy
+// can block a flow to a known-bad indicator. Without a feed the engine is inert.
+func (g *Gateway) SetThreatFeed(f *nips.Feed) { g.threatFeed = f }
+
+// threatClassifyStage matches a flow's metadata against the IOC feed and records
+// the threat matches on State — a distinct axis from the DLP body classification.
+// It reads only Event metadata (host, dst IP, path), so it needs no worker and
+// cannot fail on a parse; a match is a signal the policy acts on, never a block
+// itself (fail open, D73).
+type threatClassifyStage struct{ feed *nips.Feed }
+
+func (threatClassifyStage) Name() string { return "net-threat" }
+
+func (s threatClassifyStage) Run(_ context.Context, st *core.State) (core.Outcome, error) {
+	ns := st.Event.GetNetwork()
+	if ns == nil {
+		return core.Continue(), nil
+	}
+	matches := s.feed.Match(ns.GetSniHost(), ns.GetDstIp(), ns.GetHttpPath())
+	if len(matches) == 0 {
+		return core.Continue(), nil
+	}
+	tc := &corev1.ThreatClassification{EventId: st.Event.GetEventId()}
+	for _, m := range matches {
+		tc.Matches = append(tc.Matches, &corev1.ThreatMatch{
+			Category:    threatCategoryProto(m.Category),
+			Confidence:  m.Confidence,
+			IndicatorId: m.IndicatorID,
+		})
+	}
+	st.Threats = tc
+	return core.Continue(), nil
+}
+
+func threatCategoryProto(c nips.Category) corev1.ThreatCategory {
+	switch c {
+	case nips.CategoryDomain:
+		return corev1.ThreatCategory_THREAT_CATEGORY_IOC_DOMAIN
+	case nips.CategoryIP:
+		return corev1.ThreatCategory_THREAT_CATEGORY_IOC_IP
+	case nips.CategoryURI:
+		return corev1.ThreatCategory_THREAT_CATEGORY_URI_SIGNATURE
+	default:
+		return corev1.ThreatCategory_THREAT_CATEGORY_UNSPECIFIED
+	}
+}
+
 // Process runs one request through the pipeline, records the Decision, then — if
 // an enforcer can carry out its action — enforces it POST-DECISION. The Decision
 // is recorded (by the audit sink) BEFORE enforcement is attempted, so the trail
@@ -220,6 +274,11 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 
 	var reg core.Registry
 	reg.Register(bodyClassifyStage{c: g.classifier, body: req.Body, maxBytes: g.maxBytes})
+	// NIPS-2 threat-intel runs before the policy (when a feed is configured), so the
+	// policy sees input.threat and can block a flow to a known-bad indicator.
+	if g.threatFeed != nil {
+		reg.Register(threatClassifyStage{feed: g.threatFeed})
+	}
 	reg.Register(g.policy)
 	disp := core.NewDispatcher(&reg, g.deadline)
 	disp.OnOutcome = core.NewAuditSink(g.ledger).Record

@@ -99,6 +99,8 @@ jobs:
         run: ./scripts/check-agent-deps.sh
       - name: enforcement dispatch + quarantine (post-decision, observe-only default)
         run: go test -count=1 -v ./internal/engine/ ./internal/enforcers/...
+      - name: NIPS-2 threat-intel engine (IOC match + policy blocks a known-bad flow)
+        run: go test -count=1 -v ./internal/nips/ && go test -count=1 -run 'GatewayBlocksKnownBad|GatewayAllowsClean|GatewayNoFeed' -v ./internal/gateway/
       - name: agent process-boundary invariants
         run: go test -run 'TestFrame|TestOversized|TestTruncated|TestClassifierError|TestUnreadable|TestByteCeiling|TestWorkerRefuses|TestPrivilegedTalks|TestWorkerTimeout' -v ./internal/agent/
 

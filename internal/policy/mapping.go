@@ -122,11 +122,30 @@ func buildInput(st *core.State) map[string]interface{} {
 			"encoded_command":    f.EncodedCommand,
 		}
 	}
+	// Network threat-intel matches (NIPS-2): a distinct axis from classification —
+	// a known-bad destination/request, so a policy can prevent the flow. Absent
+	// when no threat engine ran or nothing matched (a threat rule then denies
+	// nothing on its own — fail open, D73).
+	var threat interface{}
+	if tc := st.Threats; tc != nil && len(tc.GetMatches()) > 0 {
+		cats := map[string]int{}
+		matches := make([]interface{}, 0, len(tc.GetMatches()))
+		for _, m := range tc.GetMatches() {
+			cats[m.GetCategory().String()]++
+			matches = append(matches, map[string]interface{}{
+				"category":     m.GetCategory().String(),
+				"confidence":   m.GetConfidence(),
+				"indicator_id": m.GetIndicatorId(),
+			})
+		}
+		threat = map[string]interface{}{"matches": matches, "categories": cats}
+	}
 	return map[string]interface{}{
 		"purpose":        st.Event.GetPurpose().String(),
 		"event":          event,
 		"classification": hits,
 		"context":        ctx,
+		"threat":         threat,
 	}
 }
 

@@ -39,6 +39,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/core"
 	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/gateway"
+	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
@@ -110,6 +111,7 @@ func main() {
 	// The pool satisfies gateway.New's classifier interface (same Classify method as
 	// a single worker), so concurrent flows classify in parallel (D76).
 	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
+	applyThreatFeed(gw, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 
@@ -257,6 +259,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	}
 
 	gw := gateway.New(cls, accessPol, ledger, log, 30*time.Second)
+	applyThreatFeed(gw, log)
 	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
 	riskStore := gateway.NewRiskStore()
 	ap.SetRiskStore(riskStore)
@@ -457,6 +460,23 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// applyThreatFeed loads the NIPS-2 IOC feed (OPENSHIELD_IOC_FEED) and enables the
+// threat-intel engine on the gateway. A configured-but-malformed feed aborts
+// startup; no feed leaves the engine inert (the gateway inspects DLP only).
+func applyThreatFeed(gw *gateway.Gateway, log *slog.Logger) {
+	path := os.Getenv("OPENSHIELD_IOC_FEED")
+	if path == "" {
+		log.Warn("gateway: OPENSHIELD_IOC_FEED unset — NIPS-2 threat-intel engine inert (DLP inspection only)")
+		return
+	}
+	feed, err := nips.LoadFeed(path)
+	if err != nil {
+		fatal(log, "loading IOC feed", err)
+	}
+	gw.SetThreatFeed(feed)
+	log.Info("gateway: NIPS-2 threat-intel engine active", slog.Int("indicators", feed.Size()))
 }
 
 func fatal(log *slog.Logger, msg string, err error) {

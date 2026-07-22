@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package openshield.v1;
+
+option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
+
+// ThreatCategory is the closed set of network threat-intel signal kinds (NIPS-2).
+// It is DISTINCT from the DLP DetectorType: a DLP detector flags sensitive CONTENT
+// (and its enum is closed to avoid leaking what was detected), whereas a threat
+// match flags a known-bad DESTINATION or request — public threat-intel, already in
+// the flow's metadata. Conflating them would be a category error.
+enum ThreatCategory {
+  THREAT_CATEGORY_UNSPECIFIED = 0;
+  // The flow's host is, or is a subdomain of, a known-bad domain.
+  THREAT_CATEGORY_IOC_DOMAIN = 1;
+  // The flow's destination IP is a known-bad address or in a known-bad CIDR.
+  THREAT_CATEGORY_IOC_IP = 2;
+  // The request path matches a network URI signature.
+  THREAT_CATEGORY_URI_SIGNATURE = 3;
+}
+
+// ThreatMatch is one threat-intel hit on a flow. It carries the category and a
+// confidence (1.0 for a definitive IOC match) and an OPAQUE indicator id (a feed or
+// rule identifier an analyst can trace) — never the matched content, so the
+// classification-crossing stays free of raw matched strings.
+message ThreatMatch {
+  ThreatCategory category = 1;
+  double confidence = 2;
+  string indicator_id = 3;
+}
+
+// ThreatClassification holds the threat matches for a flow — the network analogue
+// of the DLP LocalClassification, on its own axis.
+message ThreatClassification {
+  string event_id = 1;
+  repeated ThreatMatch matches = 2;
+}

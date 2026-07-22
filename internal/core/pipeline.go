@@ -112,6 +112,13 @@ type State struct {
 	Event          *corev1.Event
 	Classification *corev1.LocalClassification
 
+	// Threats holds network threat-intel matches (NIPS-2) — a flow to a known-bad
+	// destination or a request matching a network signature. It is a DISTINCT axis
+	// from Classification (which flags sensitive CONTENT): a threat match flags a
+	// known-bad DESTINATION, public threat-intel already in the flow's metadata.
+	// Nil when no threat engine runs (existing pipelines unaffected).
+	Threats *corev1.ThreatClassification
+
 	// Context is enrichment Policy consults but does not compute: risk score,
 	// asset tier, exception groups, org unit.
 	//

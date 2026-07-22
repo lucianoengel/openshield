@@ -103,8 +103,11 @@ func TestStageInterfaceExposesNoSiblingAccess(t *testing.T) {
 	// around. The rule being enforced: State may carry DATA a stage reads, and
 	// must never carry a HANDLE through which a stage could reach the
 	// dispatcher, the registry or another stage.
+	// Threats (NIPS-2) was added deliberately — it is DATA a stage reads (network
+	// threat-intel matches), the same shape of value as Classification, not a handle
+	// to another stage. This list edit is the speed bump working as intended.
 	got := structFieldNames(core.State{})
-	want := []string{"Classification", "Context", "Event"}
+	want := []string{"Classification", "Context", "Event", "Threats"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("State fields = %v, want exactly %v — a stage must not be able to "+
 			"reach the dispatcher, the registry or another stage", got, want)
