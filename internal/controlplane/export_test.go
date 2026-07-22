@@ -35,3 +35,9 @@ func RequireTierForTest(minRole string) http.Handler {
 // EmitForTest exposes the unexported emit so a test can prove an unconfigured server
 // never fills its notify queue (R34-9).
 func (s *Server) EmitForTest(n notify.Notification) { s.emit(context.Background(), n) }
+
+// BackoffFor / NakBackoffBase / NakBackoffMax expose the pure Nak redelivery schedule (R34-4)
+// so a test can assert the doubling-and-cap behavior without a live JetStream message.
+func BackoffFor(numDelivered uint64) time.Duration { return backoffFor(numDelivered) }
+func NakBackoffBase() time.Duration                { return nakBackoffBase }
+func NakBackoffMax() time.Duration                 { return nakBackoffMax }

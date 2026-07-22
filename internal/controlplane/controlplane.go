@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
@@ -388,7 +389,15 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 		sigSub, err = js.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
 			switch s.handleSigned(context.Background(), m.Data) {
 			case ingestTransient:
-				_ = m.Nak() // retry — the verified message is not lost
+				// R34-4: redeliver with BACKOFF, not immediately — a bare Nak() hot-loops a
+				// verified message against a down/full database, spinning CPU and drowning
+				// the log. Delay grows with the redelivery count so a sustained DB outage is
+				// retried patiently (never dropped), a transient blip still recovers fast.
+				delay := nakBackoffBase
+				if md, merr := m.Metadata(); merr == nil && md != nil {
+					delay = backoffFor(md.NumDelivered)
+				}
+				_ = m.NakWithDelay(delay)
 			default: // ingestPersisted or ingestPermanent — done, do not redeliver
 				_ = m.Ack()
 			}
@@ -453,6 +462,15 @@ func decodeIndex(kind string, data []byte) (agentID, eventID string, ok bool) {
 
 func (s *Server) insert(ctx context.Context, kind, agentID, eventID string, payload []byte, verified bool) error {
 	_, err := s.pool.Exec(ctx,
+		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload, verified) VALUES ($1,$2,$3,$4,$5)`,
+		agentID, kind, eventID, payload, verified)
+	return err
+}
+
+// insertTx is the transactional telemetry insert used by the durable ingest path (R34-4), so the
+// insert commits (or rolls back) ATOMICALLY with the sequence advance in verifySignedTx.
+func (s *Server) insertTx(ctx context.Context, tx pgx.Tx, kind, agentID, eventID string, payload []byte, verified bool) error {
+	_, err := tx.Exec(ctx,
 		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload, verified) VALUES ($1,$2,$3,$4,$5)`,
 		agentID, kind, eventID, payload, verified)
 	return err

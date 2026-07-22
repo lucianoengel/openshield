@@ -100,6 +100,18 @@ func main() {
 		pub = natsx.NewSignedPublisher(agentID, id, conn)
 	}
 
+	// Durable ingest (PLAT-2, R34-4): publish into the JetStream telemetry stream so a
+	// message survives a control-plane restart and is redelivered until ACKed — the "durable,
+	// no loss" claim is only real when the PRODUCER is on JetStream. Gated on
+	// OPENSHIELD_JETSTREAM so a deployment without a JetStream-enabled broker keeps the
+	// core-NATS path; a spool (below) still covers a broker outage in both modes.
+	if os.Getenv("OPENSHIELD_JETSTREAM") != "" {
+		if err := pub.UseJetStream(); err != nil {
+			fatal("jetstream: %v (unset OPENSHIELD_JETSTREAM to use core NATS)", err)
+		}
+		fmt.Fprintf(os.Stderr, "fleet-agent %s: durable JetStream ingest enabled\n", agentID)
+	}
+
 	// Durable offline queue (D40/D67): spool signed telemetry when the control
 	// plane is unreachable and re-send it on reconnect, so an outage causes a gap,
 	// not silent loss (D1). An overflow eviction is logged LOUDLY — a drop that is

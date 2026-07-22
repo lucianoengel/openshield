@@ -37,13 +37,47 @@ func isPermanentVerifyError(err error) bool {
 		errors.Is(err, ErrBadSignature) || errors.Is(err, ErrReplay)
 }
 
+// nakBackoffBase and nakBackoffMax bound the redelivery delay for a transiently-failed ingest
+// (R34-4): the delay doubles per redelivery from the base, capped at the max, so a sustained DB
+// outage is retried patiently rather than hot-looped, while a single blip recovers within the base.
+const (
+	nakBackoffBase = 250 * time.Millisecond
+	nakBackoffMax  = 30 * time.Second
+)
+
+// backoffFor is the pure delay schedule: base * 2^(n-1), capped at max. Extracted so it is unit
+// testable without a live JetStream message.
+func backoffFor(numDelivered uint64) time.Duration {
+	if numDelivered <= 1 {
+		return nakBackoffBase
+	}
+	d := nakBackoffBase
+	for i := uint64(1); i < numDelivered; i++ {
+		d *= 2
+		if d >= nakBackoffMax {
+			return nakBackoffMax
+		}
+	}
+	return d
+}
+
 func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 	var env corev1.SignedTelemetry
 	if err := proto.Unmarshal(data, &env); err != nil {
 		s.DecodeFailures.Add(1)
 		return ingestPermanent // corrupt bytes will not decode on redelivery either
 	}
-	res, err := s.VerifySigned(ctx, env.GetAgentId(), env.GetSequence(), env.GetPayload(), env.GetSignature(), time.Now())
+	// R34-4: verify (which ADVANCES the monotonic sequence) and the telemetry INSERT run in ONE
+	// transaction. A transient persist failure then rolls back the sequence advance too, so the
+	// Nak-redelivered message re-verifies cleanly and is retried — instead of the advance committing,
+	// the redelivery looking like a replay, and the "durable, no loss" message being silently dropped.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ingestTransient // can't even open a tx — infra, retry
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	res, err := s.verifySignedTx(ctx, tx, env.GetAgentId(), env.GetSequence(), env.GetPayload(), env.GetSignature())
 	if err != nil {
 		if isPermanentVerifyError(err) {
 			// Unverifiable/replayed telemetry is not evidence: rejected, counted, not stored.
@@ -54,26 +88,36 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 		// rejection; retry so the verified message is not lost.
 		return ingestTransient
 	}
-	if res.Gap {
-		s.Gaps.Add(1)
-	}
 	// R34-12: enforce the subject contract at INGEST (server-side), not only in the
 	// endpoint's engine.attribute (client-side) — a legacy or rogue agent must not be
 	// able to persist a subject-less event straight into fleet_telemetry. A verified
 	// but subject-less event is rejected (permanent: the same bytes won't gain a
-	// subject on redelivery), counted, and never stored.
+	// subject on redelivery), counted, and never stored. The sequence advance is
+	// COMMITTED so the next message is not seen as a spurious gap.
 	if env.GetKind() == "event" {
 		var ev corev1.Event
 		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil || ev.GetSubject().GetPseudonymousId() == "" {
+			if cerr := tx.Commit(ctx); cerr != nil {
+				return ingestTransient // couldn't record the advance — let it redeliver
+			}
 			s.RejectedTelemetry.Add(1)
 			return ingestPermanent
 		}
 	}
 	eventID := eventIDFor(env.GetKind(), env.GetPayload())
-	if err := s.insert(ctx, env.GetKind(), env.GetAgentId(), eventID, env.GetPayload(), true); err != nil {
+	if err := s.insertTx(ctx, tx, env.GetKind(), env.GetAgentId(), eventID, env.GetPayload(), true); err != nil {
 		// A persist failure is transient (a full/down database) — count it (observable) and retry.
+		// The deferred rollback undoes the sequence advance so the retry re-verifies (R34-4).
 		s.DecodeFailures.Add(1)
 		return ingestTransient
+	}
+	if err := tx.Commit(ctx); err != nil {
+		// The insert never durably landed — count and retry; the advance rolls back with it.
+		s.DecodeFailures.Add(1)
+		return ingestTransient
+	}
+	if res.Gap {
+		s.Gaps.Add(1)
 	}
 
 	// Server-side peer-UEBA (D54), only for a VERIFIED event: an unverified

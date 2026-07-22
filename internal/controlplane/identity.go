@@ -136,20 +136,37 @@ func (s *Server) VerifySigned(ctx context.Context, agentID string, seq uint64, p
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	res, err := s.verifySignedTx(ctx, tx, agentID, seq, payload, sig)
+	if err != nil {
+		return SignedResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return SignedResult{}, err
+	}
+	return res, nil
+}
+
+// verifySignedTx is the atomic core of signed-telemetry verification, WITHOUT owning the
+// transaction: the advisory lock, identity read, signature/replay check, and monotonic-sequence
+// advance all run on the caller's tx. VerifySigned wraps it in a commit-per-call; the durable
+// ingest path (R34-4) wraps it in the SAME tx as the telemetry insert, so a transient persist
+// failure ROLLS BACK the sequence advance too — otherwise the advance commits, redelivery looks
+// like a replay, and the Nak-redelivered message is dropped (the "durable, no loss" claim broken).
+func (s *Server) verifySignedTx(ctx context.Context, tx pgx.Tx, agentID string, seq uint64, payload, sig []byte) (SignedResult, error) {
 	// Serialize concurrent messages for the SAME agent (the monotonic-sequence check must be
 	// atomic) via a per-agent transaction-scoped ADVISORY lock (PLAT-2), instead of a
 	// `SELECT … FOR UPDATE` that held the agent_identities ROW lock across the whole transaction
 	// (blocking even reads of that identity). hashtext maps the agent id to the lock key; a rare
 	// hash collision merely serializes two unrelated agents briefly — never a correctness issue,
 	// since the sequence is still checked against the correct row. The lock releases at commit/rollback.
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, agentID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, agentID); err != nil {
 		return SignedResult{}, err
 	}
 
 	var pub []byte
 	var revokedAt *time.Time
 	var lastSeq int64
-	err = tx.QueryRow(ctx,
+	err := tx.QueryRow(ctx,
 		`SELECT public_key, revoked_at, last_sequence FROM agent_identities WHERE agent_id = $1`,
 		agentID).Scan(&pub, &revokedAt, &lastSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -177,9 +194,6 @@ func (s *Server) VerifySigned(ctx context.Context, agentID string, seq uint64, p
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE agent_identities SET last_sequence = $1 WHERE agent_id = $2`, int64(seq), agentID); err != nil {
-		return SignedResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return SignedResult{}, err
 	}
 	return res, nil
