@@ -64,6 +64,9 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	if limit <= 0 {
 		limit = 100
 	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit // SEC-8: hard cap even for a direct (non-HTTP) caller
+	}
 	q := `SELECT subject_id, risk_score, context_version, detected_at FROM peer_alerts`
 	var conds []string
 	var args []any
@@ -130,24 +133,13 @@ func (s *Server) OperatorReadHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		f := AlertFilter{
-			SubjectID: r.URL.Query().Get("subject"),
-			Limit:     queryInt(r, "limit", 100),
-		}
-		if v := r.URL.Query().Get("min_risk"); v != "" {
-			if x, err := strconv.ParseFloat(v, 64); err == nil {
-				f.MinRisk = x
-			}
-		}
-		if v := r.URL.Query().Get("since"); v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				f.Since = t
-			}
-		}
-		if v := r.URL.Query().Get("until"); v != "" {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				f.Until = t
-			}
+		// SEC-8: a malformed filter param is a 400, NOT a silent drop — silently ignoring a
+		// bad since/until/min_risk returns OVER-BROAD results that look authoritative (an
+		// investigator would trust a wrong answer).
+		f, err := parseAlertFilter(r)
+		if err != nil {
+			http.Error(w, "bad filter: "+err.Error(), http.StatusBadRequest)
+			return
 		}
 		alerts, err := s.SearchPeerAlerts(r.Context(), f)
 		if err != nil {
@@ -179,6 +171,53 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	})
 
 	return mux
+}
+
+// maxSearchLimit caps a /search result set (SEC-8): an uncapped limit is an unbounded
+// query / memory vector. A caller may ask for less; more is clamped.
+const maxSearchLimit = 1000
+
+// parseAlertFilter parses the /search query params, returning an error on ANY malformed
+// value (SEC-8) rather than silently dropping it, and capping the limit.
+func parseAlertFilter(r *http.Request) (AlertFilter, error) {
+	q := r.URL.Query()
+	f := AlertFilter{SubjectID: q.Get("subject")}
+
+	limit := 100
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return AlertFilter{}, fmt.Errorf("limit %q is not a positive integer", v)
+		}
+		limit = n
+	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit // clamp, not error — a large ask is honored up to the cap
+	}
+	f.Limit = limit
+
+	if v := q.Get("min_risk"); v != "" {
+		x, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return AlertFilter{}, fmt.Errorf("min_risk %q is not a number", v)
+		}
+		f.MinRisk = x
+	}
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return AlertFilter{}, fmt.Errorf("since %q is not RFC3339 time", v)
+		}
+		f.Since = t
+	}
+	if v := q.Get("until"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return AlertFilter{}, fmt.Errorf("until %q is not RFC3339 time", v)
+		}
+		f.Until = t
+	}
+	return f, nil
 }
 
 func queryInt(r *http.Request, key string, def int) int {
