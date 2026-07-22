@@ -26,7 +26,15 @@ jobs:
           cache: true
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race ./...
+      # The D9 claim Windows carries is COMPILE portability — the interfaces bake in
+      # no Linux assumptions — which build+vet prove. The behavioural suite is POSIX
+      # by nature (fanotify, Unix file-mode 0600/0700 assertions, KILL syscalls,
+      # /bin/sleep, forward-slash paths) and Phase 1 ships Linux only (Windows/macOS
+      # agents are explicitly out of Phase 1), so it cannot and should not pass on
+      # Windows. Run -race on the POSIX platforms (ubuntu = the ship target, macOS a
+      # second POSIX check); revisit per-test skips only if Windows becomes a target.
+      - if: runner.os != 'Windows'
+        run: go test -race ./...
 
   tidy:
     runs-on: ubuntu-latest
