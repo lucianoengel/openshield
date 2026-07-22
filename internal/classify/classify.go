@@ -41,7 +41,7 @@ type Classifier struct {
 // Phase-D2 secrets detectors (private keys, AWS keys, JWTs, vendor API tokens).
 func New() *Classifier {
 	return &Classifier{detectors: []Detector{
-		cpf{}, creditCard{}, ssn{}, email{},
+		cpf{}, creditCard{}, ssn{}, email{}, phone{},
 		privateKey{}, awsAccessKey{}, jwt{}, apiToken{},
 		iban{}, healthData{},
 	}}
