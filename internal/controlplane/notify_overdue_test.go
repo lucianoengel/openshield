@@ -22,6 +22,30 @@ func (f *fakeNotifier) Notify(_ context.Context, n notify.Notification) error {
 	return nil
 }
 
+func (f *fakeNotifier) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sent)
+}
+
+func (f *fakeNotifier) first() notify.Notification {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sent[0]
+}
+
+// waitSent polls until the async delivery worker (SIEM-12) has delivered `want` notifications.
+func waitSent(t *testing.T, f *fakeNotifier, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for f.count() < want && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if f.count() != want {
+		t.Fatalf("delivered %d notifications, want %d", f.count(), want)
+	}
+}
+
 // A stale agent triggers exactly one overdue notification; a second check dedups;
 // after a fresh heartbeat the agent can alert again (D83).
 func TestNotifyOverdueDeliversAndDedups(t *testing.T) {
@@ -40,8 +64,15 @@ func TestNotifyOverdueDeliversAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || len(fn.sent) != 1 || fn.sent[0].Kind != notify.KindAgentOverdue || fn.sent[0].AgentID != "stale" {
-		t.Fatalf("first check notified %d (%v), want exactly 1 agent-overdue for 'stale'", n, fn.sent)
+	if n != 1 {
+		t.Fatalf("first check notified %d, want exactly 1 newly-overdue agent", n)
+	}
+	waitSent(t, fn, 1) // delivery is async (SIEM-12)
+	if fn.first().Kind != notify.KindAgentOverdue || fn.first().AgentID != "stale" {
+		t.Fatalf("delivered %+v, want an agent-overdue for 'stale'", fn.first())
+	}
+	if fn.first().ID == "" {
+		t.Error("the delivered notification has no idempotency id (SIEM-12)")
 	}
 
 	// Second check: same agent still overdue → deduped, no new notification.
@@ -49,8 +80,11 @@ func TestNotifyOverdueDeliversAndDedups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 0 || len(fn.sent) != 1 {
-		t.Fatalf("second check notified %d (total %d), want 0 (dedup)", n, len(fn.sent))
+	if n != 0 {
+		t.Fatalf("second check notified %d, want 0 (dedup)", n)
+	}
+	if fn.count() != 1 {
+		t.Fatalf("dedup delivered again (total %d), want 1", fn.count())
 	}
 
 	// The agent reports again (recent heartbeat) → recovers; then goes silent → it

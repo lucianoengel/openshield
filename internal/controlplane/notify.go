@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"time"
@@ -12,19 +14,52 @@ import (
 // SetNotifier turns on alert delivery (D83). Without it the server records alerts
 // but tells no one (the default Nop). Delivery is best-effort and additive — the
 // recorded alert is the record, the notification is a copy pushed to a human (D30).
-func (s *Server) SetNotifier(n notify.Notifier) { s.notifier = n }
+// SetNotifier turns on alert delivery and starts the async delivery worker (once). Delivery runs
+// OFF the ingest path (SIEM-12): emit enqueues, the worker delivers, so a slow/retrying webhook
+// never stalls telemetry ingest (handleSigned → observePeer → emit).
+func (s *Server) SetNotifier(n notify.Notifier) {
+	s.notifier = n
+	s.notifyOnce.Do(func() { go s.deliverLoop() })
+}
 
-// notify delivers an alert best-effort: a sink error is logged and COUNTED, never
-// propagated — a down webhook must not break telemetry ingest or the detection
-// itself. Losing a notification degrades responsiveness, not the record.
-func (s *Server) emit(ctx context.Context, n notify.Notification) {
+// deliverLoop delivers queued notifications one at a time, off the ingest path. It runs for the
+// process lifetime; a delivery error is counted and logged, never propagated (best-effort, D83).
+func (s *Server) deliverLoop() {
+	for n := range s.notifyQ {
+		if s.notifier == nil {
+			continue
+		}
+		if err := s.notifier.Notify(context.Background(), n); err != nil {
+			s.NotifyFailures.Add(1)
+			fmt.Fprintf(os.Stderr, "openshield-server: alert delivery failed (alert still recorded): %v\n", err)
+		}
+	}
+}
+
+// emit QUEUES an alert for async delivery (SIEM-12) — it does not deliver inline, so a slow webhook
+// cannot stall ingest. A stable idempotency id is stamped so the receiver dedupes a retried delivery.
+// If the queue is full (a delivery backlog), the notification is DROPPED and counted — losing a page
+// degrades responsiveness, never the record, and never blocks ingest.
+func (s *Server) emit(_ context.Context, n notify.Notification) {
 	if s.notifier == nil {
 		return
 	}
-	if err := s.notifier.Notify(ctx, n); err != nil {
-		s.NotifyFailures.Add(1)
-		fmt.Fprintf(os.Stderr, "openshield-server: alert delivery failed (alert still recorded): %v\n", err)
+	if n.ID == "" {
+		n.ID = newNotifyID()
 	}
+	select {
+	case s.notifyQ <- n:
+	default:
+		s.NotifyDropped.Add(1)
+		fmt.Fprintf(os.Stderr, "openshield-server: alert delivery queue full — dropped a notification (ingest never blocks)\n")
+	}
+}
+
+// newNotifyID returns a random idempotency key for a notification.
+func newNotifyID() string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return "ntf_" + hex.EncodeToString(b[:])
 }
 
 // NotifyOverdue notifies a human about agents that have gone silent past threshold

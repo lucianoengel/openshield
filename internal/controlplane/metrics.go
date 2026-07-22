@@ -31,6 +31,7 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_telemetry_gaps_total", "Sequence gaps in verified telemetry (suppression between agent and here).", s.Gaps.Load()},
 			{"openshield_peer_alerts_total", "Server-side peer-UEBA detections recorded.", s.PeerAlerts.Load()},
 			{"openshield_notify_failures_total", "Alert-delivery errors (best-effort delivery).", s.NotifyFailures.Load()},
+		{"openshield_notify_dropped_total", "Notifications dropped because the async delivery queue was full (SIEM-12).", s.NotifyDropped.Load()},
 			{"openshield_dropped_messages_total", "NATS async errors / slow-consumer drops (receive-side loss, SEC-4).", s.DroppedMessages.Load()},
 		}
 		for _, m := range metrics {

@@ -67,6 +67,9 @@ type Server struct {
 	// a failure is counted, never fatal — so this counter is how a broken sink is
 	// observable rather than silent.
 	NotifyFailures atomic.Int64
+	// NotifyDropped counts notifications dropped because the async delivery queue was full
+	// (SIEM-12) — a delivery backlog degrades responsiveness but never blocks ingest.
+	NotifyDropped atomic.Int64
 	// DroppedMessages counts NATS async errors (above all SlowConsumer overflow) — a
 	// receive-side drop is COUNTED and logged, never silent (SEC-4).
 	DroppedMessages atomic.Int64
@@ -77,6 +80,10 @@ type Server struct {
 	notifier        notify.Notifier
 	notifyMu        sync.Mutex
 	notifiedOverdue map[string]bool
+	// notifyQ carries alerts to the async delivery worker (SIEM-12), started once by SetNotifier —
+	// delivery runs OFF the ingest path so a slow webhook never stalls telemetry ingest.
+	notifyQ    chan notify.Notification
+	notifyOnce sync.Once
 
 	// peer-UEBA (D54) is a SERVER-SIDE analytics consumer of the verified stream,
 	// OFF unless explicitly enabled — enabling it is the D23 consent/DPIA decision.
@@ -99,7 +106,8 @@ type Server struct {
 
 // New creates a server over an existing pool.
 func New(pool *pgxpool.Pool) *Server {
-	return &Server{pool: pool, now: time.Now, notifier: notify.Nop{}, notifiedOverdue: map[string]bool{}}
+	return &Server{pool: pool, now: time.Now, notifier: notify.Nop{}, notifiedOverdue: map[string]bool{},
+		notifyQ: make(chan notify.Notification, 256)}
 }
 
 // EnablePeerUEBA turns on server-side peer-baseline analytics (D54). This is the

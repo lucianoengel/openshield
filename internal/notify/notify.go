@@ -25,6 +25,10 @@ const (
 // Notification is one alert. Subject and AgentID are pseudonymous (D23) — the
 // notification carries no content, only the fleet-level signal.
 type Notification struct {
+	// ID is a stable idempotency key for this logical alert (SIEM-12). A receiver dedupes on it, so a
+	// client-timeout-after-server-success retry does not double-page. It is stable across the
+	// delivery retry (the same Notification is retried), and distinct per logical alert.
+	ID        string    `json:"id,omitempty"`
 	Kind      Kind      `json:"kind"`
 	Subject   string    `json:"subject,omitempty"`
 	AgentID   string    `json:"agent_id,omitempty"`
