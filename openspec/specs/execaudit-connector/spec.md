@@ -23,7 +23,6 @@ still be produced, with the start-time absent, rather than dropped.
 #### Scenario: The event carries the observed process's start-time when available
 - **WHEN** the producer emits a process-exec event for a live process
 - **THEN** the event carries the process's start-time captured at observation; and when the start-time cannot be read the event is still emitted with the start-time absent
-## ADDED Requirements
 
 ### Requirement: The execaudit connector pairs a live record stream into events
 The execaudit connector MUST provide a source that reads auditd records from a stream, pairs each
@@ -35,7 +34,6 @@ unbounded stream of unpaired records cannot grow memory without limit or emit a 
 #### Scenario: Interleaved pairs are matched and a flood is bounded
 - **WHEN** the source reads interleaved SYSCALL/EXECVE records, a malformed record, and a flood of unpaired records
 - **THEN** each complete pair is emitted as a process event matched by id, the malformed record is dropped and counted, and the unpaired flood is bounded (evicted and counted) with no spurious event
-## ADDED Requirements
 
 ### Requirement: The execaudit connector decodes auditd's value encodings
 The execaudit connector MUST decode the value encodings auditd uses for argv and exe fields: a
@@ -46,7 +44,6 @@ detection as its real text rather than an opaque hex blob. A quoted value MUST N
 #### Scenario: A hex-encoded argv value is decoded to its real text
 - **WHEN** the connector parses an EXECVE record whose spaced argument auditd hex-encoded, and a quoted simple value
 - **THEN** the hex-encoded argument is decoded to its original text while the quoted value is only unquoted
-## ADDED Requirements
 
 ### Requirement: The EXECVE parser bounds the argument count
 The execaudit EXECVE parser MUST bound the number of argument entries it reads from a record, so a

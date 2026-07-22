@@ -134,7 +134,6 @@ remain documented follow-ups.
 - **THEN** the enforcer refuses it, while a genuine regular file is encrypted/quarantined as before
 - **AND** a test asserts both outcomes
 
-
 ### Requirement: A flow enforcer resolves a flow_id target through a pluggable flow table
 A flow enforcer MUST implement the existing `core.TargetedEnforcer`, advertise the network verdicts it
 can carry out (BLOCK and REDIRECT), and resolve the `flow_id` enforce target to an action through a
@@ -191,7 +190,6 @@ terminate itself or an init-level process, and auditing a refused or failed term
 #### Scenario: A kill decision terminates the named process and never the engine
 - **WHEN** the engine processes a process event with a terminate decision, and separately a process event naming the engine's own process
 - **THEN** the named process is terminated while the engine refuses to terminate itself, and both the termination and the refusal are audited
-## ADDED Requirements
 
 ### Requirement: The kill enforcer protects critical processes and resists pid reuse
 The process-terminating enforcer MUST refuse to terminate a critical process — init, the service

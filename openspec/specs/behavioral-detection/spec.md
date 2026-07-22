@@ -16,7 +16,6 @@ MUST resolve a binary name from both Windows and Unix paths.
 #### Scenario: Malicious execution shape is flagged and routine execution is not
 - **WHEN** the analyzer scores a process execution
 - **THEN** an office application spawning an encoded interpreter scores high with recorded reasons, while a routine command scores zero
-## ADDED Requirements
 
 ### Requirement: The behavioral detector resists near-miss command evasions
 The behavioral detector MUST recognize an encoded-command flag by the tool's own prefix semantics
