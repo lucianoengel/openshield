@@ -5,8 +5,9 @@
 > lens, the frozen core, the tensions, the phased plan) as reference at the bottom. The middle
 > holds the **architecture decisions** that close the open forks and the **category backlog**.
 >
-> **Authoritative status is this file at `HEAD`, as of the Round-32 audit (verified through
-> D168, 2026-07-22).** Earlier round-by-round narratives have been folded into the Done list
+> **Authoritative status is this file at `HEAD`, as of the Round-33 audit (verified through
+> D168, 2026-07-22); items marked ✅ SHIPPED in the queue (D170–D176) landed after and await
+> audit-round verification.** Earlier round-by-round narratives have been folded into the Done list
 > and the queue below; see *Audit history* at the end for what each round covered.
 
 ---
@@ -32,7 +33,7 @@
 
 ---
 
-## Status at a glance (Round-33, verified through D168)
+## Status at a glance (Round-33 — verified through D168; D170–D176 shipped since, pending audit)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -45,12 +46,12 @@ wiring the domains together**, not more breadth.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| **XDR** (umbrella) | ~25% | Detection breadth spans endpoint/network/identity, but **correlation is single-domain**: `Correlate()` reads only `peer_alerts` (peer-UEBA/identity), while DLP/HIPS/DNS/SMTP/USB detections stop at `fleet_telemetry` and **never form incidents**. No unified entity model (device⋈user), subject keys disjoint per domain. Real XDR needs the entity graph + cross-domain normalization + correlation + coordinated response (XDR-1…7, gated on IDENT-1). |
-| Zero Trust (ZTNA) | ~55% | Access broker + microseg + **real OIDC/JWT on-path** (alg-confusion rejected) + dual-credential logic + agent-signed posture bound to the reporting key. **But the posture chain is INERT in production** — publisher and proxy derive the subject key differently, so every compliant device reads `HasPosture=false` (IDENT-1, the top of the queue). No hardware attestation, no JWKS rotation, no ZTNA client. |
-| DLP | ~45% core | Strong sandboxed detection core; enforcement wired behind `OPENSHIELD_ENFORCE`; compliance packs (PCI/HIPAA/GDPR) load and change decisions — **but packs REPLACE the default policy**, so enabling one silently disables HIPS + out-of-scope detectors (DLP-5b). +EIN/NPI/NHS/SIN/ABA/routing/phone detectors. Still one channel, no EDM/OCR/ML. |
+| **XDR** (umbrella) | ~25% | Detection breadth spans endpoint/network/identity, but **correlation is single-domain**: `Correlate()` reads only `peer_alerts` (peer-UEBA/identity), while DLP/HIPS/DNS/SMTP/USB detections stop at `fleet_telemetry` and **never form incidents**. No unified entity model (device⋈user), subject keys disjoint per domain. Real XDR needs the entity graph + cross-domain normalization + correlation + coordinated response (XDR-1…7; **IDENT-1 landed D170, so XDR-1 is now unblocked**). |
+| Zero Trust (ZTNA) | ~55% | Access broker + microseg + **real OIDC/JWT on-path** (alg-confusion rejected) + dual-credential logic + agent-signed posture bound to the reporting key. The posture chain is now **canonicalized** — one shared `pseudonym.Of` across publisher, roster, and proxy (IDENT-1, D170, pending audit). No hardware attestation, no JWKS rotation, no ZTNA client. |
+| DLP | ~45% core | Strong sandboxed detection core; enforcement wired behind `OPENSHIELD_ENFORCE`; compliance packs (PCI/HIPAA/GDPR) now **compose** with the default rather than replacing it (DLP-5b, D171, pending audit). +EIN/NPI/NHS/SIN/ABA/routing/phone detectors. Still one channel, no EDM/OCR/ML. |
 | NIPS / NTPS | ~30% | Per-channel: **HTTP is genuinely inline** (forward proxy, terminates TLS, `BLOCK`/`REDIRECT` in-path — real prevention, deliberately fail-open per D73/D17); **DNS is tap/detect-only** (DEPLOY-1 — cannot prevent; inline sinkhole resolver = NIPS-8); **SMTP is a terminating capture endpoint** (parses, does not relay — inline-`5xx`-reject-capable but not yet a filtering MTA hop). So the category is **NIDS today + inline NIPS on HTTP.** Next: transparent inline for HTTP (ADR-8/NIPS-1), signatures/threat-intel (NIPS-2). |
-| SIEM | ~35% | `/events` search **mounted + gated**, **materialized incidents** (id/state), cross-host correlation, alert lifecycle+ack, async multi-sink HMAC webhooks, persisted UEBA baselines, case workflow, syslog. Still: no unified alert-lifecycle schema (ADR-10), notify idempotency broken (SIEM-12), no UI, no CEF/WEF. |
-| HIPS | ~30% | Phase E **runs end-to-end** — real auditd source → real pid → real KILL, behavioral→decision, detector evasions closed (mutation-confirmed). **KILL safety incomplete**: pid-reuse revalidation ineffective + the critical-process allowlist is self-immunizing (HIPS-7/8). `DENY_EXEC` deliberately deferred (needs `FAN_OPEN_EXEC_PERM`). |
+| SIEM | ~35% | `/events` search **mounted + gated**, **materialized incidents** (id/state), cross-host correlation, alert lifecycle+ack, async multi-sink HMAC webhooks, persisted UEBA baselines, case workflow, syslog; notify idempotency + timestamped-HMAC webhooks landed (SIEM-12/8b, D172/D176, pending audit). Still: no unified alert-lifecycle schema (ADR-10), no UI, no CEF/WEF. |
+| HIPS | ~30% | Phase E **runs end-to-end** — real auditd source → real pid → real KILL, behavioral→decision, detector evasions closed (mutation-confirmed). **KILL safety hardened** — trusted-identity critical-process allowlist (real `/proc/<pid>/exe` + root-ownership) and start-time pid-reuse revalidation (HIPS-8/7, D174/D175, pending audit). `DENY_EXEC` deliberately deferred (needs `FAN_OPEN_EXEC_PERM`). |
 | **SOAR** | ~10% | Has the *evidence + case shell* — four-eyes cases (library-only, **no HTTP surface**), materialized incidents with ack, async multi-sink HMAC webhooks — but **zero orchestration**: incidents never notify, no playbook engine, no enrichment/threat-intel, no bidirectional integrations, no generic approval object, no MTTA/MTTR, correlation only runs on operator GET. Response automation is governed by **ADR-12/T5** (server-side playbooks pipeline-native; signed intent seam + off-pipeline runners **owner-approved 2026-07-22**). SOAR-1…9. |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. Not in the headline category set (XDR/DLP/HIPS/NTPS/SIEM/ZT/SOAR). |
 
@@ -369,6 +370,12 @@ keeps the sentence "the server coordinates, it does not control" literally true 
   map one intent to one call from a **per-connector closed verb set** (the IdP runner knows only
   `DISABLE_USER`/`REVOKE_SESSIONS` over a typed principal — never a URL or a script). The control plane
   still only publishes intent; four-eyes is **non-waivable**. Covers SOAR-8.
+  **Guarantee under a compromised control plane (be precise):** four-eyes is a *control-plane* gate and
+  does NOT survive control-plane compromise — an attacker holding the signing key mints its own approved
+  intents. What holds against that adversary is the **per-connector closed verb set**: a compromised
+  control plane can at worst disable a user or revoke sessions — never exfiltrate data or execute code
+  (the same bound Tier-2 concedes). Four-eyes is the control against the *honest-but-careless* operator;
+  the closed verb set is the bound against the *compromised* one. Both are load-bearing; neither alone.
 - **Permanently out (the red line holds, never "later"):** (1) arbitrary command/script execution on
   endpoints — the exact capability D14 makes inexpressible; (2) remote live-forensics content pull —
   forbidden independently by the D10/D29 content boundary. Any pressure for these is pressure to reopen
@@ -661,7 +668,7 @@ into the Done list and the queue above.
   unmounted `/events`, the HIPS scaffolding-not-runnable state, and the SMTP/ENG residuals.
 - **Round-32 (through D168)** — verified the entire R31 queue + the net-new ZT/DLP/SIEM features closed;
   surfaced IDENT-1 (HIGH, inert posture chain), the DLP-5b policy-replace bug, and the HIPS-7/8
-  KILL-safety gaps; closed the 11 open architecture forks as ADR-0…ADR-11. Independently double-checked
+  KILL-safety gaps; closed the 11 open architecture forks as ADR-0, ADR-2…ADR-11 (there is no ADR-1 — the NAC/VPN fork became ADR-0). Independently double-checked
   (all findings confirmed; two ADR text errors fixed pre-commit).
 - **Round-33 (through D168, this file)** — repositioning audit for **XDR + SOAR** (2 new headline
   dimensions; NAC/VPN dropped from the headline set). Proved XDR correlation is **single-domain** today
