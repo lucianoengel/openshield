@@ -87,24 +87,26 @@ const (
 	EventKind_EVENT_KIND_USB_INSERTED  EventKind = 4
 	EventKind_EVENT_KIND_NETWORK_FLOW  EventKind = 5
 	EventKind_EVENT_KIND_HTTP_REQUEST  EventKind = 6
-	EventKind_EVENT_KIND_DNS_QUERY     EventKind = 7 // a resolved DNS question (Phase C — DNS breadth)
-	EventKind_EVENT_KIND_SMTP_MESSAGE  EventKind = 8 // an outbound SMTP message (Phase C — email breadth)
-	EventKind_EVENT_KIND_PROCESS_EXEC  EventKind = 9 // a process execution (Phase E — HIPS)
+	EventKind_EVENT_KIND_DNS_QUERY     EventKind = 7  // a resolved DNS question (Phase C — DNS breadth)
+	EventKind_EVENT_KIND_SMTP_MESSAGE  EventKind = 8  // an outbound SMTP message (Phase C — email breadth)
+	EventKind_EVENT_KIND_PROCESS_EXEC  EventKind = 9  // a process execution (Phase E — HIPS)
+	EventKind_EVENT_KIND_FILE_DELETED  EventKind = 10 // a watched file was removed (HIPS-4 FIM — a delete is a tamper signal)
 )
 
 // Enum value maps for EventKind.
 var (
 	EventKind_name = map[int32]string{
-		0: "EVENT_KIND_UNSPECIFIED",
-		1: "EVENT_KIND_FILE_OPENED",
-		2: "EVENT_KIND_FILE_MODIFIED",
-		3: "EVENT_KIND_FILE_CREATED",
-		4: "EVENT_KIND_USB_INSERTED",
-		5: "EVENT_KIND_NETWORK_FLOW",
-		6: "EVENT_KIND_HTTP_REQUEST",
-		7: "EVENT_KIND_DNS_QUERY",
-		8: "EVENT_KIND_SMTP_MESSAGE",
-		9: "EVENT_KIND_PROCESS_EXEC",
+		0:  "EVENT_KIND_UNSPECIFIED",
+		1:  "EVENT_KIND_FILE_OPENED",
+		2:  "EVENT_KIND_FILE_MODIFIED",
+		3:  "EVENT_KIND_FILE_CREATED",
+		4:  "EVENT_KIND_USB_INSERTED",
+		5:  "EVENT_KIND_NETWORK_FLOW",
+		6:  "EVENT_KIND_HTTP_REQUEST",
+		7:  "EVENT_KIND_DNS_QUERY",
+		8:  "EVENT_KIND_SMTP_MESSAGE",
+		9:  "EVENT_KIND_PROCESS_EXEC",
+		10: "EVENT_KIND_FILE_DELETED",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":   0,
@@ -117,6 +119,7 @@ var (
 		"EVENT_KIND_DNS_QUERY":     7,
 		"EVENT_KIND_SMTP_MESSAGE":  8,
 		"EVENT_KIND_PROCESS_EXEC":  9,
+		"EVENT_KIND_FILE_DELETED":  10,
 	}
 )
 
@@ -927,7 +930,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xa9\x02\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xc6\x02\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
@@ -938,7 +941,9 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x17EVENT_KIND_HTTP_REQUEST\x10\x06\x12\x18\n" +
 	"\x14EVENT_KIND_DNS_QUERY\x10\a\x12\x1b\n" +
 	"\x17EVENT_KIND_SMTP_MESSAGE\x10\b\x12\x1b\n" +
-	"\x17EVENT_KIND_PROCESS_EXEC\x10\t*r\n" +
+	"\x17EVENT_KIND_PROCESS_EXEC\x10\t\x12\x1b\n" +
+	"\x17EVENT_KIND_FILE_DELETED\x10\n" +
+	"*r\n" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +

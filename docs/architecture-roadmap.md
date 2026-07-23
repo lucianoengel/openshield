@@ -830,6 +830,15 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   like the inline file responder (B2) / NIPS-1 TPROXY. `KILL_PROCESS` (post-exec) already landed.
 - **HIPS-4 · FIM, memory/injection detection, ransomware canary, application whitelisting** — each a
   separate subsystem-sized bet · XL each. Do not bundle.
+  - ✅ **FIM increment 1 SHIPPED (D223):** `internal/fim` detects tampering of operator-designated
+    critical files against a persistent SHA-256 baseline — catches a timestomped modify (preserved
+    mtime+size) that the size+mtime `filewatch` misses, detects DELETION (new `EVENT_KIND_FILE_DELETED`),
+    persists the known-good manifest across restarts. Emits each drift as a content-free pipeline event
+    (→ policy ALERT, audited) via `fimSource` in `openshield-engine`; no root (periodic hashing). Proven
+    end-to-end on the real engine→worker path; 4 mutation guards. **Honest limit:** the manifest is a
+    plain (unsigned) file — a signed tamper-evident baseline is the next increment. Deferred: real-time
+    inotify/fanotify watch, remediation, xattr/ACL monitoring, recursive globs, Windows/macOS paths.
+    Memory/injection detection, ransomware canary, and application whitelisting remain separate XL bets.
 
 ### Platform (remainder, not in the immediate queue)
 - **PLAT-5 · Config management beyond env vars** — P2 · S–M. Typed config (file + env override),

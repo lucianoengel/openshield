@@ -31,6 +31,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/enforcers/process"
 	"github.com/lucianoengel/openshield/internal/enforcers/quarantine"
 	"github.com/lucianoengel/openshield/internal/engine"
+	"github.com/lucianoengel/openshield/internal/fim"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
@@ -211,6 +212,50 @@ func main() {
 			slog.String("source", execLog))
 	}
 
+	// Optional File Integrity Monitoring source (HIPS-4). When OPENSHIELD_FIM_PATHS names critical
+	// files/dirs, the engine hashes them into a known-good baseline (OPENSHIELD_FIM_BASELINE, built +
+	// saved on first run, loaded thereafter) and periodically rescans, emitting a drift Event
+	// (modified/created/deleted) into the SAME pipeline so a tamper finding becomes an audited decision.
+	// No privilege (periodic hashing). Tracked in wg so events is not closed while it produces.
+	if fimPaths := splitEnv("OPENSHIELD_FIM_PATHS"); len(fimPaths) > 0 {
+		baselineFile := strings.TrimSpace(os.Getenv("OPENSHIELD_FIM_BASELINE"))
+		if baselineFile == "" {
+			fatal(log, "FIM misconfigured", errNoFimBaseline)
+		}
+		var manifest *fim.Manifest
+		if _, statErr := os.Stat(baselineFile); statErr != nil {
+			m, overflow, err := fim.BuildBaseline(fimPaths, fim.Options{})
+			if err != nil {
+				fatal(log, "building FIM baseline", err)
+			}
+			if err := fim.SaveManifest(baselineFile, m); err != nil {
+				fatal(log, "saving FIM baseline", err)
+			}
+			manifest = m
+			log.Warn("engine: FIM baseline CAPTURED from the current on-disk state — REVIEW it; "+
+				"the manifest is a plain file and is NOT tamper-evident (a signed baseline is a follow-up)",
+				slog.String("baseline", baselineFile), slog.Int("files", m.Size()), slog.Int("skipped", overflow))
+		} else {
+			m, err := fim.LoadManifest(baselineFile)
+			if err != nil {
+				fatal(log, "loading FIM baseline", err)
+			}
+			manifest = m
+			log.Info("engine: FIM active against a known-good baseline (unsigned manifest)",
+				slog.String("baseline", baselineFile), slog.Int("files", m.Size()))
+		}
+		iv := envDuration("OPENSHIELD_FIM_INTERVAL", 60*time.Second)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fimSource(ctx, manifest, fimPaths, iv, fim.Options{}, events, log)
+		}()
+		log.Info("engine: FIM connector ENABLED — critical-file drift enters the pipeline (HIPS-4)",
+			slog.Int("paths", len(fimPaths)), slog.Duration("interval", iv))
+	} else {
+		log.Info("engine: FIM inert (set OPENSHIELD_FIM_PATHS + OPENSHIELD_FIM_BASELINE to enable)")
+	}
+
 	go func() { wg.Wait(); close(events) }()
 
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
@@ -259,15 +304,22 @@ func processOne(ctx context.Context, eng *engine.Engine, ev *corev1.Event, log *
 var errNoWatchDirs = errors.New("set OPENSHIELD_WATCH_DIRS (comma-separated) to at least one directory")
 
 // watchDirs parses OPENSHIELD_WATCH_DIRS (comma-separated), trimming blanks.
-func watchDirs() []string {
+func watchDirs() []string { return splitEnv("OPENSHIELD_WATCH_DIRS") }
+
+// splitEnv parses a comma-separated env var into a trimmed, non-empty list.
+func splitEnv(key string) []string {
 	var out []string
-	for _, d := range strings.Split(os.Getenv("OPENSHIELD_WATCH_DIRS"), ",") {
+	for _, d := range strings.Split(os.Getenv(key), ",") {
 		if d = strings.TrimSpace(d); d != "" {
 			out = append(out, d)
 		}
 	}
 	return out
 }
+
+// errNoFimBaseline makes a FIM run without a baseline path fail loudly (the baseline is
+// where the known-good state lives — without a persistent file it cannot survive a restart).
+var errNoFimBaseline = errors.New("set OPENSHIELD_FIM_BASELINE to a manifest file path when OPENSHIELD_FIM_PATHS is set")
 
 // watch feeds a directory's fanotify events into the shared channel until the
 // context is cancelled. A read error that is not cancellation is logged and the
