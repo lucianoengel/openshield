@@ -131,6 +131,11 @@ type Server struct {
 	CEFIngested   atomic.Int64
 	CEFDropped    atomic.Int64
 	cefListenAddr atomic.Value // string: the bound listener address, once RunCEFSyslog binds
+
+	// CloudTrailIngested / CloudTrailDropped count CloudTrail records persisted vs. skipped (a record
+	// with no event identity, a poison file, or a persist failure) — the drop is counted, never silent.
+	CloudTrailIngested atomic.Int64
+	CloudTrailDropped  atomic.Int64
 }
 
 // New creates a server over an existing pool.

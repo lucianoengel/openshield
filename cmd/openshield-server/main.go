@@ -117,6 +117,18 @@ func main() {
 			}()
 		}
 
+		// SIEM-4: when OPENSHIELD_CLOUDTRAIL_DIR is set, ingest AWS CloudTrail deliveries dropped into
+		// that directory (the S3-synced pattern) into the external-log store. Leader-only, so failover
+		// does not double-ingest; a scan error is logged, never fatal.
+		if ctDir := os.Getenv("OPENSHIELD_CLOUDTRAIL_DIR"); ctDir != "" {
+			go func() {
+				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 CloudTrail ingest watching %s\n", ctDir)
+				if err := srv.RunCloudTrailIngest(leaderCtx, ctDir); err != nil && leaderCtx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: CloudTrail ingest stopped: %v\n", err)
+				}
+			}()
+		}
+
 		// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
 		// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
 		// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are

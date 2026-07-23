@@ -40,6 +40,10 @@ func RequireTierForTest(minRole string) http.Handler {
 // never fills its notify queue (R34-9).
 func (s *Server) EmitForTest(n notify.Notification) { s.emit(context.Background(), n) }
 
+// ScanCloudTrailDirForTest runs one CloudTrail directory scan (SIEM-4), so a test can drive ingest
+// deterministically without waiting on the poller's ticker.
+func (s *Server) ScanCloudTrailDirForTest(dir string) { s.scanCloudTrailDir(context.Background(), dir) }
+
 // BackoffFor / NakBackoffBase / NakBackoffMax expose the pure Nak redelivery schedule (R34-4)
 // so a test can assert the doubling-and-cap behavior without a live JetStream message.
 func BackoffFor(numDelivered uint64) time.Duration { return backoffFor(numDelivered) }
