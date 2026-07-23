@@ -29,7 +29,14 @@ type Resolver struct {
 	Upstream string                 // "ip:port" of the real resolver to forward to
 	Blocked  func(name string) bool // reports whether a queried domain is blocked (IOC-feed-backed in prod)
 	Timeout  time.Duration          // per-forward timeout; 0 → defaultTimeout
-	Log      *slog.Logger
+	// Mark, when > 0, is a firewall mark (SO_MARK) set on the upstream forward socket (linux). It is the
+	// loop-breaker for the transparent :53 redirect (dnsredirect): the redirect rule captures every
+	// client's :53 traffic EXCEPT packets carrying this mark, so the resolver's own forwarded queries
+	// escape the redirect and reach the real upstream instead of looping back into the resolver. Mark == 0
+	// leaves upstream forwarding exactly as it was (plain dial, no mark) — required when there is no
+	// redirect installed and off non-linux platforms.
+	Mark int
+	Log  *slog.Logger
 }
 
 func (r Resolver) timeout() time.Duration {
@@ -85,7 +92,7 @@ func (r Resolver) handle(query []byte, client net.Addr, pc net.PacketConn) {
 // leaves the query unanswered (a normal resolver outcome when the upstream is down) — it is NOT a
 // sinkhole and MUST NOT be turned into one.
 func (r Resolver) forward(query []byte, client net.Addr, pc net.PacketConn) {
-	uc, err := net.DialTimeout("udp", r.Upstream, r.timeout())
+	uc, err := r.dialUpstream()
 	if err != nil {
 		if r.Log != nil {
 			r.Log.Warn("dnssink: upstream dial failed (query unanswered, NOT sinkholed)", slog.String("err", err.Error()))
@@ -106,6 +113,17 @@ func (r Resolver) forward(query []byte, client net.Addr, pc net.PacketConn) {
 		return
 	}
 	_, _ = pc.WriteTo(resp[:m], client)
+}
+
+// dialUpstream dials the UDP upstream. With Mark == 0 it is exactly the historical net.DialTimeout path.
+// With Mark > 0 it dials through a Dialer whose Control stamps SO_MARK on the socket (linux) so the
+// forwarded query escapes the transparent redirect (the loop-break); markControl is a no-op off linux.
+func (r Resolver) dialUpstream() (net.Conn, error) {
+	if r.Mark == 0 {
+		return net.DialTimeout("udp", r.Upstream, r.timeout())
+	}
+	d := net.Dialer{Timeout: r.timeout(), Control: markControl(r.Mark)}
+	return d.Dial("udp", r.Upstream)
 }
 
 // nxdomain builds an NXDOMAIN response from a query: the same transaction id and question, QR=1,

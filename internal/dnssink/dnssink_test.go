@@ -3,6 +3,7 @@ package dnssink
 import (
 	"context"
 	"net"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -148,6 +149,37 @@ func TestForwardsNormalQuery(t *testing.T) {
 	}
 	if len(resp) < 2 || resp[len(resp)-2] != 0xde || resp[len(resp)-1] != 0xad {
 		t.Fatal("the client did not receive the upstream's relayed response")
+	}
+}
+
+// TestMarkZeroForwardsPlainly: with Mark == 0 the upstream forward is the historical plain-dial path — a
+// normal query is still relayed byte-for-byte (the loop-break machinery must not perturb the default).
+func TestMarkZeroForwardsPlainly(t *testing.T) {
+	canned := append(buildQuery(0, "good.com"), 0xbe, 0xef)
+	up := newStubUpstream(t, canned)
+	r := Resolver{Upstream: up.pc.LocalAddr().String(), Blocked: func(string) bool { return false }, Mark: 0}
+	addr := runResolver(t, r)
+
+	resp := query(t, addr, buildQuery(0x1234, "good.com"))
+	if !up.queried.Load() {
+		t.Fatal("Mark==0: the upstream was not queried")
+	}
+	if len(resp) < 2 || resp[len(resp)-2] != 0xbe || resp[len(resp)-1] != 0xef {
+		t.Fatal("Mark==0: the client did not receive the relayed upstream response (plain path perturbed)")
+	}
+}
+
+// TestMarkSelectsControlPath: on linux a non-zero Mark builds the SO_MARK dial Control (the loop-break).
+// The actual setsockopt needs CAP_NET_ADMIN and is exercised by the gated VM test; here we assert only that
+// the control path is selected on linux (and is inert off linux where the redirect does not exist).
+func TestMarkSelectsControlPath(t *testing.T) {
+	c := markControl(0x1d5)
+	if runtime.GOOS == "linux" {
+		if c == nil {
+			t.Fatal("linux: Mark>0 must build a non-nil dial Control for SO_MARK")
+		}
+	} else if c != nil {
+		t.Fatal("non-linux: markControl must be inert (nil)")
 	}
 }
 

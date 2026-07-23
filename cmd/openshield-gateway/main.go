@@ -39,6 +39,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/casb"
 	"github.com/lucianoengel/openshield/internal/core"
+	"github.com/lucianoengel/openshield/internal/dnsredirect"
 	"github.com/lucianoengel/openshield/internal/dnssink"
 	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/attest"
@@ -666,7 +667,16 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 			"CAP_NET_BIND_SERVICE)", slog.String("addr", addr), slog.String("err", err.Error()))
 		return
 	}
-	r := dnssink.Resolver{Upstream: upstream, Blocked: gw.BlockedDomain, Log: log}
+	// Transparent :53 redirect (NIPS-8 increment 2): when OPENSHIELD_DNS_REDIRECT=1, redirect the host's
+	// UDP :53 traffic to this resolver so UNCONFIGURED clients are also sinkholed. The resolver carries a
+	// firewall mark on its upstream socket so its OWN forwards escape the redirect (the loop-break); the
+	// redirect rule exempts that mark. Root-only (CAP_NET_ADMIN); a failure logs and the resolver still
+	// serves explicitly-configured clients.
+	mark := 0
+	if os.Getenv("OPENSHIELD_DNS_REDIRECT") == "1" {
+		mark = envMark("OPENSHIELD_DNS_REDIRECT_MARK", 0x1d5)
+	}
+	r := dnssink.Resolver{Upstream: upstream, Blocked: gw.BlockedDomain, Mark: mark, Log: log}
 	go func() {
 		if err := r.Serve(ctx, pc); err != nil && ctx.Err() == nil {
 			log.Error("gateway: DNS sinkhole stopped", slog.String("err", err.Error()))
@@ -674,6 +684,48 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	}()
 	log.Info("gateway: NIPS-8 preventive DNS resolver ACTIVE (sinkhole blocked domains, forward the rest)",
 		slog.String("listen", addr), slog.String("upstream", upstream))
+
+	if mark != 0 {
+		port := listenPort(pc, addr)
+		if port == 0 {
+			log.Error("gateway: transparent DNS redirect NOT installed — could not determine resolver port",
+				slog.String("addr", addr))
+		} else if err := dnsredirect.Install(port, mark, log); err != nil {
+			log.Error("gateway: transparent DNS redirect could NOT install — resolver still serves configured "+
+				"clients (needs CAP_NET_ADMIN + iptables/nft)", slog.String("err", err.Error()))
+		} else {
+			go func() {
+				<-ctx.Done()
+				if err := dnsredirect.Remove(log); err != nil {
+					log.Error("gateway: transparent DNS redirect teardown failed", slog.String("err", err.Error()))
+				}
+			}()
+		}
+	}
+}
+
+// listenPort resolves the resolver's actual UDP port: prefer the bound socket (handles a ":0" ephemeral
+// listen), fall back to parsing the configured address.
+func listenPort(pc net.PacketConn, addr string) int {
+	if ua, ok := pc.LocalAddr().(*net.UDPAddr); ok && ua.Port != 0 {
+		return ua.Port
+	}
+	if _, portStr, err := net.SplitHostPort(addr); err == nil {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			return p
+		}
+	}
+	return 0
+}
+
+// envMark reads a firewall mark (accepts hex "0x1d5" or decimal); def on unset/parse error.
+func envMark(k string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+		if n, err := strconv.ParseInt(v, 0, 32); err == nil {
+			return int(n)
+		}
+	}
+	return def
 }
 
 func fatal(log *slog.Logger, msg string, err error) {
