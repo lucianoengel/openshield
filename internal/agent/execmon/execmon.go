@@ -68,23 +68,37 @@ type DenyEvaluator struct {
 	DenyPaths     map[string]bool // absolute exec paths to block
 	DenyBasenames map[string]bool // exec basenames to block (e.g. "nc", "ncat")
 	BehaviorFloor float64         // block when behavioral.Score >= this; 0 disables the behavioral gate
+
+	// Application whitelisting (default-deny): when either allow map is non-empty, a RESOLVED exec
+	// whose path/basename is NOT allowlisted is blocked. The deny-list and behavioral gate above still
+	// apply first (deny wins over allow), and an unresolved path is allowed (we cannot verify it —
+	// availability over a false block, D17).
+	AllowPaths     map[string]bool
+	AllowBasenames map[string]bool
 }
 
-// Evaluate returns VerdictBlock on a deny-list hit or an above-floor behavioral score,
-// else VerdictAllow. It never returns an error.
+func (d DenyEvaluator) allowlistActive() bool {
+	return len(d.AllowPaths) > 0 || len(d.AllowBasenames) > 0
+}
+
+// Evaluate returns VerdictBlock on a deny-list hit, an above-floor behavioral score, or (in
+// allowlist mode) a resolved exec that is not allowlisted; else VerdictAllow. It never errors.
 func (d DenyEvaluator) Evaluate(_ context.Context, e watchdog.PermissionEvent) (watchdog.Verdict, error) {
 	path := e.Path
 	if path != "" {
-		if d.DenyPaths[path] {
-			return watchdog.VerdictBlock, nil
-		}
-		if d.DenyBasenames[filepath.Base(path)] {
+		base := filepath.Base(path)
+		// Deny and behavioral FIRST — these can block even an allowlisted binary (deny > allow).
+		if d.DenyPaths[path] || d.DenyBasenames[base] {
 			return watchdog.VerdictBlock, nil
 		}
 		if d.BehaviorFloor > 0 {
 			if f := behavioral.Analyze(path, "", nil); f.Score >= d.BehaviorFloor {
 				return watchdog.VerdictBlock, nil
 			}
+		}
+		// Application whitelisting: default-deny a resolved exec that is not on the allowlist.
+		if d.allowlistActive() && !d.AllowPaths[path] && !d.AllowBasenames[base] {
+			return watchdog.VerdictBlock, nil
 		}
 	}
 	return watchdog.VerdictAllow, nil

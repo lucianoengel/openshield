@@ -858,6 +858,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   already landed.
 - **HIPS-4 · FIM, memory/injection detection, ransomware canary, application whitelisting** — each a
   separate subsystem-sized bet · XL each. Do not bundle.
+  - ✅ **Application whitelisting SHIPPED (D230):** default-deny exec via an allowlist on the inline
+    exec-permission control (D224) — only approved binaries run, everything else refused inline; deny-list
+    + behavioral still block first (deny > allow). Opt-in `OPENSHIELD_EXEC_ALLOW`, parser-free. Proven on
+    the VM (a non-allowlisted binary kernel-refused). **Note: the allowlist must include the dynamic loader
+    (`ld-linux`) + interpreters — `FAN_OPEN_EXEC_PERM` fires for them too.** Deferred: strict
+    deny-unknown-path, content-hash allowlisting. **Memory/injection detection and ransomware canary
+    remain separate XL bets.**
   - ✅ **FIM increment 1 SHIPPED (D223):** `internal/fim` detects tampering of operator-designated
     critical files against a persistent SHA-256 baseline — catches a timestomped modify (preserved
     mtime+size) that the size+mtime `filewatch` misses, detects DELETION (new `EVENT_KIND_FILE_DELETED`),

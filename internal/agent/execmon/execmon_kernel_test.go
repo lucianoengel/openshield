@@ -133,3 +133,53 @@ func isPermission(err error) bool {
 	}
 	return false
 }
+
+// TestExecPermissionKernelAllowlist (HIPS-4 application whitelisting): with a default-deny allowlist,
+// a NON-allowlisted binary is kernel-REFUSED, while an allowlisted one runs.
+//
+// NOTE: the kernel raises FAN_OPEN_EXEC_PERM for the dynamic LOADER (ld-linux) too, not just the main
+// binary — so a real allowlist MUST include the loader (and any script interpreters), or every dynamic
+// binary breaks. The allowlist here includes the common loader basenames for that reason; a
+// non-allowlisted main binary is still blocked at its OWN exec (before the loader is reached).
+func TestExecPermissionKernelAllowlist(t *testing.T) {
+	requireExecPerm(t)
+	dir := t.TempDir()
+	allowed := filepath.Join(dir, "helper")
+	blocked := filepath.Join(dir, "unlisted")
+	copyExec(t, allowed)
+	copyExec(t, blocked)
+
+	mon, err := execmon.Open([]string{dir})
+	if err != nil {
+		t.Fatalf("open monitor: %v", err)
+	}
+	defer mon.Close()
+
+	allow := map[string]bool{
+		"helper": true,
+		// The dynamic loader must be allowlisted or a dynamic binary cannot run.
+		"ld-linux-x86-64.so.2": true, "ld-linux.so.2": true, "ld-musl-x86_64.so.1": true,
+	}
+	wd := &watchdog.Watchdog{
+		SelfPID:   int32(os.Getpid()),
+		Budget:    2 * time.Second,
+		Responder: watchdog.FanotifyResponder{NotifyFD: mon.NotifyFD()},
+		Evaluator: execmon.DenyEvaluator{AllowBasenames: allow}, // default-deny
+		Audit:     func(context.Context, watchdog.PermissionEvent, watchdog.Severity, string) error { return nil },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = mon.Run(ctx, wd) }()
+	time.Sleep(150 * time.Millisecond)
+
+	// The allowlisted binary runs (its own exec + the loader are both allowlisted).
+	if out, err := exec.Command(allowed).CombinedOutput(); err != nil {
+		t.Fatalf("allowlisted binary was refused (%v): %s", err, out)
+	}
+	// The non-allowlisted binary is refused at its own exec (default-deny), before the loader.
+	if err := exec.Command(blocked).Run(); err == nil {
+		t.Fatal("a non-allowlisted binary EXECUTED — application whitelisting did not default-deny it")
+	} else if !isPermission(err) {
+		t.Fatalf("blocked exec failed with %v, want a permission error (EACCES/EPERM)", err)
+	}
+}

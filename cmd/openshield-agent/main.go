@@ -99,8 +99,20 @@ func buildEvaluator() (execmon.DenyEvaluator, error) {
 		}
 		ev.BehaviorFloor = floor
 	}
-	if len(ev.DenyPaths) == 0 && len(ev.DenyBasenames) == 0 && ev.BehaviorFloor <= 0 {
-		return ev, fmt.Errorf("no exec signal configured: set OPENSHIELD_EXEC_DENY and/or OPENSHIELD_EXEC_BEHAVIOR_FLOOR")
+	// Application whitelisting (default-deny): OPENSHIELD_EXEC_ALLOW lists the ONLY binaries permitted to
+	// execute; anything else (with a resolved path) is refused. Same format as the deny-list.
+	if f := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_ALLOW")); f != "" {
+		paths, bases, err := execmon.LoadDenyList(f)
+		if err != nil {
+			return ev, err
+		}
+		ev.AllowPaths, ev.AllowBasenames = paths, bases
+		logf("WARNING: application whitelisting (default-deny) is ON — only binaries in %s may execute; "+
+			"an incomplete allowlist can break the host", f)
+	}
+	if len(ev.DenyPaths) == 0 && len(ev.DenyBasenames) == 0 && ev.BehaviorFloor <= 0 &&
+		len(ev.AllowPaths) == 0 && len(ev.AllowBasenames) == 0 {
+		return ev, fmt.Errorf("no exec signal configured: set OPENSHIELD_EXEC_DENY, OPENSHIELD_EXEC_ALLOW, and/or OPENSHIELD_EXEC_BEHAVIOR_FLOOR")
 	}
 	return ev, nil
 }
