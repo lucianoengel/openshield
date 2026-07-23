@@ -832,8 +832,16 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     exemption normal resolution loops and hangs.** Deferred: the PREROUTING/gateway-forwarding case (redirect
     other hosts' `:53`); TCP DNS; a bypass watchdog (remove the redirect if the resolver dies so resolution
     is never wedged); DoT/DoH (`:853`/`:443` evade a `:53` redirect).
-  - **Increment 3 (deferred):** local cache + upstream failover; sinkhole-to-walled-garden IP; TCP DNS +
-    DoT/DoH; the bypass watchdog; the PREROUTING gateway-forward case.
+  - ✅ **Increment 3 DONE (D235) — the redirect self-heals instead of wedging DNS.** `dnsredirect.Watchdog`
+    probes the resolver's liveness and, after a threshold of consecutive failures, REMOVES the redirect
+    (bypass → host falls back to direct DNS), re-installing on recovery — the D73/D17 fail-open discipline
+    applied to the redirect itself, closing the D234 availability hole (a dead resolver no longer wedges
+    host name resolution). Threshold damps flapping; recovery is immediate. **Proven on the VM: kill the
+    resolver → the watchdog bypasses → the query resolves directly instead of hanging;** 2 unit mutation
+    guards (threshold, counter-reset). Deferred: a shared watchdog for the TPROXY redirect; backoff/hold-down;
+    a bypass alert (notify seam); an upstream-independent sentinel probe.
+  - **Increment 4 (deferred):** local cache + upstream failover; sinkhole-to-walled-garden IP; TCP DNS +
+    DoT/DoH; the PREROUTING gateway-forward case; the TPROXY-redirect watchdog.
   Original: DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
   inline `:53` redirect over a non-resolver would blackhole all fleet name resolution. To make DNS
   *preventive* it must become a **real resolver**: local cache + upstream forwarding + failover, then

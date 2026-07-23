@@ -690,16 +690,12 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 		if port == 0 {
 			log.Error("gateway: transparent DNS redirect NOT installed — could not determine resolver port",
 				slog.String("addr", addr))
-		} else if err := dnsredirect.Install(port, mark, log); err != nil {
-			log.Error("gateway: transparent DNS redirect could NOT install — resolver still serves configured "+
-				"clients (needs CAP_NET_ADMIN + iptables/nft)", slog.String("err", err.Error()))
 		} else {
-			go func() {
-				<-ctx.Done()
-				if err := dnsredirect.Remove(log); err != nil {
-					log.Error("gateway: transparent DNS redirect teardown failed", slog.String("err", err.Error()))
-				}
-			}()
+			// The watchdog owns install/remove: it removes the redirect (falls back to direct DNS) if the
+			// resolver wedges, so a dead resolver never wedges host name resolution, and restores it on
+			// recovery (NIPS-8 inc-3, the D234 availability follow-up).
+			wd := &dnsredirect.Watchdog{Port: port, Mark: mark, Log: log}
+			go wd.Run(ctx)
 		}
 	}
 }
