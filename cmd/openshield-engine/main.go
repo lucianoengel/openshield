@@ -336,10 +336,17 @@ func registerEnforcers(eng *engine.Engine, log *slog.Logger) error {
 		names = append(names, "encrypt-local(escrow)")
 	}
 	// HIPS containment (HIPS-5): KILL_PROCESS terminates a process by pid POST-exec — a real,
-	// runnable containment now that the engine selects the pid target by event kind. DENY_EXEC
-	// (true inline exec-block) is DEFERRED: it needs an exec-permission handler
-	// (FAN_OPEN_EXEC_PERM), which is privileged and env-gated like the inline file responder (B2);
-	// there is no ExecController to wire until that lands, so the deny enforcer is not registered.
+	// runnable containment now that the engine selects the pid target by event kind.
+	//
+	// DENY_EXEC (true inline exec-block, HIPS-3) is answered by the WATCHDOG's inline path, NOT an
+	// engine enforcer: the watchdog's ExecEvaluator runs engine.Process over the exec-permission
+	// event (internal/agent/execguard.Decider) and maps DENY_EXEC → VerdictBlock → Responder.Deny,
+	// reusing the fail-open budget. The process.DenyEnforcer is therefore deliberately NOT registered
+	// here — the engine's enforce() loop fires inside engine.Process, so registering it would DOUBLE
+	// the deny (once via the enforcer, once via the watchdog's kernel answer). It remains for the
+	// alternate async flow-enforcer model (an engine that dispatches exec events without holding the
+	// permission fd). The privileged FAN_OPEN_EXEC_PERM producer that feeds the watchdog is the
+	// root-gated adapter, deferred exactly like the inline file responder (B2) and NIPS-1 TPROXY.
 	eng.Enforcers = append(eng.Enforcers, process.NewKillEnforcer())
 	names = append(names, "kill-process")
 	log.Warn("engine: ENFORCEMENT ENABLED — decisions now CONTAIN, not only observe (HON-3)",
