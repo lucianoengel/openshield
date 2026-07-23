@@ -94,6 +94,7 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/alerts/ack", requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)
 		mux.Handle("/search", requireTier(RoleAnalyst, opRead))
 		mux.Handle("/events", requireTier(RoleAnalyst, opRead)) // SIEM-1: event search over the fleet aggregate
+		mux.Handle("/logs", requireTier(RoleAnalyst, opRead))  // SIEM-4: search ingested third-party external logs
 		mux.Handle("/incidents", requireTier(RoleAnalyst, opRead))
 		mux.Handle("/incidents/ack", requireTier(RoleResponder, opRead)) // SIEM-11b: acknowledge an incident (POST)
 		mux.Handle("/overdue", requireTier(RoleAnalyst, opRead))

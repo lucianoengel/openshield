@@ -203,6 +203,8 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		writeJSON(w, events)
 	})
 
+	mux.HandleFunc("/logs", s.externalLogsHandler) // SIEM-4: search ingested third-party logs (CEF, CloudTrail)
+
 	mux.HandleFunc("/alerts/ack", s.alertAckHandler)
 
 	mux.HandleFunc("/subject", s.subjectHandler)

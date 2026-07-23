@@ -3,12 +3,70 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/connectors/cef"
 	"github.com/lucianoengel/openshield/internal/connectors/syslog"
 )
+
+// externalLogsHandler serves GET /logs — a filtered, bounded search over the ingested third-party
+// external logs (CEF over syslog, AWS CloudTrail). Mounted behind the same analyst read gate as
+// /events. A malformed filter param is a 400, not a silent drop (SEC-8): silently ignoring a bad
+// since/until/limit returns OVER-BROAD results an investigator would trust as authoritative.
+func (s *Server) externalLogsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	f, err := parseExternalLogFilter(r)
+	if err != nil {
+		http.Error(w, "bad filter: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	logs, err := s.SearchExternalLogs(r.Context(), f)
+	if err != nil {
+		http.Error(w, "read failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, logs)
+}
+
+// parseExternalLogFilter parses the /logs query params, rejecting ANY malformed value (SEC-8).
+func parseExternalLogFilter(r *http.Request) (ExternalLogFilter, error) {
+	q := r.URL.Query()
+	f := ExternalLogFilter{
+		Vendor:   q.Get("vendor"),
+		Product:  q.Get("product"),
+		Host:     q.Get("host"),
+		Severity: q.Get("severity"),
+	}
+	if v := q.Get("since"); v != "" {
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, fmt.Errorf("since: %w", err)
+		}
+		f.Since = ts
+	}
+	if v := q.Get("until"); v != "" {
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return f, fmt.Errorf("until: %w", err)
+		}
+		f.Until = ts
+	}
+	f.Limit = 100
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return f, fmt.Errorf("limit %q is not a positive integer", v)
+		}
+		f.Limit = n
+	}
+	return f, nil
+}
 
 // ExternalLog is one persisted third-party log event (SIEM-4): a CEF record received over syslog from
 // the estate. It is UNVERIFIED (third-party, unauthenticated syslog), stored apart from attributable
