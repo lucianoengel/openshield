@@ -794,8 +794,11 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   columns at ingest would enable field-level hunting — larger surface, pull after the queue.)*
 
 ### HIPS (endpoint-behavioral domain — Phase E, landed and hardening)
-- **HIPS-3 (remainder) · `DENY_EXEC`** — P0 · action expansion (A, T1) · L. True inline deny needs
-  `FAN_OPEN_EXEC_PERM` + per-verb owner sign-off on T1. `KILL_PROCESS` already landed.
+- **HIPS-3 · `DENY_EXEC`** — ✅ **T1-gated logic DONE (D217).** `watchdog.ExecEvaluator` +
+  `internal/agent/execguard.Decider(engine)` map a pipeline `DENY_EXEC` decision to a kernel `FAN_DENY`
+  under the fail-open budget; mutation-verified without root. **Remaining (root-gated adapter):** the
+  `FAN_OPEN_EXEC_PERM` fanotify mark/read/respond producer that feeds the watchdog — deferred exactly
+  like the inline file responder (B2) / NIPS-1 TPROXY. `KILL_PROCESS` (post-exec) already landed.
 - **HIPS-4 · FIM, memory/injection detection, ransomware canary, application whitelisting** — each a
   separate subsystem-sized bet · XL each. Do not bundle.
 
