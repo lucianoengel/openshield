@@ -787,9 +787,15 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     the rooted VM** with real netns+veth+TPROXY (a denied flow dropped, an allowed one spliced to an
     echo server); 3 mutation guards incl. the on-kernel no-IP_TRANSPARENT. **Now a real inline IPS at
     L4, paired with the NIPS-2 detection engine.**
-  - **Increment 2 (deferred):** SNI/ClientHello peek + content-signature bytes inspection over the flow
-    (inc 1 is L4 metadata — a bad SNI to a shared-CDN IP isn't caught yet); an auto-disable bypass
-    watchdog for a wedged redirect; UDP; nftables-native config; a privileged CI job with netns.
+  - ✅ **Increment 2 DONE (D226) — the inline plane now blocks by DOMAIN.** `internal/gateway/sni.go`
+    defensively extracts the SNI from the TLS ClientHello; `handleFlow` peeks it (replaying the bytes so
+    an allowed flow is byte-for-byte transparent) and sets `Request.Host = SNI`, so the IOC domain match
+    blocks a flow to a bad domain on a SHARED CDN IP. Fail-open on a peek timeout/non-TLS. **Proven on the
+    VM** (a real ClientHello through TPROXY dropped by its SNI); 3 mutation guards incl. the over-read.
+  - **Increment 3 (deferred):** content-signature inspection of the flow PAYLOAD via the worker (inc 2 is
+    SNI/host only); an HTTP Host-header peek for cleartext; an auto-disable bypass watchdog for a wedged
+    redirect; UDP; nftables-native config; QUIC/TLS-1.3-ECH (hides SNI → falls back to L4); a privileged
+    CI job with netns.
 - **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
   YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS.
   - ✅ **Metadata IOC half DONE** — `internal/nips` matches domain/IP/CIDR/URI-substring, hot-reload +

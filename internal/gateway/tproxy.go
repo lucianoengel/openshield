@@ -5,9 +5,24 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
+
+// maxPeek bounds how many initial flow bytes are buffered to recover the SNI (a ClientHello is
+// well under this); peekDeadline bounds how long we wait for the client to speak first, so a
+// server-speaks-first or slow flow fails open promptly.
+const (
+	maxPeek      = 4096
+	peekDeadline = 500 * time.Millisecond
+)
+
+// FlowHint carries content-free metadata peeked from a flow's initial bytes for the decision —
+// currently the TLS SNI hostname ("" when not recoverable).
+type FlowHint struct {
+	SNI string
+}
 
 // Transparent (TPROXY) inline data-plane (NIPS-1): the gateway can act as an inline network
 // IPS, not only an explicit HTTP proxy. A TPROXY nftables/iptables rule redirects a TCP flow
@@ -19,9 +34,10 @@ import (
 // Egress fail-open is load-bearing (ADR-8/D73/D17): a pipeline error forwards the flow rather
 // than dropping it — inline prevention degrades to a passive wire, never a network outage.
 
-// DecideFunc decides a flow on its metadata: block reports whether to drop the flow. An error
-// is a DETECTION failure and MUST be treated as allow by the caller (fail-open).
-type DecideFunc func(ctx context.Context, origDst, src net.Addr) (block bool, err error)
+// DecideFunc decides a flow on its metadata plus a peeked hint (the SNI): block reports whether to
+// drop the flow. An error is a DETECTION failure and MUST be treated as allow by the caller
+// (fail-open).
+type DecideFunc func(ctx context.Context, origDst, src net.Addr, hint FlowHint) (block bool, err error)
 
 // DialFunc connects to a flow's original destination (production: a net.Dialer).
 type DialFunc func(origDst net.Addr) (net.Conn, error)
@@ -35,7 +51,13 @@ type DialFunc func(origDst net.Addr) (net.Conn, error)
 func handleFlow(ctx context.Context, client net.Conn, origDst net.Addr, decide DecideFunc, dial DialFunc, log *slog.Logger) {
 	defer client.Close()
 
-	block, err := decide(ctx, origDst, client.RemoteAddr())
+	// Peek the initial bytes to recover the SNI, without consuming them (they are replayed to the
+	// upstream on splice, so an allowed flow is byte-for-byte transparent). A peek timeout/error
+	// yields no bytes and no SNI — the flow then decides on metadata and splices (fail-open).
+	peeked := peekInitial(client)
+	hint := FlowHint{SNI: extractSNI(peeked)}
+
+	block, err := decide(ctx, origDst, client.RemoteAddr(), hint)
 	if err != nil {
 		// Fail-open: forward the flow, audit the failure. Never drop on a detection error.
 		if log != nil {
@@ -46,7 +68,7 @@ func handleFlow(ctx context.Context, client net.Conn, origDst net.Addr, decide D
 	if block {
 		// Drop: closing the client (via defer) refuses the flow. No upstream dial, no bytes.
 		if log != nil {
-			log.Info("tproxy: flow dropped by policy", "dst", origDst.String(), "src", client.RemoteAddr().String())
+			log.Info("tproxy: flow dropped by policy", "dst", origDst.String(), "sni", hint.SNI, "src", client.RemoteAddr().String())
 		}
 		return
 	}
@@ -59,25 +81,44 @@ func handleFlow(ctx context.Context, client net.Conn, origDst net.Addr, decide D
 		return
 	}
 	defer upstream.Close()
-	splice(client, upstream)
+	// Replay the peeked bytes first so the upstream sees the original handshake, then splice.
+	spliceWithPrefix(client, upstream, peeked)
 }
 
-// splice copies bytes bidirectionally between the client and the upstream until either side
-// closes; when one direction ends it closes both connections to unblock the other, then waits
-// for both copies to finish.
-func splice(a, b net.Conn) {
+// peekInitial reads up to maxPeek bytes from the client under a short deadline, returning what it
+// read (possibly empty). It does not consume from the caller's view: the returned bytes are
+// replayed to the upstream. A read error or timeout returns whatever was read (often nothing) so
+// the flow fails open on the peek.
+func peekInitial(client net.Conn) []byte {
+	_ = client.SetReadDeadline(time.Now().Add(peekDeadline))
+	buf := make([]byte, maxPeek)
+	n, _ := client.Read(buf)
+	_ = client.SetReadDeadline(time.Time{}) // clear the deadline for the splice
+	return buf[:n]
+}
+
+// spliceWithPrefix copies bytes bidirectionally between the client and the upstream, sending the
+// peeked prefix to the upstream FIRST (so it sees the original handshake) then the rest of the
+// client stream. When one direction ends it closes both connections to unblock the other, then
+// waits for both copies to finish.
+func spliceWithPrefix(client, upstream net.Conn, prefix []byte) {
 	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
+	go func() {
+		if len(prefix) > 0 {
+			_, _ = upstream.Write(prefix)
+		}
+		_, _ = io.Copy(upstream, client)
 		done <- struct{}{}
-	}
-	go cp(a, b)
-	go cp(b, a)
+	}()
+	go func() {
+		_, _ = io.Copy(client, upstream)
+		done <- struct{}{}
+	}()
 	<-done
 	// One direction ended; closing both unblocks the peer's pending Read (double-close with
 	// handleFlow's deferred closes is harmless).
-	a.Close()
-	b.Close()
+	client.Close()
+	upstream.Close()
 	<-done
 }
 
@@ -92,7 +133,7 @@ type TProxyServer struct {
 // flow has no HTTP body): a Request carrying the original destination runs the pipeline, and
 // a BLOCK action drops the flow. SNI/content inspection is a later increment.
 func NewTProxyServer(gw *Gateway, log *slog.Logger) *TProxyServer {
-	decide := func(ctx context.Context, origDst, src net.Addr) (bool, error) {
+	decide := func(ctx context.Context, origDst, src net.Addr, hint FlowHint) (bool, error) {
 		dstIP, dstPort := addrHostPort(origDst)
 		srcIP, srcPort := addrHostPort(src)
 		dec, err := gw.Process(ctx, &Request{
@@ -102,6 +143,7 @@ func NewTProxyServer(gw *Gateway, log *slog.Logger) *TProxyServer {
 			DstIP:     dstIP,
 			DstPort:   dstPort,
 			Protocol:  "tcp",
+			Host:      hint.SNI, // the peeked SNI → the IOC domain match + host policy apply
 			Direction: corev1.NetworkDirection_NETWORK_DIRECTION_EGRESS,
 		})
 		if err != nil {

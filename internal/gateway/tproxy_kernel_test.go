@@ -4,7 +4,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -91,7 +93,7 @@ func TestTProxyKernelRedirect(t *testing.T) {
 	}
 	defer ln.Close()
 	srv := &TProxyServer{
-		decide: func(_ context.Context, origDst, _ net.Addr) (bool, error) {
+		decide: func(_ context.Context, origDst, _ net.Addr, _ FlowHint) (bool, error) {
 			host, _, _ := net.SplitHostPort(origDst.String())
 			return host == denyDst, nil
 		},
@@ -124,6 +126,7 @@ func setupTopology(t *testing.T) {
 		tryRun("iptables", "-t", "mangle", "-F", "PREROUTING")
 		tryRun("ip", "rule", "del", "fwmark", "1", "lookup", "100")
 		tryRun("ip", "route", "flush", "table", "100")
+		tryRun("ip", "addr", "del", allowDst+"/32", "dev", "lo")
 	}
 	cleanup() // clear any stale state from a previous run
 	t.Cleanup(cleanup)
@@ -155,4 +158,66 @@ func nsConnect(dst, msg string) (string, error) {
 	script := fmt.Sprintf(`exec 3<>/dev/tcp/%s/%s || exit 1; printf '%s' >&3; timeout 1 cat <&3`, dst, dstPort, msg)
 	out, err := exec.Command("ip", "netns", "exec", nsName, "bash", "-c", script).CombinedOutput()
 	return string(out), err
+}
+
+// nsConnectRaw sends arbitrary bytes (base64-encoded on the wire, decoded in the ns) FROM the
+// namespace to dst:dstPort and returns whatever comes back within a short timeout.
+func nsConnectRaw(dst string, payload []byte) (string, error) {
+	b64 := base64.StdEncoding.EncodeToString(payload)
+	script := fmt.Sprintf(`exec 3<>/dev/tcp/%s/%s || exit 1; printf '%s' | base64 -d >&3; timeout 1 cat <&3 | wc -c`, dst, dstPort, b64)
+	out, err := exec.Command("ip", "netns", "exec", nsName, "bash", "-c", script).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// TestTProxyKernelBlocksBySNI (NIPS-1 increment 2): a redirected flow to an ALLOWED destination IP
+// is DROPPED when its ClientHello SNI is policy-blocked, and SPLICED (reaches the echo server) when
+// the SNI is benign — the domain recovered from the peeked handshake, proven on a real TPROXY path.
+func TestTProxyKernelBlocksBySNI(t *testing.T) {
+	requireTProxy(t)
+	setupTopology(t)
+
+	// Echo server on the allowed dst IP; it counts bytes it receives (the splice target).
+	echoLn, err := net.Listen("tcp", allowDst+":"+dstPort)
+	if err != nil {
+		t.Fatalf("bind echo: %v", err)
+	}
+	defer echoLn.Close()
+	go func() {
+		for {
+			c, err := echoLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) { defer c.Close(); io.Copy(c, c) }(c)
+		}
+	}()
+
+	ln, err := ListenTransparent(tproxyLn)
+	if err != nil {
+		t.Fatalf("transparent listen: %v", err)
+	}
+	defer ln.Close()
+	// Block by SNI only (the dst IP is NOT blocked): proves the SNI peek drives the decision.
+	srv := &TProxyServer{
+		decide: func(_ context.Context, _ net.Addr, _ net.Addr, h FlowHint) (bool, error) {
+			return h.SNI == "blocked.example.com", nil
+		},
+		dial: func(origDst net.Addr) (net.Conn, error) { return net.Dial("tcp", origDst.String()) },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Serve(ctx, ln)
+	time.Sleep(200 * time.Millisecond)
+
+	blockedHello := clientHelloFor(t, "blocked.example.com")
+	okHello := clientHelloFor(t, "ok.example.com")
+
+	// Benign SNI → spliced: the echo server receives (and echoes) the handshake bytes → wc -c > 0.
+	if out, err := nsConnectRaw(allowDst, okHello); err != nil || out == "0" || out == "" {
+		t.Fatalf("benign-SNI flow was not spliced (echo bytes=%q err=%v)", out, err)
+	}
+	// Blocked SNI → dropped: the connection is closed, nothing echoes back → wc -c == 0.
+	if out, _ := nsConnectRaw(allowDst, blockedHello); out != "0" && out != "" {
+		t.Fatalf("blocked-SNI flow was NOT dropped (echoed %s bytes) — the SNI peek did not block it", out)
+	}
 }

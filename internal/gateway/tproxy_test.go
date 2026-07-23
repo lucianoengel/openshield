@@ -60,7 +60,7 @@ func TestHandleFlowDrops(t *testing.T) {
 	client, peer := clientPair()
 	defer peer.Close()
 
-	decide := func(context.Context, net.Addr, net.Addr) (bool, error) { return true, nil } // BLOCK
+	decide := func(context.Context, net.Addr, net.Addr, FlowHint) (bool, error) { return true, nil } // BLOCK
 	go handleFlow(context.Background(), client, origin.ln.Addr(), decide, dialTo(origin.ln.Addr()), nil)
 
 	// The client end should be closed by the handler (drop); a write then read returns EOF/err.
@@ -83,7 +83,7 @@ func TestHandleFlowSplices(t *testing.T) {
 	client, peer := clientPair()
 	defer peer.Close()
 
-	decide := func(context.Context, net.Addr, net.Addr) (bool, error) { return false, nil } // ALLOW
+	decide := func(context.Context, net.Addr, net.Addr, FlowHint) (bool, error) { return false, nil } // ALLOW
 	go handleFlow(context.Background(), client, origin.ln.Addr(), decide, dialTo(origin.ln.Addr()), nil)
 
 	peer.SetDeadline(time.Now().Add(2 * time.Second))
@@ -113,7 +113,7 @@ func TestHandleFlowFailOpen(t *testing.T) {
 	client, peer := clientPair()
 	defer peer.Close()
 
-	decide := func(context.Context, net.Addr, net.Addr) (bool, error) {
+	decide := func(context.Context, net.Addr, net.Addr, FlowHint) (bool, error) {
 		return true, io.ErrUnexpectedEOF // block=true BUT an error → must be treated as ALLOW (fail-open)
 	}
 	go handleFlow(context.Background(), client, origin.ln.Addr(), decide, dialTo(origin.ln.Addr()), nil)
