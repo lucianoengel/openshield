@@ -5,6 +5,7 @@ package openshield.v1;
 option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
 
 import "openshield/v1/classification.proto";
+import "openshield/v1/threat.proto";
 
 // IPC between the privileged agent and the unprivileged parser worker.
 //
@@ -55,4 +56,9 @@ message ClassifyResponse {
   // conflating them would let a crashing parser read as a clean file.
   string error = 4;
   bool truncated = 5;
+  // Content-signature hits (NIPS-2) from matching the operator ruleset against the
+  // body IN THE WORKER. Each carries the rule id + category + confidence — never
+  // the matched bytes, so the crossing stays content-free (D10), same discipline
+  // as DetectorHit.
+  repeated ThreatMatch threat_matches = 6;
 }

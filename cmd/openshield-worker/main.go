@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/agent/ipc"
@@ -24,6 +25,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/worker"
 	"github.com/lucianoengel/openshield/internal/classify"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/signature"
 )
 
 func main() {
@@ -95,6 +97,35 @@ func main() {
 		fmt.Fprintf(os.Stderr, "openshield-worker: DLP-3 IDM active (%d documents)\n", didx.Size())
 	}
 	c := worker.Classifier(cls)
+
+	// NIPS-2 content-signature engine: when a ruleset is configured, the worker matches
+	// operator signatures over each flow body (here, behind the sandbox, because the body
+	// is attacker content — D72) and reports content-free ThreatMatches. A malformed
+	// ruleset aborts (a silently-missing signature engine would read as "no network
+	// threats" when none were checked, the EDM-index discipline). It hot-reloads: the
+	// watcher swaps the ruleset atomically so a new signature takes effect with no restart.
+	var rules atomic.Pointer[signature.Ruleset]
+	if rp := os.Getenv("OPENSHIELD_NIPS_RULES"); rp != "" {
+		rs, err := signature.LoadRuleset(rp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: bad NIPS ruleset %q: %v\n", rp, err)
+			os.Exit(1)
+		}
+		rules.Store(rs)
+		fmt.Fprintf(os.Stderr, "openshield-worker: NIPS-2 content signatures active (%d rules)\n", rs.Size())
+		w := signature.NewRulesetWatcher(rp)
+		go w.Watch(context.Background(), 2*time.Second,
+			func(rs *signature.Ruleset) {
+				rules.Store(rs)
+				fmt.Fprintf(os.Stderr, "openshield-worker: NIPS-2 ruleset reloaded (%d rules)\n", rs.Size())
+			},
+			func(err error) {
+				fmt.Fprintf(os.Stderr, "openshield-worker: NIPS-2 ruleset reload failed, keeping current: %v\n", err)
+			})
+	} else {
+		fmt.Fprintln(os.Stderr, "openshield-worker: NIPS-2 content signatures OFF (set OPENSHIELD_NIPS_RULES to enable)")
+	}
+
 	in, out := os.Stdin, os.Stdout
 
 	for {
@@ -106,7 +137,7 @@ func main() {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		resp := worker.Handle(ctx, c, &req)
+		resp := worker.Handle(ctx, c, rules.Load(), &req)
 		cancel()
 		if err := ipc.WriteFrame(out, resp); err != nil {
 			return

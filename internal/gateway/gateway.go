@@ -212,6 +212,18 @@ func (s bodyClassifyStage) Run(ctx context.Context, st *core.State) (core.Outcom
 		}
 	}
 	st.Classification = lc
+	// NIPS-2 content signatures: the worker also matched the operator ruleset over the
+	// body (behind the sandbox) and returned content-free ThreatMatches. Project them
+	// onto the SAME threat axis the IOC metadata stage uses, so the policy prevents on a
+	// body signature exactly as on a known-bad destination. APPEND (never overwrite): a
+	// flow can trip both a metadata IOC and a content signature, and the policy must see
+	// both — the net-threat stage appends its own matches to this.
+	if tms := resp.GetThreatMatches(); len(tms) > 0 {
+		if st.Threats == nil {
+			st.Threats = &corev1.ThreatClassification{EventId: st.Event.GetEventId()}
+		}
+		st.Threats.Matches = append(st.Threats.Matches, tms...)
+	}
 	return core.Continue(), nil
 }
 
@@ -241,15 +253,19 @@ func (s threatClassifyStage) Run(_ context.Context, st *core.State) (core.Outcom
 	if len(matches) == 0 {
 		return core.Continue(), nil
 	}
-	tc := &corev1.ThreatClassification{EventId: st.Event.GetEventId()}
+	// APPEND to any existing threat classification (a content-signature stage may have
+	// already recorded body matches on this flow) — overwriting would hide one axis of
+	// threat from the policy. The two stages share one ThreatClassification.
+	if st.Threats == nil {
+		st.Threats = &corev1.ThreatClassification{EventId: st.Event.GetEventId()}
+	}
 	for _, m := range matches {
-		tc.Matches = append(tc.Matches, &corev1.ThreatMatch{
+		st.Threats.Matches = append(st.Threats.Matches, &corev1.ThreatMatch{
 			Category:    threatCategoryProto(m.Category),
 			Confidence:  m.Confidence,
 			IndicatorId: m.IndicatorID,
 		})
 	}
-	st.Threats = tc
 	return core.Continue(), nil
 }
 

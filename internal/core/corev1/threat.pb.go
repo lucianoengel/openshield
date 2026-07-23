@@ -36,6 +36,10 @@ const (
 	ThreatCategory_THREAT_CATEGORY_IOC_IP ThreatCategory = 2
 	// The request path matches a network URI signature.
 	ThreatCategory_THREAT_CATEGORY_URI_SIGNATURE ThreatCategory = 3
+	// The flow BODY matched an operator content signature (NIPS-2 body-content
+	// engine), matched in the sandboxed worker. The indicator id is the rule id;
+	// the matched bytes never cross the classification boundary.
+	ThreatCategory_THREAT_CATEGORY_CONTENT_SIGNATURE ThreatCategory = 4
 )
 
 // Enum value maps for ThreatCategory.
@@ -45,12 +49,14 @@ var (
 		1: "THREAT_CATEGORY_IOC_DOMAIN",
 		2: "THREAT_CATEGORY_IOC_IP",
 		3: "THREAT_CATEGORY_URI_SIGNATURE",
+		4: "THREAT_CATEGORY_CONTENT_SIGNATURE",
 	}
 	ThreatCategory_value = map[string]int32{
-		"THREAT_CATEGORY_UNSPECIFIED":   0,
-		"THREAT_CATEGORY_IOC_DOMAIN":    1,
-		"THREAT_CATEGORY_IOC_IP":        2,
-		"THREAT_CATEGORY_URI_SIGNATURE": 3,
+		"THREAT_CATEGORY_UNSPECIFIED":       0,
+		"THREAT_CATEGORY_IOC_DOMAIN":        1,
+		"THREAT_CATEGORY_IOC_IP":            2,
+		"THREAT_CATEGORY_URI_SIGNATURE":     3,
+		"THREAT_CATEGORY_CONTENT_SIGNATURE": 4,
 	}
 )
 
@@ -212,12 +218,13 @@ const file_openshield_v1_threat_proto_rawDesc = "" +
 	"\findicator_id\x18\x03 \x01(\tR\vindicatorId\"g\n" +
 	"\x14ThreatClassification\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x124\n" +
-	"\amatches\x18\x02 \x03(\v2\x1a.openshield.v1.ThreatMatchR\amatches*\x90\x01\n" +
+	"\amatches\x18\x02 \x03(\v2\x1a.openshield.v1.ThreatMatchR\amatches*\xb7\x01\n" +
 	"\x0eThreatCategory\x12\x1f\n" +
 	"\x1bTHREAT_CATEGORY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aTHREAT_CATEGORY_IOC_DOMAIN\x10\x01\x12\x1a\n" +
 	"\x16THREAT_CATEGORY_IOC_IP\x10\x02\x12!\n" +
-	"\x1dTHREAT_CATEGORY_URI_SIGNATURE\x10\x03B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x1dTHREAT_CATEGORY_URI_SIGNATURE\x10\x03\x12%\n" +
+	"!THREAT_CATEGORY_CONTENT_SIGNATURE\x10\x04B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_threat_proto_rawDescOnce sync.Once

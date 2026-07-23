@@ -223,8 +223,13 @@ type ClassifyResponse struct {
 	Hits      []*DetectorHit         `protobuf:"bytes,3,rep,name=hits,proto3" json:"hits,omitempty"`
 	// Set when the worker could not classify. An error is not "nothing found":
 	// conflating them would let a crashing parser read as a clean file.
-	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
-	Truncated     bool   `protobuf:"varint,5,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	Error     string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	Truncated bool   `protobuf:"varint,5,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	// Content-signature hits (NIPS-2) from matching the operator ruleset against the
+	// body IN THE WORKER. Each carries the rule id + category + confidence — never
+	// the matched bytes, so the crossing stays content-free (D10), same discipline
+	// as DetectorHit.
+	ThreatMatches []*ThreatMatch `protobuf:"bytes,6,rep,name=threat_matches,json=threatMatches,proto3" json:"threat_matches,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -294,11 +299,18 @@ func (x *ClassifyResponse) GetTruncated() bool {
 	return false
 }
 
+func (x *ClassifyResponse) GetThreatMatches() []*ThreatMatch {
+	if x != nil {
+		return x.ThreatMatches
+	}
+	return nil
+}
+
 var File_openshield_v1_ipc_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_ipc_proto_rawDesc = "" +
 	"\n" +
-	"\x17openshield/v1/ipc.proto\x12\ropenshield.v1\x1a\"openshield/v1/classification.proto\"\xc8\x01\n" +
+	"\x17openshield/v1/ipc.proto\x12\ropenshield.v1\x1a\"openshield/v1/classification.proto\x1a\x1aopenshield/v1/threat.proto\"\xc8\x01\n" +
 	"\x0fClassifyRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
@@ -314,14 +326,15 @@ const file_openshield_v1_ipc_proto_rawDesc = "" +
 	"\n" +
 	"confidence\x18\x02 \x01(\x01R\n" +
 	"confidence\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\rR\x05count\"\xb0\x01\n" +
+	"\x05count\x18\x03 \x01(\rR\x05count\"\xf3\x01\n" +
 	"\x10ClassifyResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
 	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12.\n" +
 	"\x04hits\x18\x03 \x03(\v2\x1a.openshield.v1.DetectorHitR\x04hits\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1c\n" +
-	"\ttruncated\x18\x05 \x01(\bR\ttruncatedB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\ttruncated\x18\x05 \x01(\bR\ttruncated\x12A\n" +
+	"\x0ethreat_matches\x18\x06 \x03(\v2\x1a.openshield.v1.ThreatMatchR\rthreatMatchesB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_ipc_proto_rawDescOnce sync.Once
@@ -341,15 +354,17 @@ var file_openshield_v1_ipc_proto_goTypes = []any{
 	(*DetectorHit)(nil),      // 1: openshield.v1.DetectorHit
 	(*ClassifyResponse)(nil), // 2: openshield.v1.ClassifyResponse
 	(DetectorType)(0),        // 3: openshield.v1.DetectorType
+	(*ThreatMatch)(nil),      // 4: openshield.v1.ThreatMatch
 }
 var file_openshield_v1_ipc_proto_depIdxs = []int32{
 	3, // 0: openshield.v1.DetectorHit.detector_type:type_name -> openshield.v1.DetectorType
 	1, // 1: openshield.v1.ClassifyResponse.hits:type_name -> openshield.v1.DetectorHit
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	4, // 2: openshield.v1.ClassifyResponse.threat_matches:type_name -> openshield.v1.ThreatMatch
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_ipc_proto_init() }
@@ -358,6 +373,7 @@ func file_openshield_v1_ipc_proto_init() {
 		return
 	}
 	file_openshield_v1_classification_proto_init()
+	file_openshield_v1_threat_proto_init()
 	file_openshield_v1_ipc_proto_msgTypes[0].OneofWrappers = []any{
 		(*ClassifyRequest_Path)(nil),
 		(*ClassifyRequest_FileHandle)(nil),

@@ -17,6 +17,10 @@ enum ThreatCategory {
   THREAT_CATEGORY_IOC_IP = 2;
   // The request path matches a network URI signature.
   THREAT_CATEGORY_URI_SIGNATURE = 3;
+  // The flow BODY matched an operator content signature (NIPS-2 body-content
+  // engine), matched in the sandboxed worker. The indicator id is the rule id;
+  // the matched bytes never cross the classification boundary.
+  THREAT_CATEGORY_CONTENT_SIGNATURE = 4;
 }
 
 // ThreatMatch is one threat-intel hit on a flow. It carries the category and a

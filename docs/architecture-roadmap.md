@@ -774,8 +774,18 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 - **NIPS-1 · Transparent/inline connector** — P0 · data-plane (D) · L. **Approach fixed by ADR-8**
   (opt-in TPROXY, bypass watchdog, preserve egress fail-open).
 - **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
-  YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS. **Sequence
-  with NIPS-1.**
+  YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS.
+  - ✅ **Metadata IOC half DONE** — `internal/nips` matches domain/IP/CIDR/URI-substring, hot-reload +
+    remote-URL feed (capability `network-threat-intel`).
+  - ✅ **Content-signature half DONE (D221, increment 1)** — `internal/signature`: an operator ruleset
+    (literal `content` + `nocase` + RE2 `regex`, AND-combined, bounded scan, content-free hits) matched
+    against the flow BODY IN THE SANDBOXED WORKER (D72 — body = attacker content), returned via new
+    additive `ClassifyResponse.threat_matches`/`THREAT_CATEGORY_CONTENT_SIGNATURE`, projected onto
+    `st.Threats` so policy PREVENTs on a body signature; hot-reloadable. Proven end-to-end on the real
+    gateway→worker path; 3 mutation guards incl. the append-merge (overwrite would hide every signature
+    from policy). **Crosses ADR-8's "without signatures it is not an IPS" line for content.**
+  - **Remaining increments:** full Suricata/Snort grammar (flowbits/offset-depth/thresholding),
+    Aho-Corasick multi-pattern, response-body scanning (shares NIPS-4), inline DROP (root-gated NIPS-1).
 - **NIPS-8 · Inline DNS sinkhole resolver — turn DNS from detect to prevent** — P1 · new data-plane
   (D) · L. DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
   inline `:53` redirect over a non-resolver would blackhole all fleet name resolution. To make DNS

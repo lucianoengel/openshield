@@ -15,7 +15,7 @@ import (
 // as a file, keeping the parser in the sandbox (D72).
 func TestHandleClassifiesInlineContent(t *testing.T) {
 	c := worker.Classifier(classify.New())
-	resp := worker.Handle(context.Background(), c, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), c, nil, &corev1.ClassifyRequest{
 		RequestId: "r1", EventId: "e1",
 		Subject: &corev1.ClassifyRequest_Content{Content: []byte("cpf 111.444.777-35\n")},
 	})
@@ -37,7 +37,7 @@ func TestHandleClassifiesInlineContent(t *testing.T) {
 // "no subject" (which IS an error) by the oneof type.
 func TestHandleEmptyContentIsCleanNotError(t *testing.T) {
 	c := worker.Classifier(classify.New())
-	resp := worker.Handle(context.Background(), c, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), c, nil, &corev1.ClassifyRequest{
 		RequestId: "r1", Subject: &corev1.ClassifyRequest_Content{Content: []byte{}},
 	})
 	if resp.GetError() != "" {
@@ -53,7 +53,7 @@ func TestHandleEmptyContentIsCleanNotError(t *testing.T) {
 func TestHandleContentHitsMaxBytes(t *testing.T) {
 	c := worker.Classifier(classify.New())
 	big := strings.Repeat("A", 1024)
-	resp := worker.Handle(context.Background(), c, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), c, nil, &corev1.ClassifyRequest{
 		RequestId: "r1", MaxBytes: 16,
 		Subject: &corev1.ClassifyRequest_Content{Content: []byte(big)},
 	})
@@ -68,7 +68,7 @@ func TestHandleContentHitsMaxBytes(t *testing.T) {
 // No subject is an error, never a clean empty result.
 func TestHandleNoSubjectIsError(t *testing.T) {
 	c := worker.Classifier(classify.New())
-	resp := worker.Handle(context.Background(), c, &corev1.ClassifyRequest{RequestId: "r1"})
+	resp := worker.Handle(context.Background(), c, nil, &corev1.ClassifyRequest{RequestId: "r1"})
 	if resp.GetError() == "" {
 		t.Error("a request with no subject produced no error")
 	}

@@ -89,7 +89,7 @@ func TestClassifierErrorIsNotACleanResult(t *testing.T) {
 	_ = os.WriteFile(p, []byte("data"), 0o600)
 
 	c := &fakeClassifier{err: errors.New("parser exploded")}
-	resp := worker.Handle(context.Background(), c, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), c, nil, &corev1.ClassifyRequest{
 		RequestId: "r1", EventId: "e1",
 		Subject: &corev1.ClassifyRequest_Path{Path: p},
 	})
@@ -102,7 +102,7 @@ func TestClassifierErrorIsNotACleanResult(t *testing.T) {
 }
 
 func TestUnreadableFileIsAnErrorNotACleanResult(t *testing.T) {
-	resp := worker.Handle(context.Background(), &fakeClassifier{}, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), &fakeClassifier{}, nil, &corev1.ClassifyRequest{
 		RequestId: "r1",
 		Subject:   &corev1.ClassifyRequest_Path{Path: "/nonexistent/definitely"},
 	})
@@ -121,7 +121,7 @@ func TestByteCeilingBoundsInputAndReportsTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &fakeClassifier{}
-	resp := worker.Handle(context.Background(), c, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), c, nil, &corev1.ClassifyRequest{
 		RequestId: "r1",
 		Subject:   &corev1.ClassifyRequest_Path{Path: p},
 		MaxBytes:  100,
@@ -138,7 +138,7 @@ func TestByteCeilingBoundsInputAndReportsTruncation(t *testing.T) {
 // passed bytes, attacker-controlled content would land in the address space
 // holding CAP_SYS_ADMIN, which is the whole thing being prevented.
 func TestWorkerRefusesWhenGivenNoPath(t *testing.T) {
-	resp := worker.Handle(context.Background(), &fakeClassifier{}, &corev1.ClassifyRequest{
+	resp := worker.Handle(context.Background(), &fakeClassifier{}, nil, &corev1.ClassifyRequest{
 		RequestId: "r1",
 		Subject:   &corev1.ClassifyRequest_FileHandle{FileHandle: []byte{1, 2, 3}},
 	})

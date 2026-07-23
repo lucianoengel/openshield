@@ -24,6 +24,7 @@ import (
 	"os"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/signature"
 )
 
 // Classifier turns bytes into detector hits. Real detectors arrive in T-007;
@@ -51,7 +52,13 @@ type Classifier interface {
 //
 // Either way the response carries detector types and counts, never matched
 // content (D10/D29), and either way the bytes pass the same bounded reader.
-func Handle(ctx context.Context, c Classifier, req *corev1.ClassifyRequest) *corev1.ClassifyResponse {
+//
+// rules is the NIPS-2 content-signature ruleset (nil/empty = off). When active, the
+// worker ALSO matches the operator signatures against the same body it classifies and
+// reports content-free ThreatMatches — the pattern match runs HERE, behind the
+// sandbox, because the body is attacker content (D72). It reads the ruleset via an
+// atomic pointer so a hot-reload swaps it without a restart.
+func Handle(ctx context.Context, c Classifier, rules *signature.Ruleset, req *corev1.ClassifyRequest) *corev1.ClassifyResponse {
 	resp := &corev1.ClassifyResponse{
 		RequestId: req.GetRequestId(),
 		EventId:   req.GetEventId(),
@@ -91,13 +98,42 @@ func Handle(ctx context.Context, c Classifier, req *corev1.ClassifyRequest) *cor
 	// disk and for inline bytes.
 	lr := &limitReader{R: src, N: int64(max)}
 
-	hits, err := c.Classify(ctx, lr)
+	// With no content-signature ruleset the path is unchanged: stream straight into the
+	// DLP classifier. Only when signatures are active do we buffer the bounded body once
+	// so the SAME bytes feed both the DLP classifier and the signature engine.
+	if rules.Empty() {
+		hits, err := c.Classify(ctx, lr)
+		if err != nil {
+			resp.Error = fmt.Sprintf("worker: classify: %v", err)
+			return resp
+		}
+		resp.Hits = hits
+		resp.Truncated = lr.Truncated
+		return resp
+	}
+
+	body, err := io.ReadAll(lr) // bounded by lr; sets lr.Truncated at the cap
+	if err != nil {
+		resp.Error = fmt.Sprintf("worker: read: %v", err)
+		return resp
+	}
+	hits, err := c.Classify(ctx, bytes.NewReader(body))
 	if err != nil {
 		resp.Error = fmt.Sprintf("worker: classify: %v", err)
 		return resp
 	}
 	resp.Hits = hits
 	resp.Truncated = lr.Truncated
+	// NIPS-2: match the operator content signatures over the same body. Each Hit
+	// becomes a content-free ThreatMatch (rule id + confidence, category
+	// CONTENT_SIGNATURE) — the matched bytes never cross the IPC (D10).
+	for _, h := range rules.Match(body) {
+		resp.ThreatMatches = append(resp.ThreatMatches, &corev1.ThreatMatch{
+			Category:    corev1.ThreatCategory_THREAT_CATEGORY_CONTENT_SIGNATURE,
+			Confidence:  h.Confidence,
+			IndicatorId: h.RuleID,
+		})
+	}
 	return resp
 }
 
