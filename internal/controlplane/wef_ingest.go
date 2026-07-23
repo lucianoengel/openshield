@@ -86,6 +86,7 @@ func wefToExternalLog(r wef.Record) ExternalLog {
 		Severity:    r.Level,
 		Message:     msg,
 		Raw:         r.Raw,
+		Fields:      r.Data, // the EventData Name/Value pairs, huntable per-field
 	}
 }
 

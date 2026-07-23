@@ -78,6 +78,16 @@ func cloudTrailToExternalLog(r cloudtrail.Record) ExternalLog {
 		Severity:    r.ErrorCode, // empty on success; an error code is the failure signal
 		Message:     r.EventSource + ":" + r.EventName + " by " + r.ActorARN + " in " + r.AWSRegion,
 		Raw:         r.Raw,
+		// The parsed CloudTrail fields, huntable per-field (e.g. sourceIPAddress across CloudTrail+WEF).
+		Fields: map[string]string{
+			"eventSource":        r.EventSource,
+			"eventName":          r.EventName,
+			"awsRegion":          r.AWSRegion,
+			"sourceIPAddress":    r.SourceIP,
+			"userIdentityArn":    r.ActorARN,
+			"errorCode":          r.ErrorCode,
+			"recipientAccountId": r.Account,
+		},
 	}
 }
 

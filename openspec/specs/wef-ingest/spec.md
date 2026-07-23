@@ -52,3 +52,6 @@ elected leader SHALL ingest.
 #### Scenario: A poison WEF file does not block ingest
 - **WHEN** a malformed file is dropped into the watched directory
 - **THEN** it is marked failed and counted, and subsequent valid files still ingest
+
+> Field-level hunting: this source's parsed fields are stored in `external_logs.fields` (JSONB) and
+> searchable via the shared field filter — see `cef-syslog-ingest` (SIEM field-level hunting, D212).
