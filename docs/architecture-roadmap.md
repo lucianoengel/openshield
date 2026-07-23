@@ -86,25 +86,27 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
 
 ### Net-new issues (R34) — fold each into the owning ticket; ordered by severity
 
-> **Remediation status (updated 2026-07-22).** ✅ DONE: R34-1, R34-3, R34-4, R34-5, R34-6,
-> R34-7, R34-8, R34-9, R34-10, R34-11, R34-12, and R34-2 **part 1** (pre-auth token) — commits
-> 77ce96c batch-1, 874875b, df65e94, 2ec84fa, 4c793aa, ee92316, 79d873a. ⏳ TODO: R34-2 **part 2**
-> (EK-cert-chain to manufacturer roots — swtpm has no vendor cert so the positive path is
-> untestable here; needs EK-cert-from-NV + a roots pool; carries test proposal #5), R34-13 (LOW
->   bundle). **Test proposals (12): ✅ DONE #1,#2,#3,#4,#6,#7,#8,#9,#12 (see the numbered list below for
-> the test each maps to). ⏳ PENDING #5 (EK-cert refusal — needs R34-2 part 2, untestable on swtpm), #10
-> (Incident→notify — needs SOAR-1), #11 (cross-domain correlation — needs XDR-4).**
+> **Remediation status (updated 2026-07-23).** ✅ DONE: R34-1, R34-3, R34-4, R34-5, R34-6,
+> R34-7, R34-8, R34-9, R34-10, R34-11, R34-12, and R34-2 **both parts** (part 1 pre-auth token ee92316;
+> part 2 EK-cert-chain anchor 2d9deae, D218) — commits 77ce96c batch-1, 874875b, df65e94, 2ec84fa,
+> 4c793aa, ee92316, 79d873a, 2d9deae. ⏳ TODO: R34-13 (LOW bundle: per-index salt). **Test proposals
+> (12): ✅ DONE #1,#2,#3,#4,#5,#6,#7,#8,#9,#12 (see the numbered list below for the test each maps to).
+> ⏳ PENDING #10 (Incident→notify — needs SOAR-1), #11 (cross-domain correlation — needs XDR-4).**
 
 - **R34-1 · ✅ DONE (77ce96c) · Attestation verdict never expires — P1 (HIGH) · gateway/attestation.go.** `IsAttested`
   never TTLs; a compromised endpoint that simply *stops* attesting stays `Attested=true` forever
   (`AttestLoop` logs failures, never drops the gateway verdict). *Fix:* stamp `attested_at`, expire
   after N miss-intervals; a drifted/silent device loses attestation within one cycle. *Mutation:* attest
   once, stop, advance clock → `IsAttested` must flip false.
-- **R34-2 · 🟡 PART 1 DONE (ee92316: pre-auth token) · No EK-cert-chain anchor + no enroll authorization — P1 (HIGH) · attest/ek.go,
-  attestenrollnet.go.** `handleEnroll` trusts any EK bytes + any device-chosen `Subject`; credential
-  activation only proves EK/AK co-residence, so **any device with its own co-resident TPM (incl. swtpm)
-  self-enrolls under any pseudonym**. *Fix:* validate the EK cert to manufacturer roots + require an
-  enrollment pre-auth token (who-may-enroll). The ZTNA-vs-toy line for attestation.
+- **R34-2 · ✅ DONE (part 1 ee92316 pre-auth token; part 2 2d9deae/D218 EK-cert-chain anchor) — P1 (HIGH) · attest/ekcert.go,
+  attestenrollnet.go.** Was: `handleEnroll` trusted any EK bytes + any device-chosen `Subject`; credential
+  activation only proves EK/AK co-residence, so any device with a co-resident TPM (incl. swtpm) could
+  self-enroll under any pseudonym. Now the pre-auth token gates who-may-enroll AND, when
+  `OPENSHIELD_EK_ROOTS` is configured, `attest.VerifyEKCert` requires the EK cert to chain to a
+  manufacturer root and be bound to the submitted EK public key — refused before any challenge. The
+  ZTNA-vs-toy line for attestation, closed. **Follow-on (not gating): endpoint-side EK-cert retrieval
+  from the TPM NV index + shipping real vendor root bundles** (swtpm has no vendor cert, so the positive
+  test path uses a synthetic manufacturer cert over the real swtpm EK).
 - **R34-3 · ✅ DONE (77ce96c) · JWKS accepts `http://` — P1 (HIGH) · gateway/identity, main.go:~281.** Plaintext JWKS fetch =
   key injection = full auth bypass. *Fix:* enforce `https://` at construction; add failed-fetch backoff
   so an unknown-`kid` flood during an IdP outage can't drive one fetch per trigger.
@@ -165,8 +167,9 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
    `StartTicks=0` / `if false` mutations.
 4. ✅ DONE (77ce96c) `TestAttestationVerdictExpires`. **Attestation freshness** (R34-1): real swtpm + NATS, attest once, stop, advance clock → assert
    `IsAttested`→false (drives a verifier TTL that doesn't exist yet).
-5. ⏳ PENDING (needs R34-2 part 2; swtpm has no vendor cert). **EK-cert-chain refusal** (R34-2): enroll a device whose EK carries no vendor-CA cert → `handleEnroll`
-   must refuse. Drives the real enroll path + the anchoring fix.
+5. ✅ DONE (2d9deae, D218) `TestEnrollRefusesUncertifiedEK`. **EK-cert-chain refusal** (R34-2): a real-EK
+   device with no/rogue cert → `handleEnroll` refuses and never enrolls (real NATS enroll path, isolated
+   so only the cert guard can refuse); + `VerifyEKCert` unit tests + a swtpm accept path.
 6. ✅ DONE (2ec84fa) `TestJetStreamRedeliversOnDBFailure`. **JetStream redelivery on DB failure** (R34-4): embedded JS + real PG, close the pool mid-backlog →
    assert Nak/redeliver then persist. **Kills the `Nak→Ack` mutation.**
 7. ✅ DONE (4c793aa) `TestLeaderRecoversFromConnDeath`. **Leader conn-death failover** (R34-6): from a 2nd pool `pg_terminate_backend()` the leader's held
@@ -248,7 +251,8 @@ Each carries its verifying mutation test from *Round-34 audit findings* above.
 1. **R34-4 · Wire the JetStream producer** (P1 HIGH) — the durable-ingest claim is inert until a binary
    calls `UseJetStream()`; add Nak backoff. *Test #6.* Unblocks the ADR-2/ADR-3 durability story.
 2. **R34-1 · Attestation TTL** (P1 HIGH) — a verdict that never expires is not zero-trust. *Test #4.* (S)
-3. **R34-2 · EK-cert-chain anchor + enroll authz** (P1 HIGH) — the attestation-vs-toy line. *Test #5.* (M)
+3. **R34-2 · EK-cert-chain anchor + enroll authz** ✅ DONE (part 1 ee92316, part 2 2d9deae/D218) — the
+   attestation-vs-toy line, closed. *Test #5 landed (`TestEnrollRefusesUncertifiedEK`).*
 4. **R34-3 · HTTPS-only JWKS + outage backoff** (P1 HIGH) — plaintext JWKS = auth bypass. (S)
 5. **R34-5 · Prove the HIPS-7 pid-reuse plumbing** (P1 HIGH) — the guard may be silently inert. *Test #3.* (S)
 6. **XDR-1-WIRE · Populate the entity graph** ✅ DONE (d0319d0, D203) — enrollment + verified ingest
