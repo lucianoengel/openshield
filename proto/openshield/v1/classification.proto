@@ -64,6 +64,12 @@ enum DetectorType {
   // A driver's license (DLP-7): state-variable alphanumeric, context-REQUIRED
   // (the format alone is too generic to fire on its own).
   DETECTOR_TYPE_DRIVERS_LICENSE = 21;
+  // India Aadhaar (DLP-7): a 12-digit id validated by the published Verhoeff checksum plus the
+  // first-digit 2-9 constraint — a real check-digit scheme, so a hit is strong, low-FP evidence.
+  DETECTOR_TYPE_AADHAAR = 22;
+  // UK National Insurance Number (DLP-7): the [prefix][6 digits][suffix] format with the official
+  // prefix-letter exclusions. No checksum, so context-REQUIRED (near a National-Insurance keyword).
+  DETECTOR_TYPE_UK_NINO = 23;
 }
 
 // LocalMatch holds matched content. Host-only.

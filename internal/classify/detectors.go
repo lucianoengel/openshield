@@ -350,3 +350,68 @@ func (ein) Scan(text []byte) (int, float64) {
 	}
 	return countValid(einRe, text, norm, valid), confEIN
 }
+
+// --- India Aadhaar (DLP-7) ---
+
+// confAadhaar: a real check-digit scheme (Verhoeff) plus the first-digit 2-9 constraint — strong,
+// low-FP evidence, on par with the other checksummed national IDs.
+const confAadhaar = 0.85
+
+type aadhaar struct{}
+
+// aadhaarRe matches the conventional 4-4-4 spaced form OR a bare 12-digit run whose first digit is
+// 2-9 (Aadhaar never begins 0 or 1). The Verhoeff checksum does the real filtering.
+var aadhaarRe = regexp.MustCompile(`\b[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}\b`)
+
+func (aadhaar) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_AADHAAR }
+func (aadhaar) Scan(text []byte) (int, float64) {
+	valid := func(s string) bool {
+		return len(s) == 12 && s[0] >= '2' && verhoeffValid(s)
+	}
+	return countValid(aadhaarRe, text, stripNonDigits, valid), confAadhaar
+}
+
+// Verhoeff checksum tables (the published dihedral-group algorithm used by Aadhaar). d is the
+// multiplication (D5) table, p the permutation, inv the inverse — transcribed from the standard.
+var (
+	verhoeffD = [10][10]int{
+		{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+		{1, 2, 3, 4, 0, 6, 7, 8, 9, 5},
+		{2, 3, 4, 0, 1, 7, 8, 9, 5, 6},
+		{3, 4, 0, 1, 2, 8, 9, 5, 6, 7},
+		{4, 0, 1, 2, 3, 9, 5, 6, 7, 8},
+		{5, 9, 8, 7, 6, 0, 4, 3, 2, 1},
+		{6, 5, 9, 8, 7, 1, 0, 4, 3, 2},
+		{7, 6, 5, 9, 8, 2, 1, 0, 4, 3},
+		{8, 7, 6, 5, 9, 3, 2, 1, 0, 4},
+		{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+	}
+	verhoeffP = [8][10]int{
+		{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+		{1, 5, 7, 6, 2, 8, 3, 0, 9, 4},
+		{5, 8, 0, 3, 7, 9, 6, 1, 4, 2},
+		{8, 9, 1, 6, 0, 4, 3, 5, 2, 7},
+		{9, 4, 5, 3, 1, 2, 6, 8, 7, 0},
+		{4, 2, 8, 6, 5, 7, 3, 9, 0, 1},
+		{2, 7, 9, 3, 8, 0, 6, 4, 1, 5},
+		{7, 0, 4, 6, 9, 1, 3, 2, 5, 8},
+	}
+)
+
+// verhoeffValid reports whether an all-digit string passes the Verhoeff checksum (the check digit is
+// the last digit; a valid number reduces to 0). Empty or non-digit input is invalid.
+func verhoeffValid(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	c := 0
+	// Process digits right-to-left; position i (from the right, 0-based) uses permutation row i%8.
+	for i := 0; i < len(s); i++ {
+		d := int(s[len(s)-1-i] - '0')
+		if d < 0 || d > 9 {
+			return false
+		}
+		c = verhoeffD[c][verhoeffP[i%8][d]]
+	}
+	return c == 0
+}

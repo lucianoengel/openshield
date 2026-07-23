@@ -750,9 +750,9 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 - **DLP-6 · Endpoint user coaching/justification** — P1 · X + UI · M. REDIRECT-to-coaching exists at
   the network gateway only; bring it to the endpoint.
 - ✅ **DLP-7 · Detection breadth — context/proximity + passport/DL (SHIPPED D199)** — P1 · classify · M–L.
-  `contextNear` keyword-proximity primitive + passport and driver's-license detectors (context-REQUIRED,
-  low-FP for weak-format ids). Remaining: more countries/national-IDs (reuse the primitive), richer
-  context rules via the signed custom-rule surface.
+  `contextNear` keyword-proximity primitive + passport/driver's-license (D199) + **India Aadhaar
+  (Verhoeff) & UK NINO (context-gated) SHIPPED (D215)**. Remaining: more countries (copy-paste the
+  checksum/context shapes), richer context rules via the signed custom-rule surface.
 - **DLP-8 · Format depth** — P2 · classify · M. **✅ Nested-archive recursion SHIPPED (D214): a file in a
   plain zip (even double-zipped) is now extracted + classified, bomb-bounded.** Remaining: RTF / legacy
   `.doc`, tar/gzip containers, response-body multipart/gzip (shared with NIPS-4).

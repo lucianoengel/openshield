@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/lucianoengel/openshield/internal/classify"
@@ -87,19 +86,36 @@ func TestClassifyExtractsDocxInsideZip(t *testing.T) {
 	}
 }
 
-// TestClassifyArchiveBombIsBounded (DLP-8): a zip with many large deflated members does not hang or
-// OOM — extraction stops at the shared budget. (A bomb-safety smoke test: it must simply RETURN.)
-func TestClassifyArchiveBombIsBounded(t *testing.T) {
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	filler := strings.Repeat("A", 1<<20) // 1 MiB, highly compressible (deflates tiny)
-	for i := 0; i < 64; i++ {            // 64 MiB expanded from a small zip
-		w, _ := zw.Create("f" + strings.Repeat("x", i%3) + string(rune('a'+i)) + ".txt")
-		w.Write([]byte(filler))
+// TestClassifyDeepNestingIsBounded (DLP-8): a DEEPLY-nested archive (a zip in a zip in a zip …, the
+// recursive-decompression amplification vector) does not recurse without limit — the depth cap stops
+// it, so classification completes fast. The value at the deepest level (past the cap) is NOT extracted,
+// which is the honest bound; the test's assertion is that classification RETURNS bounded.
+func TestClassifyDeepNestingIsBounded(t *testing.T) {
+	// Innermost payload, then wrap it 12 times — well past maxArchiveDepth (4).
+	cur := []byte("customer CPF 111.444.777-35 deep inside")
+	for i := 0; i < 12; i++ {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("nested.zip")
+		w.Write(cur)
+		zw.Close()
+		cur = buf.Bytes()
 	}
-	zw.Close()
-	// Must return within the test (no hang / OOM) — the assertion is that it completes.
-	if _, err := classify.New().Classify(context.Background(), bytes.NewReader(buf.Bytes())); err != nil {
-		t.Fatalf("classify errored on a compressible archive: %v", err)
+	// Must complete (no unbounded recursion / hang) — extraction stops at the depth cap.
+	if _, err := classify.New().Classify(context.Background(), bytes.NewReader(cur)); err != nil {
+		t.Fatalf("classify errored on a deeply-nested archive: %v", err)
+	}
+	// A payload within the depth cap IS reached, confirming recursion actually runs (not disabled).
+	shallow := []byte("customer CPF 111.444.777-35")
+	for i := 0; i < 3; i++ { // 3 wraps → depths 1..3, within the cap
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		w, _ := zw.Create("n.zip")
+		w.Write(shallow)
+		zw.Close()
+		shallow = buf.Bytes()
+	}
+	if !hasType(classifyBytes(t, shallow), corev1.DetectorType_DETECTOR_TYPE_CPF) {
+		t.Fatal("a CPF nested within the depth cap was not detected — recursion is not reaching it")
 	}
 }

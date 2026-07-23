@@ -83,6 +83,12 @@ const (
 	// A driver's license (DLP-7): state-variable alphanumeric, context-REQUIRED
 	// (the format alone is too generic to fire on its own).
 	DetectorType_DETECTOR_TYPE_DRIVERS_LICENSE DetectorType = 21
+	// India Aadhaar (DLP-7): a 12-digit id validated by the published Verhoeff checksum plus the
+	// first-digit 2-9 constraint — a real check-digit scheme, so a hit is strong, low-FP evidence.
+	DetectorType_DETECTOR_TYPE_AADHAAR DetectorType = 22
+	// UK National Insurance Number (DLP-7): the [prefix][6 digits][suffix] format with the official
+	// prefix-letter exclusions. No checksum, so context-REQUIRED (near a National-Insurance keyword).
+	DetectorType_DETECTOR_TYPE_UK_NINO DetectorType = 23
 )
 
 // Enum value maps for DetectorType.
@@ -110,6 +116,8 @@ var (
 		19: "DETECTOR_TYPE_IDM",
 		20: "DETECTOR_TYPE_PASSPORT",
 		21: "DETECTOR_TYPE_DRIVERS_LICENSE",
+		22: "DETECTOR_TYPE_AADHAAR",
+		23: "DETECTOR_TYPE_UK_NINO",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":     0,
@@ -134,6 +142,8 @@ var (
 		"DETECTOR_TYPE_IDM":             19,
 		"DETECTOR_TYPE_PASSPORT":        20,
 		"DETECTOR_TYPE_DRIVERS_LICENSE": 21,
+		"DETECTOR_TYPE_AADHAAR":         22,
+		"DETECTOR_TYPE_UK_NINO":         23,
 	}
 )
 
@@ -383,7 +393,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xe0\x04\n" +
+	"matchCount*\x96\x05\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -407,7 +417,9 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x11DETECTOR_TYPE_EDM\x10\x12\x12\x15\n" +
 	"\x11DETECTOR_TYPE_IDM\x10\x13\x12\x1a\n" +
 	"\x16DETECTOR_TYPE_PASSPORT\x10\x14\x12!\n" +
-	"\x1dDETECTOR_TYPE_DRIVERS_LICENSE\x10\x15B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x1dDETECTOR_TYPE_DRIVERS_LICENSE\x10\x15\x12\x19\n" +
+	"\x15DETECTOR_TYPE_AADHAAR\x10\x16\x12\x19\n" +
+	"\x15DETECTOR_TYPE_UK_NINO\x10\x17B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once

@@ -45,6 +45,7 @@ func New() *Classifier {
 		privateKey{}, awsAccessKey{}, jwt{}, apiToken{},
 		iban{}, healthData{}, abaRouting{}, caSIN{}, npi{}, ukNHS{}, ein{},
 		passport{}, driversLicense{}, // DLP-7: context-gated weak-format identifiers
+		aadhaar{}, ukNINO{}, // DLP-7: India Aadhaar (Verhoeff) + UK NINO (context-gated)
 	}}
 }
 

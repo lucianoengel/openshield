@@ -65,7 +65,35 @@ var (
 
 	dlValueRe = regexp.MustCompile(`\b[A-Z0-9]{5,20}\b`)
 	dlKeyRe   = regexp.MustCompile(`(?i)driver'?s?\s+licen[sc]e|\bdl\s*(no|number|#)`)
+
+	// UK NINO (DLP-7): two prefix letters, six digits, one suffix A-D — optionally spaced (AB 12 34 56 C).
+	// The prefix exclusions (D,F,I,Q,U,V never used; O not second; and certain admin prefixes) are
+	// enforced by ninoPrefixValid; the regex is deliberately loose so the validator, not the pattern,
+	// carries the precision. No checksum exists, so it is context-gated like passport/DL.
+	ninoValueRe = regexp.MustCompile(`\b[A-Za-z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-Da-d]\b`)
+	ninoKeyRe   = regexp.MustCompile(`(?i)national\s+insurance|\bni\s*(no|number)\b|\bnino\b`)
 )
+
+// ninoPrefixValid enforces the official UK NINO prefix rules on a normalized (letters+digits) NINO:
+// neither prefix letter may be D, F, I, Q, U or V; the second may not be O; and the two-letter prefix
+// may not be one of the administrative combinations (BG, GB, KN, NK, NT, TN, ZZ). This is what keeps
+// the loose pattern from firing on arbitrary "XX 12 34 56 A" text.
+func ninoPrefixValid(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+	a, b := s[0], s[1]
+	// normContextValue lowercases, so compare against lowercase.
+	bad := func(c byte) bool { return c == 'd' || c == 'f' || c == 'i' || c == 'q' || c == 'u' || c == 'v' }
+	if bad(a) || bad(b) || b == 'o' {
+		return false
+	}
+	switch string([]byte{a, b}) {
+	case "bg", "gb", "kn", "nk", "nt", "tn", "zz":
+		return false
+	}
+	return true
+}
 
 // confContext is the moderate confidence of a context-gated, checksumless match:
 // stronger than bare structural (the keyword filters most FPs), weaker than a
@@ -103,4 +131,16 @@ func (driversLicense) Scan(text []byte) (int, float64) {
 	// R34-11: require ≥1 digit so ordinary all-caps words ("DRIVER", "LICENSE",
 	// "NUMBER") near the keyword are not counted as license values.
 	return contextNear(dlValueRe, dlKeyRe, contextWindow, text, hasDigit), confContext
+}
+
+// ukNINO detects a UK National Insurance Number only near a National-Insurance keyword (DLP-7). NINO
+// has no checksum, so — like passport/DL — it is context-REQUIRED, reusing the contextNear primitive;
+// the prefix rules (ninoPrefixValid) filter arbitrary values that share the shape.
+type ukNINO struct{}
+
+func (ukNINO) Type() corev1.DetectorType { return corev1.DetectorType_DETECTOR_TYPE_UK_NINO }
+func (ukNINO) Scan(text []byte) (int, float64) {
+	return contextNear(ninoValueRe, ninoKeyRe, contextWindow, text, func(v string) bool {
+		return ninoPrefixValid(normContextValue([]byte(v)))
+	}), confContext
 }
