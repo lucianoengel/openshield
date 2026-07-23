@@ -642,34 +642,34 @@ func applyTProxy(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 		return
 	}
 	srv := gateway.NewTProxyServer(gw, log)
-	go func() {
-		if err := srv.Serve(ctx, ln); err != nil && ctx.Err() == nil {
-			log.Error("gateway: TPROXY server stopped", slog.String("err", err.Error()))
-		}
-	}()
 	log.Info("gateway: NIPS-1 transparent inline plane ACTIVE (drops a blocked flow at L4)", slog.String("addr", addr))
 
 	// Self-install the TPROXY redirect rules (NIPS-1 inc-4a) so the inline plane is deployable without
-	// hand-crafted out-of-band firewall config. Opt-in; a failure logs and the plane keeps running (the
-	// operator may install rules out of band) — never fail-closed.
+	// hand-crafted out-of-band firewall config. Opt-in. The rule lifecycle is bound to the SERVER (inc-4b):
+	// RunTProxyWithRules removes the rules the instant Serve returns — for any reason — so a stopped
+	// listener never leaves traffic redirected into a dead socket.
 	if os.Getenv("OPENSHIELD_TPROXY_INSTALL_RULES") == "1" {
 		port := listenPort(ln.Addr(), addr)
 		dports := envPorts("OPENSHIELD_TPROXY_DPORTS", []int{80, 443})
 		mark := envMark("OPENSHIELD_TPROXY_MARK", 1)
 		table := envMark("OPENSHIELD_TPROXY_TABLE", 100)
 		if port == 0 {
-			log.Error("gateway: TPROXY rules NOT installed — could not determine listener port", slog.String("addr", addr))
-		} else if err := gateway.InstallTProxyRules(port, dports, mark, table, log); err != nil {
-			log.Error("gateway: TPROXY rules could NOT install — inline plane still runs (install rules out of "+
-				"band; needs CAP_NET_ADMIN + iptables/ip)", slog.String("err", err.Error()))
+			log.Error("gateway: TPROXY rules NOT installed — could not determine listener port; serving without "+
+				"the self-installed redirect", slog.String("addr", addr))
+			go serveTProxy(ctx, srv, ln, log)
 		} else {
-			go func() {
-				<-ctx.Done()
-				if err := gateway.RemoveTProxyRules(port, dports, mark, table, log); err != nil {
-					log.Error("gateway: TPROXY rules teardown failed", slog.String("err", err.Error()))
-				}
-			}()
+			go gateway.RunTProxyWithRules(ctx, ln, srv, port, dports, mark, table, log)
 		}
+		return
+	}
+	// Operator owns the redirect rules out of band — just serve; OpenShield manages only rules it installed.
+	go serveTProxy(ctx, srv, ln, log)
+}
+
+// serveTProxy runs the transparent server and logs an unexpected stop.
+func serveTProxy(ctx context.Context, srv *gateway.TProxyServer, ln net.Listener, log *slog.Logger) {
+	if err := srv.Serve(ctx, ln); err != nil && ctx.Err() == nil {
+		log.Error("gateway: TPROXY server stopped", slog.String("err", err.Error()))
 	}
 }
 

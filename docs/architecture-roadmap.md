@@ -816,6 +816,12 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   - **Increment 4b (deferred):** streaming inspection past the peek window; TLS interception for encrypted
     payload; structured HTTP parsing; a TPROXY bypass watchdog; UDP; nftables-native config;
     QUIC/TLS-1.3-ECH (hides SNI → L4 fallback); a privileged CI job with netns.
+  - ✅ **Increment 4b DONE (D238) — the redirect rules are bound to the server lifecycle.**
+    `gateway.RunTProxyWithRules` removes the self-installed TPROXY rules the instant `Serve` returns (an
+    unexpected listener stop as well as a clean ctx cancel), so a dead listener never leaves host :80/:443
+    traffic redirected into a closed socket (fail-open). Removes only if install succeeded. **VM-proven:
+    close the listener → the rule is gone; the ctx-only-remove mutation leaves it dangling (VM test FAILs).**
+    Deferred: automatic self-heal (re-arm + reinstall after a stop), a hung-listener probe.
 - **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
   YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS.
   - ✅ **Metadata IOC half DONE** — `internal/nips` matches domain/IP/CIDR/URI-substring, hot-reload +
