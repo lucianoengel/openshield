@@ -147,8 +147,7 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   into `fleet_telemetry`. *Fix:* validate at ingest (server-side), not just client-side.
 - **R34-13 · 🟡 MOSTLY DONE (e8f12d6) · Minor/LOW (fold in):** ✅ NIPS `matchURI` min-length,
   ✅ `procIdentityOf` tested, ✅ `EnsureAppLogin` re-asserts NOSUPERUSER/NOCREATEROLE/etc, ✅
-  "k-anonymized" privacy claim corrected (honest membership-oracle limit). ✅ SIEM-12 durable dedup DONE (D207: `notify_dedupe`, survives restart). ⏳ remaining: incidents
-  never `emit` = **promote SOAR-1**. Original text:  incidents never `emit` a notification (`incidents.go`) — this **is**
+  "k-anonymized" privacy claim corrected (honest membership-oracle limit). ✅ SIEM-12 durable dedup DONE (D207: `notify_dedupe`, survives restart). ✅ incidents-never-`emit` = SOAR-1 **DONE (D220)**. **R34-13 fully closed.** Original text:  incidents never `emit` a notification (`incidents.go`) — this **is**
   SOAR-1, promote it · SIEM-12 dedup is per-process memory (restart double-pages; `dedup_key` exists —
   make it durable) · "k-anonymized" overstates privacy (unsalted SHA-256 → offline membership recovery
   on low-entropy values; document or per-index salt) · NIPS `matchURI` accepts `uri /` (matches every
@@ -180,7 +179,7 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
 9. ✅ DONE (D207) `TestFullNotifyPathDeliversOnce` (webhook, end-to-end). **Full notify path** (SIEM-12 real coverage): drive `handleSigned` twice with re-sent above-threshold
    telemetry against an httptest webhook → assert exactly **one** POST (covers
    `observePeer→emit→deliverLoop→Webhook`, which no current test drives end-to-end).
-10. ⏳ PENDING (needs SOAR-1: incidents don't emit yet). **Incident→notify** (SOAR-1): `MaterializeIncidents` creating a new incident delivers exactly one
+10. ✅ DONE (D220) `TestMaterializeNewIncidentNotifiesOnce` + `TestDistinctLaterIncidentPagesAgain`. **Incident→notify** (SOAR-1): `MaterializeIncidents` creating a new incident delivers exactly one
     deduped notification; re-materializing the same open incident delivers zero.
 11. ⏳ PENDING (needs XDR-4). **Cross-domain correlation** (with XDR-4): seed alerts under two `dedup_key` namespaces linked to one
     entity via real `Link` → assert one incident. Mutation: dropping the entity join must fail it.
@@ -650,10 +649,13 @@ first-class metrics. *The honest differentiator to sell: the SOAR whose **archit
 compromised-orchestrator nightmare inexpressible, and whose every automated step is courtroom-grade
 evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-7) → SOAR-8.**
 
-- **SOAR-1 · Incident → notify wiring** — srv · S. A new/escalated incident emits a `Notification`
-  (new `Kind`), id derived from the incident id (rides SIEM-12 idempotency). Today `MaterializeIncidents`
-  never notifies. *Accept: materializing a new incident → exactly one webhook; re-materializing the same
-  open incident → zero.*
+- **SOAR-1 · Incident → notify wiring** ✅ **DONE (D220)** — srv · S. `MaterializeIncidents` now emits
+  a `notify.Notification` (`KindIncident`) when — and only when — it creates a NEW incident (insert-vs-update
+  decided in SQL via `RETURNING (xmax = 0)`), keyed by `inc_<id>` so the same incident never re-pages but a
+  distinct later incident does. Rides the existing SIEM-12/R34-13 dedup + off-ingest delivery. Proven real-PG
+  + httptest webhook end-to-end (**this is audit test #10**); 2 mutation guards (always-emit caught via the
+  dedup counter; drop-explicit-id caught via the distinct-later-incident timeout). Closes the R34-13 tail
+  thread; **unblocks SOAR-2.** *Accept met: new incident → exactly one webhook; re-materialize same open → zero.*
 - **SOAR-2 · Scheduled correlation + escalation** — srv · S. Run `MaterializeIncidents` on a
   `retain.Loop` ticker; add an `open→triaged→contained→closed` state machine on `incidents` (extends the
   ADR-10 lifecycle). *Accept: with no operator GET, a seeded burst becomes a notified incident within one

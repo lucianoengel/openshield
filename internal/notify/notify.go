@@ -14,13 +14,15 @@ import (
 	"time"
 )
 
-// Kind names the two aggregate detections worth paging on. Per-decision alerts are
-// deliberately absent (too high-volume) — these are fleet-level signals.
+// Kind names the aggregate detections worth paging on. Per-decision alerts are
+// deliberately absent (too high-volume) — these are fleet-level signals: a peer
+// anomaly, a silent agent, or a correlated incident (SOAR-1).
 type Kind string
 
 const (
 	KindPeerAlert    Kind = "peer-alert"    // a subject anomalous vs its peers (D54)
 	KindAgentOverdue Kind = "agent-overdue" // an agent silent past the threshold (D50/D51)
+	KindIncident     Kind = "incident"      // a correlated incident was raised (SOAR-1); pseudonymous, no content
 )
 
 // Notification is one alert. Subject and AgentID are pseudonymous (D23) — the

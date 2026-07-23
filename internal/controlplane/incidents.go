@@ -3,11 +3,14 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/lucianoengel/openshield/internal/notify"
 )
 
 // ErrIncidentNotFound is returned when an ack targets an incident id that does not exist — distinct
@@ -40,18 +43,47 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 		return 0, err
 	}
 	for _, inc := range incidents {
-		if _, err := s.pool.Exec(ctx,
+		// RETURNING (xmax = 0) tells us whether THIS upsert INSERTed a new incident (xmax is 0 on a
+		// freshly-inserted row) or took the DO UPDATE path (xmax non-zero) that extends the subject's
+		// open incident. SOAR-1 pages only on a genuine insert — a re-correlated burst updating the
+		// open incident must not re-page.
+		var id int64
+		var inserted bool
+		if err := s.pool.QueryRow(ctx,
 			`INSERT INTO incidents (subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen)
 			 VALUES ($1,'open',$2,$3,$4,$5,$6)
 			 ON CONFLICT (subject_id) WHERE state = 'open'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, max_risk = EXCLUDED.max_risk,
 			              host_count = EXCLUDED.host_count, last_seen = EXCLUDED.last_seen,
-			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()`,
-			inc.SubjectID, inc.AlertCount, inc.MaxRisk, inc.HostCount, inc.FirstSeen, inc.LastSeen); err != nil {
+			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()
+			 RETURNING id, (xmax = 0) AS inserted`,
+			inc.SubjectID, inc.AlertCount, inc.MaxRisk, inc.HostCount, inc.FirstSeen, inc.LastSeen).
+			Scan(&id, &inserted); err != nil {
 			return 0, err
+		}
+		if inserted {
+			s.notifyIncident(ctx, id, inc, now)
 		}
 	}
 	return len(incidents), nil
+}
+
+// notifyIncident pages a human that a NEW incident was raised (SOAR-1). The id is derived from the
+// incident id (not the content-window notifyID), so the same incident never pages twice — including
+// across a restart or a redundant materialization — while a genuinely new incident for the same
+// subject (raised after the previous one left the open state, hence a new autoincrement id) pages
+// again. Delivery is best-effort and off-ingest (emit queues; a nil/absent sink is a no-op): a page
+// never fails materialization — the incidents row is the record, the notification is an additive copy.
+func (s *Server) notifyIncident(ctx context.Context, id int64, inc Incident, now time.Time) {
+	s.emit(ctx, notify.Notification{
+		Kind:      notify.KindIncident,
+		Subject:   inc.SubjectID,
+		RiskScore: inc.MaxRisk,
+		At:        now,
+		ID:        fmt.Sprintf("inc_%d", id),
+		Detail: fmt.Sprintf("%s incident: %d alerts across %d host(s), peak risk %.2f",
+			inc.Severity, inc.AlertCount, inc.HostCount, inc.MaxRisk),
+	})
 }
 
 // RecentIncidents returns materialized incidents, most recently active first.
