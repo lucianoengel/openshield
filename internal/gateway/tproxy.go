@@ -18,10 +18,13 @@ const (
 	peekDeadline = 500 * time.Millisecond
 )
 
-// FlowHint carries content-free metadata peeked from a flow's initial bytes for the decision —
-// currently the TLS SNI hostname ("" when not recoverable).
+// FlowHint carries what was peeked from a flow's initial bytes for the decision: the TLS SNI
+// hostname ("" when not recoverable) and the raw peeked payload. The payload is handed to the
+// sandboxed content-signature engine (NIPS-2) so a malicious cleartext payload is dropped inline;
+// for a TLS flow it is the ClientHello (a handshake), which matches no content signature.
 type FlowHint struct {
-	SNI string
+	SNI     string
+	Payload []byte
 }
 
 // Transparent (TPROXY) inline data-plane (NIPS-1): the gateway can act as an inline network
@@ -55,7 +58,7 @@ func handleFlow(ctx context.Context, client net.Conn, origDst net.Addr, decide D
 	// upstream on splice, so an allowed flow is byte-for-byte transparent). A peek timeout/error
 	// yields no bytes and no SNI — the flow then decides on metadata and splices (fail-open).
 	peeked := peekInitial(client)
-	hint := FlowHint{SNI: extractSNI(peeked)}
+	hint := FlowHint{SNI: extractSNI(peeked), Payload: peeked}
 
 	block, err := decide(ctx, origDst, client.RemoteAddr(), hint)
 	if err != nil {
@@ -143,7 +146,8 @@ func NewTProxyServer(gw *Gateway, log *slog.Logger) *TProxyServer {
 			DstIP:     dstIP,
 			DstPort:   dstPort,
 			Protocol:  "tcp",
-			Host:      hint.SNI, // the peeked SNI → the IOC domain match + host policy apply
+			Host:      hint.SNI,     // the peeked SNI → the IOC domain match + host policy apply
+			Body:      hint.Payload, // the peeked payload → the worker's content-signature engine (NIPS-2)
 			Direction: corev1.NetworkDirection_NETWORK_DIRECTION_EGRESS,
 		})
 		if err != nil {
