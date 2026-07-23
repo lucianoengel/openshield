@@ -129,6 +129,17 @@ func main() {
 			}()
 		}
 
+		// SIEM-4: when OPENSHIELD_WEF_DIR is set, ingest Windows Event Forwarding XML files (a WEC export)
+		// into the external-log store. Leader-only; a scan error is logged, never fatal.
+		if wefDir := os.Getenv("OPENSHIELD_WEF_DIR"); wefDir != "" {
+			go func() {
+				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 WEF ingest watching %s\n", wefDir)
+				if err := srv.RunWEFIngest(leaderCtx, wefDir); err != nil && leaderCtx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: WEF ingest stopped: %v\n", err)
+				}
+			}()
+		}
+
 		// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
 		// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
 		// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are

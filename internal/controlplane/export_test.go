@@ -44,6 +44,9 @@ func (s *Server) EmitForTest(n notify.Notification) { s.emit(context.Background(
 // deterministically without waiting on the poller's ticker.
 func (s *Server) ScanCloudTrailDirForTest(dir string) { s.scanCloudTrailDir(context.Background(), dir) }
 
+// ScanWEFDirForTest runs one WEF directory scan (SIEM-4), for deterministic ingest tests.
+func (s *Server) ScanWEFDirForTest(dir string) { s.scanWEFDir(context.Background(), dir) }
+
 // BackoffFor / NakBackoffBase / NakBackoffMax expose the pure Nak redelivery schedule (R34-4)
 // so a test can assert the doubling-and-cap behavior without a live JetStream message.
 func BackoffFor(numDelivered uint64) time.Duration { return backoffFor(numDelivered) }

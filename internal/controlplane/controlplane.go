@@ -136,6 +136,11 @@ type Server struct {
 	// with no event identity, a poison file, or a persist failure) — the drop is counted, never silent.
 	CloudTrailIngested atomic.Int64
 	CloudTrailDropped  atomic.Int64
+
+	// WEFIngested / WEFDropped count Windows Event Forwarding events persisted vs. skipped (a record with
+	// no EventID, a poison file, or a persist failure) — the drop is counted, never silent.
+	WEFIngested atomic.Int64
+	WEFDropped  atomic.Int64
 }
 
 // New creates a server over an existing pool.
