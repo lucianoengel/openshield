@@ -59,11 +59,12 @@ type classifyStage struct {
 func (classifyStage) Name() string { return "classify" }
 
 func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, error) {
-	// A DELETED file (HIPS-4 FIM) has no content to open: classify it as metadata-only and
-	// let the policy decide on its path/kind. Opening the (now-missing) path would make the
-	// worker error and the tamper drift would never reach the policy. Correct in general — a
-	// deleted file genuinely has no bytes.
-	if s.Event.GetKind() == corev1.EventKind_EVENT_KIND_FILE_DELETED {
+	// A DELETED file (HIPS-4 FIM) or a RANSOMWARE detection (HIPS-4) has no content to open:
+	// classify it as metadata-only and let the policy decide on its path/kind. Opening the path
+	// would make the worker error (the file is missing, or the canaries are encrypted) and the
+	// signal would never reach the policy. Correct in general — these events carry no readable bytes.
+	switch s.Event.GetKind() {
+	case corev1.EventKind_EVENT_KIND_FILE_DELETED, corev1.EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED:
 		s.Classification = &corev1.LocalClassification{EventId: s.Event.GetEventId()}
 		return core.Continue(), nil
 	}

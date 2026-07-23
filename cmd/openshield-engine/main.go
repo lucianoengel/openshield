@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,6 +28,7 @@ import (
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
+	"github.com/lucianoengel/openshield/internal/canary"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
@@ -285,6 +287,38 @@ func main() {
 		log.Info("engine: FIM inert (set OPENSHIELD_FIM_PATHS + OPENSHIELD_FIM_BASELINE to enable)")
 	}
 
+	// Ransomware canary (HIPS-4): plant decoys in the configured dirs and fire a high-severity ransomware
+	// event when a threshold of them change within a window (the mass-change signature). Each dir gets its
+	// own detector + poll loop.
+	if canaryDirs := splitEnv("OPENSHIELD_CANARY_DIRS"); len(canaryDirs) > 0 {
+		count := envInt("OPENSHIELD_CANARY_COUNT", 16)
+		det := &canary.Detector{
+			Threshold: envInt("OPENSHIELD_CANARY_THRESHOLD", 4),
+			Window:    envDuration("OPENSHIELD_CANARY_WINDOW", 10*time.Second),
+		}
+		iv := envDuration("OPENSHIELD_CANARY_INTERVAL", 2*time.Second)
+		for _, dir := range canaryDirs {
+			paths, err := canary.Plant(dir, count)
+			if err != nil {
+				fatal(log, "planting canaries", err)
+			}
+			m, _, err := fim.BuildBaseline(paths, fim.Options{})
+			if err != nil {
+				fatal(log, "baselining canaries", err)
+			}
+			d := dir
+			mani := m
+			cpaths := paths
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				canarySource(ctx, mani, d, cpaths, det, iv, events, log)
+			}()
+			log.Info("engine: ransomware canary ACTIVE", slog.String("dir", d), slog.Int("canaries", len(paths)),
+				slog.Int("threshold", det.Threshold), slog.Duration("window", det.Window))
+		}
+	}
+
 	go func() { wg.Wait(); close(events) }()
 
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
@@ -349,6 +383,16 @@ func splitEnv(key string) []string {
 // errNoFimBaseline makes a FIM run without a baseline path fail loudly (the baseline is
 // where the known-good state lives — without a persistent file it cannot survive a restart).
 var errNoFimBaseline = errors.New("set OPENSHIELD_FIM_BASELINE to a manifest file path when OPENSHIELD_FIM_PATHS is set")
+
+// envInt parses an integer env var, returning def when unset or malformed.
+func envInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
 
 // readEd25519Pub reads a raw 32-byte Ed25519 public key (the trusted operator key for verifying a
 // signed FIM baseline).

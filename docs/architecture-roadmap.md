@@ -872,8 +872,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     + behavioral still block first (deny > allow). Opt-in `OPENSHIELD_EXEC_ALLOW`, parser-free. Proven on
     the VM (a non-allowlisted binary kernel-refused). **Note: the allowlist must include the dynamic loader
     (`ld-linux`) + interpreters — `FAN_OPEN_EXEC_PERM` fires for them too.** Deferred: strict
-    deny-unknown-path, content-hash allowlisting. **Memory/injection detection and ransomware canary
-    remain separate XL bets.**
+    deny-unknown-path, content-hash allowlisting. **Memory/injection detection remains a separate XL bet.**
+  - ✅ **Ransomware canary SHIPPED (D232):** `internal/canary` plants decoy files and fires a
+    high-severity ransomware event when a threshold of DISTINCT canaries change within a window (the
+    mass-change signature, distinct from a lone edit) — confirmed by content hash, entropy raising
+    confidence (encryption signature), emitted as `EVENT_KIND_RANSOMWARE_SUSPECTED` (metadata-only) →
+    policy ALERT. Opt-in `OPENSHIELD_CANARY_DIRS`. Proven end-to-end + 3 mutation guards. Deferred:
+    automated containment (SOAR-7), per-process attribution, real-time fanotify triggering.
   - ✅ **FIM increment 1 SHIPPED (D223):** `internal/fim` detects tampering of operator-designated
     critical files against a persistent SHA-256 baseline — catches a timestomped modify (preserved
     mtime+size) that the size+mtime `filewatch` misses, detects DELETION (new `EVENT_KIND_FILE_DELETED`),
