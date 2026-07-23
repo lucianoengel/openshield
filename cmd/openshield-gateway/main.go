@@ -509,9 +509,34 @@ func splitList(s string) []string {
 // threat-intel engine on the gateway. A configured-but-malformed feed aborts
 // startup; no feed leaves the engine inert (the gateway inspects DLP only).
 func applyThreatFeed(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
+	// NIPS-2 remote source: pull the feed from an operator URL (a served TI list) instead of a local
+	// file. Initial fetch is fail-fast (a misconfigured URL must not start a silently-empty IPS); later
+	// refreshes serve-stale so a feed-server outage never disarms the running engine.
+	if feedURL := os.Getenv("OPENSHIELD_IOC_FEED_URL"); feedURL != "" {
+		feed, etag, _, err := nips.FetchFeed(ctx, nil, feedURL, "")
+		if err != nil {
+			fatal(log, "fetching IOC feed URL", err)
+		}
+		gw.SetThreatFeed(feed)
+		log.Info("gateway: NIPS-2 threat-intel engine active (remote feed)", slog.Int("indicators", feed.Size()))
+		if iv := envDuration("OPENSHIELD_IOC_FEED_URL_RELOAD", 0); iv > 0 {
+			w := nips.NewURLFeedWatcher(feedURL, nil, etag)
+			go w.Watch(ctx, iv,
+				func(f *nips.Feed) {
+					gw.SetThreatFeed(f)
+					log.Info("gateway: NIPS-2 IOC feed reloaded (remote)", slog.Int("indicators", f.Size()))
+				},
+				func(err error) {
+					log.Error("gateway: NIPS-2 remote IOC feed refresh failed — keeping the current feed", slog.String("err", err.Error()))
+				})
+			log.Info("gateway: NIPS-2 remote IOC feed pull enabled", slog.Duration("interval", iv))
+		}
+		return
+	}
+
 	path := os.Getenv("OPENSHIELD_IOC_FEED")
 	if path == "" {
-		log.Warn("gateway: OPENSHIELD_IOC_FEED unset — NIPS-2 threat-intel engine inert (DLP inspection only)")
+		log.Warn("gateway: OPENSHIELD_IOC_FEED[_URL] unset — NIPS-2 threat-intel engine inert (DLP inspection only)")
 		return
 	}
 	feed, err := nips.LoadFeed(path)
