@@ -48,10 +48,10 @@ deployable, correlated product. The UI comes after all of that is built and test
 |---|---|---|
 | **XDR** (umbrella) | ~42% | Entity graph WIRED and populated by real producers (enrollment + verified ingest resolve device⋈user, D203); a normalized entity-keyed `unified_alerts` stream + first producer (peer-UEBA) shipped (D213). **MVP gap:** wire the remaining domain producers, correlate cross-domain, build the incident timeline + coordinated response (XDR-2/4/5/6/7). |
 | Zero Trust (ZTNA) | ~75% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. **MVP gap:** an agent-brokered ZTNA client (ZT-4). |
-| DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **Enrichment gap:** OCR, non-file endpoint producers (clipboard/print/screenshot). |
+| DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **MVP gap:** endpoint exfil producers (clipboard/print, Lane E). **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
-| HIPS | ~70% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: `DENY_EXEC` logic + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. **Enrichment gap:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
+| HIPS | ~70% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. **MVP gap:** full-pipeline inline `DENY_EXEC` — a *dynamic* intent evaluated by OPA at the exec gate (Lane E, HIPS-3 inc 2), required by XDR-6. **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
 | **SOAR** | ~20% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). **MVP gap:** the whole orchestration story — scheduled correlation, four-eyes approvals, a playbook engine, enrichment, metrics, the signed response-intent seam, and integration runners (SOAR-2…9). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
@@ -70,17 +70,21 @@ detectors. Concretely, the MVP is reached when:
 2. **Incidents drive automated orchestration** — scheduled correlation, playbooks over a closed step
    registry, four-eyes approvals, enrichment, and metrics — and **live containment** flows through the
    signed Response-Intent seam and off-pipeline integration runners (SOAR lane, ADR-12 all three tiers).
-3. **A ZTNA client** brings agent-brokered access, closing the identity story (ZT-4).
-4. **The platform is production-shaped:** durable ingest is the default, config is typed and validated,
-   and there is a signed, packaged, deployable release; the cross-platform observe path is finished
-   (enforcement stays owner-gated) (PLAT lane).
+3. **Containment actually bites on the endpoint:** a `CONTAIN` intent PREVENTS the entity's new execs
+   inline (policy evaluated at the exec gate), not merely kills them after they run (Endpoint lane).
+4. **The DLP domain watches the channels users exfiltrate through** — endpoint clipboard and print, not
+   only file writes + cloud upload (Endpoint lane).
+5. **A ZTNA client (ZT-4)** closes the identity story, and **the platform is production-shaped:** durable
+   ingest is the default, config is typed and validated, and there is a signed, packaged, deployable
+   release (Platform lane). MVP is **Linux-first**; Windows/macOS is enrichment.
 
 **Then, and only then, the UI** (PLAT-1) — it is deliberately last, built over a proven, tested,
 stable backend.
 
-Everything else — more detectors, more file formats, more protocols, more countries, more log sources,
-richer NIPS grammar, endpoint DLP producers, SAML — is **enrichment**: additive producers and classify
-plugins on the frozen core. None of it gates the MVP; it lands opportunistically or after the UI.
+Everything else — richer detectors, OCR, more file formats and protocols, more countries, more log
+sources, richer NIPS grammar, screenshot capture, cross-platform Windows/macOS, SAML — is **enrichment**:
+additive producers and classify plugins on the frozen core. None of it gates the MVP; it lands
+opportunistically or after the UI.
 
 ---
 
@@ -110,10 +114,11 @@ one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-
   domains) + ledger refs; `GET /incidents/{id}/timeline`; incidents gain `domains[]`, `entity_id`.
   *Accept: the timeline of an XDR-4 incident lists all contributing alerts, cross-domain, time-ordered,
   each linking its evidence.*
-- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7.** One approved
-  `CONTAIN(entity)` intent consumed by BOTH gateway (flows) and endpoint (exec) local policies, both
-  enactments ledgered under one intent id. *Accept: CONTAIN on entity E → gateway blocks E's flows AND
-  E's agent denies new execs; one intent id in the ledger; TTL expiry restores both.*
+- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7 + HIPS-3 inc 2
+  (Lane E — the endpoint inline-deny path).** One approved `CONTAIN(entity)` intent consumed by BOTH
+  gateway (flows) and endpoint (exec) local policies, both enactments ledgered under one intent id.
+  *Accept: CONTAIN on entity E → gateway blocks E's flows AND E's agent denies new execs (prevented at
+  the exec gate, not killed after); one intent id in the ledger; TTL expiry restores both.*
 - **XDR-7 · Entity risk aggregation** — X · M. `PublishRisk` publishes per-**entity** risk aggregated
   across domains (today per-gateway-subject only), so a HIPS detection raises the risk the ZT proxy
   sees — closing the T2 loop *across* domains. *Accept: a high-risk HIPS alert on device A measurably
@@ -180,13 +185,31 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
 - **PLAT-6 · Release, packaging & deploy** — M. Tagged releases + reproducible signed binaries
   (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact. *Accept: `make
   release` produces signed, verifiable artifacts; a clean host installs and runs the stack from them.*
-- **PLAT-7 · Cross-platform observe — finish the builder half** (ADR-11) — parallel. The OBSERVE path is
-  done (per-OS `openFileWatcher` seam: fanotify on Linux, poll-based watcher on windows/darwin, same
-  binary). **Remaining:** native OS watch APIs (`ReadDirectoryChangesW`/`FSEvents`) on the same seam; a
-  non-Linux worker sandbox (seccomp is Linux-only); real Windows/macOS runtime validation. **Enforcement
-  stays owner-gated** (Windows EV cert + minifilter, macOS Endpoint Security entitlement — owner drives
-  procurement). *Accept: the engine observes file events on Windows and macOS through the native APIs,
-  runtime-validated on real hardware.*
+
+*(Cross-platform Windows/macOS observe is **enrichment**, not MVP — MVP is Linux-first; see the
+enrichment backlog. Enforcement everywhere stays owner-gated per ADR-11.)*
+
+### Lane E · Endpoint — enactment & exfil channels
+
+Makes containment bite where the process runs, and makes the DLP domain watch the channels users
+actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a hard dependency of XDR-6.
+
+- **HIPS-3 increment 2 · Full-pipeline inline `DENY_EXEC`** — A · L. Today the inline exec gate
+  (`FAN_OPEN_EXEC_PERM`, D224) decides from a parser-free static deny-list/whitelist — it cannot evaluate
+  a *dynamic* `CONTAIN` intent. Bridge the privileged exec-gate to the unprivileged engine over IPC
+  (`execguard.ExecEvaluator` is the seam) so the OPA policy — reading the ResponseIntent as typed context
+  (SOAR-7) — returns DENY/ALLOW inline, kernel-enforced. Keeps the privileged binary parser-free. *Accept:
+  a `CONTAIN(entity)` intent makes the entity's next exec kernel-REFUSED (EACCES) via the engine's policy,
+  proven on the rooted VM; the intent-absent path still runs. Mutation: bypassing the IPC verdict lets the
+  exec through → VM test FAILs.*
+- **DLP-2a · Clipboard exfil producer** — P, per-OS · L. An endpoint producer that emits a content-free
+  clipboard-copy Event (channel-tagged, D194 model) so a sensitive copy is classified + policy-gated.
+  Linux/X11+Wayland first; Windows user-mode needs no attestation (ADR-11). *Accept: copying a seeded CPF
+  to the clipboard produces a classified exfil Event → policy ALERT; a non-sensitive copy does not.*
+- **DLP-2b · Print exfil producer** — P, per-OS · L. Emit a content-free print-job Event (CUPS on Linux,
+  Windows print spooler user-mode) so a sensitive print is classified + gated. *Accept: printing a seeded
+  sensitive doc produces a classified exfil Event → policy ALERT.*
+  *(Screenshot capture + CASB refinements remain enrichment — see the backlog.)*
 
 ---
 
@@ -197,10 +220,9 @@ mutation-test discipline, one at a time, without touching the core. Pull after t
 Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane.
 
 ### DLP
-- **DLP-2 · Non-file exfil producers** — P, per-OS · XL. Clipboard, print, screenshot (display/OS-gated).
-  File-based channels (removable + cloud-sync) and content-aware CASB already ship; this is the remaining
-  endpoint-producer surface + CASB refinements (multipart/path upload heuristics, download/share,
-  shadow-IT discovery).
+- **DLP-2 · Remaining exfil surface** — P, per-OS · L. Screenshot capture (display/OS-gated) + CASB
+  refinements (multipart/path upload heuristics, download/share, shadow-IT discovery, runtime mount-table
+  resolution). *(Clipboard + print producers are MVP — Lane E; file + cloud-sync + CASB already ship.)*
 - **DLP-3 · OCR** — classify (server-side, ADR-9) · L. EDM/IDM/signed-index already ship; OCR is the last
   DLP-3 piece — server-side for gateway-visible flows, never breaking D10/D11.
 - **DLP-6 · Endpoint user coaching/justification** — X + UI · M. REDIRECT-to-coaching exists at the
@@ -234,13 +256,19 @@ Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane.
 - **Real-time behavioral hooks** — eBPF/LSM `mmap`/`mprotect`/exec hooks replacing the poll for
   memory-injection + FIM; a JIT allowlist for legitimate W+X (JVM/V8/.NET); per-process ransomware
   attribution; content-hash application whitelisting.
-- **HIPS-3 increment 2 · full-pipeline `DENY_EXEC`** — A. The inline OPA-pipeline deny needs an IPC
-  decider from the privileged binary to the unprivileged engine (`execguard.ExecEvaluator` is the
-  bridge). T1-gated logic + the kernel producer + default-deny whitelisting already ship.
+  *(Full-pipeline inline `DENY_EXEC` is MVP — Lane E, HIPS-3 inc 2.)*
 
 ### Zero Trust
 - **ZT-5 · Policy admin + session recording** — new work · L. Ties to the UI (PLAT-1).
 - **ZT-6 · SAML** — P · L. Only after OIDC proves the SSO seam.
+
+### Cross-platform (Windows/macOS)
+- **PLAT-7 · Native OS watch + Windows/macOS validation** (ADR-11) — L. The OBSERVE path already runs
+  off Linux via the poll-based `openFileWatcher` seam; enrichment finishes it: native OS watch APIs
+  (`ReadDirectoryChangesW`/`FSEvents`), a non-Linux worker sandbox (seccomp is Linux-only), and real
+  Windows/macOS runtime validation on hardware. **Enforcement stays owner-gated** (Windows EV cert +
+  minifilter, macOS Endpoint Security entitlement). Deferred out of MVP because MVP is Linux-first and
+  must be fully testable here.
 
 ---
 
@@ -429,5 +457,5 @@ Ordered by leverage-per-architectural-risk; A/C/D/E/F have largely landed.
   end; real-time eBPF/LSM hooks are enrichment.*
 - **Phase F — SIEM/analytics depth.** Search API, correlation, case workflow, log ingest. *Landed;
   cross-domain correlation is the XDR lane; dashboards are the UI.*
-- **Cross-platform — parallel, external-gated.** Portable all-Go core; per-OS producers/enforcers. *Owner
-  drives procurement; builder does observation now (MVP Lane D, PLAT-7).*
+- **Cross-platform — external-gated, post-MVP.** Portable all-Go core; per-OS producers/enforcers. MVP is
+  Linux-first; Windows/macOS is enrichment (PLAT-7). *Owner drives cert/entitlement procurement.*
