@@ -38,6 +38,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
+	"github.com/lucianoengel/openshield/internal/attest"
 	"github.com/lucianoengel/openshield/internal/gateway"
 	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/policy"
@@ -422,6 +423,24 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 				log.Info("gateway: enrollment pre-authorization ENABLED (single-use tokens required)")
 			} else {
 				log.Warn("gateway: enrollment pre-authorization DISABLED — any device with a co-resident TPM can self-enroll; set OPENSHIELD_ENROLL_PREAUTH_TOKENS to require a token (R34-2)")
+			}
+			// R34-2 part 2: EK-certificate anchor. OPENSHIELD_EK_ROOTS is a PEM bundle of TPM
+			// manufacturer root CAs; when set, an enrolling device must present an EK cert that chains
+			// to a root and is bound to its EK public key. Without it, a fabricated EK (incl. swtpm)
+			// still passes credential activation — log which mode.
+			if rootsPath := os.Getenv("OPENSHIELD_EK_ROOTS"); rootsPath != "" {
+				pem, err := os.ReadFile(rootsPath)
+				if err != nil {
+					fatal(log, "reading OPENSHIELD_EK_ROOTS", err)
+				}
+				roots, err := attest.LoadEKRoots(pem)
+				if err != nil {
+					fatal(log, "loading EK manufacturer roots", err)
+				}
+				enroller.RequireEKCertChain(roots)
+				log.Info("gateway: EK-certificate anchoring ENABLED (EK must chain to a manufacturer root)")
+			} else {
+				log.Warn("gateway: EK-certificate anchoring DISABLED — a fabricated EK (incl. swtpm) passes enrollment; set OPENSHIELD_EK_ROOTS to require a manufacturer-certified EK (R34-2)")
 			}
 			if _, err := enroller.ServeEnroll(conn); err != nil {
 				fatal(log, "attestation enroll serve", err)

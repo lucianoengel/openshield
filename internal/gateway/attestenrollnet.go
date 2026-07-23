@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"crypto/subtle"
+	"crypto/x509"
 	"fmt"
 	"sync"
 
@@ -38,6 +39,12 @@ type EnrollmentResponder struct {
 	// behavior for a deployment that has not turned pre-auth on.
 	tokens       map[string]struct{}
 	requireToken bool
+	// ekRoots is the manufacturer-root pool an EK certificate must chain to (R34-2 part 2). When
+	// requireEKCert is set, an enroll request MUST carry an ek_cert that chains to this pool AND
+	// whose public key equals the submitted ek_public — anchoring the EK to a genuine vendor-
+	// certified TPM. Credential activation proves EK/AK co-residence; this proves the EK is real.
+	ekRoots       *x509.CertPool
+	requireEKCert bool
 }
 
 // NewEnrollmentResponder wires a responder to a verifier.
@@ -58,6 +65,17 @@ func (e *EnrollmentResponder) RequireEnrollTokens(toks ...string) {
 			e.tokens[t] = struct{}{}
 		}
 	}
+}
+
+// RequireEKCertChain turns on EK-certificate anchoring (R34-2 part 2): only a device whose EK
+// certificate chains to roots and whose EK public key matches the certificate may enroll. Passing a nil
+// pool turns enforcement ON with no roots, so EVERY enrollment is refused — the safe failure for a
+// misconfigured operator (deny rather than admit an uncertified EK), mirroring RequireEnrollTokens.
+func (e *EnrollmentResponder) RequireEKCertChain(roots *x509.CertPool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.requireEKCert = true
+	e.ekRoots = roots
 }
 
 // tokenValid reports whether tok is a currently-unused pre-auth token, comparing in constant time so
@@ -106,7 +124,18 @@ func (e *EnrollmentResponder) handleEnroll(data []byte) (*corev1.AttestationEnro
 		e.mu.Unlock()
 		return nil, fmt.Errorf("enrollment not pre-authorized")
 	}
+	requireEK, ekRoots := e.requireEKCert, e.ekRoots
 	e.mu.Unlock()
+	// R34-2 part 2: EK-certificate anchor. Credential activation (below) proves the AK is co-resident
+	// with the submitted EK, but NOT that the EK is a genuine vendor-certified TPM — a fabricated (e.g.
+	// swtpm) EK passes activation. Refuse an EK whose certificate does not chain to a manufacturer root
+	// (and is not bound to the submitted EK public key) BEFORE issuing a challenge or storing pending
+	// state, so an uncertified device learns nothing beyond the refusal.
+	if requireEK {
+		if err := attest.VerifyEKCert(req.GetEkCert(), ekRoots, req.GetEkPublic()); err != nil {
+			return nil, fmt.Errorf("EK not manufacturer-attested: %w", err)
+		}
+	}
 	challenge, secret, err := attest.NewChallenge(req.GetEkPublic(), req.GetAkName())
 	if err != nil {
 		return nil, fmt.Errorf("building challenge: %w", err)

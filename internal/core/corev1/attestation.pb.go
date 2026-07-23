@@ -122,7 +122,14 @@ type AttestationEnrollRequest struct {
 	// gateway rejects an enrollment whose token it does not recognize, so a device
 	// cannot self-enroll under an arbitrary subject merely by owning a co-resident TPM
 	// (incl. swtpm). Credential activation proves EK/AK co-residence, NOT who-may-enroll.
-	EnrollToken   string `protobuf:"bytes,6,opt,name=enroll_token,json=enrollToken,proto3" json:"enroll_token,omitempty"`
+	EnrollToken string `protobuf:"bytes,6,opt,name=enroll_token,json=enrollToken,proto3" json:"enroll_token,omitempty"`
+	// ek_cert is the device's Endorsement Key certificate (DER), read from the TPM's
+	// NV index (R34-2 part 2). When the gateway is configured with a manufacturer-roots
+	// pool, it verifies this certificate chains to a root AND that its public key equals
+	// ek_public — anchoring the EK to a genuine, vendor-certified TPM. Credential
+	// activation proves the AK is co-resident with THIS EK; the EK cert proves the EK is
+	// real, not a fabricated (e.g. swtpm) key. Empty when the anchor is not configured.
+	EkCert        []byte `protobuf:"bytes,7,opt,name=ek_cert,json=ekCert,proto3" json:"ek_cert,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -197,6 +204,13 @@ func (x *AttestationEnrollRequest) GetEnrollToken() string {
 		return x.EnrollToken
 	}
 	return ""
+}
+
+func (x *AttestationEnrollRequest) GetEkCert() []byte {
+	if x != nil {
+		return x.EkCert
+	}
+	return nil
 }
 
 // AttestationEnrollChallenge is the gateway's reply to step 1: a credential-
@@ -380,14 +394,15 @@ const file_openshield_v1_attestation_proto_rawDesc = "" +
 	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12!\n" +
 	"\fquote_attest\x18\x03 \x01(\fR\vquoteAttest\x12\x1e\n" +
 	"\vquote_sig_r\x18\x04 \x01(\fR\tquoteSigR\x12\x1e\n" +
-	"\vquote_sig_s\x18\x05 \x01(\fR\tquoteSigS\"\xb2\x02\n" +
+	"\vquote_sig_s\x18\x05 \x01(\fR\tquoteSigS\"\xcb\x02\n" +
 	"\x18AttestationEnrollRequest\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x1b\n" +
 	"\tek_public\x18\x02 \x01(\fR\bekPublic\x12\x1b\n" +
 	"\tak_public\x18\x03 \x01(\fR\bakPublic\x12\x17\n" +
 	"\aak_name\x18\x04 \x01(\fR\x06akName\x12K\n" +
 	"\x06golden\x18\x05 \x03(\v23.openshield.v1.AttestationEnrollRequest.GoldenEntryR\x06golden\x12!\n" +
-	"\fenroll_token\x18\x06 \x01(\tR\venrollToken\x1a9\n" +
+	"\fenroll_token\x18\x06 \x01(\tR\venrollToken\x12\x17\n" +
+	"\aek_cert\x18\a \x01(\fR\x06ekCert\x1a9\n" +
 	"\vGoldenEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\rR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\x86\x01\n" +
