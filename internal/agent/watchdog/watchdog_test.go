@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/agent/watchdog"
-	"github.com/lucianoengel/openshield/internal/core"
 )
 
 // recordingResponder records every kernel answer, so a test can assert exactly
@@ -48,7 +47,7 @@ func (f evalFunc) Evaluate(ctx context.Context, e watchdog.PermissionEvent) (wat
 }
 
 type auditRecord struct {
-	severity core.Severity
+	severity watchdog.Severity
 	reason   string
 }
 
@@ -107,7 +106,7 @@ func TestFailOpenIsAuditedHighSeverity(t *testing.T) {
 	r := &recordingResponder{}
 	var got auditRecord
 	var audited atomic.Bool
-	audit := func(_ context.Context, _ watchdog.PermissionEvent, sev core.Severity, reason string) error {
+	audit := func(_ context.Context, _ watchdog.PermissionEvent, sev watchdog.Severity, reason string) error {
 		got = auditRecord{sev, reason}
 		audited.Store(true)
 		return nil
@@ -124,7 +123,7 @@ func TestFailOpenIsAuditedHighSeverity(t *testing.T) {
 	if !audited.Load() {
 		t.Fatal("fail-open produced no audit event — a silent fail-open is the worst failure")
 	}
-	if got.severity != core.SeverityHigh {
+	if got.severity != watchdog.SeverityHigh {
 		t.Errorf("severity = %v, want high — a fail-open must be as loud as a timeout", got.severity)
 	}
 	if got.reason == "" {
@@ -158,7 +157,7 @@ func TestSelfPIDBypassesEvaluation(t *testing.T) {
 func TestBudgetCeilingNotHang(t *testing.T) {
 	r := &recordingResponder{}
 	var audited atomic.Bool
-	audit := func(context.Context, watchdog.PermissionEvent, core.Severity, string) error {
+	audit := func(context.Context, watchdog.PermissionEvent, watchdog.Severity, string) error {
 		audited.Store(true)
 		return nil
 	}
@@ -190,7 +189,7 @@ func TestBudgetCeilingNotHang(t *testing.T) {
 // Task 3.6 — a failed audit append surfaces, but the allow still happened.
 func TestAuditFailureDoesNotRetractAllow(t *testing.T) {
 	r := &recordingResponder{}
-	audit := func(context.Context, watchdog.PermissionEvent, core.Severity, string) error {
+	audit := func(context.Context, watchdog.PermissionEvent, watchdog.Severity, string) error {
 		return errors.New("ledger down")
 	}
 	slow := evalFunc(func(ctx context.Context, _ watchdog.PermissionEvent) (watchdog.Verdict, error) {

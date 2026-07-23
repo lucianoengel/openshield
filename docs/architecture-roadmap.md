@@ -823,11 +823,18 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   columns at ingest would enable field-level hunting — larger surface, pull after the queue.)*
 
 ### HIPS (endpoint-behavioral domain — Phase E, landed and hardening)
-- **HIPS-3 · `DENY_EXEC`** — ✅ **T1-gated logic DONE (D217).** `watchdog.ExecEvaluator` +
-  `internal/agent/execguard.Decider(engine)` map a pipeline `DENY_EXEC` decision to a kernel `FAN_DENY`
-  under the fail-open budget; mutation-verified without root. **Remaining (root-gated adapter):** the
-  `FAN_OPEN_EXEC_PERM` fanotify mark/read/respond producer that feeds the watchdog — deferred exactly
-  like the inline file responder (B2) / NIPS-1 TPROXY. `KILL_PROCESS` (post-exec) already landed.
+- **HIPS-3 · `DENY_EXEC`** — ✅ **T1-gated logic DONE (D217)** + ✅ **exec-permission PRODUCER DONE
+  (D224) — inline exec prevention is REAL on a live kernel.** `internal/agent/execmon` marks
+  `FAN_OPEN_EXEC_PERM` (mount mark) + reads/decodes exec-permission events + drives the fail-open
+  watchdog to answer the kernel `FAN_DENY`/`FAN_ALLOW` + closes the event fd; wired into
+  `cmd/openshield-agent` (its first real function) with a pure parser-free deny-list/behavioral decider.
+  **Proven on a rooted VM** (kernel 6.8): a deny-listed binary is kernel-REFUSED (EACCES), a benign one
+  runs, no fd leak; 3 mutation guards incl. the on-kernel Deny→Allow. Required detainting `watchdog` of
+  `encoding/json` (moved `ExecEvaluator`→execguard, local `watchdog.Severity`, fmt-not-slog) so the
+  privileged binary stays parser-free. **Increment 2 (deferred):** the FULL OPA-pipeline `DENY_EXEC`
+  inline needs an IPC decider to the unprivileged engine (the privileged binary can't hold the
+  policy/proto); the relocated `execguard.ExecEvaluator` is that bridge. `KILL_PROCESS` (post-exec)
+  already landed.
 - **HIPS-4 · FIM, memory/injection detection, ransomware canary, application whitelisting** — each a
   separate subsystem-sized bet · XL each. Do not bundle.
   - ✅ **FIM increment 1 SHIPPED (D223):** `internal/fim` detects tampering of operator-designated

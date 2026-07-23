@@ -21,8 +21,19 @@ import (
 	"context"
 	"fmt"
 	"time"
+)
 
-	"github.com/lucianoengel/openshield/internal/core"
+// Severity is the terminal-event severity the watchdog reports to its AuditFunc. It is a
+// watchdog-LOCAL vocabulary (mirroring core.Severity's values) deliberately NOT imported
+// from internal/core: this package runs in the privileged, parser-free agent binary
+// (scripts/check-agent-deps.sh bans encoding/json, which internal/core pulls transitively
+// via protobuf). A caller that bridges to the core audit ledger maps this to core.Severity.
+type Severity int
+
+const (
+	SeverityInfo Severity = iota
+	SeverityWarn
+	SeverityHigh
 )
 
 // PermissionEvent is one decoded FAN_OPEN_PERM event.
@@ -58,7 +69,7 @@ type Evaluator interface {
 // a fail-open is recorded exactly as loudly as the dispatcher records a timeout.
 // It returns an error, which surfaces — a failed audit append is never silent —
 // but never retracts an answer already given to the kernel.
-type AuditFunc func(ctx context.Context, e PermissionEvent, severity core.Severity, reason string) error
+type AuditFunc func(ctx context.Context, e PermissionEvent, severity Severity, reason string) error
 
 // Watchdog answers permission events under a hard budget.
 type Watchdog struct {
@@ -126,7 +137,7 @@ func (w *Watchdog) failOpen(ctx context.Context, e PermissionEvent, reason strin
 	if w.Audit == nil {
 		return nil
 	}
-	if err := w.Audit(ctx, e, core.SeverityHigh, reason); err != nil {
+	if err := w.Audit(ctx, e, SeverityHigh, reason); err != nil {
 		return fmt.Errorf("watchdog: allowed (fail-open) but audit failed: %w", err)
 	}
 	return nil

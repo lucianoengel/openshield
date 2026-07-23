@@ -21,7 +21,7 @@ type ExecProcessor interface {
 // EVENT_KIND_PROCESS_EXEC event (the binary path and pid), runs the pipeline, and returns the decision's
 // action for the ExecEvaluator. A Process error is PROPAGATED so the watchdog fail-opens (an evaluation
 // failure must allow the exec, never hang or spuriously block it).
-func Decider(p ExecProcessor) watchdog.ExecDecider {
+func Decider(p ExecProcessor) ExecDecider {
 	return func(ctx context.Context, e watchdog.PermissionEvent) (corev1.Action, error) {
 		ev := &corev1.Event{
 			Kind: corev1.EventKind_EVENT_KIND_PROCESS_EXEC,
