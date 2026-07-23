@@ -36,6 +36,7 @@ import (
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
+	"github.com/lucianoengel/openshield/internal/casb"
 	"github.com/lucianoengel/openshield/internal/core"
 	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/attest"
@@ -116,6 +117,7 @@ func main() {
 	// a single worker), so concurrent flows classify in parallel (D76).
 	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
 	applyThreatFeed(ctx, gw, log)
+	applyCasbCatalog(ctx, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 	// NIPS-4: opt-in response-body inspection (classify + audit the response, not only
@@ -270,6 +272,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 
 	gw := gateway.New(cls, accessPol, ledger, log, 30*time.Second)
 	applyThreatFeed(ctx, gw, log)
+	applyCasbCatalog(ctx, log)
 	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
 	riskStore := gateway.NewRiskStore()
 	ap.SetRiskStore(riskStore)
@@ -579,6 +582,39 @@ func applyThreatFeed(ctx context.Context, gw *gateway.Gateway, log *slog.Logger)
 				log.Error("gateway: NIPS-2 IOC feed reload failed — keeping the current feed", slog.String("err", err.Error()))
 			})
 		log.Info("gateway: NIPS-2 IOC feed hot-reload enabled", slog.Duration("interval", iv))
+	}
+}
+
+// applyCasbCatalog loads the DLP-2 cloud-service catalog (OPENSHIELD_CASB_CATALOG) and
+// installs it as the process-wide CASB catalog the policy input consults. A configured-
+// but-malformed catalog aborts startup (fail-closed on config, like the EDM index); no
+// catalog leaves the CASB engine inert (the gateway still does DLP + IOC). It hot-reloads
+// so a change to a service's sanctioned status takes effect without a restart; a later
+// malformed edit is served-stale (the current catalog is kept).
+func applyCasbCatalog(ctx context.Context, log *slog.Logger) {
+	path := os.Getenv("OPENSHIELD_CASB_CATALOG")
+	if path == "" {
+		log.Warn("gateway: OPENSHIELD_CASB_CATALOG unset — DLP-2 content-aware CASB inert (no cloud-upload awareness)")
+		return
+	}
+	cat, err := casb.LoadCatalog(path)
+	if err != nil {
+		fatal(log, "loading CASB catalog", err) // fail-fast on a broken INITIAL catalog
+	}
+	casb.SetCatalog(cat)
+	log.Info("gateway: DLP-2 content-aware CASB active", slog.Int("services", cat.Size()))
+
+	if iv := envDuration("OPENSHIELD_CASB_CATALOG_RELOAD", 0); iv > 0 {
+		w := casb.NewCatalogWatcher(path) // baseline the mtime now (before the first tick)
+		go w.Watch(ctx, iv,
+			func(c *casb.Catalog) {
+				casb.SetCatalog(c)
+				log.Info("gateway: DLP-2 CASB catalog reloaded", slog.Int("services", c.Size()))
+			},
+			func(err error) {
+				log.Error("gateway: DLP-2 CASB catalog reload failed — keeping the current catalog", slog.String("err", err.Error()))
+			})
+		log.Info("gateway: DLP-2 CASB catalog hot-reload enabled", slog.Duration("interval", iv))
 	}
 }
 

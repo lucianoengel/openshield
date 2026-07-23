@@ -749,9 +749,15 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   **Channel-awareness foundation SHIPPED (D194):** `internal/exfil` tags a file event with its exfil
   channel (removable / cloud-sync / local, path-derived and content-free) and a policy escalates a
   sensitive write to an exfil channel over a local one. Covers the FILE-BASED channels (removable +
-  cloud-sync folders, via the existing fanotify/filewatch producers). Remaining: the **per-OS non-file
-  producers** — clipboard, print, screenshot (display/OS-gated) — plus content-aware CASB and runtime
-  mount-table resolution.
+  cloud-sync folders, via the existing fanotify/filewatch producers).
+  **Content-aware CASB SHIPPED (D222, increment 1):** `internal/casb` classifies a network flow's cloud
+  service + sanctioned status + upload-ness (content-free, from host+method), added to the policy input
+  as `event.cloud`; a policy BLOCKs sensitive content (worker DLP hits) uploaded to an UNSANCTIONED cloud
+  service and allows it to a sanctioned one — gateway-preventive (no root), hot-reloadable catalog. Proven
+  end-to-end on the real gateway→worker path; 4 mutation guards. **Now watches the cloud-upload channel,
+  not just directories.** Remaining: the **per-OS non-file producers** — clipboard, print, screenshot
+  (display/OS-gated) — plus CASB refinements (multipart/path upload heuristics, download/share, shadow-IT
+  discovery) and runtime mount-table resolution.
 - **DLP-3 · EDM / IDM / OCR** — P1 · classify (server-side) · XL. Exact-data-match, doc fingerprinting,
   OCR. **Placement fixed by ADR-9** — server-side / signed index into the sandbox; never break D10/D11.
   **EDM+IDM SHIPPED (D193 single-value + D197 multi-cell + D198 IDM document-fingerprint):** `internal/classify` fingerprints an operator dataset into a

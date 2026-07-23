@@ -11,6 +11,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/behavioral"
 	"github.com/lucianoengel/openshield/internal/attack"
+	"github.com/lucianoengel/openshield/internal/casb"
 	"github.com/lucianoengel/openshield/internal/exfil"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
@@ -98,6 +99,20 @@ func buildInput(st *core.State) map[string]interface{} {
 		event["host"] = ns.GetSniHost()
 		event["method"] = ns.GetHttpMethod()
 		event["path"] = ns.GetHttpPath()
+		// Content-aware CASB (DLP-2): a content-free derivation of the destination host +
+		// method (like exfil_channel below is derived from a path), so a policy can block
+		// sensitive content bound for an UNSANCTIONED cloud upload while allowing a
+		// sanctioned one. The content half is input.classification (worker DLP hits); the
+		// policy ANDs the two. Absent when no catalog is configured or the host is not a
+		// catalogued service (nil match) — existing pipelines unaffected.
+		if m := casb.Classify(ns.GetSniHost(), ns.GetHttpPath(), ns.GetHttpMethod()); m != nil {
+			event["cloud"] = map[string]interface{}{
+				"service":    m.Service,
+				"category":   m.Category,
+				"sanctioned": m.Sanctioned,
+				"upload":     m.Upload,
+			}
+		}
 	}
 	// For a filesystem event, expose the exfil channel of the write (DLP-2): a
 	// content-free derivation of the path (like the behavioral analysis below), so a
