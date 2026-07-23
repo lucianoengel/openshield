@@ -873,6 +873,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     event is only the trigger — the cryptographic scan decides drift. Opt-in `OPENSHIELD_FIM_REALTIME`,
     fail-to-wire. Proven (gated, unprivileged) + 2 mutation guards. Deferred: real-time delete
     (`FAN_DELETE`, poll-caught now), inotify fallback, per-file marks.
+  - ✅ **FIM signed baseline (increment 3) SHIPPED (D229) — FIM is now tamper-EVIDENT end to end.** The
+    baseline is operator-signed (domain-separated Ed25519, DLP signed-index model); the node verifies
+    against a trusted public key before trusting it and refuses an unverifiable one
+    (`OPENSHIELD_FIM_BASELINE_PUBKEY`; the unsigned path is preserved but loudly warned). New operator
+    tool `openshield-fim-baseline` (keygen + build+sign); the node holds only the public key. Closes the
+    "an attacker who can write the baseline hides drift" gap. Proven + 2 mutation guards (skip-verify,
+    domain-omission). Deferred: key rotation / multiple keys, host-identity binding, hardware keys.
 
 ### Platform (remainder, not in the immediate queue)
 - **PLAT-5 · Config management beyond env vars** — P2 · S–M. Typed config (file + env override),

@@ -11,7 +11,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -223,7 +225,22 @@ func main() {
 			fatal(log, "FIM misconfigured", errNoFimBaseline)
 		}
 		var manifest *fim.Manifest
-		if _, statErr := os.Stat(baselineFile); statErr != nil {
+		if pubPath := strings.TrimSpace(os.Getenv("OPENSHIELD_FIM_BASELINE_PUBKEY")); pubPath != "" {
+			// Verified mode (HIPS-4 inc 3): the baseline MUST be operator-signed and verify against the
+			// trusted key. No auto-capture — a node must not mint and trust its own baseline (it could be
+			// fed tampered files at capture). A missing/unsigned/invalid baseline is fatal.
+			pub, err := readEd25519Pub(pubPath)
+			if err != nil {
+				fatal(log, "loading FIM baseline pubkey", err)
+			}
+			m, err := fim.LoadSignedManifest(baselineFile, pub)
+			if err != nil {
+				fatal(log, "verifying signed FIM baseline (sign it with openshield-fim-baseline)", err)
+			}
+			manifest = m
+			log.Info("engine: FIM active against an OPERATOR-SIGNED baseline (tamper-evident)",
+				slog.String("baseline", baselineFile), slog.Int("files", m.Size()))
+		} else if _, statErr := os.Stat(baselineFile); statErr != nil {
 			m, overflow, err := fim.BuildBaseline(fimPaths, fim.Options{})
 			if err != nil {
 				fatal(log, "building FIM baseline", err)
@@ -232,8 +249,9 @@ func main() {
 				fatal(log, "saving FIM baseline", err)
 			}
 			manifest = m
-			log.Warn("engine: FIM baseline CAPTURED from the current on-disk state — REVIEW it; "+
-				"the manifest is a plain file and is NOT tamper-evident (a signed baseline is a follow-up)",
+			log.Warn("engine: FIM baseline CAPTURED from the current on-disk state — REVIEW it; the "+
+				"manifest is UNSIGNED and NOT tamper-evident (an attacker who can write it can hide drift) "+
+				"— set OPENSHIELD_FIM_BASELINE_PUBKEY + sign with openshield-fim-baseline",
 				slog.String("baseline", baselineFile), slog.Int("files", m.Size()), slog.Int("skipped", overflow))
 		} else {
 			m, err := fim.LoadManifest(baselineFile)
@@ -241,7 +259,8 @@ func main() {
 				fatal(log, "loading FIM baseline", err)
 			}
 			manifest = m
-			log.Info("engine: FIM active against a known-good baseline (unsigned manifest)",
+			log.Warn("engine: FIM active against an UNSIGNED baseline (tamper-vulnerable) — "+
+				"set OPENSHIELD_FIM_BASELINE_PUBKEY for a signed, tamper-evident baseline",
 				slog.String("baseline", baselineFile), slog.Int("files", m.Size()))
 		}
 		iv := envDuration("OPENSHIELD_FIM_INTERVAL", 60*time.Second)
@@ -330,6 +349,19 @@ func splitEnv(key string) []string {
 // errNoFimBaseline makes a FIM run without a baseline path fail loudly (the baseline is
 // where the known-good state lives — without a persistent file it cannot survive a restart).
 var errNoFimBaseline = errors.New("set OPENSHIELD_FIM_BASELINE to a manifest file path when OPENSHIELD_FIM_PATHS is set")
+
+// readEd25519Pub reads a raw 32-byte Ed25519 public key (the trusted operator key for verifying a
+// signed FIM baseline).
+func readEd25519Pub(path string) (ed25519.PublicKey, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("public key %s is %d bytes, want %d", path, len(b), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
+}
 
 // watch feeds a directory's fanotify events into the shared channel until the
 // context is cancelled. A read error that is not cancellation is logged and the
