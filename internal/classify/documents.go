@@ -28,7 +28,72 @@ const (
 	maxZipEntries = 4096
 	// maxEntryBytes caps a single member's expansion.
 	maxEntryBytes = 8 << 20
+	// maxArchiveDepth caps nested-archive recursion (DLP-8): a zip-in-a-zip-in-a-… beyond this is
+	// scanned as-is rather than expanded — 5 levels is generous for legitimate content, and it
+	// guarantees termination independent of the byte budget.
+	maxArchiveDepth = 4
 )
+
+// extractContent recursively extracts scannable text from a container so the detectors see the real
+// content (DLP-8). It tries, in order, a recognized Office doc (clean OOXML text), a PDF, then a GENERAL
+// ZIP (every member — recursing a member that is itself a container). A non-container returns its own
+// bytes (scan as-is). budget is a SHARED byte ceiling decremented across the WHOLE recursion, so a
+// zip-bomb nested inside a zip cannot amplify per level; depth bounds nesting. This runs in the seccomp
+// worker (D29/D35), never in the privileged agent.
+func extractContent(data []byte, depth int, budget *int64) []byte {
+	if *budget <= 0 || depth > maxArchiveDepth {
+		return data
+	}
+	// OOXML BEFORE the general zip: an Office doc is a zip, and extractOOXML yields clean XML-stripped
+	// text where the general path would dump raw XML. (extractOOXML/extractPDF have their own internal
+	// expansion caps; the shared budget is decremented at each zip-member READ in extractZipArchive.)
+	if t, ok := extractOOXML(data); ok {
+		return t
+	}
+	if t, ok := extractPDF(data); ok {
+		return t
+	}
+	if t, ok := extractZipArchive(data, depth, budget); ok {
+		return t
+	}
+	return data
+}
+
+// extractZipArchive extracts EVERY member of a general ZIP (not just OOXML text members), recursing
+// each member through extractContent so a sensitive file in a plain zip — or nested in a zip-in-a-zip —
+// is classified. Bounded by the shared budget, the entry cap, and depth. Best-effort per member (a bad
+// member is skipped, never failing the whole extraction). Returns (nil,false) for a non-zip so the
+// caller falls back to a raw scan.
+func extractZipArchive(data []byte, depth int, budget *int64) ([]byte, bool) {
+	if len(data) < len(zipMagic) || !bytes.Equal(data[:len(zipMagic)], zipMagic) {
+		return nil, false
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, false
+	}
+	var out bytes.Buffer
+	for i, f := range zr.File {
+		if i >= maxZipEntries || *budget <= 0 {
+			break
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue // one unreadable member never fails the whole extraction
+		}
+		raw, err := io.ReadAll(io.LimitReader(rc, min64(*budget, maxEntryBytes)))
+		rc.Close()
+		if err != nil {
+			continue
+		}
+		*budget -= int64(len(raw)) // every byte READ from a member is charged to the shared ceiling,
+		// so a bomb nested inside a zip cannot amplify the budget per level.
+		extracted := extractContent(raw, depth+1, budget) // recurse: a member may itself be a container
+		out.Write(extracted)
+		out.WriteByte(' ')
+	}
+	return out.Bytes(), true
+}
 
 // zipMagic is the local-file-header signature that starts every ZIP (and thus every
 // OOXML document). A cheap prefix check avoids handing non-zip bytes to zip.NewReader.

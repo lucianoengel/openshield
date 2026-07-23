@@ -74,15 +74,13 @@ func (c *Classifier) Classify(_ context.Context, r io.Reader) ([]*corev1.Detecto
 	if err != nil {
 		return nil, fmt.Errorf("classify: reading input: %w", err)
 	}
-	// Phase D1: if the bytes are a structured document (an OOXML zip or a PDF), extract
-	// its text first — otherwise the detectors scan compressed noise and miss the PII
-	// inside a .docx/.xlsx/.pdf. A non-document (or one that fails to parse) is scanned
-	// as-is, so a mis-detection degrades to "scan raw", never "scan nothing".
-	if extracted, ok := extractOOXML(text); ok {
-		text = extracted
-	} else if extracted, ok := extractPDF(text); ok {
-		text = extracted
-	}
+	// Phase D1 + DLP-8: if the bytes are a structured document (OOXML/PDF) or an ARCHIVE, extract the
+	// text first — otherwise the detectors scan compressed noise and miss PII inside a .docx/.pdf or a
+	// file placed in a .zip (even nested). extractContent recurses archive members (bounded by a shared
+	// byte budget + depth). A non-container (or one that fails to parse) is scanned as-is, so a
+	// mis-detection degrades to "scan raw", never "scan nothing".
+	budget := int64(maxExtractBytes)
+	text = extractContent(text, 0, &budget)
 	var hits []*corev1.DetectorHit
 	for _, d := range c.detectors {
 		count, conf := d.Scan(text)

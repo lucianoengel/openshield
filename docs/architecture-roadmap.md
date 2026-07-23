@@ -753,8 +753,9 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   `contextNear` keyword-proximity primitive + passport and driver's-license detectors (context-REQUIRED,
   low-FP for weak-format ids). Remaining: more countries/national-IDs (reuse the primitive), richer
   context rules via the signed custom-rule surface.
-- **DLP-8 · Format depth** — P2 · classify · M. Nested-archive recursion (stops at one level today),
-  RTF / legacy `.doc`, response-body multipart/gzip (shared with NIPS-4).
+- **DLP-8 · Format depth** — P2 · classify · M. **✅ Nested-archive recursion SHIPPED (D214): a file in a
+  plain zip (even double-zipped) is now extracted + classified, bomb-bounded.** Remaining: RTF / legacy
+  `.doc`, tar/gzip containers, response-body multipart/gzip (shared with NIPS-4).
 
 ### NIPS / NTPS
 - **NIPS-1 · Transparent/inline connector** — P0 · data-plane (D) · L. **Approach fixed by ADR-8**
