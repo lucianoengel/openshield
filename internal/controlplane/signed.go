@@ -188,11 +188,18 @@ func (s *Server) recordPeerAlert(ctx context.Context, subject string, risk float
 	// SIEM-6b/ADR-10: stamp the first-class lifecycle fields at write — severity from the risk (so it
 	// is correct for the recorded alert even if thresholds later change), status open, and a
 	// detector-namespaced correlation key. A future cross-domain detector writes the same shape.
-	_, err := s.pool.Exec(ctx,
+	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO peer_alerts (subject_id, risk_score, context_version, agent_id, detected_at, severity, status, dedup_key)
 		 VALUES ($1,$2,$3,$4,$5,$6,'open',$7)`,
-		subject, risk, ctxVersion, agentID, at.UTC(), Severity(risk), "peer-ueba:"+subject)
-	return err
+		subject, risk, ctxVersion, agentID, at.UTC(), Severity(risk), "peer-ueba:"+subject); err != nil {
+		return err
+	}
+	// XDR-2: project the peer-UEBA detection into the normalized, entity-keyed unified-alert stream so a
+	// cross-domain correlation engine sees it beside other domains' alerts. Best-effort (a failure is
+	// counted, never breaks the authoritative peer_alerts write above); the same detector-namespaced
+	// dedup_key keeps it one row per logical alert.
+	s.recordDeviceUnifiedAlert(ctx, "ueba", subject, Severity(risk), "peer risk anomaly", "peer-ueba:"+subject, at)
+	return nil
 }
 
 // eventIDFor extracts the event id for indexing from a payload of the given kind.

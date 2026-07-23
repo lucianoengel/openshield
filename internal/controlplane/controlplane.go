@@ -141,6 +141,11 @@ type Server struct {
 	// no EventID, a poison file, or a persist failure) — the drop is counted, never silent.
 	WEFIngested atomic.Int64
 	WEFDropped  atomic.Int64
+
+	// UnifiedAlertFailures counts unified-alert projections that could not be recorded (no graph, an
+	// entity-resolve failure, or an insert error) — the derived cross-domain stream is best-effort over
+	// the authoritative per-domain records, so a failure is counted, never fatal (XDR-2).
+	UnifiedAlertFailures atomic.Int64
 }
 
 // New creates a server over an existing pool.
