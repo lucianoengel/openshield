@@ -74,6 +74,11 @@ func TestAttestationTransportEndToEnd(t *testing.T) {
 	if _, err := responder.SubscribeReports(gwConn); err != nil {
 		t.Fatal(err)
 	}
+	// Ensure the subscriptions are registered server-side before the endpoint requests a challenge,
+	// else the request can race ahead of the SUB and get "no responders available" (embedded-NATS flake).
+	if err := gwConn.Flush(); err != nil {
+		t.Fatal(err)
+	}
 
 	// The device attests over the live channel.
 	if err := posture.Attest(epConn, d.tpm, d.ak, subject, pcrs); err != nil {
@@ -102,6 +107,11 @@ func TestAttestationTransportForgedReportRejected(t *testing.T) {
 
 	responder := gateway.NewAttestationResponder(v)
 	if _, err := responder.SubscribeReports(conn); err != nil {
+		t.Fatal(err)
+	}
+	// Register the report subscription server-side before publishing, else the report can arrive first
+	// and be dropped (embedded-NATS flake) so Rejected never increments.
+	if err := conn.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	// Issue a real challenge, but quote over a DIFFERENT (attacker-chosen) nonce.
@@ -133,6 +143,10 @@ func TestAttestationChallengeUnenrolled(t *testing.T) {
 
 	responder := gateway.NewAttestationResponder(v)
 	if _, err := responder.ServeChallenge(conn); err != nil {
+		t.Fatal(err)
+	}
+	// Register the challenge responder server-side before requesting, else "no responders available".
+	if err := conn.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	resp, err := conn.Request(natsx.SubjectAttestChallenge, []byte("sub_unknown"), 2*time.Second)

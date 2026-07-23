@@ -59,6 +59,11 @@ func TestEnrollmentDistributionRoundTrip(t *testing.T) {
 	if _, err := responder.SubscribeReports(gwConn); err != nil {
 		t.Fatal(err)
 	}
+	// Register the subscriptions server-side before the endpoint requests a challenge, else the request
+	// can race ahead of the SUB and get "no responders available" (embedded-NATS readiness flake).
+	if err := gwConn.Flush(); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := posture.Attest(epConn, d.tpm, d.ak, subject, pcrs); err != nil {
 		t.Fatalf("attest: %v", err)

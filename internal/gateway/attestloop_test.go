@@ -32,6 +32,10 @@ func loopHarness(t *testing.T, d *device, subject string, pcrs []int) (*gateway.
 	if _, err := responder.SubscribeReports(gwConn); err != nil {
 		t.Fatal(err)
 	}
+	// Register the subscriptions server-side before any attest request fires (embedded-NATS readiness).
+	if err := gwConn.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	return v, responder, epConn
 }
 
