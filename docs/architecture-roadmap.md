@@ -821,7 +821,13 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     unexpected listener stop as well as a clean ctx cancel), so a dead listener never leaves host :80/:443
     traffic redirected into a closed socket (fail-open). Removes only if install succeeded. **VM-proven:
     close the listener → the rule is gone; the ctx-only-remove mutation leaves it dangling (VM test FAILs).**
-    Deferred: automatic self-heal (re-arm + reinstall after a stop), a hung-listener probe.
+    Deferred: a hung-listener probe (see inc-4c for re-arm).
+  - ✅ **Increment 4c DONE (D239) — the inline plane self-heals.** `gateway.SuperviseTProxy` re-arms the
+    listener + reinstalls the rules after a transient stop (backoff `OPENSHIELD_TPROXY_RETRY`, default 5s),
+    retrying until ctx cancel — so a blip does not silently leave inline prevention disabled. **VM-proven:
+    kill the listener → the supervisor re-arms → a flow enforces again; the no-re-loop mutation leaves the
+    plane dead (VM test FAILs).** Deferred: operator-path self-heal, a crash-loop circuit breaker, a
+    hung-listener liveness probe, the nft-native backend.
 - **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
   YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS.
   - ✅ **Metadata IOC half DONE** — `internal/nips` matches domain/IP/CIDR/URI-substring, hot-reload +
