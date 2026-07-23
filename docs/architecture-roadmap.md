@@ -186,10 +186,12 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
     entity via real `Link` → assert one incident. Mutation: dropping the entity join must fail it.
 12. ✅ DONE (D207) `TestWorkerLoadsEDMIndexAndMatches` (real worker RPC). **Worker EDM integration** (D193 last untested link): exec the real `openshield-worker` with
     `OPENSHIELD_EDM_INDEX` at a `Marshal`'d blob and assert an EDM hit over the real RPC/stdin path.
-13. **Token replay across devices** (R34-10): mint a token for user U, present from cert A then cert B →
-    B must 403 once device-bound.
-14. **IOC feed reload** (NIPS-2 follow-up): SIGHUP/timer test proving a flow is blocked only *after* the
-    feed file changes — drives feed re-entry, not a fresh gateway.
+13. ✅ DONE `TestDPoPSenderConstraint` (identity/dpop_r34_test.go). **Token replay across devices** (R34-10):
+    a sender-constrained token replayed WITHOUT the bound DPoP key (or with a mismatched proof) is refused
+    — "any enrolled device replays another user's token" is closed.
+14. ✅ DONE `TestGatewayThreatFeedHotSwap` (gateway/threat_reload_test.go) + `TestWatchFeedReloadsOnChange`
+    (nips/reload_test.go). **IOC feed reload** (NIPS-2): swapping the feed at runtime makes a
+    previously-allowed flow blocked with no gateway rebuild — the watcher re-entry, not a fresh gateway.
 
 ---
 
@@ -434,9 +436,13 @@ near-term queue clears (several are already unblocked and can interleave):
 ### Minor (fold into the owning ticket, no separate proposal)
 ~~`/incidents?limit=` still silently defaults instead of 400ing~~ ✅ DONE (a00cd5f, D219: `/incidents`
 AND `/alerts` now 400 a malformed `limit`; the silent `queryInt` helper deleted) ·
-PLAT-4b `main.go` metrics *wiring* has no test (guard tested in isolation) · `EnsureAppLogin`'s
-existing-role branch should re-assert `NOSUPERUSER NOCREATEROLE` · SMTP `handle`/`processOne` recover
-present but not individually tested · SIEM-8c (per-sink fanout goroutine, P3) · ZT-2 residuals (clock-
+~~PLAT-4b `main.go` metrics *wiring* has no test~~ ✅ DONE (`TestMetricsHandlerBehindBearerGuard`: the
+real MetricsHandler composed behind `RequireBearerToken` — no/wrong token → 401 + no counter leak, valid
+token → 200 + live metrics; mutation-verified) · `EnsureAppLogin`'s existing-role branch should
+re-assert `NOSUPERUSER NOCREATEROLE` · ~~SMTP `handle`/`processOne` recover present but not individually
+tested~~ ✅ DONE (`TestSMTPListenerRecoversFromSinkPanic`: a panicking sink is contained — dropped++,
+listener serves a second session; mutation removing the recover crashes the test binary) · SIEM-8c
+(per-sink fanout goroutine, P3) · ZT-2 residuals (clock-
 skew leeway on exp/nbf; bearer tokens replayable until exp and not device-bound — jti/DPoP, P2).
 
 ---
