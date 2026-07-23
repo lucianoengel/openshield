@@ -88,19 +88,28 @@ func main() {
 		// instead). Without it, personal-adjacent telemetry accrues forever (D20).
 		retInterval := envDuration("OPENSHIELD_RETENTION_INTERVAL", 24*time.Hour)
 		fleetRetention := envDuration("OPENSHIELD_FLEET_RETENTION", 90*24*time.Hour)
+		fleetPolicy := fmt.Sprintf("OPENSHIELD_FLEET_RETENTION=%s", fleetRetention)
 		go retain.Loop(leaderCtx, retInterval, func(ctx context.Context) {
-			n, err := srv.PurgeOlderThan(ctx, time.Now().Add(-fleetRetention))
+			fleetCutoff := time.Now().Add(-fleetRetention)
+			n, err := srv.PurgeOlderThan(ctx, fleetCutoff)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "openshield-server: retention purge failed: %v\n", err)
 				return
 			}
 			fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
+			// SIEM-10: record the purge as a queryable compliance event (best-effort — the purge already
+			// happened; a recording failure is counted, never undoes or blocks it).
+			srv.RecordRetentionEvent(ctx, "fleet_telemetry", n, fleetCutoff, fleetPolicy)
 			// SIEM-12/R34-13: prune the durable notify-dedupe ledger. An id only needs to outlive its
 			// dedup window; a day-old cutoff keeps the table tiny while safely past the 10-min window.
-			if d, derr := srv.PruneNotifyDedupe(ctx, time.Now().Add(-24*time.Hour)); derr != nil {
+			ddCutoff := time.Now().Add(-24 * time.Hour)
+			if d, derr := srv.PruneNotifyDedupe(ctx, ddCutoff); derr != nil {
 				fmt.Fprintf(os.Stderr, "openshield-server: notify-dedupe prune failed: %v\n", derr)
-			} else if d > 0 {
-				fmt.Fprintf(os.Stderr, "openshield-server: pruned %d durable notify-dedupe ids\n", d)
+			} else {
+				if d > 0 {
+					fmt.Fprintf(os.Stderr, "openshield-server: pruned %d durable notify-dedupe ids\n", d)
+				}
+				srv.RecordRetentionEvent(ctx, "notify_dedupe", d, ddCutoff, "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h")
 			}
 		})
 

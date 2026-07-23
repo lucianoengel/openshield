@@ -146,6 +146,11 @@ type Server struct {
 	// entity-resolve failure, or an insert error) — the derived cross-domain stream is best-effort over
 	// the authoritative per-domain records, so a failure is counted, never fatal (XDR-2).
 	UnifiedAlertFailures atomic.Int64
+
+	// RetentionRecordFailures counts retention compliance events that could not be recorded (SIEM-10) —
+	// the purge still happened, so a recording failure is counted (the report gap is observable), not
+	// fatal.
+	RetentionRecordFailures atomic.Int64
 }
 
 // New creates a server over an existing pool.

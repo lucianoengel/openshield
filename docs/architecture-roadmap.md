@@ -786,8 +786,10 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   the XDR-2/4 lane; EVTX binary + a live WEF subscription are follow-ons.
 - ✅ **SIEM-7 · MITRE ATT&CK mapping (SHIPPED D201)** — P1 · classify metadata · M. Tag detections with techniques.
 - **SIEM-9 · Threat-intel enrichment + saved searches / scheduled reports** — P2 · S–M / M.
-- **SIEM-10 · Compliance/retention reporting** — P2 · M. What was purged, when, by which policy (ties
-  to PLAT-8).
+- ✅ **SIEM-10 · Compliance/retention reporting (SHIPPED D216)** — P2 · M. Each retention purge (fleet
+  aggregate, notify-dedupe) is recorded as a queryable `retention_events` compliance event (what/when/
+  how-many/policy/cutoff), exposed via `GET /compliance/retention` (RoleAnalyst). Remaining: record the
+  gateway ledger-tombstone purge too; scheduled report export.
 - *(SIEM event-search deepening: `fleet_telemetry` payloads are still opaque proto `BYTEA`; typed/JSONB
   columns at ingest would enable field-level hunting — larger surface, pull after the queue.)*
 

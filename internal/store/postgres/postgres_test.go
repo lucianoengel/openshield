@@ -186,10 +186,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..025), and no more no matter how many times
+	// One row per migration FILE (001..026), and no more no matter how many times
 	// Migrate runs — that stability is the property under test.
-	if n != 25 {
-		t.Errorf("schema_migrations rows = %d, want 25 — a migration applied twice "+
+	if n != 26 {
+		t.Errorf("schema_migrations rows = %d, want 26 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }
