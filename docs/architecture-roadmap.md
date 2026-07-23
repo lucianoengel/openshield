@@ -432,7 +432,8 @@ near-term queue clears (several are already unblocked and can interleave):
   owner gate; four-eyes on Tier-3 is non-waivable.
 
 ### Minor (fold into the owning ticket, no separate proposal)
-`/incidents?limit=` still silently defaults instead of 400ing (finish the SEC-8 rule on that param) ·
+~~`/incidents?limit=` still silently defaults instead of 400ing~~ ✅ DONE (a00cd5f, D219: `/incidents`
+AND `/alerts` now 400 a malformed `limit`; the silent `queryInt` helper deleted) ·
 PLAT-4b `main.go` metrics *wiring* has no test (guard tested in isolation) · `EnsureAppLogin`'s
 existing-role branch should re-assert `NOSUPERUSER NOCREATEROLE` · SMTP `handle`/`processOne` recover
 present but not individually tested · SIEM-8c (per-sink fanout goroutine, P3) · ZT-2 residuals (clock-
