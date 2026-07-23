@@ -814,7 +814,16 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   - **Remaining increments:** full Suricata/Snort grammar (flowbits/offset-depth/thresholding),
     Aho-Corasick multi-pattern, response-body scanning (shares NIPS-4), inline DROP (root-gated NIPS-1).
 - **NIPS-8 · Inline DNS sinkhole resolver — turn DNS from detect to prevent** — P1 · new data-plane
-  (D) · L. DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
+  (D) · L.
+  - ✅ **Increment 1 DONE (D231) — DNS is now PREVENTIVE.** `internal/dnssink`: a real UDP resolver that
+    forwards normal queries to an upstream and sinkholes a blocked domain with NXDOMAIN (RPZ-style),
+    backed by the hot-reloaded IOC feed (`gateway.BlockedDomain`). **Fails open** (unparseable/unmatched →
+    forward, never blackhole) and fail-to-wire. Opt-in `OPENSHIELD_DNS_SINK_LISTEN` + `_UPSTREAM`. Proven
+    on a high port (no root) + 2 mutation guards. **The transparent :53 redirect (DEPLOY-1) may now be
+    built on top of this resolver.**
+  - **Increment 2 (deferred):** local cache + upstream failover; the transparent `:53` redirect;
+    sinkhole-to-walled-garden IP; TCP DNS + DoT/DoH; a bypass watchdog.
+  Original: DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
   inline `:53` redirect over a non-resolver would blackhole all fleet name resolution. To make DNS
   *preventive* it must become a **real resolver**: local cache + upstream forwarding + failover, then
   **sinkhole/NXDOMAIN the malicious query (RPZ-style)** on a classify verdict, feeding the same

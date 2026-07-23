@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -38,6 +39,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/casb"
 	"github.com/lucianoengel/openshield/internal/core"
+	"github.com/lucianoengel/openshield/internal/dnssink"
 	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/attest"
 	"github.com/lucianoengel/openshield/internal/gateway"
@@ -119,6 +121,7 @@ func main() {
 	applyThreatFeed(ctx, gw, log)
 	applyCasbCatalog(ctx, log)
 	applyTProxy(ctx, gw, log)
+	applyDNSSink(ctx, gw, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 	// NIPS-4: opt-in response-body inspection (classify + audit the response, not only
@@ -644,6 +647,33 @@ func applyTProxy(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 		}
 	}()
 	log.Info("gateway: NIPS-1 transparent inline plane ACTIVE (drops a blocked flow at L4)", slog.String("addr", addr))
+}
+
+// applyDNSSink starts the NIPS-8 preventive DNS resolver when OPENSHIELD_DNS_SINK_LISTEN +
+// OPENSHIELD_DNS_UPSTREAM are set: it forwards normal queries to the upstream and sinkholes (NXDOMAIN) a
+// query whose domain is on the CURRENT IOC feed. Fail-open (an unparseable/unmatched query is forwarded)
+// and fail-to-wire (a bind failure logs and the gateway keeps running) — a DNS resolver must never
+// blackhole the fleet's name resolution. Binding :53 needs privilege (CAP_NET_BIND_SERVICE).
+func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
+	addr := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_SINK_LISTEN"))
+	upstream := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_UPSTREAM"))
+	if addr == "" || upstream == "" {
+		return
+	}
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		log.Error("gateway: DNS sinkhole could NOT bind — continuing WITHOUT it (fail-to-wire; :53 needs "+
+			"CAP_NET_BIND_SERVICE)", slog.String("addr", addr), slog.String("err", err.Error()))
+		return
+	}
+	r := dnssink.Resolver{Upstream: upstream, Blocked: gw.BlockedDomain, Log: log}
+	go func() {
+		if err := r.Serve(ctx, pc); err != nil && ctx.Err() == nil {
+			log.Error("gateway: DNS sinkhole stopped", slog.String("err", err.Error()))
+		}
+	}()
+	log.Info("gateway: NIPS-8 preventive DNS resolver ACTIVE (sinkhole blocked domains, forward the rest)",
+		slog.String("listen", addr), slog.String("upstream", upstream))
 }
 
 func fatal(log *slog.Logger, msg string, err error) {

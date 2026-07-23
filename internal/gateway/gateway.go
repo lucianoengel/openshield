@@ -235,6 +235,22 @@ func (s bodyClassifyStage) Run(ctx context.Context, st *core.State) (core.Outcom
 // they loaded, and the next request picks up the new one.
 func (g *Gateway) SetThreatFeed(f *nips.Feed) { g.threatFeed.Store(f) }
 
+// BlockedDomain reports whether a domain is on the CURRENT IOC feed (a domain or a parent-suffix
+// match) — the DNS sinkhole (NIPS-8) uses it so a hot-reloaded indicator is sinkholed with no restart.
+// Nil feed (unconfigured) → nothing is blocked.
+func (g *Gateway) BlockedDomain(name string) bool {
+	f := g.threatFeed.Load()
+	if f == nil {
+		return false
+	}
+	for _, m := range f.Match(name, "", "") {
+		if m.Category == nips.CategoryDomain {
+			return true
+		}
+	}
+	return false
+}
+
 // threatClassifyStage matches a flow's metadata against the IOC feed and records
 // the threat matches on State — a distinct axis from the DLP body classification.
 // It reads only Event metadata (host, dst IP, path), so it needs no worker and
