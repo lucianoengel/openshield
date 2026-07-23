@@ -118,6 +118,7 @@ func main() {
 	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
 	applyThreatFeed(ctx, gw, log)
 	applyCasbCatalog(ctx, log)
+	applyTProxy(ctx, gw, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 	// NIPS-4: opt-in response-body inspection (classify + audit the response, not only
@@ -616,6 +617,33 @@ func applyCasbCatalog(ctx context.Context, log *slog.Logger) {
 			})
 		log.Info("gateway: DLP-2 CASB catalog hot-reload enabled", slog.Duration("interval", iv))
 	}
+}
+
+// applyTProxy starts the NIPS-1 transparent inline data-plane when OPENSHIELD_TPROXY_LISTEN is
+// set: a TPROXY-redirected TCP flow is decided through the pipeline and DROPPED (blocked) or
+// SPLICED (allowed) at L4. Fail-to-wire, never fail-closed: if the IP_TRANSPARENT listener cannot
+// be created (no CAP_NET_ADMIN), the gateway logs loudly and runs WITHOUT the inline plane — the
+// network is never taken down because inline could not arm (ADR-8/D73). The operator installs the
+// iptables/nft TPROXY + routing rules out of band.
+func applyTProxy(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
+	addr := strings.TrimSpace(os.Getenv("OPENSHIELD_TPROXY_LISTEN"))
+	if addr == "" {
+		return
+	}
+	ln, err := gateway.ListenTransparent(addr)
+	if err != nil {
+		log.Error("gateway: TPROXY inline plane could NOT arm — continuing WITHOUT it (fail-to-wire, "+
+			"network not taken down); needs CAP_NET_ADMIN + an IP_TRANSPARENT-capable kernel + out-of-band "+
+			"iptables/nft TPROXY redirect rules", slog.String("addr", addr), slog.String("err", err.Error()))
+		return
+	}
+	srv := gateway.NewTProxyServer(gw, log)
+	go func() {
+		if err := srv.Serve(ctx, ln); err != nil && ctx.Err() == nil {
+			log.Error("gateway: TPROXY server stopped", slog.String("err", err.Error()))
+		}
+	}()
+	log.Info("gateway: NIPS-1 transparent inline plane ACTIVE (drops a blocked flow at L4)", slog.String("addr", addr))
 }
 
 func fatal(log *slog.Logger, msg string, err error) {

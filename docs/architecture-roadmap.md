@@ -779,6 +779,17 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 ### NIPS / NTPS
 - **NIPS-1 · Transparent/inline connector** — P0 · data-plane (D) · L. **Approach fixed by ADR-8**
   (opt-in TPROXY, bypass watchdog, preserve egress fail-open).
+  - ✅ **Increment 1 DONE (D225) — the network plane DROPS a flow at L4.** `internal/gateway`
+    `ListenTransparent` (IP_TRANSPARENT) + `TProxyServer`: a TPROXY-redirected TCP flow is decided
+    through the pipeline (IOC dst-IP) and DROPPED (blocked) or SPLICED (allowed) to its original
+    destination, with egress fail-open (a pipeline error forwards the flow) and fail-to-wire (an
+    un-armable listener never takes the network down). Opt-in `OPENSHIELD_TPROXY_LISTEN`. **Proven on
+    the rooted VM** with real netns+veth+TPROXY (a denied flow dropped, an allowed one spliced to an
+    echo server); 3 mutation guards incl. the on-kernel no-IP_TRANSPARENT. **Now a real inline IPS at
+    L4, paired with the NIPS-2 detection engine.**
+  - **Increment 2 (deferred):** SNI/ClientHello peek + content-signature bytes inspection over the flow
+    (inc 1 is L4 metadata — a bad SNI to a shared-CDN IP isn't caught yet); an auto-disable bypass
+    watchdog for a wedged redirect; UDP; nftables-native config; a privileged CI job with netns.
 - **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
   YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS.
   - ✅ **Metadata IOC half DONE** — `internal/nips` matches domain/IP/CIDR/URI-substring, hot-reload +
