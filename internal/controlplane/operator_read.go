@@ -153,7 +153,12 @@ func (s *Server) OperatorReadHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		limit := queryInt(r, "limit", 100)
+		// SEC-8: a malformed limit is a 400, not a silent default (matches /search and /incidents).
+		limit, err := intParam(r.URL.Query(), "limit", 100)
+		if err != nil {
+			http.Error(w, "bad limit: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		alerts, err := s.RecentPeerAlerts(r.Context(), limit)
 		if err != nil {
 			http.Error(w, "read failed", http.StatusInternalServerError)
@@ -297,15 +302,6 @@ func parseAlertFilter(r *http.Request) (AlertFilter, error) {
 		f.UnacknowledgedOnly = b
 	}
 	return f, nil
-}
-
-func queryInt(r *http.Request, key string, def int) int {
-	if v := r.URL.Query().Get(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return def
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -122,7 +122,14 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read failed", http.StatusInternalServerError)
 		return
 	}
-	incidents, err := s.RecentIncidents(r.Context(), queryInt(r, "limit", 100))
+	// SEC-8: a malformed limit is a 400, not a silent default — a silently-ignored bad limit returns a
+	// truncated/defaulted list that looks authoritative (the same rule the correlation params above use).
+	limit, err := intParam(q, "limit", 100)
+	if err != nil {
+		http.Error(w, "bad limit: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	incidents, err := s.RecentIncidents(r.Context(), limit)
 	if err != nil {
 		http.Error(w, "read failed", http.StatusInternalServerError)
 		return
