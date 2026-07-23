@@ -13,6 +13,17 @@ import (
 	"github.com/lucianoengel/openshield/internal/fim"
 )
 
+// fimWatchMask is the real-time watch event mask on the watched directories' children:
+//   - FAN_MODIFY | FAN_CLOSE_WRITE — a content change (and a create-with-content, which fires CLOSE_WRITE).
+//   - FAN_DELETE | FAN_MOVED_FROM — a child DELETED from / moved OUT of a watched dir (the "remove the
+//     evidence" tamper). These are directory-entry events reported against the marked directory; delivered
+//     in the unprivileged FID mode (FAN_REPORT_DFID_NAME) this watch uses — proven on the VM.
+//
+// FAN_MOVED_TO / FAN_CREATE (an ADD) are deliberately left to the poll: an added file is a weaker tamper
+// signal. Every event here is only a TRIGGER — fim.Scan re-diffs the cryptographic baseline to decide what
+// actually drifted, so a timestomped edit is still caught and a no-content change yields nothing.
+const fimWatchMask = unix.FAN_MODIFY | unix.FAN_CLOSE_WRITE | unix.FAN_DELETE | unix.FAN_MOVED_FROM | unix.FAN_EVENT_ON_CHILD
+
 // fimWatchSource is the REAL-TIME FIM producer (HIPS-4 increment 2): it watches the critical paths'
 // directories with unprivileged fanotify and, on a change, triggers an IMMEDIATE baseline re-check — so
 // tamper is caught in ~milliseconds rather than up to one poll interval late. The fanotify event is ONLY
@@ -35,13 +46,9 @@ func fimWatchSource(ctx context.Context, m *fim.Manifest, paths []string, opts f
 	}
 	defer unix.Close(fd)
 
-	// Content events on children of the watched dirs. FAN_CREATE/FAN_MOVED_TO are deliberately NOT
-	// included: they require FID reporting (a class this watch does not use, since the event is only a
-	// trigger). A newly-written file still fires FAN_CLOSE_WRITE, so a create-with-content is caught.
-	const mask = unix.FAN_MODIFY | unix.FAN_CLOSE_WRITE | unix.FAN_EVENT_ON_CHILD
 	marked := 0
 	for _, d := range fimWatchDirs(paths) {
-		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, mask, unix.AT_FDCWD, d); err != nil {
+		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, fimWatchMask, unix.AT_FDCWD, d); err != nil {
 			log.Warn("fim: real-time watch could not mark a directory — poll still covers it", slog.String("dir", d), slog.String("err", err.Error()))
 			continue
 		}

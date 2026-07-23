@@ -911,8 +911,14 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     (`FAN_REPORT_DFID_NAME` + `FAN_EVENT_ON_CHILD`) triggers an immediate `fim.Scan` on a change, so tamper
     is caught in ~ms instead of up to the poll interval; the poll stays the completeness backstop. The
     event is only the trigger — the cryptographic scan decides drift. Opt-in `OPENSHIELD_FIM_REALTIME`,
-    fail-to-wire. Proven (gated, unprivileged) + 2 mutation guards. Deferred: real-time delete
-    (`FAN_DELETE`, poll-caught now), inotify fallback, per-file marks.
+    fail-to-wire. Proven (gated, unprivileged) + 2 mutation guards. Deferred: inotify fallback, per-file marks.
+  - ✅ **FIM real-time DELETE (increment 4) SHIPPED (D236):** added `FAN_DELETE | FAN_MOVED_FROM` to the
+    real-time watch mask, so a deleted (or moved-out) critical file — the "remove the evidence" tamper —
+    fires the same immediate re-scan as a modify, caught in ~ms instead of up to a poll interval late. The
+    event is only the trigger; `fim.Scan` confirms the deletion → `FILE_DELETED`. **Confirmed the
+    unprivileged FID watch DOES deliver `FAN_DELETE` on kernel 6.8 — proven locally AND on the VM;** 1 mask
+    mutation guard. Deferred: `FAN_CREATE`/`FAN_MOVED_TO` real-time (ADD is weaker, poll-caught), per-file
+    inode marks, mount-wide privileged watch.
   - ✅ **FIM signed baseline (increment 3) SHIPPED (D229) — FIM is now tamper-EVIDENT end to end.** The
     baseline is operator-signed (domain-separated Ed25519, DLP signed-index model); the node verifies
     against a trusted public key before trusting it and refuses an unverifiable one
