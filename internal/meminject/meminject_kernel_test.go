@@ -1,3 +1,5 @@
+//go:build linux
+
 package meminject
 
 import (
@@ -11,6 +13,31 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// TestScanDetectsRealRWX maps a GENUINE rwx region via mmap and asserts ScanPID(self) finds it — a real
+// kernel mapping, not a fixture. Skipped where the kernel refuses an rwx mmap (hardened W^X). Linux-only
+// (unix.Mmap + /proc).
+func TestScanDetectsRealRWX(t *testing.T) {
+	before, err := ScanPID("/proc", os.Getpid())
+	if err != nil {
+		t.Skipf("cannot read own maps: %v", err)
+	}
+	baseline := len(before)
+
+	data, err := unix.Mmap(-1, 0, 4096, unix.PROT_READ|unix.PROT_WRITE|unix.PROT_EXEC, unix.MAP_ANON|unix.MAP_PRIVATE)
+	if err != nil {
+		t.Skipf("kernel refused an rwx mmap (hardened W^X): %v", err)
+	}
+	defer unix.Munmap(data)
+
+	after, err := ScanPID("/proc", os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) <= baseline {
+		t.Fatalf("a real rwx mapping was not detected: suspects %d → %d", baseline, len(after))
+	}
+}
 
 // TestMain lets the test binary re-exec itself as an rwx-mapping helper (for the cross-user scan test):
 // when MEMINJECT_RWX_HELPER is set it maps a genuine writable+executable region and sleeps, never

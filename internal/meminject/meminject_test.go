@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 const sampleMaps = `55e000-55e001 r-xp 00000000 08:01 100 /usr/bin/app
@@ -60,30 +58,5 @@ func TestScanAllSkipsUnreadable(t *testing.T) {
 	}
 	if unreadable != 1 {
 		t.Errorf("unreadable = %d, want 1 (pid 200's missing maps)", unreadable)
-	}
-}
-
-// TestScanDetectsRealRWX maps a GENUINE rwx region via mmap and asserts ScanPID(self) finds it — a real
-// kernel mapping, not a fixture. Skipped where the kernel refuses an rwx mmap (hardened W^X).
-func TestScanDetectsRealRWX(t *testing.T) {
-	// Baseline: the test process should have NO W+X region yet (Go's runtime is W^X).
-	before, err := ScanPID("/proc", os.Getpid())
-	if err != nil {
-		t.Skipf("cannot read own maps: %v", err)
-	}
-	baseline := len(before)
-
-	data, err := unix.Mmap(-1, 0, 4096, unix.PROT_READ|unix.PROT_WRITE|unix.PROT_EXEC, unix.MAP_ANON|unix.MAP_PRIVATE)
-	if err != nil {
-		t.Skipf("kernel refused an rwx mmap (hardened W^X): %v", err)
-	}
-	defer unix.Munmap(data)
-
-	after, err := ScanPID("/proc", os.Getpid())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(after) <= baseline {
-		t.Fatalf("a real rwx mapping was not detected: suspects %d → %d", baseline, len(after))
 	}
 }
