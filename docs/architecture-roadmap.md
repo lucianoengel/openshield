@@ -864,9 +864,15 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     persists the known-good manifest across restarts. Emits each drift as a content-free pipeline event
     (→ policy ALERT, audited) via `fimSource` in `openshield-engine`; no root (periodic hashing). Proven
     end-to-end on the real engine→worker path; 4 mutation guards. **Honest limit:** the manifest is a
-    plain (unsigned) file — a signed tamper-evident baseline is the next increment. Deferred: real-time
-    inotify/fanotify watch, remediation, xattr/ACL monitoring, recursive globs, Windows/macOS paths.
+    plain (unsigned) file — a signed tamper-evident baseline is the next increment. Deferred: remediation,
+    xattr/ACL monitoring, recursive globs, Windows/macOS paths.
     Memory/injection detection, ransomware canary, and application whitelisting remain separate XL bets.
+  - ✅ **FIM real-time watch (increment 2) SHIPPED (D228):** an unprivileged fanotify watch
+    (`FAN_REPORT_DFID_NAME` + `FAN_EVENT_ON_CHILD`) triggers an immediate `fim.Scan` on a change, so tamper
+    is caught in ~ms instead of up to the poll interval; the poll stays the completeness backstop. The
+    event is only the trigger — the cryptographic scan decides drift. Opt-in `OPENSHIELD_FIM_REALTIME`,
+    fail-to-wire. Proven (gated, unprivileged) + 2 mutation guards. Deferred: real-time delete
+    (`FAN_DELETE`, poll-caught now), inotify fallback, per-file marks.
 
 ### Platform (remainder, not in the immediate queue)
 - **PLAT-5 · Config management beyond env vars** — P2 · S–M. Typed config (file + env override),

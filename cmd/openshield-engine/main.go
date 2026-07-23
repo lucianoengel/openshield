@@ -252,6 +252,16 @@ func main() {
 		}()
 		log.Info("engine: FIM connector ENABLED — critical-file drift enters the pipeline (HIPS-4)",
 			slog.Int("paths", len(fimPaths)), slog.Duration("interval", iv))
+		// Real-time (HIPS-4 inc 2): fanotify-triggered immediate re-check so tamper is caught in ~ms,
+		// not up to one poll interval late. Additive to the poll (which stays the completeness backstop).
+		if os.Getenv("OPENSHIELD_FIM_REALTIME") != "" {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				fimWatchSource(ctx, manifest, fimPaths, fim.Options{}, envDuration("OPENSHIELD_FIM_DEBOUNCE", 200*time.Millisecond), events, log)
+			}()
+			log.Info("engine: FIM real-time watch ENABLED (poll remains the backstop)")
+		}
 	} else {
 		log.Info("engine: FIM inert (set OPENSHIELD_FIM_PATHS + OPENSHIELD_FIM_BASELINE to enable)")
 	}
