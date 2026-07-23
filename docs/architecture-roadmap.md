@@ -1,34 +1,30 @@
 # OpenShield architecture roadmap
 
-> Companion to [`decisions.md`](decisions.md). Two things live here: the **current build
-> state** (what's done, what's next) at the top, and the **design rationale** (the pipeline
-> lens, the frozen core, the tensions, the phased plan) as reference at the bottom. The middle
-> holds the **architecture decisions** that close the open forks and the **category backlog**.
+> Companion to [`decisions.md`](decisions.md). This file holds the **forward plan**: what
+> OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
+> backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D237.** The Round-34 audit
-> (2026-07-22) mutation-verified the D170–D199 shipment against live substrate and its findings
-> (`R34-*`) are all remediated; since then D200–D237 shipped the external-log SIEM ingest, the full
-> HIPS-4 endpoint-behavioral suite, transparent inline network prevention (TPROXY + DNS sinkhole,
-> VM-proven), the content-signature IPS, CASB, and SOAR-1 incident notify. See *Round-34 audit
-> findings* below for the historical record, and *Audit history* at the end for what each round
-> covered.
+> **Authoritative status is this file at `HEAD`, current through D240.** History (round-by-round
+> audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
+> not re-carried here. The compact *Done ledger* below records what shipped so it is not
+> re-proposed; open git log for the detail behind any `D<n>`.
 
 ---
 
 ## How the builder consumes this
 
-- **Re-verify before proposing.** The repo moves fast (a builder commits concurrently). Open the
-  cited files at `HEAD` and confirm the gap still exists before starting a ticket. Line numbers are
-  as-of-audit and drift — treat `file:symbol` as the anchor, re-locate if a line moved.
-- **Work the queue in order.** *Next — the active queue* below is prescriptive. Finish it before
-  pulling from *Backlog by category*.
+- **The MVP line governs.** Everything under *MVP infrastructure* is required before the UI starts.
+  Everything under *Enrichment backlog* is a post-MVP plugin that lands on the frozen core without
+  gating the MVP. Work the MVP queue top-to-bottom; pull enrichment only when a lane is genuinely
+  blocked or the owner redirects.
+- **Re-verify before proposing.** The repo moves fast. Open the cited files at `HEAD` and confirm
+  the gap still exists before starting a ticket. Treat `file:symbol` as the anchor; line numbers drift.
 - **One OpenSpec change per ticket** (`openspec-propose` → implement → `openspec-archive`). Ticket
-  IDs (`IDENT-1`, `DLP-5b`, `ADR-6`…) are stable handles — use them in the change name and commit.
+  IDs (`XDR-4`, `SOAR-4`, `PLAT-6`…) are stable handles — use them in the change name and commit.
 - **Every acceptance test must drive the REAL runtime path**, never a mock built from the code's own
   assumptions. This project's signature failure is *"verifies against its own assumptions"* — a test
-  that passes because it shares the code's wrong premise (it has recurred in nearly every audit
-  round; see the queue). For each negative security property, add the **mutation that would let the
-  bug through** and prove the test catches it.
+  that passes because it shares the code's wrong premise. For each negative security property, add the
+  **mutation that would let the bug through** and prove the test catches it.
 - **The frozen core governs.** If a ticket seems to force a change to `core.Dispatcher` / `State` /
   `Stage` / `Registry` / the `Enforcer` interfaces / `OnOutcome` / the ledger / the D10/D29 content
   boundary, STOP and re-run the D26/D69 fitness reasoning — capability lands as a producer, classify
@@ -36,633 +32,98 @@
 
 ---
 
-## Status at a glance (current through D237)
+## What OpenShield is (status at a glance, through D240)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
 correlation, case/incident workflow, and a tamper-evident hash-chained evidence ledger above it. DLP is
-one detection domain, not the center of gravity. **Honest caveat (updated through D237):** detection
-*breadth* is cross-domain and *depth* is deep in several domains (hardware attestation, EDM/IDM,
-threat-intel IPS, full HIPS-4 endpoint-behavioral suite, transparent inline network prevention). Since R34
-the shipped depth has been wired together AND extended: the XDR-1 entity graph is **populated (D203)** and
-an entity-keyed **unified-alert stream (XDR-2, D213)** exists, though `Correlate()` cross-domain fan-in over
-it is still the open XDR-4 work. **SOAR-1 (D220) closed the "incidents never notify" hole** — a
-materialized incident now pages automatically; the rest of SOAR (playbooks, approvals, MTTA/MTTR) is still
-unstarted. The remaining frontier is **cross-domain correlation depth (XDR-4+), SOAR orchestration, and the
-UI** — the per-domain detection planes are now broadly real.
+one detection domain, not the center of gravity. The per-domain detection planes are now broadly real
+and deep in several domains (hardware attestation, EDM/IDM, threat-intel + content-signature IPS, the
+full HIPS-4 endpoint-behavioral suite, transparent inline network prevention). **The remaining frontier —
+and the whole of the MVP queue below — is cross-domain correlation depth, SOAR orchestration + live
+response, a ZTNA client, and packaging: turning a set of strong detectors into one coherent,
+deployable, correlated product. The UI comes after all of that is built and tested.**
 
-| Category | Maturity | One-line reality (R34-verified) |
+| Category | Maturity | One-line reality |
 |---|---|---|
-| **XDR** (umbrella) | ~42% | Entity graph now **WIRED (XDR-1-WIRE, D203)**: enrollment + verified ingest populate the device entity, the gateway dual-credential path links device⋈user — the store is no longer orphaned, and two real producers converge (test #1). Ingest now also enforces the subject contract server-side (R34-12). **XDR-2 increment 1 (D213): a normalized entity-keyed `unified_alerts` stream + writer + `AlertsForEntity`, first producer (peer-UEBA) wired** — the alert⋈device-entity join proven. Next: wire the remaining domain producers (DLP/HIPS/NIPS/ZT) + XDR-4 correlate over it → XDR-5/6/7. |
-| Zero Trust (ZTNA) | ~75% | **Full hardware attestation chain (ZT-1, D183–191) is REAL and swtpm-proven** end-to-end — TPM quote, EK→AK credential activation, measured-boot PCR policy, NATS transport, continuous re-attestation, network self-enrollment; `Attested` set only by gateway verification. + live JWKS refresher (D182) + RBAC tiers (D179). **The R34 trust-bootstrap holes are now CLOSED:** EK-certificate anchor binds enrollment to a manufacturer-certified TPM (D218); a single-use pre-auth enroll token gates self-enrollment; the attestation verdict now EXPIRES (R34-1 TTL); JWKS is HTTPS-only (R34-3); tokens are sender-constrained via DPoP + clock-skew leeway (R34-10). Remaining: a ZTNA client (ZT-4/5/6), a per-DEVICE posture credential (posture is per-user today). |
-| DLP | ~62% | **Detection depth + supply-chain integrity:** EDM single-value (D193) + multi-cell record (D197) + IDM document-fingerprint (D198) + exfil-channel awareness (D194) + keyword-proximity passport/DL (D199) all REAL & boundary-honored. **Signed indexes (D204, ADR-9)**: the worker verifies an operator signature before loading; `openshield-dlp-index` is the build+sign tool. **Recursive archive extraction (D214)**: a sensitive file inside a nested zip is classified (double-zip evasion closed). **More national IDs (D215)**: India Aadhaar (Verhoeff) + UK NINO. **Content-aware CASB (DLP-2, D222)**: the network plane now blocks sensitive data bound for an UNSANCTIONED cloud service (cloud-upload channel ANDed with content). Still no clipboard/print/screenshot producers, no OCR; DLP-6 endpoint coaching absent. |
-| NIPS / NTPS | ~55% | **HTTP is a real inline IPS** — NIPS-2 threat-intel engine (D192) matches flow dest/URI against an operator IOC feed and a policy blocks known-bad. **Content-signature engine (D221)**: the worker matches literal+regex signatures against the flow BODY (content-free hits), crossing ADR-8's "without signatures it is not an IPS" line for CONTENT. NIPS-4 response-body inspection shipped observe-only (D200). **IOC feed HOT-RELOADS from a local file (D206) OR a remote URL (D209), serve-stale on failure.** **DNS is a preventive inline sinkhole** (NIPS-8: NXDOMAIN a blocked domain, D231) **with a transparent :53 redirect covering unconfigured clients (D234) + a self-healing bypass watchdog (D235)** — all root-gated, VM-proven. **Transparent TPROXY inline IPS (NIPS-1) drops/splices a redirected flow at L4 by dst-IP/SNI/payload (D225-227) and SELF-INSTALLS its redirect rules (D237, VM-proven).** Still: **SMTP parse-only** (not a filtering MTA), HTTP/1.1 only, no full Suricata/Snort grammar, no STIX/TAXII envelope or authed feed, no JA3. |
-| SIEM | ~46% | **Alert lifecycle unified + external-log ingest:** `peer_alerts` gains severity/status/dedup_key (6b, D178), webhook HMAC replay-protection (8b, D176), notify dedup (12, D172; durable across restart D207), pruned UEBA baselines (5b, D177), ATT&CK mapping (7, D201). **External-log ingest live (SIEM-4): CEF-over-syslog (D202/D205) + AWS CloudTrail cloud-JSON (D208) + WEF Windows-XML (D211) parsed, persisted, and operator-queryable via `GET /logs` (D210).** **Field-level hunting live (D212): every parsed field (CEF extensions, CloudTrail, WEF EventData) stored JSONB + searchable via `GET /logs?field=k:v` across sources.** Still: no UI, free-text search over `raw` + cross-vendor field-name normalization are follow-ons. |
-| HIPS | ~70% | **Big jump — the full HIPS-4 endpoint-behavioral suite shipped and the exec-deny plane is REAL on a live kernel.** Inline exec PREVENTION works: `DENY_EXEC` logic (D217) + the kernel `FAN_OPEN_EXEC_PERM` producer (D224, VM-proven) + default-deny application whitelisting (D230, VM-proven). **All four HIPS-4 subsystems shipped:** FIM (D223 baseline / D228 real-time / D229 signed / D236 real-time delete), ransomware canary (D232), application whitelisting (D230), memory-injection detection (D233). Plus HIPS-8 trusted-identity critical-process guard (D174) + HIPS-7 pid-reuse revalidation (D175, R34-5-hardened). Remaining: eBPF/LSM real-time hooks, a JIT allowlist for legit W+X, per-process ransomware attribution. |
-| **SOAR** | ~20% | **SOAR-1 (D220) closed the notify gap — a materialized incident now pages a human automatically** (insert-vs-update decided race-free in SQL; `inc_<id>` durable dedup so one incident pages once). Still a case+notify shell otherwise: four-eyes cases + materialized incidents with ack + async multi-sink HMAC webhooks, but **no playbook engine, no approvals table beyond case-close, no MTTA/MTTR (ack timestamps exist — a ~1-day metrics query), no response-intent seam.** ADR-12 tiers owner-approved; SOAR-2…9 unstarted. |
-| NAC · VPN | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. Not in the headline category set (XDR/DLP/HIPS/NTPS/SIEM/ZT/SOAR). |
+| **XDR** (umbrella) | ~42% | Entity graph WIRED and populated by real producers (enrollment + verified ingest resolve device⋈user, D203); a normalized entity-keyed `unified_alerts` stream + first producer (peer-UEBA) shipped (D213). **MVP gap:** wire the remaining domain producers, correlate cross-domain, build the incident timeline + coordinated response (XDR-2/4/5/6/7). |
+| Zero Trust (ZTNA) | ~75% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. **MVP gap:** an agent-brokered ZTNA client (ZT-4). |
+| DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **Enrichment gap:** OCR, non-file endpoint producers (clipboard/print/screenshot). |
+| NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
+| SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
+| HIPS | ~70% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: `DENY_EXEC` logic + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. **Enrichment gap:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
+| **SOAR** | ~20% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). **MVP gap:** the whole orchestration story — scheduled correlation, four-eyes approvals, a playbook engine, enrichment, metrics, the signed response-intent seam, and integration runners (SOAR-2…9). |
+| NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
-**Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring
-is real end-to-end and is the platform's strongest asset. Do not regress it.
-
----
-
-## Round-34 audit findings (verified through D199, three independent agents on live substrate)
-
-The headline: **the D170–D199 shipment is overwhelmingly REAL, not false-premise** — the security
-foundations (IDENT-1 canonical identity, the full ZT-1 hardware-attestation chain, the JWKS refresher,
-RBAC tiers, EDM/IDM/exfil detection, the NIPS-2 IPS, the SIEM lifecycle schema, the hash-chained ledger)
-all carry mutation-covered tests that drive the **real** path (real swtpm, real Postgres, real
-JetStream, real TLS). The recurring *"verifies against its own assumptions"* pattern surfaced in only
-**two** places this round (XDR-1 orphaned + soft join test; HIPS-7 unproven plumbing). The debt has
-shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durability gaps**.
-
-### Verification ledger
-- **REAL & mutation-covered** (do not re-open): IDENT-1 (D170) · ZT-1 attestation chain (D183–191) ·
-  ZT-2b JWKS (D182) · PLAT-3 RBAC (D179) · SIEM-5b/6b/8b/12 (D177/178/176/172) · DLP-3 EDM+multi-cell+IDM
-  (D193/197/198) · DLP-2 exfil-channel (D194) · DLP-7 proximity (D199, precision defect below) ·
-  HIPS-8 (D174) · NIPS-2 (D192) · XDR-3 (D196, client-side) · the ledger crown jewel (un-regressed).
-- **REAL but PARTIAL / UNWIRED** (the new debt — see tickets): XDR-1 entity graph (D195) real store,
-  **zero runtime callers** · HIPS-7 (D175) real enforcer, **observation→kill plumbing unproven** ·
-  PLAT-2 (D180) real consumer, **producer never wired into a binary** · PLAT-2b (D181) real election,
-  **conn-death failover untested**.
-
-### Net-new issues (R34) — fold each into the owning ticket; ordered by severity
-
-> **Remediation status (updated 2026-07-23).** ✅ DONE: R34-1, R34-3, R34-4, R34-5, R34-6,
-> R34-7, R34-8, R34-9, R34-10, R34-11, R34-12, and R34-2 **both parts** (part 1 pre-auth token ee92316;
-> part 2 EK-cert-chain anchor 2d9deae, D218) — commits 77ce96c batch-1, 874875b, df65e94, 2ec84fa,
-> 4c793aa, ee92316, 79d873a, 2d9deae. ⏳ TODO: R34-13 (LOW bundle: per-index salt). **Test proposals
-> (12): ✅ DONE #1,#2,#3,#4,#5,#6,#7,#8,#9,#10 (Incident→notify, D220),#12 (see the numbered list below
-> for the test each maps to). ⏳ PENDING #11 (cross-domain correlation — needs XDR-4).**
-
-- **R34-1 · ✅ DONE (77ce96c) · Attestation verdict never expires — P1 (HIGH) · gateway/attestation.go.** `IsAttested`
-  never TTLs; a compromised endpoint that simply *stops* attesting stays `Attested=true` forever
-  (`AttestLoop` logs failures, never drops the gateway verdict). *Fix:* stamp `attested_at`, expire
-  after N miss-intervals; a drifted/silent device loses attestation within one cycle. *Mutation:* attest
-  once, stop, advance clock → `IsAttested` must flip false.
-- **R34-2 · ✅ DONE (part 1 ee92316 pre-auth token; part 2 2d9deae/D218 EK-cert-chain anchor) — P1 (HIGH) · attest/ekcert.go,
-  attestenrollnet.go.** Was: `handleEnroll` trusted any EK bytes + any device-chosen `Subject`; credential
-  activation only proves EK/AK co-residence, so any device with a co-resident TPM (incl. swtpm) could
-  self-enroll under any pseudonym. Now the pre-auth token gates who-may-enroll AND, when
-  `OPENSHIELD_EK_ROOTS` is configured, `attest.VerifyEKCert` requires the EK cert to chain to a
-  manufacturer root and be bound to the submitted EK public key — refused before any challenge. The
-  ZTNA-vs-toy line for attestation, closed. **Follow-on (not gating): endpoint-side EK-cert retrieval
-  from the TPM NV index + shipping real vendor root bundles** (swtpm has no vendor cert, so the positive
-  test path uses a synthetic manufacturer cert over the real swtpm EK).
-- **R34-3 · ✅ DONE (77ce96c) · JWKS accepts `http://` — P1 (HIGH) · gateway/identity, main.go:~281.** Plaintext JWKS fetch =
-  key injection = full auth bypass. *Fix:* enforce `https://` at construction; add failed-fetch backoff
-  so an unknown-`kid` flood during an IdP outage can't drive one fetch per trigger.
-- **R34-4 · ✅ DONE (2ec84fa) · PLAT-2 JetStream producer unwired — P1 (HIGH for the durability claim) · transport.** No
-  production binary calls `UseJetStream()`; agents publish core NATS (at-most-once), so the "durable, no
-  loss" claim is inert in prod. Nak has no backoff (hot-loops on a DB outage). *Fix:* wire the producer
-  behind the existing env gate + default-flip plan; add Nak backoff. *Mutation:* `Nak→Ack` survives all
-  tests today.
-- **R34-5 · ✅ DONE (df65e94) · HIPS-7 pid-reuse plumbing has zero mutation coverage — P1 (HIGH) · execaudit/source.go:78,
-  engine.go:251.** Zeroing `StartTicks` at the source **or** short-circuiting the engine's `pid:ticks`
-  build passes the entire suite green — nothing proves the real event carries the ticks the enforcer
-  revalidates, so the kill silently degrades to best-effort. *Fix:* the R34 test below.
-- **R34-6 · ✅ DONE (4c793aa) · Leader abandons contention on a transient DB blip — P2 (MED/HIGH) · ha/leader.go:43,
-  main.go:84.** `acquire()` returns on any error and `main.go` swallows it, so a momentary Postgres blip
-  drops the instance out of the election permanently; conn-death failover (the ticket's core claim) is
-  untested; no fencing token. *Fix:* retry-with-backoff on transient errors; add the failover test below.
-- **R34-7 · ✅ DONE (77ce96c) · Lossy automated-action audit — P2 (MED) · engine.go:276.** `_ = e.ledger.Append(...)` drops
-  the enforcement-audit error silently, violating the `Ledger.Append` contract for exactly the automated
-  actions that must be evidentiary. *Fix:* log+count the failure; never silently drop a ledger append.
-- **R34-8 · ✅ DONE (77ce96c) · Untrusted-size allocation in EDM/IDM loaders — P2 (MED) · edm_record.go:227, idm.go:235.** A
-  24-byte malformed blob with `m=0xFFFFFFFF` triggers a ~16 GB `make([]uint32, m)` (OOM/DoS) before any
-  length check. *Fix:* bound `m` by remaining blob length (as `LoadEDMIndex` already does). Add the fuzz
-  test below.
-- **R34-9 · ✅ DONE (874875b) · Unconfigured server leaks the notify queue — P2 (MED) · controlplane/notify.go:84.** `New()`
-  sets `notify.Nop{}` (non-nil) but `deliverLoop` only starts in `SetNotifier`; with no webhook
-  configured every peer alert enqueues into a never-drained 256-slot queue → "queue full" stderr spam +
-  inflated `NotifyDropped`. *Fix:* only enqueue when a real delivery loop runs.
-- **R34-10 · ✅ DONE (79d873a) · Bearer tokens replayable across devices — P2 (MED) · identity/oidc.go.** Alg allow-list is
-  correct (rejects `none`/HS*), but no jti/replay tracking, no clock-skew leeway, no device binding
-  (cnf/DPoP) — any enrolled device replays another user's token until exp. *Fix:* jti seen-set + DPoP/cnf
-  device binding + small skew leeway.
-- **R34-11 · ✅ DONE (77ce96c) · DLP-7 `dlValueRe` over-broad — P3 (MED) · classify/context.go:61.** `\b[A-Z0-9]{5,20}\b`
-  counts ordinary all-caps words as license values ("DRIVER LICENSE NUMBER D1234567 EXPIRES SOON" → 3),
-  so count-threshold policies over-fire on any all-caps document. *Fix:* require ≥1 digit / drop
-  pure-alpha candidates. Add the precision regression below.
-- **R34-12 · ✅ DONE (874875b) · Ingest does not enforce the subject contract — P3 (MED) · controlplane handleSigned.** XDR-3
-  validates only inside `engine.attribute`; a legacy/rogue agent can ship subject-less events straight
-  into `fleet_telemetry`. *Fix:* validate at ingest (server-side), not just client-side.
-- **R34-13 · 🟡 MOSTLY DONE (e8f12d6) · Minor/LOW (fold in):** ✅ NIPS `matchURI` min-length,
-  ✅ `procIdentityOf` tested, ✅ `EnsureAppLogin` re-asserts NOSUPERUSER/NOCREATEROLE/etc, ✅
-  "k-anonymized" privacy claim corrected (honest membership-oracle limit). ✅ SIEM-12 durable dedup DONE (D207: `notify_dedupe`, survives restart). ✅ incidents-never-`emit` = SOAR-1 **DONE (D220)**. **R34-13 fully closed.** Original text:  incidents never `emit` a notification (`incidents.go`) — this **is**
-  SOAR-1, promote it · SIEM-12 dedup is per-process memory (restart double-pages; `dedup_key` exists —
-  make it durable) · "k-anonymized" overstates privacy (unsalted SHA-256 → offline membership recovery
-  on low-entropy values; document or per-index salt) · NIPS `matchURI` accepts `uri /` (matches every
-  flow — add a min-length parse check) · `procIdentityOf` untested (trivial) · `EnsureAppLogin` existing-
-  role branch should re-assert `NOSUPERUSER NOCREATEROLE`.
-
-### R34 gap-closing & integration test proposals (each must drive the REAL path — no seeded literals)
-1. ✅ DONE (D203) `TestEnrollAndIngestConvergeOnOneEntity`/`TestIngestPopulatesDeviceEntity`. **Entity-join E2E** (with the XDR-1 wiring below): real engine `SetSubject` → fanotify event → signed
-   transport → `handleSigned` → assert `xdr.Resolve(KindDevice, storedSubject)` equals the id a second
-   domain's real producer resolves. **Kills the tautology in `TestCanonicalJoin`.**
-2. ✅ DONE (874875b) `TestIngestRejectsSubjectlessEvent`. **Server-side subject contract** (R34-12): publish a subject-less event through the signed transport;
-   assert ingest rejects/quarantines. Mutation: dropping the ingest check must fail it.
-3. ✅ DONE (df65e94) `TestKillTargetCarriesStartTicks`+`TestScannerEmitsCapturedStartTicks`. **HIPS-7 observation→kill** (R34-5): dispatch a real `EVENT_KIND_PROCESS_EXEC` with `StartTicks`
-   through `Engine.Process` to a recording `TargetedEnforcer`, assert target == `"pid:ticks"`; + an
-   execaudit `Scanner` test asserting the emitted event carries the captured ticks. Both must FAIL under
-   `StartTicks=0` / `if false` mutations.
-4. ✅ DONE (77ce96c) `TestAttestationVerdictExpires`. **Attestation freshness** (R34-1): real swtpm + NATS, attest once, stop, advance clock → assert
-   `IsAttested`→false (drives a verifier TTL that doesn't exist yet).
-5. ✅ DONE (2d9deae, D218) `TestEnrollRefusesUncertifiedEK`. **EK-cert-chain refusal** (R34-2): a real-EK
-   device with no/rogue cert → `handleEnroll` refuses and never enrolls (real NATS enroll path, isolated
-   so only the cert guard can refuse); + `VerifyEKCert` unit tests + a swtpm accept path.
-6. ✅ DONE (2ec84fa) `TestJetStreamRedeliversOnDBFailure`. **JetStream redelivery on DB failure** (R34-4): embedded JS + real PG, close the pool mid-backlog →
-   assert Nak/redeliver then persist. **Kills the `Nak→Ack` mutation.**
-7. ✅ DONE (4c793aa) `TestLeaderRecoversFromConnDeath`. **Leader conn-death failover** (R34-6): from a 2nd pool `pg_terminate_backend()` the leader's held
-   conn → assert `leaderCtx` cancels within one poll and instance 2 is elected. **Kills the `hold()`
-   `cancel()` deletion mutation.**
-8. ✅ DONE (77ce96c) `FuzzLoadRecordIndex`+loader alloc tests. **Loader fuzz** (R34-8): `go test -fuzz` over `LoadRecordIndex`/`LoadDocumentIndex` — error-not-panic
-   and bounded allocation on arbitrary blobs.
-9. ✅ DONE (D207) `TestFullNotifyPathDeliversOnce` (webhook, end-to-end). **Full notify path** (SIEM-12 real coverage): drive `handleSigned` twice with re-sent above-threshold
-   telemetry against an httptest webhook → assert exactly **one** POST (covers
-   `observePeer→emit→deliverLoop→Webhook`, which no current test drives end-to-end).
-10. ✅ DONE (D220) `TestMaterializeNewIncidentNotifiesOnce` + `TestDistinctLaterIncidentPagesAgain`. **Incident→notify** (SOAR-1): `MaterializeIncidents` creating a new incident delivers exactly one
-    deduped notification; re-materializing the same open incident delivers zero.
-11. ⏳ PENDING (needs XDR-4). **Cross-domain correlation** (with XDR-4): seed alerts under two `dedup_key` namespaces linked to one
-    entity via real `Link` → assert one incident. Mutation: dropping the entity join must fail it.
-12. ✅ DONE (D207) `TestWorkerLoadsEDMIndexAndMatches` (real worker RPC). **Worker EDM integration** (D193 last untested link): exec the real `openshield-worker` with
-    `OPENSHIELD_EDM_INDEX` at a `Marshal`'d blob and assert an EDM hit over the real RPC/stdin path.
-13. ✅ DONE `TestDPoPSenderConstraint` (identity/dpop_r34_test.go). **Token replay across devices** (R34-10):
-    a sender-constrained token replayed WITHOUT the bound DPoP key (or with a mismatched proof) is refused
-    — "any enrolled device replays another user's token" is closed.
-14. ✅ DONE `TestGatewayThreatFeedHotSwap` (gateway/threat_reload_test.go) + `TestWatchFeedReloadsOnChange`
-    (nips/reload_test.go). **IOC feed reload** (NIPS-2): swapping the feed at runtime makes a
-    previously-allowed flow blocked with no gateway rebuild — the watcher re-entry, not a fresh gateway.
+**Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring is
+real end-to-end and is the platform's strongest asset. Do not regress it.
 
 ---
 
-## ✅ Done — verified closed (mutation-confirmed on live substrate). Do NOT re-open or re-propose.
+## The MVP cut
 
-Confirmed by mutation-reintroduction on live Postgres/NATS/TLS across Rounds 31–32 — reverting each
-guard flips its test to FAIL.
+**MVP = a coherent, deployable, correlated XDR + SOAR with live coordinated response** — not a bag of
+detectors. Concretely, the MVP is reached when:
 
-- **Security (Bucket S):** SEC-1 (sign/verify risk+posture channels) · SEC-2 (enrollment can't
-  overwrite a key or un-revoke) · SEC-3+SEC-11 (dead-man's-switch & operator views count only
-  *verified* telemetry) · SEC-4 (no silent server-side NATS loss — pending-limits + counted error
-  handler) · SEC-5 (purge/tombstone honors `legal_holds`) · SEC-6 (non-owner ledger DB role, *wired*
-  via PLAT-6b — the append-only boundary now protects the running product) · SEC-7 (no-follow safe
-  reader) · SEC-8 (operator-search input validation, 400s + caps) · SEC-9 (access-proxy header
-  hygiene + trustworthy identity header) · SEC-10 (persist restart-fragile state; monotonic
-  `context_version`) · SEC-12 (posture signature *bound to the reporting agent's key* — the signature
-  binding is correct; note the subject-key wiring is still inert in prod, tracked as IDENT-1).
-- **Honesty (Bucket H):** HON-1 (worker loads + verifies signed custom rules) · HON-2 (case-open
-  places the legal hold SEC-5 consumes) · HON-3 (engine registers enforcers under
-  `OPENSHIELD_ENFORCE`; real file moved) · HON-4 (agent-signed device-posture producer).
-- **Platform:** PLAT-4/4b (Prometheus metrics, low-cardinality, behind constant-time bearer auth +
-  non-loopback bind guard) · PLAT-6b (restricted `openshield_app` role wired across compose/systemd/
-  e2e) · PLAT-8 (DSAR / data-subject access request).
-- **Zero Trust:** ZT-2 (OIDC/JWT verifier on-path at the access proxy; `alg=none`/HS-confusion
-  rejected; iss/aud/exp/nbf enforced) · ZT-3 (dual-credential logic: device cert + user token, posture
-  keyed by device — *logic correct, but blocked in prod by IDENT-1*).
-- **DLP:** case/incident workflow (DLP-4) · compliance packs load and change a Decision (DLP-5 —
-  *composition bug tracked as DLP-5b*) · detector breadth: phone, US EIN/NPI/routing-ABA, Canadian
-  SIN, UK NHS (DLP-7 partial) · bare-run detector FP bounds.
-- **NIPS:** NIPS-3 (DNS + SMTP parsers wired to live listeners) · SMTP listener hardened (bounded
-  reader + deadline + accept semaphore — *test is false-premise, tracked as NIPS-3-SMTP-TEST*) ·
-  NIPS-7 (shared `connectors/limiter` rate-limits DNS + syslog before the ledger write) · ENG-1
-  (network-content → sandboxed worker classify path) · ENG-2 (parser-panic `recover()` at per-item
-  boundaries; D35 in-process deviation documented).
-- **SIEM:** SIEM-1 (`/events` search mounted on the served TLS mux, operator-gated) · SIEM-2
-  (cross-host `agent_id` from the verified envelope) · SIEM-6 (alert lifecycle: severity + ack behind
-  operator mTLS) · SIEM-8 (multi-sink fanout + constant-time HMAC webhook + async off-ingest) ·
-  SIEM-11 (materialized incidents with id/state + `NULLIF` host-count) · SIEM-5 (persisted UEBA
-  baselines, reload-before-ingest) · SIEM-3/4 (case workflow, syslog ingest).
-- **HIPS:** HIPS-5a/b/c (Phase E wired end-to-end: real `execaudit` source → engine extracts
-  `ProcessSubject.pid` by event kind → real `KillEnforcer`) · HIPS-6 (detector 1-char bypasses closed:
-  encoded-PS prefix match, auditd hex-decode, pipe-to-any-shell) · HIPS-3 (`KILL_PROCESS` typed verb
-  landed under the T1 red line; `DENY_EXEC` deliberately deferred).
+1. **Every domain's detections land in one entity-keyed alert stream and correlate cross-domain** into
+   one incident per attack, with a tamper-evident timeline (XDR lane).
+2. **Incidents drive automated orchestration** — scheduled correlation, playbooks over a closed step
+   registry, four-eyes approvals, enrichment, and metrics — and **live containment** flows through the
+   signed Response-Intent seam and off-pipeline integration runners (SOAR lane, ADR-12 all three tiers).
+3. **A ZTNA client** brings agent-brokered access, closing the identity story (ZT-4).
+4. **The platform is production-shaped:** durable ingest is the default, config is typed and validated,
+   and there is a signed, packaged, deployable release; the cross-platform observe path is finished
+   (enforcement stays owner-gated) (PLAT lane).
+
+**Then, and only then, the UI** (PLAT-1) — it is deliberately last, built over a proven, tested,
+stable backend.
+
+Everything else — more detectors, more file formats, more protocols, more countries, more log sources,
+richer NIPS grammar, endpoint DLP producers, SAML — is **enrichment**: additive producers and classify
+plugins on the frozen core. None of it gates the MVP; it lands opportunistically or after the UI.
 
 ---
 
-## 🔴 Next — the active queue (in priority order)
+## 🔴 MVP infrastructure — the required queue
 
-Work top to bottom. All unblocked (no owner gate). Each ticket names the ADR it implements where one
-applies.
+Work the four lanes below. Within a lane, top-to-bottom. Lanes can interleave where dependencies allow.
+Each ticket names the ADR it implements where one applies, and its `Accept` is the real-path test that
+closes it.
 
-> **R34 note:** every ✅ SHIPPED ticket below (D170–D199) is now **audit-verified REAL** — leave them
-> closed. The queue's live work is the **R34 priority lane** immediately below (close the trust-bootstrap,
-> durability-wiring, and unwired-code gaps the shipment left) followed by the strategic XDR/SOAR lanes.
+### Lane A · XDR — cross-domain correlation & coordinated response
 
-### ✅ R34 priority lane — COMPLETE (all findings remediated; kept as a record)
-Every item in this lane is done (mutation-verified on live substrate — commits in the *Remediation status*
-block above). Left here as a closed record, not active work.
-1. **R34-4 · Wire the JetStream producer** ✅ DONE (2ec84fa) — durable ingest wired + Nak backoff; the
-   VerifySigned seq-advance-before-insert replay bug fixed (verify+insert in one tx). *Test #6.*
-2. **R34-1 · Attestation TTL** ✅ DONE (77ce96c) — the verdict now expires. *Test #4.*
-3. **R34-2 · EK-cert-chain anchor + enroll authz** ✅ DONE (part 1 ee92316, part 2 2d9deae/D218) — the
-   attestation-vs-toy line, closed. *Test #5 (`TestEnrollRefusesUncertifiedEK`).*
-4. **R34-3 · HTTPS-only JWKS + outage backoff** ✅ DONE (77ce96c).
-5. **R34-5 · Prove the HIPS-7 pid-reuse plumbing** ✅ DONE (df65e94) — engine + execaudit halves. *Test #3.*
-6. **XDR-1-WIRE · Populate the entity graph** ✅ DONE (d0319d0, D203) — enrollment + verified ingest
-   resolve the device entity; the gateway dual-credential path links device⋈user; all best-effort/derived.
-   *Test #1 landed.* Unblocked **XDR-2 (D213, shipped).**
-7. **R34-6 · Leader failover hardening** ✅ DONE (4c793aa) — retry transient DB errors, conn-death test. *Test #7.*
-8. **R34-7/8/9/12 · Correctness cluster** ✅ DONE — ledger-append error surfaced · loader alloc bound
-   (*Test #8*) · notify-queue leak fixed · server-side subject contract (*Test #2*).
-9. **R34-10/11/13 · Hardening tail** ✅ DONE — token replay closed via DPoP (79d873a) · DLP-7 digit-required
-   precision · the LOW cluster (durable dedup D207, `matchURI` min-length); residual: per-index salt (LOW).
+The headline. Turns per-domain alerts into one correlated incident with a tamper-evident timeline and
+one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-7) → XDR-7.**
+(XDR-1 entity graph + XDR-3 subject stamping already shipped — see Done ledger.)
 
-### IDENT-1 · Canonical device identity — fixes the inert posture chain — P0 (HIGH) · gateway+agent+enroll · M
-- **✅ SHIPPED D170 (2026-07-22) — pending owner audit.** New zero-dep `internal/pseudonym.Of` is the one
-  shared derivation used by the posture publisher, the roster loader (`LoadPostureRoster` keys by
-  `pseudonym.Of(agentID)`), and the proxy (`identity.pseudonym`); the fleet-agent publishes posture under
-  `pseudonym.Of(agentID)`; device certs carry `CN = agentID` (ADR-6). Proven on the REAL path (no seeded
-  literal) + three mutation guards (roster/producer/proxy each flips the e2e to FAIL); the two
-  false-premise tests were repaired to drive producer→subscriber→store. Unblocks ZT-3 in prod + ZT-1/XDR-1.
-- **Confirmed by three independent agents.** SEC-12's signature binding is correct, but the feature is
-  **dead on the real path**: the fleet-agent stores posture under the raw `OPENSHIELD_SUBJECT`
-  (default = raw agentID — `cmd/openshield-fleet-agent/main.go:44,133`, stored raw at
-  `internal/gateway/posture.go:99`), while the access proxy looks it up under `pseudonym(CN)` =
-  `"sub_"+hex(sha256("zt-client-subject:"+CN)[:12])` (`access.go:176`, `identity/identity.go:83`,
-  **unexported, unshared**). `rawAgentID ≠ sub_<hash>` → the verified, stored posture is never found →
-  `HasPosture=false` → any posture-gated policy denies *every* real compliant device. ZT-3's advertised
-  "finance user on a compliant device → 200" is unreachable. Tests pass only because they seed
-  `Set(pseudonym(CN))` and read the same literal — the recurring pattern, masking a HIGH prod bug.
-- **Fix (ADR-6):** canonicalize on the enrolled agent identity; provision RoleClient certs with
-  `CN = agent identity`; export ONE shared pseudonym derivation used by enrollment, the posture
-  publisher, AND the access proxy. Re-key the SEC-12 roster/`keyFor` to the canonical pseudonym too.
-- **Verify:** an e2e that publishes via the *real* `posture.Publish` and asserts `Get(pseudonym(CN))`
-  hits; a compliant device reaches a posture-gated upstream; a non-compliant device is denied.
-
-### DLP-5b · Compose policy packs, don't replace the default — P1 · policy · M
-- **✅ SHIPPED D171 (2026-07-22) — pending owner audit.** `policy.Stage` now holds N members;
-  `NewComposite` composes default + packs + optional operator custom under a most-restrictive-wins
-  data-verb lattice, combined in Go (each module evaluated independently). `SelectFromEnv`
-  (`OPENSHIELD_POLICY_PACK[S]`/`_CUSTOM`) wired into engine+gateway — packs COMPOSE, never replace. A
-  compliance pack emitting a process verb is a hard error. Proven: every pack keeps the default's
-  behavioral + CPF alerts; 3 mutation guards (replace/lattice/pack-guard). Implements ADR-5.
-- `NewPack` swaps `default.rego` wholesale (`internal/policy/embed.go`), and the pack files omit the
-  HIPS `behavioral_alert` rule and the CPF/card strong-detector alert — so **enabling PCI silently
-  turns off behavioral process alerting** (and each pack drops the detectors outside its scope). No
-  test asserts the default protections survive pack selection, because they don't.
-- **Fix (ADR-5):** compile default + selected packs + operator custom rules under a
-  most-restrictive-wins lattice (data-plane verbs only); stamp a bundle id/version on the Decision.
-- **Verify:** PCI pack ON still ALERTs on a behavioral hit and a raw CPF; a test proves default
-  protections survive every pack.
-
-### SIEM-12 · Real notification idempotency — P2 · notify · S
-- **✅ SHIPPED D172 (2026-07-22) — pending owner audit.** `notifyID` now derives the id from
-  `kind|subject|agentID|window-bucket(At)`; a bounded FIFO `dedupeSet` on the Server suppresses a
-  re-emitted duplicate in `emit` (counted `openshield_notify_deduped_total`). Proven: a re-detection
-  within the window pages once; 2 mutation guards (dedup-off, raw-timestamp id).
-- The async hand-off is real (`TestEmitDoesNotBlockIngest`), but `newNotifyID()` is `crypto/rand`
-  per-emit (`notify.go:59`) and is **never checked server-side**. The scenario it targets — agent
-  re-sends telemetry → server re-detects → re-emits — mints a new id each time, so nothing dedupes →
-  the double-page persists.
-- **Fix:** derive the id deterministically from alert content
-  (`hash(kind|subject|agentID|window-bucket)`) + a bounded server-side seen-set checked in `emit`/
-  `deliverLoop`. **Verify:** emit the same logical alert twice → exactly one delivery.
-
-### NIPS-3-SMTP-TEST · Make the OOM guard's test real — P2 · connector test · XS
-- **✅ SHIPPED D173 (2026-07-22) — pending owner audit.** Exported `Listener.MaxBody` (tunable,
-  default 32 MiB, never disablable); the test now sets a 4 KiB ceiling + 30s idle and streams past it
-  with no newline, asserting a drop within 2s (the size ceiling, not the deadline). Mutation:
-  unbounded LimitReader → the flood blocks on the idle timeout → test FAILs. Guard code unchanged.
-- The bounded reader is correct, but `harden_test.go` streams 64 KiB against the 32 MiB cap, so
-  **removing the `io.LimitReader` still ships green** (the idle deadline masks it) — the signature
-  false-premise pattern. **Fix:** inject a small `maxBody` + a large idle timeout, stream past the cap
-  with no newline, assert `Dropped>0` without the deadline firing. (Test-only; the guard is correct.)
-
-### HIPS-8 · Trusted critical-process identity — KILL containment bypass — P2 · enforcer · M
-- **✅ SHIPPED D174 (2026-07-22) — pending owner audit.** The critical guard now keys on the real
-  executable (`/proc/<pid>/exe`, kernel-maintained) + root-ownership (`RootOwned && !OtherWritable &&
-  basename∈critical||openshield*`), not the self-settable `comm` — a non-root process can't own a root
-  binary, so renaming to `sshd` no longer grants immunity. Injectable `identify` seam
-  (`ProcIdentity`); 2 mutation guards. cgroup-unit identity noted as a future option.
-- The safety allowlist keys on kernel `comm`, which a process sets for itself
-  (`prctl(PR_SET_NAME)`/argv[0]) — `internal/enforcers/process/process.go:29-43`. Malware that names
-  itself `sshd`/`systemd`/`openshield*` becomes **permanently unkillable** by HIPS; it opts *into*
-  immunity. Worse than a renamed-LOLBin detection evasion — this grants immunity from *containment*.
-- **Fix:** gate the allowlist on a trusted identity — cgroup/systemd unit, binary hash, or a
-  known-platform pid-set — not self-reported `comm`. **Verify:** a process that renames itself `sshd`
-  but is not the real unit is still killed.
-
-### HIPS-7 · pid-reuse revalidation (reopen) — P2 · enforcer · M
-- **✅ SHIPPED D175 (2026-07-22) — pending owner audit.** The process start-time (`/proc/<pid>/stat`
-  field 22) is captured at observation in the execaudit source, carried on a new additive
-  `ProcessSubject.start_ticks`, and revalidated in `platformKill`: a pid whose current start-time no
-  longer matches the captured one is spared (recycled). Proven with a real spawned `sleep` (wrong ticks
-  → spared, correct ticks → killed); 1 mutation guard. Testing lesson recorded: check liveness via a
-  background reap, not `kill(pid,0)` (a zombie still answers it).
-- Critical-allowlist and argc bound are real (mutation-confirmed). But the pid-reuse guard does nothing:
-  `platformKill` calls `PidfdOpen(pid)` **at kill time** (`kill_linux.go:17`), and the event carries
-  only `Pid int32` — no pidfd/start-time captured at observation. On a recycled pid it opens and kills
-  the **new** holder — exactly what the commit claims to prevent. No test drives the real syscall path.
-- **Fix:** capture a pidfd (or `/proc/<pid>/stat` starttime) in the exec source when the
-  `ProcessSubject` is built, carry it on the event, revalidate/send via that captured fd in
-  `EnforceTarget`. **Verify:** a decide→recycle→kill test proves the new holder is spared.
-
-### SIEM-8b · Webhook replay protection — P2 · notify · S
-- **✅ SHIPPED D176 (2026-07-22) — pending owner audit.** The webhook HMAC now signs `"<ts>."+body`
-  and sends `X-Openshield-Timestamp`; `VerifySignature` rejects a timestamp outside a 5-min window before
-  the constant-time MAC check. Proven: a captured `(ts,body,sig)` is rejected past the window and under a
-  swapped timestamp; 2 mutation guards. Per-sink secrets already existed.
-- The MAC covers the body only (no timestamp/nonce) and one secret is shared across sinks → a captured
-  `(body, sig)` validates forever at any sink. **Fix:** sign `"t=<unix>." + body`, send `t` in a
-  header, receiver rejects stale. (Optionally per-sink secrets.)
-
-### SIEM-5b · Prune + validate UEBA baselines — P2 · analytics · S
-- **✅ SHIPPED D177 (2026-07-22) — pending owner audit.** `Analyzer.Prune` drops decayed-below-ε
-  subjects (reported for row-deletion); `WithSnapshot` + `loadBaselines` reject a non-finite/negative
-  count or future last-seen; `PersistBaselines` prunes + upserts atomically in one txn. Proven (real PG)
-  + 2 mutation guards. **Remainder: `peerLastAlert` persistence deferred** (benign one-time re-alert after restart).
-- No TTL/prune (O(N) UPSERTs forever, unbounded row + map growth); load accepts a NaN/negative `count`
-  or future `last_seen` (decay > 1 inflates the baseline; reachable only with DB write access).
-  **Fix:** prune decayed-below-ε rows + batch the upsert in a txn; validate on load; persist the
-  `peerLastAlert` cooldown.
-
-### SIEM-6b · Unified alert/incident lifecycle schema — P2 · schema · M — implements ADR-10
-- **✅ SHIPPED D178 (2026-07-22) — pending owner audit.** Migration 020 adds first-class
-  `severity`/`status`(open→triaged→closed)/`dedup_key` to `peer_alerts` (backfilled, indexed; count 19→20);
-  `recordPeerAlert` stamps them, ack advances status→triaged, reads return the stored fields. Proven
-  (real PG) + 2 mutation guards. Trade-off: severity now stored (no free re-bucket on threshold change).
-- `peer_alerts` already carries `agent_id` (mig 015) and ack columns (016); still missing as
-  first-class columns: **severity, a dedup/correlation key, and a status lifecycle beyond ack**
-  (open→triaged→closed). One migration adds them **before any further SIEM detection ships**, so each
-  new detector writes the lifecycle fields from day one. (Do NOT re-add `agent_id`/ack.)
-
-### PLAT-3 (RBAC) · Per-route analyst RBAC tiers — P1 · authz · M — implements ADR-4
-- **✅ SHIPPED D179 (2026-07-22) — pending owner audit.** analyst<responder<admin tiers on the
-  `requireTier` seam (legacy operator=admin, back-compat); reads=analyst, acks=responder, /view=admin;
-  provisioning issues the new roles. Proven (unit + served-mTLS with provisioned tier certs) + 2 mutation
-  guards. Org multi-tenancy + OIDC-group backing deferred. Unblocks the PLAT-1 UI.
-- Add read-only-analyst / responder / admin tiers on the existing `requireRole` seam, optionally
-  OIDC-group-backed (ZT-2 gives a real verifier). Defer org multi-tenancy (XL). Unblocks the PLAT-1 UI,
-  which needs its authz model fixed before design.
-
-### Then — the platform-durability & deepening lane (in this order)
-1. **PLAT-2 · JetStream telemetry durability** (ADR-2) — durable consumers with ack; replace the
-   per-message `FOR UPDATE` in `VerifySigned` with a per-agent advisory lock / batched verify. Closes
-   SEC-4's root. Prerequisite for any HA work.
-   - **✅ SHIPPED D180 (2026-07-22) — pending owner audit.** Durable WorkQueue JetStream stream over
-     SubjectSigned + durable explicit-ack consumer (ack-after-persist, nak-transient, ack-terminal replay);
-     publisher js.Publish; VerifySigned advisory-lock replaces FOR UPDATE. Env-gated (OPENSHIELD_JETSTREAM);
-     proven no-loss over a down consumer (real JS) + 2 mutation guards. Default-flip + full-suite migration = follow-on.
-2. **PLAT-2b · Active-passive HA** (ADR-3) — Postgres leader lease + Postgres HA + JetStream. Decide
-   before more in-memory state accretes.
-   - **SHIPPED D181 (2026-07-22) - pending owner audit.** Leader elects via a Postgres SESSION advisory
-     lock (pg_try_advisory_lock; auto-release on conn death = failover, no TTL); the cmd runs the singleton
-     loops + srv.Run inside leaderCtx; standby waits. Proven (real PG, 2 pools) + 2 mutation guards. PG-HA +
-     client routing deferred (ops).
-3. **ZT-2b · Live JWKS refresher** (ADR-7) → **ZT-1 · Hardware attestation** — do ZT-1 *after* IDENT-1
-   - **SHIPPED D182 (2026-07-22) - pending owner audit.** JWKSRefresher sources the OIDC verifier's
-     keys via a keyFor seam: background refresh, serve-stale on failure, rate-limited on kid-miss, NEVER a
-     fetch on the request path; RSA + Ed25519 JWK parsing; env-gated OPENSHIELD_OIDC_JWKS_URL (static PEM
-     preserved). Proven (httptest JWKS) + 2 mutation guards. OIDC discovery deferred. ZT-1 next.
-   fixes the identity it binds to.
-4. **NIPS-1 · TPROXY inline connector** (ADR-8) **with NIPS-2 · signatures/threat-intel** — ✅ SHIPPED:
-   NIPS-1 transparent TPROXY drop/SNI/payload + self-installing rules (D225/226/227/237, VM-proven);
-   NIPS-2 IOC engine (D192) + content-signature engine (D221). Remaining: full Suricata grammar, JA3.
-5. **DLP-3 · server-side EDM/OCR** (ADR-9) + **DLP-2 · exfil-channel producers** — ✅ largely SHIPPED:
-   EDM/IDM/signed-index (D193/197/198/204); exfil-channel awareness (D194) + content-aware CASB (D222).
-   Remaining: OCR, non-file endpoint producers (clipboard/print/screenshot).
-- **Cross-platform (PLAT-7)** runs in parallel throughout (ADR-11): owner drives cert/entitlement
-  procurement; builder lands GOOS skeletons + Windows observation producers now.
-
-### Strategic lanes — XDR & SOAR (the headline deliverables)
-These are the two multi-ticket lanes that make the XDR + SOAR positioning real; run them once the
-near-term queue clears (several are already unblocked and can interleave):
-- **XDR lane** (see *Backlog → XDR*): the entity graph and cross-domain correlation. **XDR-1 is
-  unblocked the moment IDENT-1 lands** (it's the same canonical-identity work), so this lane starts
-  early. Spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 (after SIEM-6b) → XDR-4 → XDR-5 → XDR-6/XDR-7.
-- **SOAR lane** (see *Backlog → SOAR*): Tier-1 (SOAR-1/2/3/4/5/6/9) is pipeline-native — SOAR-1/2
-  (incidents notify + run on a ticker) are quick wins that can land beside the near-term queue.
-  **SOAR-7 (intent seam) and SOAR-8 (runners) are now OWNER-APPROVED (2026-07-22)** and queued per the
-  spine (after SOAR-4). XDR-6 (coordinated response) depends on SOAR-7. Discipline stays: any *new*
-  intent verb beyond the initial three (`ELEVATE_SCRUTINY`/`CONTAIN`/`REVOKE_TRUST`) is a one-at-a-time
-  owner gate; four-eyes on Tier-3 is non-waivable.
-
-### Minor (fold into the owning ticket, no separate proposal)
-~~`/incidents?limit=` still silently defaults instead of 400ing~~ ✅ DONE (a00cd5f, D219: `/incidents`
-AND `/alerts` now 400 a malformed `limit`; the silent `queryInt` helper deleted) ·
-~~PLAT-4b `main.go` metrics *wiring* has no test~~ ✅ DONE (`TestMetricsHandlerBehindBearerGuard`: the
-real MetricsHandler composed behind `RequireBearerToken` — no/wrong token → 401 + no counter leak, valid
-token → 200 + live metrics; mutation-verified) · ~~`EnsureAppLogin`'s existing-role branch should
-re-assert `NOSUPERUSER NOCREATEROLE`~~ ✅ DONE (R34-13) · ~~SMTP `handle`/`processOne` recover present but not individually
-tested~~ ✅ DONE (`TestSMTPListenerRecoversFromSinkPanic`: a panicking sink is contained — dropped++,
-listener serves a second session; mutation removing the recover crashes the test binary) · SIEM-8c
-(per-sink fanout goroutine, P3) · ~~ZT-2 residuals (bearer tokens replayable until exp and not
-device-bound — jti/DPoP)~~ ✅ DONE (R34-10 DPoP sender-constrained tokens + clock-skew leeway, D-test #13).
-
----
-
-## Architecture decisions (Round-32–33) — the closed forks
-
-> The owner asked to "close missing architectural decisions to move forward." These ADRs resolve the
-> forks the audit surfaced so the builder has an unambiguous runway. **ADR-0/-11 are owner decisions;
-> ADR-2…-10 are technical decisions made to unblock — the owner may override any.** Each names the
-> ticket(s) that implement it. The frozen-core discipline (D26/D69) still governs.
-
-**ADR-0 · NAC and VPN are PARKED (owner decision, 2026-07-22).** They do not fit the pipeline (no
-Event, no Decision; the access proxy is L7-HTTP-only, categorically not a VPN). Decision: **keep them
-off the builder's queue and out of the headline category claims for now, with `NAC-*`/`VPN-*` staged**
-so either can be green-lit later without another audit. If green-lit, they are separately-scoped
-off-pipeline products that reuse the PKI/identity and *feed* posture/risk in — not pipeline plugins.
-
-**ADR-2 · Telemetry durability = NATS JetStream (implements PLAT-2, closes SEC-4's root).** Core NATS
-is at-most-once; loss is *detected* (sequence gaps) but unrecoverable, and the agent spool only covers
-broker-unreachable. Decision: **durable JetStream consumers with explicit ack** for telemetry ingest;
-keep the spool as the pre-broker buffer. Pair with replacing the per-message `FOR UPDATE` in
-`VerifySigned` (hard-serializes ingest) with a per-agent advisory lock or batched verify. Prerequisite
-for HA/scale. (Honors D12: JetStream is a **bus** for delivery durability, NOT the system-of-record —
-the hash-chained ledger remains the evidence store; do not use stream retention as evidence.)
-
-**ADR-3 · HA topology = active-passive first (implements PLAT-2b).** Single server holds in-memory
-state (UEBA analyzer, notify dedup set, alert cooldowns); SIEM-5 made baselines durable but **not
-multi-writer-safe**. Decision: **active-passive via a Postgres leader lease + Postgres HA +
-JetStream**; defer stateless-horizontal. Decide now, before more in-memory state accretes.
-
-**ADR-4 · Authz = per-route RBAC tiers now, org multi-tenancy deferred (implements PLAT-3).** Today
-there are two cert-OU roles (agent/operator). Decision: **add analyst/responder/admin tiers on the
-existing `requireRole` seam**, optionally OIDC-group-backed; **defer org tenancy** (XL) until demand.
-Unblocks the PLAT-1 UI.
-
-**ADR-5 · Policy = compose, most-restrictive-wins (implements DLP-5b).** `policy.New` takes one module
-and packs *replace* the default — dropping protections. Decision: **compile default + selected packs +
-operator custom rules together**, stamp a bundle id/version on every Decision. The combine rule is a
-most-restrictive-wins lattice **scoped to the data-plane verbs that can compete for the same data
-event**: `ALLOW < ALERT < REDIRECT < ENCRYPT_LOCAL < QUARANTINE_LOCAL < BLOCK` (tiebreak: QUARANTINE
-outranks ENCRYPT). **The process-control verbs `DENY_EXEC`/`KILL_PROCESS` are NOT in this lattice and
-MUST NOT be reachable by pack composition** — they are decided on a separate axis by the behavioral
-rule over *process* events, so a DLP/compliance pack can never silently escalate to killing a process.
-Modules emitting a process verb and modules emitting a data verb never combine (different event kinds).
-
-**ADR-6 · One canonical device identity (implements IDENT-1).** Three parties key differently today
-(enrollment, posture publisher via `OPENSHIELD_SUBJECT`, access proxy via `pseudonym(CN)`); ZT-1 would
-add a fourth. Decision: **canonicalize on the enrolled agent identity; provision RoleClient certs with
-`CN = agent identity`; export ONE shared pseudonym derivation** imported by enrollment, the posture
-publisher, and the access proxy (re-key the SEC-12 roster too). Must land *before* ZT-1 — attestation
-binds to whatever identity is chosen; this is the ZTNA-vs-toy line. (`provision.NewClientCert` already
-takes an arbitrary CN; D23 pseudonymization is preserved — derivation shared, not removed.)
-
-**ADR-7 · Live JWKS via a background refresher (implements ZT-2b).** Static PEM keys mean IdP rotation
-= restart. Decision: **a background JWKS refresher that serves-stale-on-fetch-failure, refreshes
-rate-limited on a `kid` miss, and NEVER fetches on the request path.** Unblocks Okta/Entra.
-
-**ADR-8 · NIPS inline = opt-in TPROXY, not L2 bridge (guides NIPS-1).** DNS is already tap/mirror-only
-(DEPLOY-1). For transparent HTTP: **TPROXY/nftables redirect as an opt-in deploy mode with a bypass
-watchdog; reject L2 bridging.** External-gated (root/`CAP_NET_ADMIN`) — confirm empirically. The
-deliberate D73/D17 egress fail-open MUST survive: inline **fails-to-wire, never fails-closed-the-
-network.** Sequence **NIPS-2 signatures *with* NIPS-1**.
-
-**ADR-9 · EDM/OCR placement = server-side first, then a signed index into the sandbox (guides DLP-3).**
-D10/D11 forbid content or fingerprints leaving the endpoint. Decision: **server-side EDM/OCR for
-gateway-visible flows first** (content already transits the gateway's sandbox); for endpoints, **ship
-a signed, bloom/k-anonymized EDM index *down* into the sandboxed classify worker** — content and hashes
-still never leave. Never upload endpoint content or fingerprints.
-
-**ADR-10 · Unified alert/incident lifecycle schema now (implements SIEM-6b).** One migration adds
-severity/dedup-key/status-lifecycle to `peer_alerts` before further SIEM detection ships. (`agent_id`
-and ack already shipped in migrations 015/016 — verify at HEAD; do not re-add.)
-
-**ADR-11 · Cross-platform = owner starts procurement, builder does observation now (owner decision,
-2026-07-22, implements PLAT-7).** Enforcement is externally gated (Windows EV cert + attested
-minifilter; macOS Endpoint Security entitlement — long-lead owner actions). Decision: **owner kicks off
-cert/entitlement acquisition now; in parallel the builder lands GOOS build-tag skeletons and Windows
-user-mode *observation* producers (clipboard/print) that need no attestation.** Gating limits
-enforcement, not observation; most enterprise data lives on Windows. (T1 `DENY_EXEC` still needs its
-per-verb owner sign-off before wiring; T2 risk-loop and T1 `KILL_PROCESS` are resolved in code.)
-
-**PLAT-7 builder-half status (D187): the cross-platform OBSERVE path is DONE.** The endpoint engine
-now opens its file watcher through a build-time per-OS seam (`openFileWatcher`): fanotify on Linux
-(unchanged, D52), a portable pure-stdlib poll-based watcher (`internal/connectors/filewatch`) on
-windows/darwin — so the SAME `openshield-engine` runs and observes off Linux instead of exiting where
-fanotify is unavailable. Reuses the existing `FilesystemSubject`/`FILE_*` contract (no core change);
-`make all` cross-compiles + cross-vets both targets. REMAINING PLAT-7 follow-ups: native OS watch APIs
-(`ReadDirectoryChangesW`/`FSEvents`) on the same seam; the clipboard/print observation producers; a
-NON-Linux worker sandbox (seccomp is Linux-only, so the parser runs unconfined on windows/darwin today);
-and real Windows/macOS RUNTIME validation (external-gated — the code cross-compiles and the pure logic
-is Linux-proven, but hardware validation is deferred). Enforcement stays owner-gated per ADR-11.
-
-**ADR-12 · SOAR response orchestration without breaking D14 (resolves T5) — three tiers.** SOAR's
-automated response is, on its face, the control-plane-actuates behavior D14 exists to forbid. Resolution
-keeps the sentence "the server coordinates, it does not control" literally true by tiering:
-
-- **Tier 1 — pipeline-native, no tension (most of SOAR's value; PROCEED now).** Playbooks whose steps
-  are enrichment, notification, case/incident mutation, legal holds, tagging, and approval-waits touch
-  no endpoint and actuate nothing — server-side workflow over data the server already owns, the same
-  altitude as SIEM correlation. Two new invariants: the **step registry is CLOSED and typed** (a
-  playbook composes registered steps; it cannot express a shell command or an arbitrary-URL call — the
-  D14 argument one level up), and **every step transition is appended to the audit ledger** (an
-  automated action is exactly as evidentiary as a human one). Covers SOAR-1/2/3/4/5/6/9.
-- **Tier 2 — a bounded new seam: signed Response Intent (OWNER-APPROVED 2026-07-22).** For live containment, the
-  server does what T2 already taught it: **publish signed typed data, let local policy decide.** A
-  `ResponseIntent{subject, intent, version, issued_at, ttl}` where `intent` is a **closed, parameterless
-  vocabulary** (initially `ELEVATE_SCRUTINY`, `CONTAIN`, `REVOKE_TRUST`), ed25519-signed with the SEC-1
-  control-plane key, published beside `SubjectRisk`, consumed by the endpoint/gateway as **typed policy
-  context (X, the D28 seam)**. The endpoint's *local, operator-authored* policy maps `CONTAIN` to verbs
-  it already advertises (`BLOCK`/`DENY_EXEC`/`KILL_PROCESS`) or ignores it. This does **not** widen the
-  D14 threat model — it is exactly the surface T2 conceded when it let published risk feed local policy
-  (a compromised control plane can at worst place subjects under containment/denial; never express
-  exfiltration or execution). Gates: **high-impact intents (`CONTAIN`,`REVOKE_TRUST`) require D36
-  four-eyes before publication**; a **blast-radius guard** (an intent batch touching >N subjects or
-  >x% of the fleet needs four-eyes regardless); mandatory **TTL** (containment decays unless renewed);
-  publication and each local enactment **ledgered with the intent id**. Covers SOAR-7 / XDR-6.
-  **Owner approved the seam + the initial three-verb vocabulary (2026-07-22);** any *new* intent verb
-  beyond those three still expands one at a time — a T1-style per-capability owner gate.
-- **Tier 3 — third-party actuation: off-pipeline by construction (OWNER-APPROVED 2026-07-22).** "Disable user in
-  Okta / quarantine VLAN / purge mail" actuate infrastructure with no local OpenShield policy engine.
-  Mirroring ADR-0: **integration runners are separately-scoped off-pipeline processes** (own
-  least-privilege third-party creds) that **subscribe to the same signed, approved intent stream** and
-  map one intent to one call from a **per-connector closed verb set** (the IdP runner knows only
-  `DISABLE_USER`/`REVOKE_SESSIONS` over a typed principal — never a URL or a script). The control plane
-  still only publishes intent; four-eyes is **non-waivable**. Covers SOAR-8.
-  **Guarantee under a compromised control plane (be precise):** four-eyes is a *control-plane* gate and
-  does NOT survive control-plane compromise — an attacker holding the signing key mints its own approved
-  intents. What holds against that adversary is the **per-connector closed verb set**: a compromised
-  control plane can at worst disable a user or revoke sessions — never exfiltrate data or execute code
-  (the same bound Tier-2 concedes). Four-eyes is the control against the *honest-but-careless* operator;
-  the closed verb set is the bound against the *compromised* one. Both are load-bearing; neither alone.
-- **Permanently out (the red line holds, never "later"):** (1) arbitrary command/script execution on
-  endpoints — the exact capability D14 makes inexpressible; (2) remote live-forensics content pull —
-  forbidden independently by the D10/D29 content boundary. Any pressure for these is pressure to reopen
-  D14 and goes to the owner as such.
-
----
-
-## Backlog by category (after the queue)
-
-Deeper feature work that extends the Phases (A–F, see *Reference*). Pull only after the queue.
-Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane, or off-pipeline.
-
-### XDR — cross-domain correlation & coordinated response (the umbrella; strategic-priority lane)
-
-**Delivery target:** every detection in every domain lands in one normalized, entity-keyed alert stream
-within seconds; a single entity graph (device ⋈ user ⋈ session) ties an exec event, a DNS query, a mail
-send, and a login anomaly to one asset; correlation runs continuously (not on GET) with statistical
-(burst/UEBA) *and* semantic (multi-domain, ATT&CK-sequence) rules producing **one incident per attack**
-with a full cross-domain evidence timeline backed by the hash-chained ledger — the differentiator no
-incumbent XDR has: every timeline entry is tamper-evident evidence, not a log row. Entity risk
-aggregates across domains and feeds every enforcement point's local policy (T2 closed fleet-wide); one
-containment decision propagates to all domains touching the entity. *Success test: a simulated kill-chain
-(phish → exec → C2 DNS → exfil) yields exactly one correctly-sequenced incident, containable with one
-approval.* **Dependency spine: IDENT-1 → XDR-1 → XDR-3 → XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-7, XDR-7).**
-
-- ✅ **XDR-1 · Unified entity model (SHIPPED D195)** — X (schema+context) · M · **hard-dep IDENT-1/ADR-6.**
-  `entities` ⋈ `entity_aliases` (migration 021), keyed by the ONE canonical pseudonym; `internal/xdr`
-  `Resolve` (atomic find-or-create) + `Link` (device ⋈ user merge). Real-Postgres-proven canonical join
-  + concurrency + merge. **✅ R34 XDR-1-WIRE CLOSED (d0319d0, D203): the store is now POPULATED by real
-  producers** — enrollment + verified telemetry ingest resolve the device entity; the gateway
-  dual-credential path links device⋈user; all best-effort/derived (D38). Test #1 proves two REAL
-  producers (Enroll + `handleSigned`) converge on one entity id through real ingest, killing the
-  `TestCanonicalJoin` tautology. *Accept met. Reading the graph for correlation is XDR-4; normalizing
-  every domain's alerts onto the entity-keyed table is XDR-2 (now unblocked).*
-- ✅ **XDR-3 · Canonical subject stamping (SHIPPED D196)** — P · M. The agent/connector layer stamps
-  the device's canonical pseudonym as `Event.Subject` (per-target id stays in the Target oneof). Also
-  resolves the `core/validate.go:103` tension (it requires a top-level subject no endpoint connector
-  currently sets — verify at HEAD; recurring "verifies-own-assumptions"). *Accept: fanotify + execaudit
-  events through real ingest carry the enrolled device pseudonym and pass validation.*
-- **XDR-2 · Cross-domain alert normalization** — srv (schema+writers) · L. **✅ Increment 1 SHIPPED
-  (D213):** a normalized entity-keyed `unified_alerts` stream (schema + writer + `AlertsForEntity`), with
-  the first producer (peer-UEBA) wired — the alert⋈device-entity join proven. **Remaining:** wire the
-  remaining domain producers (DLP verdicts, HIPS behavioral, DNS/SMTP classify hits, ZT denials) so every
-  domain writes the unified table, then XDR-4 correlates over it. *Accept: a HIPS KILL and a DNS classify
-  alert on one host land as unified-alert rows sharing an entity key, via real ingest.*
+- **XDR-2 · Cross-domain alert normalization** — srv (schema+writers) · L. Increment 1 shipped
+  (`unified_alerts` stream + writer + `AlertsForEntity`, peer-UEBA producer wired). **Remaining:** wire
+  the other domain producers (DLP verdicts, HIPS behavioral, DNS/SMTP classify hits, ZT denials) so every
+  domain writes the unified table. *Accept: a HIPS KILL and a DNS classify alert on one host land as
+  unified-alert rows sharing an entity key, via real ingest.*
 - **XDR-4 · Cross-domain correlation rules** — srv · M. Same-entity multi-domain window rule (distinct-
   domain count ≥ N → incident, severity boosted per domain) + sequence rules (identity-anomaly → exec →
-  DNS within window). Extends `CorrelationRule`. SIEM-7 ATT&CK tags are the sequence vocabulary — reuse,
-  don't re-ticket. *Accept: seeded exec+DNS+auth-anomaly on one entity in 10m → ONE incident
-  `domain_count=3`; the same three on different entities → none.*
+  DNS within window). Extends `CorrelationRule`; reuse SIEM-7 ATT&CK tags as the sequence vocabulary.
+  *Accept: seeded exec+DNS+auth-anomaly on one entity in 10m → ONE incident `domain_count=3`; the same
+  three on different entities → none. Mutation: dropping the entity join must fail it.*
 - **XDR-5 · Incident timeline** — srv · M. `incident_alerts` join (incident → contributing alerts, all
   domains) + ledger refs; `GET /incidents/{id}/timeline`; incidents gain `domains[]`, `entity_id`.
-  *Accept: the timeline of an XDR-4 incident lists all three contributing alerts, cross-domain,
-  time-ordered, each linking its evidence.*
-- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7 + XDR-1.** One
-  approved `CONTAIN(entity)` intent consumed by BOTH gateway (flows) and endpoint (exec) local policies,
-  both enactments ledgered under one intent id. *Accept: CONTAIN on entity E → gateway blocks E's flows
-  AND E's agent denies new execs; one intent id in the ledger; TTL expiry restores both.*
-- **XDR-7 · Entity risk aggregation** — X · M · dep XDR-1/2. `PublishRisk` publishes per-**entity** risk
-  aggregated across domains (today per-gateway-subject only), so a HIPS detection raises the risk the ZT
-  proxy sees — closing the T2 loop *across* domains. *Accept: a high-risk HIPS alert on device A
-  measurably raises the risk the access proxy applies to A's next request, via real pub/sub.*
+  *Accept: the timeline of an XDR-4 incident lists all contributing alerts, cross-domain, time-ordered,
+  each linking its evidence.*
+- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7.** One approved
+  `CONTAIN(entity)` intent consumed by BOTH gateway (flows) and endpoint (exec) local policies, both
+  enactments ledgered under one intent id. *Accept: CONTAIN on entity E → gateway blocks E's flows AND
+  E's agent denies new execs; one intent id in the ledger; TTL expiry restores both.*
+- **XDR-7 · Entity risk aggregation** — X · M. `PublishRisk` publishes per-**entity** risk aggregated
+  across domains (today per-gateway-subject only), so a HIPS detection raises the risk the ZT proxy
+  sees — closing the T2 loop *across* domains. *Accept: a high-risk HIPS alert on device A measurably
+  raises the risk the access proxy applies to A's next request, via real pub/sub.*
 
-### SOAR — orchestration & automated response (new category; governed by ADR-12/T5)
+### Lane B · SOAR — orchestration & automated response (ADR-12)
 
-**Delivery target:** no incident waits for a human to poll — detection→enrichment→notification→case is
-fully automatic with per-step ledger evidence; playbooks are declarative compositions of a **closed step
-registry**, durable across restarts, with TI enrichment (IOC store shared with NIPS-2) annotating every
-incident before an analyst opens it; response automation follows the **ADR-12 three-tier discipline**
-(server-side steps unrestricted; local actuation via signed TTL'd intents mapped by endpoint policy;
-third-party actuation via least-privilege intent-subscriber runners) with four-eyes on everything
-high-impact and *nothing* able to express an arbitrary command anywhere in the chain; bidirectional
-ITSM/IdP/email integrations close the loop back into incident state; MTTA/MTTR/automation-rate are
-first-class metrics. *The honest differentiator to sell: the SOAR whose **architecture** makes the
-compromised-orchestrator nightmare inexpressible, and whose every automated step is courtroom-grade
-evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-7) → SOAR-8.**
+The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 → SOAR-3 → SOAR-4 →
+(SOAR-5, SOAR-7) → SOAR-8.** (SOAR-1 incident→notify shipped, D220.)
 
-- **SOAR-1 · Incident → notify wiring** ✅ **DONE (D220)** — srv · S. `MaterializeIncidents` now emits
-  a `notify.Notification` (`KindIncident`) when — and only when — it creates a NEW incident (insert-vs-update
-  decided in SQL via `RETURNING (xmax = 0)`), keyed by `inc_<id>` so the same incident never re-pages but a
-  distinct later incident does. Rides the existing SIEM-12/R34-13 dedup + off-ingest delivery. Proven real-PG
-  + httptest webhook end-to-end (**this is audit test #10**); 2 mutation guards (always-emit caught via the
-  dedup counter; drop-explicit-id caught via the distinct-later-incident timeout). Closes the R34-13 tail
-  thread; **unblocks SOAR-2.** *Accept met: new incident → exactly one webhook; re-materialize same open → zero.*
 - **SOAR-2 · Scheduled correlation + escalation** — srv · S. Run `MaterializeIncidents` on a
   `retain.Loop` ticker; add an `open→triaged→contained→closed` state machine on `incidents` (extends the
   ADR-10 lifecycle). *Accept: with no operator GET, a seeded burst becomes a notified incident within one
@@ -678,324 +139,232 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
   enrich→notify→open-case; killing the server mid-run resumes without duplicating a step.*
 - **SOAR-5 · Enrichment + threat-intel** — srv + C · L. Signed TI feed ingest (STIX/CSV) → local IOC
   store; enrichment step annotates the incident timeline with IOC hits, EPSS/KEV, geo/ASN. **Shares the
-  IOC store NIPS-2 needs — build once.** *Accept: an incident whose alerts carry a known-bad domain gets
-  a TI annotation; a feed with a bad signature is rejected.*
+  IOC store NIPS-2 already needs — build once.** *Accept: an incident whose alerts carry a known-bad
+  domain gets a TI annotation; a feed with a bad signature is rejected.*
 - **SOAR-6 · MTTA/MTTR + analyst metrics** — srv · S. Derive from existing timestamps
   (`detected_at`/`acknowledged_at`/`opened_at`/`closed_at`), expose via PLAT-4 Prometheus + a report
   endpoint. *Accept: `/metrics` exposes mtta/mttr histograms that move when an incident is acked/closed.*
-- **SOAR-7 · Response-Intent seam** — X + existing A · L · **APPROVED (ADR-12 Tier-2, owner 2026-07-22).** Closed intent
-  vocabulary + `PublishIntent` mirroring `riskpub.go` (ed25519-signed, versioned, TTL), consumed as typed
-  policy context; high-impact intents gated on SOAR-3 approvals + blast-radius guard. *Accept: approved
-  `CONTAIN(subject)` → gateway policy locally BLOCKs that subject's flows; an expired/unsigned/replayed
-  intent changes nothing; an endpoint whose policy ignores intents is unaffected.*
-- **SOAR-8 · Integration runners v1** — off-pipeline · M (ITSM) / L (IdP) · **APPROVED (ADR-12
-  Tier-3, owner 2026-07-22).** (a) ITSM/ticketing bidirectional (incident→ticket, status sync-back); (b) IdP responder
-  (disable-user/revoke-sessions) as an intent *subscriber* with a per-connector closed verb set, four-eyes
-  always. *Accept: (a) closing the ticket transitions the incident; (b) an unapproved intent is never
-  executed, and the runner's ledger entry links intent-id→API call.*
+- **SOAR-7 · Response-Intent seam (Tier-2)** — X + existing A · L · **owner-approved.** Closed intent
+  vocabulary (`ELEVATE_SCRUTINY`/`CONTAIN`/`REVOKE_TRUST`) + `PublishIntent` mirroring `riskpub.go`
+  (ed25519-signed, versioned, TTL), consumed as typed policy context; high-impact intents gated on
+  SOAR-3 approvals + a blast-radius guard. *Accept: approved `CONTAIN(subject)` → gateway policy locally
+  BLOCKs that subject's flows; an expired/unsigned/replayed intent changes nothing; an endpoint whose
+  policy ignores intents is unaffected.* **Any new intent verb beyond the initial three is a one-at-a-
+  time owner gate.**
+- **SOAR-8 · Integration runners v1 (Tier-3)** — off-pipeline · M (ITSM) / L (IdP) · **owner-approved.**
+  (a) ITSM/ticketing bidirectional (incident→ticket, status sync-back); (b) IdP responder
+  (disable-user/revoke-sessions) as an intent *subscriber* with a per-connector closed verb set,
+  four-eyes always. *Accept: (a) closing the ticket transitions the incident; (b) an unapproved intent is
+  never executed, and the runner's ledger entry links intent-id→API call.*
 - **SOAR-9 · Notification routing/templating** — srv · S. Severity/kind→sink routing table over the
   existing multi-sink fanout. *Accept: CRITICAL routes to the pager sink only, INFO to the chat sink
   only, proven with two sinks.*
 
-### Zero Trust / ZTNA
-- **ZT-1 · Hardware device-posture attestation** — P1 · X + producer · XL. Posture is self-reported
-  booleans; a compromised-but-alive agent signs `Compliant=true`. Add TPM/measured-boot signed quotes
-  verified at the gateway (`google/go-tpm` is `// indirect` today — greenfield). **Must follow IDENT-1
-  (ADR-6).** The ZTNA-vs-toy line. Multi-increment:
-  - ✅ **Increment 1 · Attestation core (D183)** — SHIPPED. `internal/attest`: create a restricted
-    ECDSA-P256 AK, generate a nonce-bound `TPM2_Quote` over PCRs, and verify it server-side against the
-    AK public key with an anti-replay nonce gate. Built on `go-tpm` (not the heavy `go-tpm-tools`
-    tree); tested against real `swtpm`, gated like Postgres, run in a new CI `attestation` job.
-    Scope caveat: trusts the AK by raw public key — EK binding is increment 2.
-  - ✅ **Increment 2 · EK→AK credential activation (D184)** — SHIPPED. Bind the AK to a genuine TPM
-    via credential activation: server-side `MakeCredential` in pure Go (go-tpm `CreateCredential`),
-    endpoint `TPM2_ActivateCredential`. swtpm-proven: same-TPM activates, a different TPM's EK cannot,
-    a substituted AK breaks the name binding. Closes D183's raw-AK-trust gap (EK-cert-chain validation
-    scoped as the production step).
-  - ✅ **Increment 3 · Measured-boot PCR policy (D185)** — SHIPPED. Read a golden PCR baseline, compute
-    the aggregate digest the TPM commits to in pure Go, and gate a verified quote against it
-    (`ErrPCRMismatch` on drift). swtpm-proven: pure-Go digest matches the TPM's; golden state compliant,
-    a drifted PCR rejected. Event-log *attribution* (`binary_bios_measurements`) deferred — diagnostic,
-    not gating; go-tpm has no parser and go-tpm-tools is barred (D183).
-  - ✅ **Increment 4 · Posture wiring (D186)** — SHIPPED, **ZT-1 COMPLETE**. `AttestationReport` proto
-    (evidence, no self-asserted verdict) + `core.DevicePosture.Attested` (exposed to policy) +
-    `gateway.AttestationVerifier` (enroll → one-shot-nonce challenge → verify quote+PCR) + access-proxy
-    overlay. `Attested` is set only by the gateway's own verification, never self-reported. swtpm-proven
-    end-to-end incl. the full TLS access proxy admitting an attested device and denying an unverified
-    one. The NATS challenge/report transport is the noted follow-up (primitive-then-transport, cf.
-    D89→D91).
-  - ✅ **Transport (D188)** — SHIPPED. A NATS challenge/report channel drives the verifier on live data:
-    a device requests a nonce, quotes, publishes; the gateway issues the nonce and verifies, flipping it
-    to attested. The report self-authenticates (it's a TPM-signed quote — no extra signature). Proven
-    embedded-NATS + real-swtpm end-to-end.
-  - ✅ **Enrollment distribution (D189)** — SHIPPED. Capture a device's AK + golden PCR baseline into a
-    JSON file (posture-roster model) and load it into the gateway verifier (atomic, fail-closed on a bad
-    record); `cmd/openshield-gateway` loads it via `OPENSHIELD_ATTEST_ENROLLMENTS`. swtpm-proven: a
-    distributed enrollment attests a real device end to end. The ZT-1 chain now runs with real devices.
-  - ✅ **Continuous re-attestation (D190)** — SHIPPED. `posture.AttestLoop` re-attests on an interval so
-    the gateway's Attested signal tracks the device's current state; wired into `cmd/openshield-fleet-agent`
-    (`OPENSHIELD_ATTEST_PCRS`). swtpm-proven continuous verification: a good device stays attested, a
-    drifted device loses attestation within a cycle.
-  - ✅ **Automated network enrollment (D191)** — SHIPPED. A device proves its AK genuine-TPM-resident by a
-    live credential-activation handshake over NATS and self-enrolls — no operator file. swtpm-proven: a
-    genuine device enrolls + attests over the wire; a fake device (EK/AK on different TPMs) or a tampered
-    activation is refused. **ZT-1 operability is now COMPLETE** (core → EK activation → PCR policy →
-    posture wiring → transport → file enrollment → continuous re-attestation → network enrollment).
-    Remaining notes: EK-cert-chain anchoring + enrollment-authorization + TOFU-vs-operator-vouched baseline
-    are documented alternatives/follow-ups, not gaps in the working chain.
-- **ZT-4 · ZTNA client/connector model** — P2 · new work · L. Enterprise ZTNA is agent-brokered; today
-  it is server-side reverse-proxy only.
-- **ZT-5 · Policy admin + session recording** — P2 · new work · L. Policy is a boot-loaded file; add an
-  admin surface (ties to PLAT-1) + per-session audit.
-- **ZT-6 · SAML** — P3 · producer · L. Only after OIDC proves the SSO seam.
+### Lane C · Zero Trust — the ZTNA client
 
-### DLP
-- **DLP-2 · Real exfiltration-channel producers** — P0-for-product · producers (+ maybe actions) · XL,
-  per-OS. Clipboard, print, screenshot, removable-media file-copy (content-aware), cloud-sync/CASB. A
-  DLP that watches directories but not the channels users exfiltrate through is not a DLP.
-  **Channel-awareness foundation SHIPPED (D194):** `internal/exfil` tags a file event with its exfil
-  channel (removable / cloud-sync / local, path-derived and content-free) and a policy escalates a
-  sensitive write to an exfil channel over a local one. Covers the FILE-BASED channels (removable +
-  cloud-sync folders, via the existing fanotify/filewatch producers).
-  **Content-aware CASB SHIPPED (D222, increment 1):** `internal/casb` classifies a network flow's cloud
-  service + sanctioned status + upload-ness (content-free, from host+method), added to the policy input
-  as `event.cloud`; a policy BLOCKs sensitive content (worker DLP hits) uploaded to an UNSANCTIONED cloud
-  service and allows it to a sanctioned one — gateway-preventive (no root), hot-reloadable catalog. Proven
-  end-to-end on the real gateway→worker path; 4 mutation guards. **Now watches the cloud-upload channel,
-  not just directories.** Remaining: the **per-OS non-file producers** — clipboard, print, screenshot
-  (display/OS-gated) — plus CASB refinements (multipart/path upload heuristics, download/share, shadow-IT
-  discovery) and runtime mount-table resolution.
-- **DLP-3 · EDM / IDM / OCR** — P1 · classify (server-side) · XL. Exact-data-match, doc fingerprinting,
-  OCR. **Placement fixed by ADR-9** — server-side / signed index into the sandbox; never break D10/D11.
-  **EDM+IDM SHIPPED (D193 single-value + D197 multi-cell + D198 IDM document-fingerprint):** `internal/classify` fingerprints an operator dataset into a
-  k-anonymized bloom index (ships into the sandbox, no raw data leaves), and a new `DETECTOR_TYPE_EDM`
-  detector matches a specific sensitive value in a flow across formatting (adjacent-token windows),
-  worker-loaded via `OPENSHIELD_EDM_INDEX`. **Multi-cell record correlation (D197), IDM document
-  fingerprinting (D198), and index signing (D204, ADR-9) all shipped.** Remaining DLP-3: **OCR** only.
-- **DLP-6 · Endpoint user coaching/justification** — P1 · X + UI · M. REDIRECT-to-coaching exists at
-  the network gateway only; bring it to the endpoint.
-- ✅ **DLP-7 · Detection breadth — context/proximity + passport/DL (SHIPPED D199)** — P1 · classify · M–L.
-  `contextNear` keyword-proximity primitive + passport/driver's-license (D199) + **India Aadhaar
-  (Verhoeff) & UK NINO (context-gated) SHIPPED (D215)**. Remaining: more countries (copy-paste the
-  checksum/context shapes), richer context rules via the signed custom-rule surface.
-- **DLP-8 · Format depth** — P2 · classify · M. **✅ Nested-archive recursion SHIPPED (D214): a file in a
-  plain zip (even double-zipped) is now extracted + classified, bomb-bounded.** Remaining: RTF / legacy
-  `.doc`, tar/gzip containers, response-body multipart/gzip (shared with NIPS-4).
+- **ZT-4 · ZTNA client/connector model** — new work · L. Enterprise ZTNA is agent-brokered; today it is
+  server-side reverse-proxy only. Build the agent-brokered access path over the existing dual-credential
+  + attestation posture. *Accept: an attested, authorized agent brokers access to an internal upstream it
+  cannot reach directly; a non-attested or unauthorized agent is refused.*
 
-### NIPS / NTPS
-- **NIPS-1 · Transparent/inline connector** — P0 · data-plane (D) · L. **Approach fixed by ADR-8**
-  (opt-in TPROXY, bypass watchdog, preserve egress fail-open).
-  - ✅ **Increment 1 DONE (D225) — the network plane DROPS a flow at L4.** `internal/gateway`
-    `ListenTransparent` (IP_TRANSPARENT) + `TProxyServer`: a TPROXY-redirected TCP flow is decided
-    through the pipeline (IOC dst-IP) and DROPPED (blocked) or SPLICED (allowed) to its original
-    destination, with egress fail-open (a pipeline error forwards the flow) and fail-to-wire (an
-    un-armable listener never takes the network down). Opt-in `OPENSHIELD_TPROXY_LISTEN`. **Proven on
-    the rooted VM** with real netns+veth+TPROXY (a denied flow dropped, an allowed one spliced to an
-    echo server); 3 mutation guards incl. the on-kernel no-IP_TRANSPARENT. **Now a real inline IPS at
-    L4, paired with the NIPS-2 detection engine.**
-  - ✅ **Increment 2 DONE (D226) — the inline plane now blocks by DOMAIN.** `internal/gateway/sni.go`
-    defensively extracts the SNI from the TLS ClientHello; `handleFlow` peeks it (replaying the bytes so
-    an allowed flow is byte-for-byte transparent) and sets `Request.Host = SNI`, so the IOC domain match
-    blocks a flow to a bad domain on a SHARED CDN IP. Fail-open on a peek timeout/non-TLS. **Proven on the
-    VM** (a real ClientHello through TPROXY dropped by its SNI); 3 mutation guards incl. the over-read.
-  - ✅ **Increment 3 DONE (D227) — the FULL NIPS-2 engine now runs inline.** The bytes peeked for the SNI
-    are also classified by the worker's content-signature engine (`Request.Body = peeked`), so a malicious
-    CLEARTEXT payload is dropped inline — the transparent plane now decides on dst-IP + SNI + payload
-    content-signatures. Bounded to the peek window; cleartext-only (TLS payload is encrypted → SNI is the
-    signal); fail-open unchanged. Proven (real gateway decider, mutation-verified).
-  - ✅ **Increment 4a DONE (D237) — the inline plane SELF-INSTALLS its TPROXY rules, now deployable.**
-    `internal/gateway.InstallTProxyRules` owns the mark routing rule + a divert route (dedicated table) + a
-    per-dport mangle PREROUTING TPROXY rule, opt-in (`OPENSHIELD_TPROXY_INSTALL_RULES=1`), idempotent,
-    deleted-by-exact-spec on exit (never touches operator rules); fail-to-wire. **Two production correctness
-    bugs surfaced on the VM: TPROXY must be DIRECTLY in PREROUTING (not a jumped sub-chain), and `! -i lo`
-    is required (else the server's own loopback dial loops back into the listener). Gated VM test: a
-    forwarded flow dropped/spliced via the self-installed rules — PASS; divert-route-drop mutation hangs the
-    flow (routing half load-bearing).** This also unblocks a TPROXY bypass watchdog (OpenShield now owns the
-    rules — the D235 analogue). Deferred: nftables-native backend, the bypass watchdog, the OUTPUT/local-host
-    case, IPv6.
-  - **Increment 4b (deferred):** streaming inspection past the peek window; TLS interception for encrypted
-    payload; structured HTTP parsing; a TPROXY bypass watchdog; UDP; nftables-native config;
-    QUIC/TLS-1.3-ECH (hides SNI → L4 fallback); a privileged CI job with netns.
-  - ✅ **Increment 4b DONE (D238) — the redirect rules are bound to the server lifecycle.**
-    `gateway.RunTProxyWithRules` removes the self-installed TPROXY rules the instant `Serve` returns (an
-    unexpected listener stop as well as a clean ctx cancel), so a dead listener never leaves host :80/:443
-    traffic redirected into a closed socket (fail-open). Removes only if install succeeded. **VM-proven:
-    close the listener → the rule is gone; the ctx-only-remove mutation leaves it dangling (VM test FAILs).**
-    Deferred: a hung-listener probe (see inc-4c for re-arm).
-  - ✅ **Increment 4c DONE (D239) — the inline plane self-heals.** `gateway.SuperviseTProxy` re-arms the
-    listener + reinstalls the rules after a transient stop (backoff `OPENSHIELD_TPROXY_RETRY`, default 5s),
-    retrying until ctx cancel — so a blip does not silently leave inline prevention disabled. **VM-proven:
-    kill the listener → the supervisor re-arms → a flow enforces again; the no-re-loop mutation leaves the
-    plane dead (VM test FAILs).** Deferred: operator-path self-heal, a crash-loop circuit breaker, a
-    hung-listener liveness probe, the nft-native backend.
-- **NIPS-2 · Signature / threat-intel engine** — P0 · classify (C) · L. Suricata/Snort-ruleset or
-  YARA-style network classifier + IOC feeds. Without this it is categorically not an IPS.
-  - ✅ **Metadata IOC half DONE** — `internal/nips` matches domain/IP/CIDR/URI-substring, hot-reload +
-    remote-URL feed (capability `network-threat-intel`).
-  - ✅ **Content-signature half DONE (D221, increment 1)** — `internal/signature`: an operator ruleset
-    (literal `content` + `nocase` + RE2 `regex`, AND-combined, bounded scan, content-free hits) matched
-    against the flow BODY IN THE SANDBOXED WORKER (D72 — body = attacker content), returned via new
-    additive `ClassifyResponse.threat_matches`/`THREAT_CATEGORY_CONTENT_SIGNATURE`, projected onto
-    `st.Threats` so policy PREVENTs on a body signature; hot-reloadable. Proven end-to-end on the real
-    gateway→worker path; 3 mutation guards incl. the append-merge (overwrite would hide every signature
-    from policy). **Crosses ADR-8's "without signatures it is not an IPS" line for content.**
-  - **Remaining increments:** full Suricata/Snort grammar (flowbits/offset-depth/thresholding),
-    Aho-Corasick multi-pattern, response-body scanning (shares NIPS-4), inline DROP (root-gated NIPS-1).
-- **NIPS-8 · Inline DNS sinkhole resolver — turn DNS from detect to prevent** — P1 · new data-plane
-  (D) · L.
-  - ✅ **Increment 1 DONE (D231) — DNS is now PREVENTIVE.** `internal/dnssink`: a real UDP resolver that
-    forwards normal queries to an upstream and sinkholes a blocked domain with NXDOMAIN (RPZ-style),
-    backed by the hot-reloaded IOC feed (`gateway.BlockedDomain`). **Fails open** (unparseable/unmatched →
-    forward, never blackhole) and fail-to-wire. Opt-in `OPENSHIELD_DNS_SINK_LISTEN` + `_UPSTREAM`. Proven
-    on a high port (no root) + 2 mutation guards.
-  - ✅ **Increment 2 DONE (D234) — the sinkhole now covers UNCONFIGURED clients.** A root-only nat rule
-    (`internal/dnsredirect`, iptables/nft) transparently redirects the host's UDP `:53` to the local
-    resolver, so a client pointed at `8.8.8.8` (or malware with a hard-coded resolver) is sinkholed with no
-    reconfiguration. **The loop-break is the core:** a naive redirect would capture the resolver's OWN
-    upstream forward (also `:53`) and loop it back — so `dnssink.Resolver` marks its upstream socket
-    (`SO_MARK`) and the redirect rule exempts the mark (the dnscrypt/systemd-resolved pattern). Rules live
-    in a dedicated chain/table, remove-then-add idempotent, fail-to-wire. Opt-in `OPENSHIELD_DNS_REDIRECT=1`
-    (+ `_MARK`). **Proven on the VM: an unconfigured client gets NXDOMAIN for a blocked domain + NOERROR for
-    a normal one (the marked forward escaping the redirect); a second gated test proves that WITHOUT the
-    exemption normal resolution loops and hangs.** Deferred: the PREROUTING/gateway-forwarding case (redirect
-    other hosts' `:53`); TCP DNS; a bypass watchdog (remove the redirect if the resolver dies so resolution
-    is never wedged); DoT/DoH (`:853`/`:443` evade a `:53` redirect).
-  - ✅ **Increment 3 DONE (D235) — the redirect self-heals instead of wedging DNS.** `dnsredirect.Watchdog`
-    probes the resolver's liveness and, after a threshold of consecutive failures, REMOVES the redirect
-    (bypass → host falls back to direct DNS), re-installing on recovery — the D73/D17 fail-open discipline
-    applied to the redirect itself, closing the D234 availability hole (a dead resolver no longer wedges
-    host name resolution). Threshold damps flapping; recovery is immediate. **Proven on the VM: kill the
-    resolver → the watchdog bypasses → the query resolves directly instead of hanging;** 2 unit mutation
-    guards (threshold, counter-reset). Deferred: a shared watchdog for the TPROXY redirect; backoff/hold-down;
-    a bypass alert (notify seam); an upstream-independent sentinel probe.
-  - ✅ **Forwarded/gateway redirect DONE (D240) — the sinkhole now protects clients BEHIND the gateway.**
-    The D234 redirect was OUTPUT-only (the gateway's own DNS); this adds a nat PREROUTING REDIRECT of
-    forwarded client `:53` (`internal/dnsredirect.InstallForwarded`, dedicated chain), so a fleet of clients
-    behind the gateway is sinkholed. No mark loop-break needed (the resolver's upstream forward is OUTPUT,
-    not PREROUTING). Watchdog `Scope` (local/forwarded/both) covers it; `OPENSHIELD_DNS_REDIRECT=forwarded|both`.
-    **VM-proven with a netns forwarding topology + `dig` from the client ns** (blocked→NXDOMAIN,
-    normal→NOERROR); PREROUTING-jump-drop mutation → not sinkholed (VM FAILs). Deferred: nft-native, TCP DNS.
-  - **Increment 5 (deferred):** local cache + upstream failover; sinkhole-to-walled-garden IP; TCP DNS +
-    DoT/DoH; the nftables-native backend; the TPROXY-redirect watchdog.
-  Original: DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
-  inline `:53` redirect over a non-resolver would blackhole all fleet name resolution. To make DNS
-  *preventive* it must become a **real resolver**: local cache + upstream forwarding + failover, then
-  **sinkhole/NXDOMAIN the malicious query (RPZ-style)** on a classify verdict, feeding the same
-  pipeline. **Must fail open** (resolver error → forward upstream, never blackhole — the D73/D17
-  discipline) and carry a bypass watchdog (resolver down → traffic still resolves). External-gated like
-  NIPS-1 (owns `:53`). Do NOT ship the transparent redirect from DEPLOY-1 until this resolver exists.
-  *(Explicitly not the tap-based answer/RST-injection hack — that races the real response and loses
-  under load; it is not a security control.)*
-- ✅ **NIPS-4 · Response-body inspection (SHIPPED D200, observe-only)** — P1 · classify · M. Today only the *request* body is
-  classified; the response is copied through. Add buffered/streamed classification with memory bounds,
-  gzip + multipart decode (shared with DLP-8). **Must preserve the deliberate D73/D17 egress fail-open.**
-- **NIPS-5 · HTTP/2 & QUIC interception** — P2 · new work · L. HTTP/1.1 only today.
-- **NIPS-6 · Raw TCP/L4 metadata connector + anomaly/beaconing detection** — P2 · P + C · L.
+### Lane D · Platform — durability, config, packaging, cross-platform
 
-### SIEM
-- ✅ **SIEM-4 · External log ingestion (CEF parser D202, syslog listener + external_logs store D205, AWS
-  CloudTrail cloud-JSON D208, WEF Windows-XML D211)** — P1 · connector class · M. **All three formats
-  shipped**; a `GET /logs` operator query (D210) spans them. Correlating external logs into incidents is
-  the XDR-2/4 lane; EVTX binary + a live WEF subscription are follow-ons.
-- ✅ **SIEM-7 · MITRE ATT&CK mapping (SHIPPED D201)** — P1 · classify metadata · M. Tag detections with techniques.
-- **SIEM-9 · Threat-intel enrichment + saved searches / scheduled reports** — P2 · S–M / M.
-- ✅ **SIEM-10 · Compliance/retention reporting (SHIPPED D216)** — P2 · M. Each retention purge (fleet
-  aggregate, notify-dedupe) is recorded as a queryable `retention_events` compliance event (what/when/
-  how-many/policy/cutoff), exposed via `GET /compliance/retention` (RoleAnalyst). Remaining: record the
-  gateway ledger-tombstone purge too; scheduled report export.
-- *(✅ Field-level hunting SHIPPED (D212): every ingested log's parsed fields (CEF/CloudTrail/WEF) are
-  stored JSONB and searchable via `GET /logs?field=k:v` across sources. Remaining deepening: `fleet_telemetry`
-  proto `BYTEA` payloads are still opaque — typed columns for the fleet stream + free-text search over `raw`
-  are follow-ons.)*
-
-### HIPS (endpoint-behavioral domain — Phase E, landed and hardening)
-- **HIPS-3 · `DENY_EXEC`** — ✅ **T1-gated logic DONE (D217)** + ✅ **exec-permission PRODUCER DONE
-  (D224) — inline exec prevention is REAL on a live kernel.** `internal/agent/execmon` marks
-  `FAN_OPEN_EXEC_PERM` (mount mark) + reads/decodes exec-permission events + drives the fail-open
-  watchdog to answer the kernel `FAN_DENY`/`FAN_ALLOW` + closes the event fd; wired into
-  `cmd/openshield-agent` (its first real function) with a pure parser-free deny-list/behavioral decider.
-  **Proven on a rooted VM** (kernel 6.8): a deny-listed binary is kernel-REFUSED (EACCES), a benign one
-  runs, no fd leak; 3 mutation guards incl. the on-kernel Deny→Allow. Required detainting `watchdog` of
-  `encoding/json` (moved `ExecEvaluator`→execguard, local `watchdog.Severity`, fmt-not-slog) so the
-  privileged binary stays parser-free. **Increment 2 (deferred):** the FULL OPA-pipeline `DENY_EXEC`
-  inline needs an IPC decider to the unprivileged engine (the privileged binary can't hold the
-  policy/proto); the relocated `execguard.ExecEvaluator` is that bridge. `KILL_PROCESS` (post-exec)
-  already landed.
-- **HIPS-4 · FIM, memory/injection detection, ransomware canary, application whitelisting** — each a
-  separate subsystem-sized bet · XL each. Do not bundle.
-  - ✅ **Application whitelisting SHIPPED (D230):** default-deny exec via an allowlist on the inline
-    exec-permission control (D224) — only approved binaries run, everything else refused inline; deny-list
-    + behavioral still block first (deny > allow). Opt-in `OPENSHIELD_EXEC_ALLOW`, parser-free. Proven on
-    the VM (a non-allowlisted binary kernel-refused). **Note: the allowlist must include the dynamic loader
-    (`ld-linux`) + interpreters — `FAN_OPEN_EXEC_PERM` fires for them too.** Deferred: strict
-    deny-unknown-path, content-hash allowlisting. (Memory/injection detection shipped separately, D233.)
-  - ✅ **Ransomware canary SHIPPED (D232):** `internal/canary` plants decoy files and fires a
-    high-severity ransomware event when a threshold of DISTINCT canaries change within a window (the
-    mass-change signature, distinct from a lone edit) — confirmed by content hash, entropy raising
-    confidence (encryption signature), emitted as `EVENT_KIND_RANSOMWARE_SUSPECTED` (metadata-only) →
-    policy ALERT. Opt-in `OPENSHIELD_CANARY_DIRS`. Proven end-to-end + 3 mutation guards. Deferred:
-    automated containment (SOAR-7), per-process attribution, real-time fanotify triggering.
-  - ✅ **FIM increment 1 SHIPPED (D223):** `internal/fim` detects tampering of operator-designated
-    critical files against a persistent SHA-256 baseline — catches a timestomped modify (preserved
-    mtime+size) that the size+mtime `filewatch` misses, detects DELETION (new `EVENT_KIND_FILE_DELETED`),
-    persists the known-good manifest across restarts. Emits each drift as a content-free pipeline event
-    (→ policy ALERT, audited) via `fimSource` in `openshield-engine`; no root (periodic hashing). Proven
-    end-to-end on the real engine→worker path; 4 mutation guards. **Honest limit:** the manifest is a
-    plain (unsigned) file — a signed tamper-evident baseline is the next increment. Deferred: remediation,
-    xattr/ACL monitoring, recursive globs, Windows/macOS paths.
-    Memory/injection detection (D233), ransomware canary (D232), and application whitelisting (D230) all shipped.
-  - ✅ **FIM real-time watch (increment 2) SHIPPED (D228):** an unprivileged fanotify watch
-    (`FAN_REPORT_DFID_NAME` + `FAN_EVENT_ON_CHILD`) triggers an immediate `fim.Scan` on a change, so tamper
-    is caught in ~ms instead of up to the poll interval; the poll stays the completeness backstop. The
-    event is only the trigger — the cryptographic scan decides drift. Opt-in `OPENSHIELD_FIM_REALTIME`,
-    fail-to-wire. Proven (gated, unprivileged) + 2 mutation guards. Deferred: inotify fallback, per-file marks.
-  - ✅ **FIM real-time DELETE (increment 4) SHIPPED (D236):** added `FAN_DELETE | FAN_MOVED_FROM` to the
-    real-time watch mask, so a deleted (or moved-out) critical file — the "remove the evidence" tamper —
-    fires the same immediate re-scan as a modify, caught in ~ms instead of up to a poll interval late. The
-    event is only the trigger; `fim.Scan` confirms the deletion → `FILE_DELETED`. **Confirmed the
-    unprivileged FID watch DOES deliver `FAN_DELETE` on kernel 6.8 — proven locally AND on the VM;** 1 mask
-    mutation guard. Deferred: `FAN_CREATE`/`FAN_MOVED_TO` real-time (ADD is weaker, poll-caught), per-file
-    inode marks, mount-wide privileged watch.
-  - ✅ **FIM signed baseline (increment 3) SHIPPED (D229) — FIM is now tamper-EVIDENT end to end.** The
-    baseline is operator-signed (domain-separated Ed25519, DLP signed-index model); the node verifies
-    against a trusted public key before trusting it and refuses an unverifiable one
-    (`OPENSHIELD_FIM_BASELINE_PUBKEY`; the unsigned path is preserved but loudly warned). New operator
-    tool `openshield-fim-baseline` (keygen + build+sign); the node holds only the public key. Closes the
-    "an attacker who can write the baseline hides drift" gap. Proven + 2 mutation guards (skip-verify,
-    domain-omission). Deferred: key rotation / multiple keys, host-identity binding, hardware keys.
-  - ✅ **Memory/injection detection SHIPPED (D233) — the last HIPS-4 subsystem.** `internal/meminject`
-    scans `/proc/<pid>/maps` and flags any region that is BOTH writable and executable (the W^X-violation
-    signature of injected shellcode), reading only map METADATA + the exe path — never process memory
-    contents (that would need `process_vm_readv`, which the worker sandbox denies). A cross-process scan
-    skips-and-counts any process it cannot read, so an unprivileged run covers its own processes and a ROOT
-    run covers the whole fleet. Emitted as a content-free `EVENT_KIND_MEMORY_INJECTION_SUSPECTED`
-    (ProcessSubject pid + exe, dedup'd by pid+exe so a standing region emits once) → policy ALERT; the
-    event carries no path, so the engine's existing `fs==nil` branch classifies it metadata-only with no
-    engine change. Opt-in `OPENSHIELD_MEMSCAN_INTERVAL`. Proven: unit + a real-kernel own-process rwx test
-    + the isWX mutation guard, and a **GATED cross-user scan run on the VM (root reads a `nobody` process's
-    maps + finds its W+X region): PASS** — the genuinely root-required fleet path. Deferred: real-time
-    (eBPF/LSM `mmap`+`mprotect` hook vs this poll), a JIT allowlist (JVM/V8/.NET legitimately map W+X),
-    ptrace/reflective-loading detection beyond the W+X signal, non-Linux. **HIPS-4 subsystems complete.**
-
-### Platform (remainder, not in the immediate queue)
-- **PLAT-5 · Config management beyond env vars** — P2 · S–M. Typed config (file + env override),
-  validated fail-fast at boot; secrets as file paths.
-- **PLAT-6 · Release, packaging & deploy** — P2 · M. Tagged releases + reproducible signed binaries
-  (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact.
+- **PLAT-2 · Durable ingest by default** (ADR-2) — srv · M. JetStream durable consumers are wired and
+  env-gated (D180); flip them on by default and migrate the full suite off core-NATS at-most-once. Keep
+  the agent spool as the pre-broker buffer; the hash-chained ledger stays the system-of-record.
+  *Accept: with no env override, a telemetry event survives a consumer restart mid-backlog (real JS +
+  PG); mutation `Ack→Nak` order still redelivers.*
+- **PLAT-5 · Config management beyond env vars** — S–M. Typed config (file + env override), validated
+  fail-fast at boot; secrets as file paths. *Accept: an invalid config fails the binary at boot with a
+  precise error; env overrides a file value.*
+- **PLAT-6 · Release, packaging & deploy** — M. Tagged releases + reproducible signed binaries
+  (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact. *Accept: `make
+  release` produces signed, verifiable artifacts; a clean host installs and runs the stack from them.*
+- **PLAT-7 · Cross-platform observe — finish the builder half** (ADR-11) — parallel. The OBSERVE path is
+  done (per-OS `openFileWatcher` seam: fanotify on Linux, poll-based watcher on windows/darwin, same
+  binary). **Remaining:** native OS watch APIs (`ReadDirectoryChangesW`/`FSEvents`) on the same seam; a
+  non-Linux worker sandbox (seccomp is Linux-only); real Windows/macOS runtime validation. **Enforcement
+  stays owner-gated** (Windows EV cert + minifilter, macOS Endpoint Security entitlement — owner drives
+  procurement). *Accept: the engine observes file events on Windows and macOS through the native APIs,
+  runtime-validated on real hardware.*
 
 ---
 
-## Parked (owner-gated — do not start)
+## 🟢 Enrichment backlog — post-MVP plugins (on the frozen core)
 
-- **PLAT-1 · A UI** — P1 · XL — *the single biggest enterprise-credibility gap.* Minimal SPA (or rich
-  TUI first) over the operator-read API: fleet health, alerts, incidents, search, agent status, cases.
-  Needs a frontend-toolchain decision (repo is pure Go). Owner-reserved (explicitly last). Its authz
-  model is unblocked by ADR-4 (PLAT-3).
-- **NAC** (off-pipeline, parked — ADR-0): NAC-1 (802.1X/RADIUS authenticator + switch/AP integration) ·
-  NAC-2 (posture-gated admission + quarantine VLAN) · NAC-3 (guest onboarding / captive portal /
-  agentless discovery). All XL, network-infrastructure, not pipeline plugins.
-- **VPN** (off-pipeline, parked — ADR-0): VPN-1 (WireGuard/IPsec/TLS tunnel data plane + client, XL) ·
-  VPN-2 (split-tunnel policy + per-tunnel cert lifecycle, L). ZTNA is not a VPN.
+Additive producers / classify plugins that **do not gate the MVP**. Each lands via the same OpenSpec +
+mutation-test discipline, one at a time, without touching the core. Pull after the MVP queue (or the UI).
+Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane.
+
+### DLP
+- **DLP-2 · Non-file exfil producers** — P, per-OS · XL. Clipboard, print, screenshot (display/OS-gated).
+  File-based channels (removable + cloud-sync) and content-aware CASB already ship; this is the remaining
+  endpoint-producer surface + CASB refinements (multipart/path upload heuristics, download/share,
+  shadow-IT discovery).
+- **DLP-3 · OCR** — classify (server-side, ADR-9) · L. EDM/IDM/signed-index already ship; OCR is the last
+  DLP-3 piece — server-side for gateway-visible flows, never breaking D10/D11.
+- **DLP-6 · Endpoint user coaching/justification** — X + UI · M. REDIRECT-to-coaching exists at the
+  network gateway; bring it to the endpoint. (Depends on the UI.)
+- **DLP-7 · More national IDs / richer context rules** — classify · M. Copy the checksum/context shapes;
+  extend via the signed custom-rule surface.
+- **DLP-8 · Format depth** — classify · M. Nested-archive recursion ships; remaining: RTF, legacy `.doc`,
+  tar/gzip containers, response-body multipart/gzip (shared with NIPS-4).
+
+### NIPS / NTPS
+- **NIPS-1 deferred increments** — D. nftables-native backend, TPROXY bypass watchdog, OUTPUT/local-host
+  case, IPv6, streaming inspection past the peek window, TLS interception, structured HTTP parsing.
+- **NIPS-2 · Full signature engine** — C. Suricata/Snort grammar (flowbits/offset-depth/thresholding),
+  Aho-Corasick multi-pattern, response-body scanning, STIX/TAXII + authed feeds, JA3. (IOC + content-
+  signature halves already ship.)
+- **NIPS-5 · HTTP/2 & QUIC interception** — new work · L. HTTP/1.1 only today.
+- **NIPS-6 · Raw TCP/L4 metadata connector + anomaly/beaconing detection** — P + C · L.
+- **NIPS-8 deferred increments** — D. Local cache + upstream failover, sinkhole-to-walled-garden IP, TCP
+  DNS, DoT/DoH, nftables-native backend. (Resolver + transparent redirect (local + forwarded) + bypass
+  watchdog already ship.)
+
+### SIEM
+- **SIEM-9 · Threat-intel enrichment + saved searches / scheduled reports** — S–M / M.
+- **SIEM-10 remainder** — record the gateway ledger-tombstone purge as a compliance event; scheduled
+  report export. (Retention-event recording + `GET /compliance/retention` already ship.)
+- **Field-hunting deepening** — typed columns for the `fleet_telemetry` proto `BYTEA` payloads; free-text
+  search over `raw`; cross-vendor field-name normalization. (JSONB field hunting across CEF/CloudTrail/WEF
+  already ships.)
+
+### HIPS
+- **Real-time behavioral hooks** — eBPF/LSM `mmap`/`mprotect`/exec hooks replacing the poll for
+  memory-injection + FIM; a JIT allowlist for legitimate W+X (JVM/V8/.NET); per-process ransomware
+  attribution; content-hash application whitelisting.
+- **HIPS-3 increment 2 · full-pipeline `DENY_EXEC`** — A. The inline OPA-pipeline deny needs an IPC
+  decider from the privileged binary to the unprivileged engine (`execguard.ExecEvaluator` is the
+  bridge). T1-gated logic + the kernel producer + default-deny whitelisting already ship.
+
+### Zero Trust
+- **ZT-5 · Policy admin + session recording** — new work · L. Ties to the UI (PLAT-1).
+- **ZT-6 · SAML** — P · L. Only after OIDC proves the SSO seam.
+
+---
+
+## 🔒 Parked — owner-gated, do not start
+
+- **PLAT-1 · The UI** — XL — *the single biggest enterprise-credibility gap, and deliberately last.*
+  Minimal SPA (or rich TUI first) over the operator-read API: fleet health, alerts, incidents, search,
+  agent status, cases. Needs a frontend-toolchain decision (repo is pure Go). **Starts only after the
+  entire MVP infrastructure queue is built and tested.** Its authz model is already unblocked by ADR-4.
+- **NAC** (off-pipeline, ADR-0): 802.1X/RADIUS · posture-gated admission + quarantine VLAN · guest
+  onboarding. Network-infrastructure, not pipeline plugins.
+- **VPN** (off-pipeline, ADR-0): WireGuard/IPsec/TLS tunnel + client · split-tunnel policy. ZTNA is not a
+  VPN.
+
+---
+
+## ✅ Done ledger — verified closed (do not re-open or re-propose)
+
+Mutation-confirmed on live substrate (Postgres/NATS/TLS/swtpm/real kernel) across Rounds 30–34 and the
+D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log for the detail behind any
+`D<n>`.
+
+- **Core / security / honesty:** frozen pipeline (Event→Classify→Policy→Decision→Enforce→Audit); the
+  forward-secure hash-chained ledger + external anchoring (crown jewel); signed risk/posture channels;
+  enrollment key-overwrite/un-revoke guards; dead-man's-switch + verified-only operator views; no silent
+  server-side NATS loss; purge/tombstone honors legal holds; non-owner ledger DB role wired
+  (`openshield_app`); no-follow safe reader; operator-search validation; access-proxy header hygiene;
+  DSAR (PLAT-8); Prometheus metrics behind constant-time bearer auth (PLAT-4/4b).
+- **Identity / Zero Trust:** IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
+  across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
+  JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers
+  (D179). **ZT-1 full hardware attestation chain (D183–191):** AK quote → EK→AK credential activation →
+  measured-boot PCR policy → posture wiring → NATS transport → file + network self-enrollment →
+  continuous re-attestation, swtpm-proven end-to-end; EK-cert-chain anchor (D218) + pre-auth enroll token;
+  attestation verdict TTL; HTTPS-only JWKS; DPoP sender-constrained tokens + clock-skew leeway.
+- **DLP:** case/incident workflow; compliance packs compose (not replace) under a most-restrictive-wins
+  lattice (D171, ADR-5); detector breadth (CPF/card/SSN/phone/EIN/NPI/routing/SIN/NHS/passport/DL/Aadhaar/
+  NINO). EDM single + multi-cell + IDM doc-fingerprint (D193/197/198); signed indexes (D204, ADR-9);
+  exfil-channel awareness (D194); content-aware CASB (D222); recursive archive extraction (D214).
+- **NIPS:** DNS + SMTP parsers on live listeners; shared rate-limiter; network-content → sandboxed-worker
+  classify. **NIPS-1 transparent inline IPS (D225–239, VM-proven):** L4 drop/splice by dst-IP + SNI +
+  payload content-signatures, self-installing + lifecycle-bound + self-healing TPROXY rules. **NIPS-2
+  engine:** IOC threat-intel (hot-reload, local + remote-URL, D192/206/209) + content-signature engine
+  (D221). **NIPS-8 DNS sinkhole (D231–240, VM-proven):** preventive NXDOMAIN resolver + transparent :53
+  redirect (local + forwarded) with mark loop-break + self-healing bypass watchdog. NIPS-4 response-body
+  inspection (D200, observe-only).
+- **SIEM:** `/events` + `/logs` search on the served TLS mux, operator-gated; cross-host `agent_id` from
+  the verified envelope; alert lifecycle (severity/status/dedup_key, D178, ADR-10); multi-sink HMAC
+  webhook fanout + replay protection (D176); materialized incidents; persisted + pruned UEBA baselines
+  (D177); durable notify dedup (D172/207); ATT&CK mapping (D201); external-log ingest CEF-syslog + AWS
+  CloudTrail + WEF (D202/205/208/211) with field-level JSONB hunting (D212); retention compliance events
+  (D216).
+- **HIPS (full HIPS-4 suite):** exec producer → behavioral classifier → `KILL_PROCESS`; trusted-identity
+  critical-process guard (D174); pid-reuse revalidation (D175); inline exec PREVENTION on a live kernel —
+  `DENY_EXEC` logic (D217) + `FAN_OPEN_EXEC_PERM` producer (D224) + default-deny whitelisting (D230);
+  FIM baseline/real-time/signed/real-time-delete (D223/228/229/236); ransomware canary (D232);
+  memory-injection W^X detection (D233).
+- **Platform:** JetStream durable consumers env-gated (D180, ADR-2); active-passive HA via Postgres
+  advisory-lock leader lease (D181, ADR-3); cross-platform OBSERVE path (D187, ADR-11). XDR-1 entity
+  graph populated by real producers (D195/203); XDR-3 canonical subject stamping (D196); XDR-2 increment 1
+  unified-alert stream (D213). SOAR-1 incident→notify (D220).
+
+---
+
+## Architecture decisions (ADRs) — the closed forks
+
+These resolve the forks past audits surfaced. **ADR-0/-11 are owner decisions; ADR-2…-12 are technical
+decisions made to unblock — the owner may override any.** The frozen-core discipline (D26/D69) governs.
+(There is no ADR-1; the NAC/VPN fork became ADR-0.)
+
+- **ADR-0 · NAC and VPN are PARKED (owner).** They produce no Event and consume no Decision (the access
+  proxy is L7-HTTP-only, not a VPN). Kept off the queue and out of headline claims; `NAC-*`/`VPN-*`
+  staged for later green-light as separately-scoped off-pipeline products that *feed* posture/risk in.
+- **ADR-2 · Telemetry durability = NATS JetStream** (PLAT-2). Durable consumers with explicit ack for
+  ingest; keep the spool as the pre-broker buffer; replace the per-message `FOR UPDATE` in `VerifySigned`
+  with a per-agent advisory lock. JetStream is a **bus**, never the system-of-record (the ledger is).
+- **ADR-3 · HA = active-passive first** (PLAT-2b). Postgres leader lease + Postgres HA + JetStream; defer
+  stateless-horizontal until in-memory state (UEBA analyzer, dedup sets, cooldowns) is multi-writer-safe.
+- **ADR-4 · Authz = per-route RBAC tiers now, org tenancy deferred** (PLAT-3). analyst/responder/admin on
+  the `requireRole` seam, optionally OIDC-group-backed. Unblocks the UI.
+- **ADR-5 · Policy = compose, most-restrictive-wins** (DLP-5b). Compile default + selected packs +
+  operator custom together; stamp a bundle id/version on every Decision. Lattice over **data-plane verbs
+  only**: `ALLOW < ALERT < REDIRECT < ENCRYPT_LOCAL < QUARANTINE_LOCAL < BLOCK`. The process verbs
+  `DENY_EXEC`/`KILL_PROCESS` are **NOT** reachable by pack composition — a DLP/compliance pack can never
+  escalate to killing a process.
+- **ADR-6 · One canonical device identity** (IDENT-1). Canonicalize on the enrolled agent identity;
+  RoleClient certs carry `CN = agent identity`; ONE shared pseudonym derivation across enrollment, posture
+  publisher, and access proxy. Landed before ZT-1 — the ZTNA-vs-toy line.
+- **ADR-7 · Live JWKS via a background refresher** (ZT-2b). Serves-stale-on-failure, rate-limited on a
+  `kid` miss, NEVER fetches on the request path.
+- **ADR-8 · NIPS inline = opt-in TPROXY, not L2 bridge** (NIPS-1). TPROXY/nftables redirect as an opt-in
+  deploy mode with a bypass watchdog; reject L2 bridging. External-gated (root/`CAP_NET_ADMIN`). The
+  deliberate D73/D17 egress fail-open MUST survive: inline **fails-to-wire, never fails-closed-the-
+  network.**
+- **ADR-9 · EDM/OCR placement = server-side first, then a signed index into the sandbox** (DLP-3).
+  Server-side for gateway-visible flows; for endpoints, ship a signed, bloom/k-anonymized index *down*
+  into the sandboxed worker. Content and hashes never leave the endpoint (D10/D11).
+- **ADR-10 · Unified alert/incident lifecycle schema** (SIEM-6b). One migration adds severity/dedup-key/
+  status-lifecycle to `peer_alerts` before further SIEM detection ships.
+- **ADR-11 · Cross-platform = owner starts procurement, builder does observation now (owner).**
+  Enforcement is externally gated (Windows EV cert + attested minifilter; macOS Endpoint Security
+  entitlement). Owner acquires certs/entitlements; the builder lands GOOS skeletons + user-mode
+  observation producers that need no attestation. Gating limits enforcement, not observation.
+- **ADR-12 · SOAR response orchestration without breaking D14 — three tiers (owner-approved).**
+  - **Tier 1 — pipeline-native (SOAR-1/2/3/4/5/6/9).** Playbook steps that enrich/notify/mutate cases/
+    place holds/tag/approve touch no endpoint and actuate nothing — server-side workflow over data the
+    server already owns. Invariants: the **step registry is CLOSED and typed** (no shell command or
+    arbitrary URL), and **every step transition is ledgered**.
+  - **Tier 2 — signed Response Intent (SOAR-7 / XDR-6).** For live containment the server publishes a
+    signed, TTL'd `ResponseIntent{subject, intent, version, issued_at, ttl}` with a **closed,
+    parameterless vocabulary** (`ELEVATE_SCRUTINY`/`CONTAIN`/`REVOKE_TRUST`), consumed as **typed policy
+    context** — the endpoint's *local* policy maps it to verbs it already advertises. This does not widen
+    D14: a compromised control plane can at worst place subjects under containment, never express
+    exfiltration or execution. High-impact intents need four-eyes + a blast-radius guard; publication and
+    each enactment are ledgered with the intent id. New verbs beyond the initial three expand one at a time.
+  - **Tier 3 — third-party actuation, off-pipeline (SOAR-8).** Integration runners are separately-scoped
+    processes with least-privilege third-party creds that subscribe to the same signed, approved intent
+    stream and map one intent to one call from a **per-connector closed verb set** (the IdP runner knows
+    only `DISABLE_USER`/`REVOKE_SESSIONS` — never a URL or script). Four-eyes is non-waivable. The closed
+    verb set is the bound against a *compromised* control plane; four-eyes is the control against the
+    *careless* operator — both load-bearing.
+  - **Permanently out:** arbitrary command/script execution on endpoints (the capability D14 makes
+    inexpressible) and remote live-forensics content pull (forbidden by the D10/D29 content boundary). Any
+    pressure for these reopens D14 and goes to the owner as such.
 
 ---
 
@@ -1003,115 +372,62 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
 
 ### The lens: does it fit the frozen pipeline?
 
-The bet is a fixed pipeline — **Event → Classify → Policy → Decision → Enforce → Audit** — that
-absorbs capabilities as plugins, proven data-plane-agnostic three times (endpoint files D48, peer-UEBA
-D53, network gateway D69). Every piece is classified by how it meets that pipeline:
+The bet is a fixed pipeline — **Event → Classify → Policy → Decision → Enforce → Audit** — that absorbs
+capabilities as plugins, proven data-plane-agnostic (endpoint files D48, peer-UEBA D53, network gateway
+D69). Every piece is classified by how it meets that pipeline:
 
 - **P — Producer plugin.** A new Event source (a connector). Additive; the D69 seam holds.
 - **C — Classify plugin.** A new detector/analyzer in the sandboxed worker. Additive.
-- **X — Context input.** A new typed Policy input via the `ResolveContext`/`State.Context` seam
-  (D28/D53). Additive — this is the seam identity and risk flow through.
-- **A — Action expansion.** A new verb in the **closed** `Action` set (D14). NOT additive in spirit —
-  the closed set is a security feature (a compromised control plane cannot express "upload to URL").
-  Each new action is a deliberate, typed, single-purpose expansion, decided one at a time.
+- **X — Context input.** A new typed Policy input via the `ResolveContext`/`State.Context` seam (D28/D53).
+  Additive — the seam identity and risk flow through.
+- **A — Action expansion.** A new verb in the **closed** `Action` set (D14). Each new action is a
+  deliberate, typed, single-purpose expansion, decided one at a time — the closed set is a security
+  feature (a compromised control plane cannot express "upload to URL").
 - **D — New data-plane shape.** A new connector topology (transparent/inline vs forward-proxy). The
   pipeline is unchanged; the connector is new.
 - **E — External gating.** Not a design problem (certs, entitlements, ecosystem).
-
-The recurring discipline: **the core stays frozen; capability lands in producers, classify plugins,
-typed context, and — rarely and deliberately — one new action at a time.**
 
 ### What stays frozen
 
 The core does not change: `core.Dispatcher`, `State`, `Stage`, `Registry`, the
 `Enforcer`/`TargetedEnforcer` interfaces, `OnOutcome`, the ledger, the boundary rule (D10/D29 — content
-stays in the classifying process; only type+count+metadata cross). If any work forces a core change,
-that is the signal to stop and re-examine — the D26/D69 fitness tests apply.
+stays in the classifying process; only type+count+metadata cross). If any work forces a core change, that
+is the signal to stop and re-run the D26/D69 fitness tests.
 
 ### The five tensions (T1–T5) — status
 
-- **T1 — Does the closed action set (D14) expand?** *Resolved: expand one typed verb per capability,
-  never a parameterised framework.* `KILL_PROCESS` landed as a bounded verb; `DENY_EXEC` still needs
-  per-verb owner sign-off before wiring.
-- **T2 — Does risk flow back to enforcement (the D54 dead-end)?** *Resolved in code: the server
-  computes+publishes risk; the endpoint/gateway reads it as typed Policy context (D28) and decides
-  locally.* The server informs; it never actuates (D14 preserved).
-- **T3 — One product or a platform (DLP → XDR)?** *Resolved: the platform bet is made — OpenShield is
-  an XDR.* Detection-and-response now spans **endpoint** (file DLP + HIPS behavioral/KILL), **network**
-  (forward-proxy + DNS/SMTP NDR), and **identity** (ZTNA/OIDC), correlated server-side (SIEM
-  incidents/UEBA + the ledger) on one pipeline. **DLP is one classify-domain, not the whole product.**
-  The discipline shifts from "don't go broad" to **"keep each domain credible — depth beats shallow
-  breadth"**: the domains sit at 30–55% today (see the status table), so the standing risk is now
-  half-built breadth, not scope creep. New domains still enter as explicit, separately-scoped bets
-  (a producer + a classify-domain + at most one deliberate action), never a core change.
-- **T4 — Categories that do NOT fit the pipeline (NAC/VPN).** *Resolved by the owner: PARKED (ADR-0)* —
-  they produce no Event and consume no Decision. Off the queue, out of headline claims, tickets staged.
-- **T5 — Does SOAR response orchestration make the server a controller?** SOAR's core artifact — a
-  playbook that fires "isolate host / disable user / block indicator" — is on its face the
-  server-actuates behavior D14 forbids. *Resolved (ADR-12), tiered:* server-side playbooks (enrich/
-  notify/case/tag/approve over a **closed step registry**, every step ledgered) are pipeline-native and
-  land now; live containment goes through a **signed, closed-vocabulary Response-Intent** the endpoint's
-  *local* policy enacts (the T2 publish-and-decide seam, not a command); third-party actuation (IdP/
-  ITSM) is **off-pipeline** intent-subscriber runners with least-privilege creds + non-waivable
-  four-eyes. **Arbitrary endpoint command execution and remote content pull are permanently out** — the
-  D14/D10 red line. *Tier-1 proceeds; the intent seam (Tier-2) and runners (Tier-3) are **owner-approved
-  (2026-07-22)** and queued — new intent verbs beyond the initial three still expand one at a time (a
-  T1-style gate).*
+- **T1 — Does the closed action set (D14) expand?** *Resolved: one typed verb per capability, never a
+  parameterised framework.* `KILL_PROCESS` landed; `DENY_EXEC` logic landed (T1-gated); the full-pipeline
+  `DENY_EXEC` still needs its per-verb owner sign-off before wiring.
+- **T2 — Does risk flow back to enforcement?** *Resolved in code:* the server computes+publishes risk;
+  the endpoint/gateway reads it as typed Policy context (D28) and decides locally. The server informs;
+  it never actuates (D14 preserved). XDR-7 extends this per-entity across domains.
+- **T3 — One product or a platform (DLP → XDR)?** *Resolved: the platform bet is made — OpenShield is an
+  XDR.* Detection-and-response spans endpoint, network, and identity on one pipeline. DLP is one classify-
+  domain. The discipline is **"keep each domain credible — depth beats shallow breadth"**; new domains
+  enter as explicit, separately-scoped bets, never a core change.
+- **T4 — Categories that do NOT fit (NAC/VPN).** *Resolved by the owner: PARKED (ADR-0).*
+- **T5 — Does SOAR make the server a controller?** *Resolved (ADR-12), tiered:* server-side playbooks over
+  a closed step registry (every step ledgered) land now; live containment goes through a signed, closed-
+  vocabulary Response-Intent the endpoint's *local* policy enacts; third-party actuation is off-pipeline
+  intent-subscriber runners with least-privilege creds + non-waivable four-eyes. Arbitrary endpoint
+  command execution and remote content pull are permanently out.
 
 ### Phased plan (original design sequence, for context)
 
-Ordered by leverage-per-architectural-risk; much of A/C/E/F has since landed (see Done/queue).
+Ordered by leverage-per-architectural-risk; A/C/D/E/F have largely landed.
 
-- **Phase A — Identity & Zero-Trust foundation (X + P + one A).** Identity producer at the proxy
-  (verified pseudonymised subject replacing `sha256(src-IP)`); identity+posture as typed Policy context
-  (D28/D53); close the risk loop (T2). *Largely landed; IDENT-1 + ZT-1 remain.*
-- **Phase B — Inline prevention (enforcement-timing, one A).** Two-tier classify in the fanotify
-  permission window (fast pre-filter + async full); wire the privileged permission-mode agent (D18/D62)
-  under fail-open; `BLOCK` truly inline for files. *Open — the DLP credibility gap.*
-- **Phase C — Network breadth & transparent inline (P + D + C).** Transparent/inline connector (ADR-8);
-  non-HTTP producers (DNS/SMTP *landed*; raw TCP/L4 open); response-body + multipart + decompression;
-  IDS-signature classify plugin (NIPS-2).
-- **Phase D — Detection depth (C).** Document-structure parsing (PDF landed); secrets/health/national-ID
-  detectors (largely landed); admin-authorable signed detectors (landed); optional ML/EDM (ADR-9).
-- **Phase E — HIPS (P + a bounded A + C) — the endpoint-behavioral domain (the platform bet, now
-  taken).** Exec producer + behavioral classifier +
-  `KILL_PROCESS`/`DENY_EXEC`. *Runs end-to-end; hardening in the queue (HIPS-7/8), `DENY_EXEC` deferred.*
-- **Phase F — SIEM/analytics depth (server-side).** Search API (landed), correlation/rules (landed),
-  case workflow (landed), dashboards/UI (PLAT-1, parked), third-party log ingest (syslog landed;
-  CEF/WEF = SIEM-4).
-- **Cross-platform (Windows/macOS) — parallel, external-gated (E).** Portable all-Go core; per-OS
-  producers/enforcers. *Owner drives procurement, builder does observation now — ADR-11.*
-
----
-
-## Audit history
-
-Round-by-round detail lives in git history and the session memory; each round's residuals were folded
-into the Done list and the queue above.
-
-- **Round-30 (2026-07-21)** — first full 7-category enterprise audit. Produced the original
-  SEC-/HON-/PLAT- buckets + the category feature backlog. Caught its own same-day staleness against a
-  concurrent builder (→ the re-verify-at-HEAD discipline).
-- **Round-31 (through D136)** — mutation-verified the Bucket S/H fixes on live substrate; caught the
-  unmounted `/events`, the HIPS scaffolding-not-runnable state, and the SMTP/ENG residuals.
-- **Round-32 (through D168)** — verified the entire R31 queue + the net-new ZT/DLP/SIEM features closed;
-  surfaced IDENT-1 (HIGH, inert posture chain), the DLP-5b policy-replace bug, and the HIPS-7/8
-  KILL-safety gaps; closed the 11 open architecture forks as ADR-0, ADR-2…ADR-11 (there is no ADR-1 — the NAC/VPN fork became ADR-0). Independently double-checked
-  (all findings confirmed; two ADR text errors fixed pre-commit).
-- **Round-33 (through D168, this file)** — repositioning audit for **XDR + SOAR** (2 new headline
-  dimensions; NAC/VPN dropped from the headline set). Proved XDR correlation is **single-domain** today
-  (only peer-UEBA feeds `peer_alerts`; no entity model) → XDR-1…7 gated on IDENT-1; found SOAR is a
-  case+notify shell → SOAR-1…9; resolved the **T5 tension** (SOAR vs D14) as **ADR-12**'s three tiers
-  (server-side playbooks pipeline-native; signed closed-vocabulary intent seam + off-pipeline runners
-  owner-gated; arbitrary endpoint command execution permanently out). Substrate inventory + gap audit;
-  DLP/HIPS/NTPS/SIEM/ZT gaps not re-derived (Round-32 backlog is current).
-- **Round-34 (through D199, this file)** — full 7-category re-audit of the **D170–D199 shipment** (30
-  tickets) by three independent agents on live substrate (real swtpm/Postgres/JetStream/TLS). Verdict:
-  the shipment is **overwhelmingly REAL** — the *"verifies against its own assumptions"* pattern appeared
-  in only two places (XDR-1 orphaned store + soft join test; HIPS-7 unproven observation→kill plumbing).
-  Debt shifted from fake tests to **unwired real code** (JetStream producer, entity graph) and
-  **trust-bootstrap / durability gaps** (no EK-cert-chain anchor, no enroll authz, attestation never
-  expires, HTTP-JWKS, untested leader failover). Refreshed the maturity table (ZT 55→65, DLP 45→55,
-  SIEM 35→42, HIPS/NIPS/XDR nudged; SOAR unchanged at 10); filed `R34-1…13` + 14 gap-closing test
-  proposals; opened the **R34 priority lane** (wire the producer + entity graph, close the trust holes)
-  ahead of the strategic XDR/SOAR lanes. Confirmed the ledger crown jewel un-regressed.
+- **Phase A — Identity & Zero-Trust foundation.** Identity producer at the proxy; identity+posture as
+  typed Policy context; close the risk loop (T2). *Landed; ZT-4 client remains (MVP Lane C).*
+- **Phase B — Inline prevention.** Two-tier classify in the fanotify permission window; inline `BLOCK`
+  for files. *The endpoint DLP inline-block window is still the open bet.*
+- **Phase C — Network breadth & transparent inline.** Transparent/inline connector (ADR-8); DNS/SMTP
+  landed; NIPS-2 signatures landed. *Largely landed; enrichment increments remain.*
+- **Phase D — Detection depth.** Document parsing, national-ID detectors, signed detectors, EDM. *Largely
+  landed; OCR remains (enrichment).*
+- **Phase E — HIPS.** Exec producer + behavioral classifier + `KILL_PROCESS`/`DENY_EXEC`. *Runs end-to-
+  end; real-time eBPF/LSM hooks are enrichment.*
+- **Phase F — SIEM/analytics depth.** Search API, correlation, case workflow, log ingest. *Landed;
+  cross-domain correlation is the XDR lane; dashboards are the UI.*
+- **Cross-platform — parallel, external-gated.** Portable all-Go core; per-OS producers/enforcers. *Owner
+  drives procurement; builder does observation now (MVP Lane D, PLAT-7).*
