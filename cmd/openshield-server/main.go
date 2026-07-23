@@ -95,6 +95,13 @@ func main() {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
+			// SIEM-12/R34-13: prune the durable notify-dedupe ledger. An id only needs to outlive its
+			// dedup window; a day-old cutoff keeps the table tiny while safely past the 10-min window.
+			if d, derr := srv.PruneNotifyDedupe(ctx, time.Now().Add(-24*time.Hour)); derr != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: notify-dedupe prune failed: %v\n", derr)
+			} else if d > 0 {
+				fmt.Fprintf(os.Stderr, "openshield-server: pruned %d durable notify-dedupe ids\n", d)
+			}
 		})
 
 		// SIEM-4: when OPENSHIELD_CEF_SYSLOG_LISTEN is set, receive CEF-over-syslog from the estate and

@@ -54,7 +54,7 @@ close the trust-bootstrap and durability-wiring holes R34 found), not more bread
 | Zero Trust (ZTNA) | ~65% | **Big jump: full hardware attestation chain (ZT-1, D183–191) is REAL and swtpm-proven** end-to-end — TPM quote, EK→AK credential activation, measured-boot PCR policy, NATS transport, continuous re-attestation, network self-enrollment; `Attested` set only by gateway verification. + live JWKS refresher (D182, off-request-path) + RBAC tiers (D179). **But trust-bootstrap holes cap it (R34):** no EK-cert-chain anchor + no enroll authz (any co-resident TPM self-enrolls as any subject), attestation verdict **never expires** (stop attesting → stay trusted), JWKS accepts `http://`. No ZTNA client (ZT-4), no DPoP/jti. |
 | DLP | ~58% | **Detection depth + supply-chain integrity:** EDM single-value (D193) + multi-cell record (D197) + IDM document-fingerprint (D198) + exfil-channel awareness (D194) + keyword-proximity passport/DL (D199) all REAL & boundary-honored. **Indexes now SIGNED (D204, ADR-9): the worker verifies an operator signature (OPENSHIELD_DLP_INDEX_PUBKEY) before loading, and `openshield-dlp-index` is the operator build+sign tool** — closing "indexes unsigned" and "no operator index-builder tool". Still **file+HTTP only**: no clipboard/print/screenshot producers, no OCR. DLP-6 endpoint coaching absent. |
 | NIPS / NTPS | ~35% | **HTTP is a real inline IPS** — NIPS-2 threat-intel engine (D192) matches flow dest/URI against an operator IOC feed and a policy blocks known-bad, end-to-end proven. NIPS-4 response-body inspection **observe-only (D200, in-flight)**. **IOC feed HOT-RELOADS (D206, OPENSHIELD_IOC_FEED_RELOAD): a new indicator takes effect without a restart, serve-stale on a bad edit.** Still: **DNS tap/detect-only** (no inline sinkhole, NIPS-8), **SMTP parse-only** (not a filtering MTA), no transparent TPROXY (NIPS-1), HTTP/1.1 only, no remote feed pull (STIX/TAXII), no JA3/body signatures. |
-| SIEM | ~46% | **Alert lifecycle unified + external-log ingest:** `peer_alerts` gains severity/status/dedup_key (6b, D178), webhook HMAC replay-protection (8b, D176), notify dedup (12, D172), pruned UEBA baselines (5b, D177), ATT&CK mapping (7, D201). **CEF-over-syslog LISTENER + external_logs store live (SIEM-4, D205): the estate's third-party logs are received, parsed (D202), persisted, and searchable** (`OPENSHIELD_CEF_SYSLOG_LISTEN`). Still: no UI, no WEF/cloud-JSON ingest, no `/logs` HTTP surface yet (the `SearchExternalLogs` method is the query capability), CEF extension columnisation (field-level hunting) a follow-on. |
+| SIEM | ~46% | **Alert lifecycle unified + external-log ingest:** `peer_alerts` gains severity/status/dedup_key (6b, D178), webhook HMAC replay-protection (8b, D176), notify dedup (12, D172; durable across restart D207), pruned UEBA baselines (5b, D177), ATT&CK mapping (7, D201). **CEF-over-syslog LISTENER + external_logs store live (SIEM-4, D205): the estate's third-party logs are received, parsed (D202), persisted, and searchable** (`OPENSHIELD_CEF_SYSLOG_LISTEN`). Still: no UI, no WEF/cloud-JSON ingest, no `/logs` HTTP surface yet (the `SearchExternalLogs` method is the query capability), CEF extension columnisation (field-level hunting) a follow-on. |
 | HIPS | ~35% | HIPS-8 trusted-identity critical-process guard (D174, `/proc/<pid>/exe`+root-owned) is **REAL** (self-rename to `sshd` still killable). **HIPS-7 pid-reuse guard is the R34 false-premise catch:** the enforcer test is exemplary (real spawned process) but the **observation→kill plumbing has zero mutation coverage** — zeroing `StartTicks` at the source passes the whole suite, so the guard may be silently inert on the real path. `DENY_EXEC` enforcer **built but UNREGISTERED** (needs `FAN_OPEN_EXEC_PERM` + T1 owner sign-off). |
 | **SOAR** | ~10% | **Unchanged — still a case+notify shell.** Four-eyes cases + materialized incidents with ack + async multi-sink HMAC webhooks, but **zero orchestration**: incidents **still never notify** (no `emit` in `incidents.go`), no playbook engine, no approvals table beyond case-close, no MTTA/MTTR (ack timestamps exist — a ~1-day metrics query), no response-intent seam. ADR-12 tiers owner-approved; SOAR-1…9 unstarted. |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** by owner decision (ADR-0) — tickets staged, off the queue and out of headline claims. Not in the headline category set (XDR/DLP/HIPS/NTPS/SIEM/ZT/SOAR). |
@@ -91,8 +91,9 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
 > 77ce96c batch-1, 874875b, df65e94, 2ec84fa, 4c793aa, ee92316, 79d873a. ⏳ TODO: R34-2 **part 2**
 > (EK-cert-chain to manufacturer roots — swtpm has no vendor cert so the positive path is
 > untestable here; needs EK-cert-from-NV + a roots pool; carries test proposal #5), R34-13 (LOW
-> bundle). Test proposals: #2/#3/#4/#6/#7 landed with their fixes; #1 (entity-join E2E) and #5
-> (EK-cert refusal) pending.
+>   bundle). **Test proposals (12): ✅ DONE #1,#2,#3,#4,#6,#7,#8,#9,#12 (see the numbered list below for
+> the test each maps to). ⏳ PENDING #5 (EK-cert refusal — needs R34-2 part 2, untestable on swtpm), #10
+> (Incident→notify — needs SOAR-1), #11 (cross-domain correlation — needs XDR-4).**
 
 - **R34-1 · ✅ DONE (77ce96c) · Attestation verdict never expires — P1 (HIGH) · gateway/attestation.go.** `IsAttested`
   never TTLs; a compromised endpoint that simply *stops* attesting stays `Attested=true` forever
@@ -144,8 +145,7 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   into `fleet_telemetry`. *Fix:* validate at ingest (server-side), not just client-side.
 - **R34-13 · 🟡 MOSTLY DONE (e8f12d6) · Minor/LOW (fold in):** ✅ NIPS `matchURI` min-length,
   ✅ `procIdentityOf` tested, ✅ `EnsureAppLogin` re-asserts NOSUPERUSER/NOCREATEROLE/etc, ✅
-  "k-anonymized" privacy claim corrected (honest membership-oracle limit). ⏳ still open (feature-
-  scale): SIEM-12 durable dedup (persist `dedup_key` so a restart does not double-page) · incidents
+  "k-anonymized" privacy claim corrected (honest membership-oracle limit). ✅ SIEM-12 durable dedup DONE (D207: `notify_dedupe`, survives restart). ⏳ remaining: incidents
   never `emit` = **promote SOAR-1**. Original text:  incidents never `emit` a notification (`incidents.go`) — this **is**
   SOAR-1, promote it · SIEM-12 dedup is per-process memory (restart double-pages; `dedup_key` exists —
   make it durable) · "k-anonymized" overstates privacy (unsalted SHA-256 → offline membership recovery
@@ -154,34 +154,34 @@ shifted from *fake tests* to **unwired real code** and **trust-bootstrap / durab
   role branch should re-assert `NOSUPERUSER NOCREATEROLE`.
 
 ### R34 gap-closing & integration test proposals (each must drive the REAL path — no seeded literals)
-1. **Entity-join E2E** (with the XDR-1 wiring below): real engine `SetSubject` → fanotify event → signed
+1. ✅ DONE (D203) `TestEnrollAndIngestConvergeOnOneEntity`/`TestIngestPopulatesDeviceEntity`. **Entity-join E2E** (with the XDR-1 wiring below): real engine `SetSubject` → fanotify event → signed
    transport → `handleSigned` → assert `xdr.Resolve(KindDevice, storedSubject)` equals the id a second
    domain's real producer resolves. **Kills the tautology in `TestCanonicalJoin`.**
-2. **Server-side subject contract** (R34-12): publish a subject-less event through the signed transport;
+2. ✅ DONE (874875b) `TestIngestRejectsSubjectlessEvent`. **Server-side subject contract** (R34-12): publish a subject-less event through the signed transport;
    assert ingest rejects/quarantines. Mutation: dropping the ingest check must fail it.
-3. **HIPS-7 observation→kill** (R34-5): dispatch a real `EVENT_KIND_PROCESS_EXEC` with `StartTicks`
+3. ✅ DONE (df65e94) `TestKillTargetCarriesStartTicks`+`TestScannerEmitsCapturedStartTicks`. **HIPS-7 observation→kill** (R34-5): dispatch a real `EVENT_KIND_PROCESS_EXEC` with `StartTicks`
    through `Engine.Process` to a recording `TargetedEnforcer`, assert target == `"pid:ticks"`; + an
    execaudit `Scanner` test asserting the emitted event carries the captured ticks. Both must FAIL under
    `StartTicks=0` / `if false` mutations.
-4. **Attestation freshness** (R34-1): real swtpm + NATS, attest once, stop, advance clock → assert
+4. ✅ DONE (77ce96c) `TestAttestationVerdictExpires`. **Attestation freshness** (R34-1): real swtpm + NATS, attest once, stop, advance clock → assert
    `IsAttested`→false (drives a verifier TTL that doesn't exist yet).
-5. **EK-cert-chain refusal** (R34-2): enroll a device whose EK carries no vendor-CA cert → `handleEnroll`
+5. ⏳ PENDING (needs R34-2 part 2; swtpm has no vendor cert). **EK-cert-chain refusal** (R34-2): enroll a device whose EK carries no vendor-CA cert → `handleEnroll`
    must refuse. Drives the real enroll path + the anchoring fix.
-6. **JetStream redelivery on DB failure** (R34-4): embedded JS + real PG, close the pool mid-backlog →
+6. ✅ DONE (2ec84fa) `TestJetStreamRedeliversOnDBFailure`. **JetStream redelivery on DB failure** (R34-4): embedded JS + real PG, close the pool mid-backlog →
    assert Nak/redeliver then persist. **Kills the `Nak→Ack` mutation.**
-7. **Leader conn-death failover** (R34-6): from a 2nd pool `pg_terminate_backend()` the leader's held
+7. ✅ DONE (4c793aa) `TestLeaderRecoversFromConnDeath`. **Leader conn-death failover** (R34-6): from a 2nd pool `pg_terminate_backend()` the leader's held
    conn → assert `leaderCtx` cancels within one poll and instance 2 is elected. **Kills the `hold()`
    `cancel()` deletion mutation.**
-8. **Loader fuzz** (R34-8): `go test -fuzz` over `LoadRecordIndex`/`LoadDocumentIndex` — error-not-panic
+8. ✅ DONE (77ce96c) `FuzzLoadRecordIndex`+loader alloc tests. **Loader fuzz** (R34-8): `go test -fuzz` over `LoadRecordIndex`/`LoadDocumentIndex` — error-not-panic
    and bounded allocation on arbitrary blobs.
-9. **Full notify path** (SIEM-12 real coverage): drive `handleSigned` twice with re-sent above-threshold
+9. ✅ DONE (D207) `TestFullNotifyPathDeliversOnce` (webhook, end-to-end). **Full notify path** (SIEM-12 real coverage): drive `handleSigned` twice with re-sent above-threshold
    telemetry against an httptest webhook → assert exactly **one** POST (covers
    `observePeer→emit→deliverLoop→Webhook`, which no current test drives end-to-end).
-10. **Incident→notify** (SOAR-1): `MaterializeIncidents` creating a new incident delivers exactly one
+10. ⏳ PENDING (needs SOAR-1: incidents don't emit yet). **Incident→notify** (SOAR-1): `MaterializeIncidents` creating a new incident delivers exactly one
     deduped notification; re-materializing the same open incident delivers zero.
-11. **Cross-domain correlation** (with XDR-4): seed alerts under two `dedup_key` namespaces linked to one
+11. ⏳ PENDING (needs XDR-4). **Cross-domain correlation** (with XDR-4): seed alerts under two `dedup_key` namespaces linked to one
     entity via real `Link` → assert one incident. Mutation: dropping the entity join must fail it.
-12. **Worker EDM integration** (D193 last untested link): exec the real `openshield-worker` with
+12. ✅ DONE (D207) `TestWorkerLoadsEDMIndexAndMatches` (real worker RPC). **Worker EDM integration** (D193 last untested link): exec the real `openshield-worker` with
     `OPENSHIELD_EDM_INDEX` at a `Marshal`'d blob and assert an EDM hit over the real RPC/stdin path.
 13. **Token replay across devices** (R34-10): mint a token for user U, present from cert A then cert B →
     B must 403 once device-bound.

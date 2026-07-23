@@ -51,7 +51,7 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 	lockDB(t, pool)
 	ddlCtx, ddlCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer ddlCancel()
-	if _, err := pool.Exec(ddlCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, case_notes, cases, legal_holds, incidents, ueba_baselines, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(ddlCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, case_notes, cases, legal_holds, incidents, ueba_baselines, external_logs, notify_dedupe, entities, entity_aliases, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	if err := postgres.Migrate(ddlCtx, pool); err != nil {

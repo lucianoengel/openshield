@@ -81,7 +81,7 @@ func (s *Server) deliverLoop() {
 // lets the receiver dedupe a client-timeout-after-server-success retry too. If the queue is full (a
 // delivery backlog), the notification is DROPPED and counted — losing a page degrades responsiveness,
 // never the record, and never blocks ingest.
-func (s *Server) emit(_ context.Context, n notify.Notification) {
+func (s *Server) emit(ctx context.Context, n notify.Notification) {
 	// R34-9: enqueue ONLY when a delivery loop is actually running. New() sets a
 	// non-nil Nop notifier but does NOT start the loop, so gating on `notifier != nil`
 	// let every alert pile into a never-drained queue ("queue full" spam + inflated
@@ -93,8 +93,19 @@ func (s *Server) emit(_ context.Context, n notify.Notification) {
 		n.ID = notifyID(n)
 	}
 	// Server-side idempotency: a logical alert already emitted this window is suppressed, so a
-	// re-detection does not double-page (SIEM-12). markNew is atomic (check-and-record).
+	// re-detection does not double-page (SIEM-12). markNew is atomic (check-and-record). This
+	// in-memory set is the FAST pre-filter — a same-process duplicate is caught here without a DB hit.
 	if s.notifyDedupe != nil && !s.notifyDedupe.markNew(n.ID) {
+		s.NotifyDeduped.Add(1)
+		return
+	}
+	// R34-13: durable idempotency. The in-memory set said "new", but a PRIOR process may have already
+	// delivered this id before a restart/failover — so record it durably and suppress if it was already
+	// there. Fail-open: a nil pool or a DB error falls back to the in-memory decision (still page) —
+	// a missed page is worse than a rare double-page during a DB outage.
+	if isNew, err := s.markNotifyDurable(ctx, n.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: durable notify-dedupe unavailable (%v) — delivering (fail-open)\n", err)
+	} else if !isNew {
 		s.NotifyDeduped.Add(1)
 		return
 	}
@@ -104,6 +115,39 @@ func (s *Server) emit(_ context.Context, n notify.Notification) {
 		s.NotifyDropped.Add(1)
 		fmt.Fprintf(os.Stderr, "openshield-server: alert delivery queue full — dropped a notification (ingest never blocks)\n")
 	}
+}
+
+// markNotifyDurable records a notification id in the durable dedupe ledger and reports whether it was
+// NEW (not seen before, this process or a prior one). It is the cross-restart authority behind the
+// in-memory pre-filter (R34-13). Fail-open: with no pool it returns (true, nil) so the in-memory
+// decision stands; a DB error is returned so emit logs it and delivers anyway. The insert is atomic
+// (ON CONFLICT DO NOTHING) and uses a fresh short-timeout context so a slow/cancelled caller ctx cannot
+// wedge delivery.
+func (s *Server) markNotifyDurable(ctx context.Context, id string) (bool, error) {
+	if s.pool == nil {
+		return true, nil // no durable layer — the in-memory set is the only dedupe
+	}
+	ictx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ictx, `INSERT INTO notify_dedupe (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil // 1 = newly inserted; 0 = already present (a duplicate)
+}
+
+// PruneNotifyDedupe deletes durable dedupe ids older than before, keeping the ledger bounded. An id
+// only needs to outlive its dedup window for the "page once" guarantee to hold, so the caller passes a
+// cutoff a few windows back. Returns the number of ids removed.
+func (s *Server) PruneNotifyDedupe(ctx context.Context, before time.Time) (int64, error) {
+	if s.pool == nil {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM notify_dedupe WHERE emitted_at < $1`, before.UTC())
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // notifyID derives a STABLE idempotency key from the alert's identity — kind, subject, agent, and a
