@@ -29,6 +29,7 @@ enum EventKind {
   EVENT_KIND_PROCESS_EXEC = 9; // a process execution (Phase E — HIPS)
   EVENT_KIND_FILE_DELETED = 10; // a watched file was removed (HIPS-4 FIM — a delete is a tamper signal)
   EVENT_KIND_RANSOMWARE_SUSPECTED = 11; // a mass canary change — a suspected ransomware attack (HIPS-4)
+  EVENT_KIND_MEMORY_INJECTION_SUSPECTED = 12; // a process with writable+executable memory (HIPS-4 W^X)
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives

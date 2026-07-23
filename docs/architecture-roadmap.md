@@ -901,6 +901,19 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     tool `openshield-fim-baseline` (keygen + build+sign); the node holds only the public key. Closes the
     "an attacker who can write the baseline hides drift" gap. Proven + 2 mutation guards (skip-verify,
     domain-omission). Deferred: key rotation / multiple keys, host-identity binding, hardware keys.
+  - ✅ **Memory/injection detection SHIPPED (D233) — the last HIPS-4 subsystem.** `internal/meminject`
+    scans `/proc/<pid>/maps` and flags any region that is BOTH writable and executable (the W^X-violation
+    signature of injected shellcode), reading only map METADATA + the exe path — never process memory
+    contents (that would need `process_vm_readv`, which the worker sandbox denies). A cross-process scan
+    skips-and-counts any process it cannot read, so an unprivileged run covers its own processes and a ROOT
+    run covers the whole fleet. Emitted as a content-free `EVENT_KIND_MEMORY_INJECTION_SUSPECTED`
+    (ProcessSubject pid + exe, dedup'd by pid+exe so a standing region emits once) → policy ALERT; the
+    event carries no path, so the engine's existing `fs==nil` branch classifies it metadata-only with no
+    engine change. Opt-in `OPENSHIELD_MEMSCAN_INTERVAL`. Proven: unit + a real-kernel own-process rwx test
+    + the isWX mutation guard, and a **GATED cross-user scan run on the VM (root reads a `nobody` process's
+    maps + finds its W+X region): PASS** — the genuinely root-required fleet path. Deferred: real-time
+    (eBPF/LSM `mmap`+`mprotect` hook vs this poll), a JIT allowlist (JVM/V8/.NET legitimately map W+X),
+    ptrace/reflective-loading detection beyond the W+X signal, non-Linux. **HIPS-4 subsystems complete.**
 
 ### Platform (remainder, not in the immediate queue)
 - **PLAT-5 · Config management beyond env vars** — P2 · S–M. Typed config (file + env override),

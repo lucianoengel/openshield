@@ -65,6 +65,10 @@ func (c classifyStage) Run(ctx context.Context, s *core.State) (core.Outcome, er
 	// signal would never reach the policy. Correct in general — these events carry no readable bytes.
 	switch s.Event.GetKind() {
 	case corev1.EventKind_EVENT_KIND_FILE_DELETED, corev1.EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED:
+		// These carry a FilesystemSubject path but have no readable content (a deleted file; the
+		// encrypted/deleted canary set) — classify metadata-only so the worker never tries to open it.
+		// (A memory-injection event carries a ProcessSubject, not a path, so the fs==nil branch below
+		// already classifies it metadata-only — no case needed here.)
 		s.Classification = &corev1.LocalClassification{EventId: s.Event.GetEventId()}
 		return core.Continue(), nil
 	}
