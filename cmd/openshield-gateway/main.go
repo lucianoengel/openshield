@@ -648,6 +648,47 @@ func applyTProxy(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 		}
 	}()
 	log.Info("gateway: NIPS-1 transparent inline plane ACTIVE (drops a blocked flow at L4)", slog.String("addr", addr))
+
+	// Self-install the TPROXY redirect rules (NIPS-1 inc-4a) so the inline plane is deployable without
+	// hand-crafted out-of-band firewall config. Opt-in; a failure logs and the plane keeps running (the
+	// operator may install rules out of band) — never fail-closed.
+	if os.Getenv("OPENSHIELD_TPROXY_INSTALL_RULES") == "1" {
+		port := listenPort(ln.Addr(), addr)
+		dports := envPorts("OPENSHIELD_TPROXY_DPORTS", []int{80, 443})
+		mark := envMark("OPENSHIELD_TPROXY_MARK", 1)
+		table := envMark("OPENSHIELD_TPROXY_TABLE", 100)
+		if port == 0 {
+			log.Error("gateway: TPROXY rules NOT installed — could not determine listener port", slog.String("addr", addr))
+		} else if err := gateway.InstallTProxyRules(port, dports, mark, table, log); err != nil {
+			log.Error("gateway: TPROXY rules could NOT install — inline plane still runs (install rules out of "+
+				"band; needs CAP_NET_ADMIN + iptables/ip)", slog.String("err", err.Error()))
+		} else {
+			go func() {
+				<-ctx.Done()
+				if err := gateway.RemoveTProxyRules(port, dports, mark, table, log); err != nil {
+					log.Error("gateway: TPROXY rules teardown failed", slog.String("err", err.Error()))
+				}
+			}()
+		}
+	}
+}
+
+// envPorts parses a comma-separated port list; def on unset/empty. A bad token is skipped.
+func envPorts(k string, def []int) []int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
+	}
+	var out []int
+	for _, tok := range strings.Split(v, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(tok)); err == nil && n > 0 {
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 // applyDNSSink starts the NIPS-8 preventive DNS resolver when OPENSHIELD_DNS_SINK_LISTEN +
@@ -686,7 +727,7 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 		slog.String("listen", addr), slog.String("upstream", upstream))
 
 	if mark != 0 {
-		port := listenPort(pc, addr)
+		port := listenPort(pc.LocalAddr(), addr)
 		if port == 0 {
 			log.Error("gateway: transparent DNS redirect NOT installed — could not determine resolver port",
 				slog.String("addr", addr))
@@ -700,11 +741,18 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	}
 }
 
-// listenPort resolves the resolver's actual UDP port: prefer the bound socket (handles a ":0" ephemeral
-// listen), fall back to parsing the configured address.
-func listenPort(pc net.PacketConn, addr string) int {
-	if ua, ok := pc.LocalAddr().(*net.UDPAddr); ok && ua.Port != 0 {
-		return ua.Port
+// listenPort resolves a listener's actual port: prefer the bound socket address (handles a ":0" ephemeral
+// listen for either UDP or TCP), fall back to parsing the configured address string.
+func listenPort(bound net.Addr, addr string) int {
+	switch a := bound.(type) {
+	case *net.UDPAddr:
+		if a.Port != 0 {
+			return a.Port
+		}
+	case *net.TCPAddr:
+		if a.Port != 0 {
+			return a.Port
+		}
 	}
 	if _, portStr, err := net.SplitHostPort(addr); err == nil {
 		if p, err := strconv.Atoi(portStr); err == nil {
