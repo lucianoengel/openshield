@@ -60,6 +60,33 @@ func TestRemoveIsInverseTeardown(t *testing.T) {
 	}
 }
 
+// TestForwardedRuleIsPreroutingRedirectNoMark: the forwarded (gateway) redirect is a PREROUTING REDIRECT
+// that excludes loopback and carries NO mark exemption (unlike the local OUTPUT rule, the resolver's own
+// upstream forward never traverses PREROUTING). Mutation shape: drop `! -i lo` or the REDIRECT target.
+func TestForwardedRuleIsPreroutingRedirectNoMark(t *testing.T) {
+	got := flatten(iptablesForwardedInstallArgs(8053))
+	for _, want := range []string{"! -i lo", "--dport 53", "REDIRECT", "--to-ports 8053", "-A PREROUTING -p udp --dport 53 -j " + iptChainFwd} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("forwarded install args missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "--mark") || strings.Contains(got, "-m mark") {
+		t.Fatalf("the forwarded rule must NOT carry a mark exemption:\n%s", got)
+	}
+}
+
+// TestForwardedRemoveIsScopedToOwnChain: forwarded teardown deletes only its dedicated chain, never
+// PREROUTING itself.
+func TestForwardedRemoveIsScopedToOwnChain(t *testing.T) {
+	got := flatten(iptablesForwardedRemoveArgs())
+	if !strings.Contains(got, "-F "+iptChainFwd) || !strings.Contains(got, "-X "+iptChainFwd) {
+		t.Fatalf("forwarded remove must flush+delete the dedicated chain %q:\n%s", iptChainFwd, got)
+	}
+	if strings.Contains(got, "-F PREROUTING") || strings.Contains(got, "-X PREROUTING") {
+		t.Fatalf("forwarded remove must NOT flush/delete PREROUTING itself:\n%s", got)
+	}
+}
+
 // TestUnsupportedErrorMessage: the off-linux stub returns a clear linux-only error.
 func TestUnsupportedErrorMessage(t *testing.T) {
 	if !strings.Contains(errUnsupported.Error(), "linux-only") {

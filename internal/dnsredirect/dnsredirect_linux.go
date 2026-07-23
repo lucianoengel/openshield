@@ -42,6 +42,25 @@ func Remove(log *slog.Logger) error {
 	return nil
 }
 
+// InstallForwarded redirects FORWARDED UDP :53 (client DNS passing through this host as a gateway) to the
+// local resolver on resolverPort (nat PREROUTING, iptables). Remove-then-add idempotent. No mark loop-break
+// is needed for the forwarded path. nft-forwarded is a deferred backend.
+func InstallForwarded(resolverPort int, log *slog.Logger) error {
+	path, err := exec.LookPath("iptables")
+	if err != nil {
+		return fmt.Errorf("dnsredirect: iptables not found for the forwarded redirect: %w", errUnsupported)
+	}
+	return install(path, log, iptablesForwardedRemoveArgs(), iptablesForwardedScaffoldArgs(), iptablesForwardedInstallArgs(resolverPort))
+}
+
+// RemoveForwarded tears down the forwarded redirect. Idempotent.
+func RemoveForwarded(log *slog.Logger) error {
+	if path, err := exec.LookPath("iptables"); err == nil {
+		best(path, log, iptablesForwardedRemoveArgs())
+	}
+	return nil
+}
+
 // install is remove-then-add: idempotent teardown, best-effort scaffold (chain/table create — a benign
 // "exists" is fine after the flush), then the FATAL rule adds (a half-installed redirect must not report
 // success).

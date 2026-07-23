@@ -702,13 +702,14 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 			"CAP_NET_BIND_SERVICE)", slog.String("addr", addr), slog.String("err", err.Error()))
 		return
 	}
-	// Transparent :53 redirect (NIPS-8 increment 2): when OPENSHIELD_DNS_REDIRECT=1, redirect the host's
-	// UDP :53 traffic to this resolver so UNCONFIGURED clients are also sinkholed. The resolver carries a
-	// firewall mark on its upstream socket so its OWN forwards escape the redirect (the loop-break); the
-	// redirect rule exempts that mark. Root-only (CAP_NET_ADMIN); a failure logs and the resolver still
-	// serves explicitly-configured clients.
+	// Transparent :53 redirect (NIPS-8): OPENSHIELD_DNS_REDIRECT = local|1 (the host's own DNS, OUTPUT),
+	// forwarded (client DNS through this gateway, PREROUTING), or both. The LOCAL redirect carries a
+	// firewall mark on the resolver's upstream socket so its own forwards escape (the loop-break); the
+	// FORWARDED redirect needs no mark (the resolver's upstream forward is OUTPUT, not PREROUTING).
+	// Root-only (CAP_NET_ADMIN); a failure logs and the resolver still serves explicitly-configured clients.
+	scope, redirect := dnsRedirectScope(os.Getenv("OPENSHIELD_DNS_REDIRECT"))
 	mark := 0
-	if os.Getenv("OPENSHIELD_DNS_REDIRECT") == "1" {
+	if redirect && scope != dnsredirect.ScopeForwarded { // local/both need the loop-break mark
 		mark = envMark("OPENSHIELD_DNS_REDIRECT_MARK", 0x1d5)
 	}
 	r := dnssink.Resolver{Upstream: upstream, Blocked: gw.BlockedDomain, Mark: mark, Log: log}
@@ -720,18 +721,32 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	log.Info("gateway: NIPS-8 preventive DNS resolver ACTIVE (sinkhole blocked domains, forward the rest)",
 		slog.String("listen", addr), slog.String("upstream", upstream))
 
-	if mark != 0 {
+	if redirect {
 		port := listenPort(pc.LocalAddr(), addr)
 		if port == 0 {
 			log.Error("gateway: transparent DNS redirect NOT installed — could not determine resolver port",
 				slog.String("addr", addr))
 		} else {
 			// The watchdog owns install/remove: it removes the redirect (falls back to direct DNS) if the
-			// resolver wedges, so a dead resolver never wedges host name resolution, and restores it on
-			// recovery (NIPS-8 inc-3, the D234 availability follow-up).
-			wd := &dnsredirect.Watchdog{Port: port, Mark: mark, Log: log}
+			// resolver wedges, so a dead resolver never wedges name resolution, and restores it on recovery
+			// (NIPS-8 inc-3). Scope selects local/forwarded/both (NIPS-8 forwarded/gateway redirect).
+			wd := &dnsredirect.Watchdog{Port: port, Mark: mark, Scope: scope, Log: log}
 			go wd.Run(ctx)
 		}
+	}
+}
+
+// dnsRedirectScope parses OPENSHIELD_DNS_REDIRECT into a scope; the bool is false when the redirect is off.
+func dnsRedirectScope(v string) (dnsredirect.Scope, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "local":
+		return dnsredirect.ScopeLocal, true
+	case "forwarded":
+		return dnsredirect.ScopeForwarded, true
+	case "both":
+		return dnsredirect.ScopeBoth, true
+	default:
+		return dnsredirect.ScopeLocal, false
 	}
 }
 

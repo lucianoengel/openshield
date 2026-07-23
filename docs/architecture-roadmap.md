@@ -868,8 +868,15 @@ evidence.* **Dependency spine: SOAR-1/2 → SOAR-3 → SOAR-4 → (SOAR-5, SOAR-
     resolver → the watchdog bypasses → the query resolves directly instead of hanging;** 2 unit mutation
     guards (threshold, counter-reset). Deferred: a shared watchdog for the TPROXY redirect; backoff/hold-down;
     a bypass alert (notify seam); an upstream-independent sentinel probe.
-  - **Increment 4 (deferred):** local cache + upstream failover; sinkhole-to-walled-garden IP; TCP DNS +
-    DoT/DoH; the PREROUTING gateway-forward case; the TPROXY-redirect watchdog.
+  - ✅ **Forwarded/gateway redirect DONE (D240) — the sinkhole now protects clients BEHIND the gateway.**
+    The D234 redirect was OUTPUT-only (the gateway's own DNS); this adds a nat PREROUTING REDIRECT of
+    forwarded client `:53` (`internal/dnsredirect.InstallForwarded`, dedicated chain), so a fleet of clients
+    behind the gateway is sinkholed. No mark loop-break needed (the resolver's upstream forward is OUTPUT,
+    not PREROUTING). Watchdog `Scope` (local/forwarded/both) covers it; `OPENSHIELD_DNS_REDIRECT=forwarded|both`.
+    **VM-proven with a netns forwarding topology + `dig` from the client ns** (blocked→NXDOMAIN,
+    normal→NOERROR); PREROUTING-jump-drop mutation → not sinkholed (VM FAILs). Deferred: nft-native, TCP DNS.
+  - **Increment 5 (deferred):** local cache + upstream failover; sinkhole-to-walled-garden IP; TCP DNS +
+    DoT/DoH; the nftables-native backend; the TPROXY-redirect watchdog.
   Original: DNS is tap/detect-only today (DEPLOY-1) because a passive parser cannot drop a query and an
   inline `:53` redirect over a non-resolver would blackhole all fleet name resolution. To make DNS
   *preventive* it must become a **real resolver**: local cache + upstream forwarding + failover, then

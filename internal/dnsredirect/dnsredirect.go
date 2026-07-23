@@ -22,8 +22,9 @@ var errUnsupported = errors.New("dnsredirect: transparent DNS redirect is linux-
 // Names of the dedicated firewall objects, so Remove is a clean single-target teardown that never touches
 // unrelated operator rules.
 const (
-	iptChain = "OPENSHIELD_DNSREDIR"    // custom chain in the nat table (iptables backend)
-	nftTable = "openshield_dnsredirect" // dedicated table (nft backend)
+	iptChain    = "OPENSHIELD_DNSREDIR"     // custom nat chain for the LOCAL (OUTPUT) redirect
+	iptChainFwd = "OPENSHIELD_DNSREDIR_FWD"  // custom nat chain for the FORWARDED (PREROUTING) redirect
+	nftTable    = "openshield_dnsredirect"   // dedicated table (nft backend)
 )
 
 // markHex renders a firewall mark the way iptables/nft accept it.
@@ -59,6 +60,39 @@ func iptablesInstallArgs(port, mark int, exempt bool) [][]string {
 	return [][]string{
 		rule,
 		{"-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", iptChain},
+	}
+}
+
+// --- Forwarded (gateway / PREROUTING) redirect ---------------------------------------------------------
+//
+// For a host acting as a GATEWAY, client DNS is FORWARDED through it and never traverses OUTPUT, so the
+// D234 local (OUTPUT) redirect misses it. A nat PREROUTING REDIRECT catches forwarded :53 and delivers it
+// to the local resolver. No mark loop-break is needed: the resolver's own upstream forward is locally
+// generated (OUTPUT), so it never traverses PREROUTING and is not re-redirected. `! -i lo` keeps the
+// gateway's own loopback :53 out of the forwarded rule.
+
+// iptablesForwardedRemoveArgs is the idempotent teardown for the forwarded redirect (its own chain).
+func iptablesForwardedRemoveArgs() [][]string {
+	return [][]string{
+		{"-t", "nat", "-D", "PREROUTING", "-p", "udp", "--dport", "53", "-j", iptChainFwd},
+		{"-t", "nat", "-F", iptChainFwd},
+		{"-t", "nat", "-X", iptChainFwd},
+	}
+}
+
+// iptablesForwardedScaffoldArgs creates the forwarded chain (best-effort).
+func iptablesForwardedScaffoldArgs() [][]string {
+	return [][]string{{"-t", "nat", "-N", iptChainFwd}}
+}
+
+// iptablesForwardedInstallArgs builds the fatal forwarded rules: a REDIRECT of non-loopback forwarded :53
+// into the resolver, plus the PREROUTING jump. No mark exemption (the resolver's OUTPUT upstream forward
+// never traverses PREROUTING).
+func iptablesForwardedInstallArgs(port int) [][]string {
+	return [][]string{
+		{"-t", "nat", "-A", iptChainFwd, "!", "-i", "lo", "-p", "udp", "--dport", "53",
+			"-j", "REDIRECT", "--to-ports", fmt.Sprintf("%d", port)},
+		{"-t", "nat", "-A", "PREROUTING", "-p", "udp", "--dport", "53", "-j", iptChainFwd},
 	}
 }
 

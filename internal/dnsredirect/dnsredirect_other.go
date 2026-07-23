@@ -9,3 +9,9 @@ func Install(resolverPort, mark int, log *slog.Logger) error { return errUnsuppo
 
 // Remove is a no-op off linux (nothing was installed).
 func Remove(log *slog.Logger) error { return nil }
+
+// InstallForwarded is unsupported off linux.
+func InstallForwarded(resolverPort int, log *slog.Logger) error { return errUnsupported }
+
+// RemoveForwarded is a no-op off linux.
+func RemoveForwarded(log *slog.Logger) error { return nil }

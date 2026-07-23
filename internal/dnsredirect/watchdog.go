@@ -19,9 +19,20 @@ const (
 // takes the host's name resolution down with it (the D73/D17 fail-open discipline applied to the redirect
 // itself). A bypass is a degraded posture (unconfigured clients are no longer sinkholed) but strictly
 // better than a wedged fleet.
+// Scope selects which redirect(s) the watchdog manages: the LOCAL (OUTPUT) redirect for the host's own
+// DNS, the FORWARDED (PREROUTING) redirect for client DNS passing through a gateway, or BOTH.
+type Scope int
+
+const (
+	ScopeLocal     Scope = iota // OUTPUT redirect (host's own :53) — the D234 default
+	ScopeForwarded              // PREROUTING redirect (forwarded client :53) — the gateway case
+	ScopeBoth                   // both
+)
+
 type Watchdog struct {
 	Port     int           // the resolver's UDP port (redirect target + default probe target)
-	Mark     int           // the loop-break firewall mark
+	Mark     int           // the loop-break firewall mark (LOCAL scope only)
+	Scope    Scope         // which redirect(s) to manage; zero value = ScopeLocal (back-compatible)
 	Interval time.Duration // probe cadence; 0 → defaultInterval
 	Failures int           // consecutive failed probes before bypass; 0 → defaultFailures
 	Probe    func() bool   // resolver liveness; nil → the default DNS probe against 127.0.0.1:Port
@@ -53,7 +64,14 @@ func (w *Watchdog) doInstall() error {
 	if w.install != nil {
 		return w.install()
 	}
-	return Install(w.Port, w.Mark, w.Log)
+	var err error
+	if w.Scope != ScopeForwarded { // ScopeLocal or ScopeBoth
+		err = Install(w.Port, w.Mark, w.Log)
+	}
+	if err == nil && w.Scope != ScopeLocal { // ScopeForwarded or ScopeBoth
+		err = InstallForwarded(w.Port, w.Log)
+	}
+	return err
 }
 
 func (w *Watchdog) doRemove() {
@@ -61,7 +79,12 @@ func (w *Watchdog) doRemove() {
 		w.remove()
 		return
 	}
-	_ = Remove(w.Log)
+	if w.Scope != ScopeForwarded {
+		_ = Remove(w.Log)
+	}
+	if w.Scope != ScopeLocal {
+		_ = RemoveForwarded(w.Log)
+	}
 }
 
 func (w *Watchdog) probe() bool {
