@@ -48,7 +48,8 @@ deployable, correlated product. The UI comes after all of that is built and test
 security decision — detection, correlation, and response — is explainable, reproducible, and
 cryptographically auditable, on one incident timeline across endpoint, network, and identity.* Lead with
 that; "pipeline-native XDR" is the engineering, not the pitch. Product positioning is currently thin — a
-named gap, tracked in *Cross-cutting* below.
+named gap, but an owner/README messaging task (it needs the product's voice, not a builder's), deliberately
+NOT an infra ticket and not part of the queues below.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
@@ -114,9 +115,13 @@ one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-
   unified-alert rows sharing an entity key, via real ingest.*
 - **XDR-4 · Cross-domain correlation rules** — srv · M. Same-entity multi-domain window rule (distinct-
   domain count ≥ N → incident, severity boosted per domain) + sequence rules (identity-anomaly → exec →
-  DNS within window). Extends `CorrelationRule`; reuse SIEM-7 ATT&CK tags as the sequence vocabulary.
-  *Accept: seeded exec+DNS+auth-anomaly on one entity in 10m → ONE incident `domain_count=3`; the same
-  three on different entities → none. Mutation: dropping the entity join must fail it.*
+  DNS within window). **Must read the XDR-2 `unified_alerts` stream, not `peer_alerts`** — today
+  `controlplane.Correlate()` only groups the single-domain UEBA `peer_alerts` table by subject, so the
+  XDR-2 unified stream and this correlator are not yet connected; XDR-4 is where they join (hence the hard
+  precedence on XDR-2 wiring the remaining producers). Extends `CorrelationRule`; reuse SIEM-7 ATT&CK tags
+  as the sequence vocabulary. *Accept: seeded exec+DNS+auth-anomaly on one entity in 10m → ONE incident
+  `domain_count=3` sourced from `unified_alerts`; the same three on different entities → none. Mutation:
+  dropping the entity join must fail it.*
 - **XDR-5 · Incident timeline** — srv · M. `incident_alerts` join (incident → contributing alerts, all
   domains) + ledger refs; `GET /incidents/{id}/timeline`; incidents gain `domains[]`, `entity_id`.
   *Accept: the timeline of an XDR-4 incident lists all contributing alerts, cross-domain, time-ordered,
@@ -209,8 +214,11 @@ enrichment backlog. Enforcement everywhere stays owner-gated per ADR-11.)*
 
 Makes containment bite where the process runs, and makes the DLP domain watch the channels users
 actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a hard dependency of XDR-6.
+(DLP-2 is split: 2a/2b clipboard+print are MVP here; screenshot + CASB refinements stay DLP-2 in enrichment.)
 
-- **HIPS-3 increment 2 · Full-pipeline inline `DENY_EXEC`** — A · L. Today the inline exec gate
+- **HIPS-3 increment 2 · Full-pipeline inline `DENY_EXEC`** — A · L · **owner-approved** (the MVP
+  prevent-inline decision is the T1 sign-off; the `DENY_EXEC` verb itself already landed T1-gated at D217,
+  so this is wiring an approved verb through the dynamic path, not adding a new Action-set entry). Today the inline exec gate
   (`FAN_OPEN_EXEC_PERM`, D224) decides from a parser-free static deny-list/whitelist — it cannot evaluate
   a *dynamic* `CONTAIN` intent. Bridge the privileged exec-gate to the unprivileged engine over IPC
   (`execguard.ExecEvaluator` is the seam) so the OPA policy — reading the ResponseIntent as typed context
@@ -227,13 +235,14 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   (hardening): a killed or hung engine makes execs ALLOW-with-loud-audit within the timeout rather than
   hang; a fork-storm trips the circuit breaker instead of the engine. Mutation: making the gate fail
   CLOSED on timeout must FAIL this test — fail-open here is a load-bearing safety property, not a bug.*
-- **DLP-2a · Clipboard exfil producer** — P, per-OS · L. An endpoint producer that emits a content-free
+- **DLP-2a · Clipboard exfil producer** — P · L. An endpoint producer that emits a content-free
   clipboard-copy Event (channel-tagged, D194 model) so a sensitive copy is classified + policy-gated.
-  Linux/X11+Wayland first; Windows user-mode needs no attestation (ADR-11). *Accept: copying a seeded CPF
-  to the clipboard produces a classified exfil Event → policy ALERT; a non-sensitive copy does not.*
-- **DLP-2b · Print exfil producer** — P, per-OS · L. Emit a content-free print-job Event (CUPS on Linux,
-  Windows print spooler user-mode) so a sensitive print is classified + gated. *Accept: printing a seeded
-  sensitive doc produces a classified exfil Event → policy ALERT.*
+  **MVP is Linux only (X11 + Wayland)** — the attestation-free Windows/macOS clipboard producer rides
+  PLAT-7 (enrichment), keeping the Linux-first MVP invariant intact. *Accept: copying a seeded CPF to the
+  clipboard produces a classified exfil Event → policy ALERT; a non-sensitive copy does not.*
+- **DLP-2b · Print exfil producer** — P · L. Emit a content-free print-job Event (**CUPS on Linux for the
+  MVP**; the Windows print-spooler producer rides PLAT-7, enrichment) so a sensitive print is classified +
+  gated. *Accept: printing a seeded sensitive doc produces a classified exfil Event → policy ALERT.*
   *(Screenshot capture + CASB refinements remain enrichment — see the backlog.)*
 
 ---
@@ -261,7 +270,8 @@ Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane.
 - **NIPS-1 deferred increments** — D. nftables-native backend, TPROXY bypass watchdog, OUTPUT/local-host
   case, IPv6, streaming inspection past the peek window, TLS interception, structured HTTP parsing.
 - **NIPS-2 · Full signature engine** — C. Suricata/Snort grammar (flowbits/offset-depth/thresholding),
-  Aho-Corasick multi-pattern, response-body scanning, STIX/TAXII + authed feeds, JA3. (IOC + content-
+  Aho-Corasick multi-pattern, response-body scanning, STIX/TAXII + authed feeds, JA3, **SMTP content
+  filtering** (the SMTP parser ships in the Done ledger; acting on its content is here). (IOC + content-
   signature halves already ship.)
 - **NIPS-5 · HTTP/2 & QUIC interception** — new work · L. HTTP/1.1 only today.
 - **NIPS-6 · Raw TCP/L4 metadata connector + anomaly/beaconing detection** — P + C · L.
@@ -270,7 +280,8 @@ Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane.
   watchdog already ship.)
 
 ### SIEM
-- **SIEM-9 · Threat-intel enrichment + saved searches / scheduled reports** — S–M / M.
+- **SIEM-9 · Threat-intel enrichment + saved searches / scheduled reports + more ingest formats** — S–M /
+  M. Additional ingest formats beyond CEF/CloudTrail/WEF (syslog-RFC5424, JSON-lines, GELF) live here.
 - **SIEM-10 remainder** — record the gateway ledger-tombstone purge as a compliance event; scheduled
   report export. (Retention-event recording + `GET /compliance/retention` already ship.)
 - **Field-hunting deepening** — typed columns for the `fleet_telemetry` proto `BYTEA` payloads; free-text
@@ -316,14 +327,18 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   set D14 + closed intent vocabulary ADR-12); (2) *no policy evaluation runs in privileged code* (the
   privilege-split worker; the exec-gate IPC decider preserves this even for HIPS-3 inc 2); (3) *evidence
   cannot be rewritten below an anchor* (forward-secure hash chain + external anchoring).
+- **Performance/latency budget in CI** — S. The fanotify and exec permission-window budgets are a
+  *correctness* property (an over-budget verdict trips the HIPS-3 inc 2 / fail-open path), so a regression
+  benchmark that fails CI when the window is blown gates the same way the invariants do — it is not a
+  nice-to-have. (Fuzz / property / golden-trace tests below are separate and parallel.)
 
 **Ongoing / parallel — strongly recommended, not strictly gating:**
 
-- **CI hardening** — the project already runs mutation + real-runtime/VM + race. Named gaps a reviewer
-  expects at this ambition: **fuzz** the untrusted parsers (the D13 threat — ClamAV-CVE-class RCE),
-  **property tests** for the ledger and the policy lattice, **golden-trace / replay** tests (a recorded
-  event stream must reproduce identical decisions + ledger rows), and a **performance/latency benchmark in
-  CI** — the fanotify and exec permission-window budgets are correctness properties, not nice-to-haves.
+- **CI hardening (the non-latency half)** — the project already runs mutation + real-runtime/VM + race.
+  Named gaps a reviewer expects at this ambition: **fuzz** the untrusted parsers (the D13 threat —
+  ClamAV-CVE-class RCE), **property tests** for the ledger and the policy lattice, and **golden-trace /
+  replay** tests (a recorded event stream must reproduce identical decisions + ledger rows). (The
+  latency-budget benchmark is gating — see above.)
 - **Contributor onboarding** — the codebase is genuinely hard to enter cold. Deliverables: an architecture
   tour; **diagrams** (agent lifecycle, event flow, playbook execution, intent publication, attestation,
   entity graph, risk flow); a "how to add a producer / classify plugin / playbook step" tutorial with one
@@ -376,7 +391,7 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   continuous re-attestation, swtpm-proven end-to-end; EK-cert-chain anchor (D218) + pre-auth enroll token;
   attestation verdict TTL; HTTPS-only JWKS; DPoP sender-constrained tokens + clock-skew leeway.
 - **DLP:** case/incident workflow; compliance packs compose (not replace) under a most-restrictive-wins
-  lattice (D171, ADR-5); detector breadth (CPF/card/SSN/phone/EIN/NPI/routing/SIN/NHS/passport/DL/Aadhaar/
+  lattice (DLP-5b, D171, ADR-5); detector breadth (CPF/card/SSN/phone/EIN/NPI/routing/SIN/NHS/passport/DL/Aadhaar/
   NINO). EDM single + multi-cell + IDM doc-fingerprint (D193/197/198); signed indexes (D204, ADR-9);
   exfil-channel awareness (D194); content-aware CASB (D222); recursive archive extraction (D214).
 - **NIPS:** DNS + SMTP parsers on live listeners; shared rate-limiter; network-content → sandboxed-worker
@@ -387,9 +402,9 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   redirect (local + forwarded) with mark loop-break + self-healing bypass watchdog. NIPS-4 response-body
   inspection (D200, observe-only).
 - **SIEM:** `/events` + `/logs` search on the served TLS mux, operator-gated; cross-host `agent_id` from
-  the verified envelope; alert lifecycle (severity/status/dedup_key, D178, ADR-10); multi-sink HMAC
+  the verified envelope; alert lifecycle (severity/status/dedup_key, SIEM-6b, D178, ADR-10); multi-sink HMAC
   webhook fanout + replay protection (D176); materialized incidents; persisted + pruned UEBA baselines
-  (D177); durable notify dedup (D172/207); ATT&CK mapping (D201); external-log ingest CEF-syslog + AWS
+  (D177); durable notify dedup (D172/207); ATT&CK mapping (SIEM-7, D201); external-log ingest CEF-syslog + AWS
   CloudTrail + WEF (D202/205/208/211) with field-level JSONB hunting (D212); retention compliance events
   (D216).
 - **HIPS (full HIPS-4 suite):** exec producer → behavioral classifier → `KILL_PROCESS`; trusted-identity
@@ -398,7 +413,7 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   FIM baseline/real-time/signed/real-time-delete (D223/228/229/236); ransomware canary (D232);
   memory-injection W^X detection (D233).
 - **Platform:** JetStream durable consumers env-gated (D180, ADR-2); active-passive HA via Postgres
-  advisory-lock leader lease (D181, ADR-3); cross-platform OBSERVE path (D187, ADR-11). XDR-1 entity
+  advisory-lock leader lease (PLAT-2b, D181, ADR-3); cross-platform OBSERVE path (D187, ADR-11). XDR-1 entity
   graph populated by real producers (D195/203); XDR-3 canonical subject stamping (D196); XDR-2 increment 1
   unified-alert stream (D213). SOAR-1 incident→notify (D220).
 
@@ -496,8 +511,10 @@ is the signal to stop and re-run the D26/D69 fitness tests.
 ### The five tensions (T1–T5) — status
 
 - **T1 — Does the closed action set (D14) expand?** *Resolved: one typed verb per capability, never a
-  parameterised framework.* `KILL_PROCESS` landed; `DENY_EXEC` logic landed (T1-gated); the full-pipeline
-  `DENY_EXEC` still needs its per-verb owner sign-off before wiring.
+  parameterised framework.* `KILL_PROCESS` landed; `DENY_EXEC` logic landed (T1-gated). The full-pipeline
+  inline `DENY_EXEC` (HIPS-3 inc 2) is owner-approved via the MVP prevent-inline decision — it wires the
+  already-sanctioned `DENY_EXEC` verb through the dynamic exec-gate path; it is NOT a new Action-set entry,
+  so no further per-verb gate is outstanding.
 - **T2 — Does risk flow back to enforcement?** *Resolved in code:* the server computes+publishes risk;
   the endpoint/gateway reads it as typed Policy context (D28) and decides locally. The server informs;
   it never actuates (D14 preserved). XDR-7 extends this per-entity across domains.
