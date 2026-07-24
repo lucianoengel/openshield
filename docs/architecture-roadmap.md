@@ -44,6 +44,12 @@ and the whole of the MVP queue below — is cross-domain correlation depth, SOAR
 response, a ZTNA client, and packaging: turning a set of strong detectors into one coherent,
 deployable, correlated product. The UI comes after all of that is built and tested.**
 
+**Why OpenShield, in one sentence (a thesis the MVP must *earn* — not yet a proven claim):** *every
+security decision — detection, correlation, and response — is explainable, reproducible, and
+cryptographically auditable, on one incident timeline across endpoint, network, and identity.* Lead with
+that; "pipeline-native XDR" is the engineering, not the pitch. Product positioning is currently thin — a
+named gap, tracked in *Cross-cutting* below.
+
 | Category | Maturity | One-line reality |
 |---|---|---|
 | **XDR** (umbrella) | ~42% | Entity graph WIRED and populated by real producers (enrollment + verified ingest resolve device⋈user, D203); a normalized entity-keyed `unified_alerts` stream + first producer (peer-UEBA) shipped (D213). **MVP gap:** wire the remaining domain producers, correlate cross-domain, build the incident timeline + coordinated response (XDR-2/4/5/6/7). |
@@ -75,8 +81,9 @@ detectors. Concretely, the MVP is reached when:
 4. **The DLP domain watches the channels users exfiltrate through** — endpoint clipboard and print, not
    only file writes + cloud upload (Endpoint lane).
 5. **A ZTNA client (ZT-4)** closes the identity story, and **the platform is production-shaped:** durable
-   ingest is the default, config is typed and validated, and there is a signed, packaged, deployable
-   release (Platform lane). MVP is **Linux-first**; Windows/macOS is enrichment.
+   ingest is the default, config is typed and validated, there is a signed, packaged, deployable release,
+   and it can be **upgraded, backed up + restored, and emergency-disabled** (operational lifecycle —
+   Platform lane). MVP is **Linux-first**; Windows/macOS is enrichment.
 
 **Then, and only then, the UI** (PLAT-1) — it is deliberately last, built over a proven, tested,
 stable backend.
@@ -90,7 +97,7 @@ opportunistically or after the UI.
 
 ## 🔴 MVP infrastructure — the required queue
 
-Work the four lanes below. Within a lane, top-to-bottom. Lanes can interleave where dependencies allow.
+Work the five lanes below. Within a lane, top-to-bottom. Lanes can interleave where dependencies allow.
 Each ticket names the ADR it implements where one applies, and its `Accept` is the real-path test that
 closes it.
 
@@ -172,7 +179,7 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   + attestation posture. *Accept: an attested, authorized agent brokers access to an internal upstream it
   cannot reach directly; a non-attested or unauthorized agent is refused.*
 
-### Lane D · Platform — durability, config, packaging, cross-platform
+### Lane D · Platform — durability, config, packaging, operability
 
 - **PLAT-2 · Durable ingest by default** (ADR-2) — srv · M. JetStream durable consumers are wired and
   env-gated (D180); flip them on by default and migrate the full suite off core-NATS at-most-once. Keep
@@ -185,6 +192,15 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
 - **PLAT-6 · Release, packaging & deploy** — M. Tagged releases + reproducible signed binaries
   (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact. *Accept: `make
   release` produces signed, verifiable artifacts; a clean host installs and runs the stack from them.*
+- **PLAT-9 · Operational lifecycle & recovery** — M–L. The question a CISO asks first — *how do I run
+  this?* — and today the roadmap answers only "packaging." Deliver: rolling agent + server upgrade with
+  version-skew tolerance and **rollback**; a fleet-wide **emergency disable** ("stop enforcing now") that
+  fails safe and is itself ledgered; **backup + verified restore** of the Postgres system-of-record and the
+  per-agent ledger (restore must re-verify the hash chain + anchors, not just the bytes); node/DB recovery
+  + a basic DR runbook; and a documented **deployment footprint** (this is a compose/systemd/single-Helm-
+  release product, not a 50-node cluster — state it, so operators can size it). *Accept: an upgrade rolls
+  forward and back with no ledger gap; a restored backup re-verifies its chain + anchors; emergency-disable
+  flips the fleet to observe-only within one interval and writes a ledger entry.*
 
 *(Cross-platform Windows/macOS observe is **enrichment**, not MVP — MVP is Linux-first; see the
 enrichment backlog. Enforcement everywhere stays owner-gated per ADR-11.)*
@@ -202,6 +218,15 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   a `CONTAIN(entity)` intent makes the entity's next exec kernel-REFUSED (EACCES) via the engine's policy,
   proven on the rooted VM; the intent-absent path still runs. Mutation: bypassing the IPC verdict lets the
   exec through → VM test FAILs.*
+  **The IPC is the highest-risk surface in the whole MVP — engineer it as such, not as a happy-path RPC.**
+  Bounded per-exec verdict timeout; on timeout / engine crash / queue overflow / partial response the gate
+  **FAILS OPEN** (allow + high-severity audit) and NEVER wedges exec on the host — the same discipline as
+  the NIPS bypass watchdog and the D73/D17 egress fail-open (a dead engine must not be able to brick a
+  machine's ability to run programs). Defend against fork-storm amplification (verdict cache + per-cmd
+  circuit breaker), engine restart (re-handshake, no stuck EACCES), and unbounded queue growth. *Accept
+  (hardening): a killed or hung engine makes execs ALLOW-with-loud-audit within the timeout rather than
+  hang; a fork-storm trips the circuit breaker instead of the engine. Mutation: making the gate fail
+  CLOSED on timeout must FAIL this test — fail-open here is a load-bearing safety property, not a bug.*
 - **DLP-2a · Clipboard exfil producer** — P, per-OS · L. An endpoint producer that emits a content-free
   clipboard-copy Event (channel-tagged, D194 model) so a sensitive copy is classified + policy-gated.
   Linux/X11+Wayland first; Windows user-mode needs no attestation (ADR-11). *Accept: copying a seeded CPF
@@ -272,12 +297,58 @@ Pipeline fit noted `P/C/X/A/D` = producer/classify/context/action/data-plane.
 
 ---
 
+## 📐 Cross-cutting — assurance, docs & CI
+
+Not a detection domain — the maturity a reviewer (CISO / principal security engineer / staff platform
+engineer) checks *before betting on the platform*. Each is cheap relative to its credibility payoff and
+mostly independent of the lanes above. Surfaced by an external architecture review (2026-07-24).
+
+**Gate the "call it shippable" line — do before or alongside the MVP:**
+
+- **`THREAT_MODEL.md` — first-class, consolidated** — S. The trust boundaries are today *inferable* from
+  D14, the ADRs, and `intake.md`, but never stated in one place. Write who is trusted vs not and exactly
+  what each buys an attacker: compromised server, compromised gateway, compromised agent, compromised
+  admin, offline endpoint, replay, malicious insider, supply chain. Tie every boundary to the guard that
+  holds it (ledger forward-secrecy, closed action set D14, signed intents ADR-12, four-eyes SOAR-3).
+- **`INVARIANTS.md` — lightweight proofs** — S. On-brand with the project's ethos and backed by the
+  existing mutation harness. State and argue the load-bearing invariants, each with the test that catches a
+  regression: (1) *a compromised server can never cause arbitrary endpoint code execution* (closed action
+  set D14 + closed intent vocabulary ADR-12); (2) *no policy evaluation runs in privileged code* (the
+  privilege-split worker; the exec-gate IPC decider preserves this even for HIPS-3 inc 2); (3) *evidence
+  cannot be rewritten below an anchor* (forward-secure hash chain + external anchoring).
+
+**Ongoing / parallel — strongly recommended, not strictly gating:**
+
+- **CI hardening** — the project already runs mutation + real-runtime/VM + race. Named gaps a reviewer
+  expects at this ambition: **fuzz** the untrusted parsers (the D13 threat — ClamAV-CVE-class RCE),
+  **property tests** for the ledger and the policy lattice, **golden-trace / replay** tests (a recorded
+  event stream must reproduce identical decisions + ledger rows), and a **performance/latency benchmark in
+  CI** — the fanotify and exec permission-window budgets are correctness properties, not nice-to-haves.
+- **Contributor onboarding** — the codebase is genuinely hard to enter cold. Deliverables: an architecture
+  tour; **diagrams** (agent lifecycle, event flow, playbook execution, intent publication, attestation,
+  entity graph, risk flow); a "how to add a producer / classify plugin / playbook step" tutorial with one
+  worked example plugin; and Good-First-Issue labelling. Keep the internal `D<n>` build handles out of
+  public/contributor-facing docs — they are stable references, not onboarding material.
+- **Plugin resource isolation** — hardening the worker beyond the seccomp/cgroup sandbox: per-plugin
+  CPU/memory/fd budgets, a decompression-bomb ceiling shared with DLP-8/NIPS-4, and a per-plugin circuit
+  breaker so one detector cannot starve, deadlock, leak descriptors, or fork-bomb the shared worker.
+  (Sandbox exists today; *between-plugins* fairness under a hostile/buggy parser is the gap.)
+
+*(Already covered by existing tickets — do NOT re-add: ResponseIntent versioning is in SOAR-7 + ADR-12
+Tier-2 `version` from day one; the "freeze backend contracts" discipline is the frozen core D26/D69.)*
+
+---
+
 ## 🔒 Parked — owner-gated, do not start
 
 - **PLAT-1 · The UI** — XL — *the single biggest enterprise-credibility gap, and deliberately last.*
   Minimal SPA (or rich TUI first) over the operator-read API: fleet health, alerts, incidents, search,
   agent status, cases. Needs a frontend-toolchain decision (repo is pure Go). **Starts only after the
   entire MVP infrastructure queue is built and tested.** Its authz model is already unblocked by ADR-4.
+  **Design it for investigation ergonomics, not display.** Adoption is won or lost on how fast an analyst
+  can pivot, search, compare hosts, replay an incident, and *explain a block* — not on how the backend
+  looks. Treat pivot / search / replay / explain-a-decision as first-class PLAT-1 requirements, measured in
+  clicks-to-answer. A beautiful backend behind an 80-click investigation loses.
 - **NAC** (off-pipeline, ADR-0): 802.1X/RADIUS · posture-gated admission + quarantine VLAN · guest
   onboarding. Network-infrastructure, not pipeline plugins.
 - **VPN** (off-pipeline, ADR-0): WireGuard/IPsec/TLS tunnel + client · split-tunnel policy. ZTNA is not a
