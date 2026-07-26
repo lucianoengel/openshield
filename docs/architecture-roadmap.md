@@ -244,8 +244,10 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   carrying author/diff/rollback, validation at save, and LIVE APPLY (a watcher swaps an immutable
   snapshot; loops read parameters per tick). **Secrets are never stored**, so a config-DB dump is not a
   credential dump. *Residual, named:* no UI yet (this is the model and the API it will call); the
-  **gateway and agent** still use the old helpers, and likely should receive settings over the signed
-  channel rather than hold DB credentials; no per-node dynamic values; no staged rollout; no keystore.
+  **agent binaries** still use the old helpers — the GATEWAY adopted the package in D272, declared
+  ALL-BOOTSTRAP because a network appliance's settings are node-local, so it needs no database
+  credentials and a future fleet-wide gateway setting belongs on the signed channel; no per-node dynamic
+  values; no staged rollout; no keystore.
   **BREAKING:** a dynamic field set in the environment no longer takes effect — it is reported, not
   silent (`OPENSHIELD_BREAKGLASS` is the deliberate, reported override).
 - **PLAT-6 · Release, packaging & deploy** — 🟡 **increment 1 DONE (D264)** — see Done ledger. `make
