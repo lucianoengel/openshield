@@ -20,11 +20,16 @@ import (
 // closed verb set. A playbook that could actuate would route around both. When actuation arrives it
 // arrives THROUGH those gates, as a step that requests an intent, not as a step that acts.
 
-// stepEnrich records what the platform ALREADY holds about the incident.
+// stepEnrich records what is known about the incident: local context, plus any THREAT-INTEL match on the
+// evidence its alerts point at (SOAR-5).
 //
-// This is LOCAL CONTEXT ASSEMBLY, not threat intelligence: no feed, no IOC lookup, no external call.
-// SOAR-5 owns the IOC store (shared with NIPS-2) and will replace this body with real enrichment. Saying
-// so here rather than letting the step's name imply more is the honest half of shipping it early.
+// The threat-intel half reads observables the events already carry (never a new collection surface) and
+// matches them with the SAME matcher the inline network engine blocks with. It ANNOTATES only — no alert,
+// no severity change, no actuation — because a public feed is a third party's assertion and one
+// over-broad entry would otherwise become fleet-wide enforcement.
+//
+// Still absent, and named rather than stubbed: EPSS/KEV (both key off a CVE identifier, which nothing in
+// this pipeline produces) and geo/ASN (a licensed GeoIP data file).
 func stepEnrich(ctx context.Context, s *Server, rc *runCtx, _ Step) (string, error) {
 	var kind string
 	var domains []string
@@ -47,15 +52,28 @@ func stepEnrich(ctx context.Context, s *Server, rc *runCtx, _ Step) (string, err
 		}
 	}
 	body := fmt.Sprintf(
-		"local context: kind=%s severity=%s alerts=%d contributing=%d hosts=%d domains=[%s] aliases=%d window=%s→%s "+
-			"(no threat-intel lookup performed — SOAR-5)",
+		"local context: kind=%s severity=%s alerts=%d contributing=%d hosts=%d domains=[%s] aliases=%d window=%s→%s",
 		kind, rc.incident.Severity, rc.incident.AlertCount, contributing, rc.incident.HostCount,
 		strings.Join(domains, ","), aliases,
 		rc.incident.FirstSeen.UTC().Format(time.RFC3339), rc.incident.LastSeen.UTC().Format(time.RFC3339))
 	if err := s.addAnnotation(ctx, rc.incident.ID, "enrichment", body, rc.pb.Identity()); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("annotated: %d contributing alert(s), %d domain(s)", contributing, len(domains)), nil
+	// SOAR-5: threat intel. A separate annotation KIND, not appended to the local-context line, so an
+	// operator (and a later report) can tell a third party's assertion apart from what we observed.
+	hits, err := s.EnrichIncidentWithTI(ctx, rc.incident.ID)
+	if err != nil {
+		return "", err
+	}
+	if len(hits) > 0 {
+		// No annotation when there is no hit: one that says "nothing found" trains an analyst to skip
+		// them, and the absence of a `ti` row already means exactly that.
+		if err := s.addAnnotation(ctx, rc.incident.ID, "ti", tiAnnotationBody(hits), rc.pb.Identity()); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("annotated: %d contributing alert(s), %d domain(s), %d threat-intel hit(s)",
+		contributing, len(domains), len(hits)), nil
 }
 
 // stepNotify pages through the existing fanout.

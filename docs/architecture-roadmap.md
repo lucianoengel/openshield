@@ -59,7 +59,7 @@ NOT an infra ticket and not part of the queues below.
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~85% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). The intent-driven half is DONE too: a `CONTAIN` Response-Intent makes the entity's next exec kernel-REFUSED via a real OPA policy, VM-proven (D253). **The endpoint half of coordinated response is complete.** **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
-| **SOAR** | ~62% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). **MVP gap:** enrichment/TI, analyst metrics, integration runners and notification routing (SOAR-5/6/8/9). |
+| **SOAR** | ~72% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). Threat intel is real: signed feed ingest into a shared IOC store, and incidents are enriched from observables the verified events already carry (SOAR-5, D257). **MVP gap:** analyst metrics, integration runners and notification routing (SOAR-6/8/9). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring is
@@ -164,10 +164,15 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   construction — SOAR-7/8 own that); no DAG, no retries/backoff, no rate limit on playbook starts;
   `enrich` is local context assembly, not threat intel (SOAR-5); the approval gate is a one-operator
   human-in-the-loop gate, NOT two-human four-eyes, because the requester is the playbook.
-- **SOAR-5 · Enrichment + threat-intel** — srv + C · L. Signed TI feed ingest (STIX/CSV) → local IOC
-  store; enrichment step annotates the incident timeline with IOC hits, EPSS/KEV, geo/ASN. **Shares the
-  IOC store NIPS-2 already needs — build once.** *Accept: an incident whose alerts carry a known-bad
-  domain gets a TI annotation; a feed with a bad signature is rejected.*
+- **SOAR-5 · Enrichment + threat-intel** — ✅ **DONE, increment 1 (D257)** — see Done ledger. Detached
+  ed25519 feed verification that runs BEFORE the parser (asserted by a parser-entry counter, not by the
+  refusal alone); a `ioc_indicators`/`ioc_feeds` store with snapshot-replace semantics; ONE matcher shared
+  with the inline NIPS engine; enrichment walking XDR-5's evidence references to observables the verified
+  events already carry. *Residual, named:* **no EPSS/KEV** (both key off a CVE id and nothing in the
+  pipeline produces one); **no geo/ASN** (a licensed GeoIP data file — a distribution decision); **no
+  STIX** (a large untrusted-JSON surface; an external converter is the right shape); no IOC ageing,
+  confidence or TLP; no retro-hunt when a feed lands; no signed URL fetch; unsigned feeds still load when
+  no key is configured (warned, not silent); and a hit ANNOTATES, never enforces.
 - **SOAR-6 · MTTA/MTTR + analyst metrics** — srv · S. Derive from existing timestamps
   (`detected_at`/`acknowledged_at`/`opened_at`/`closed_at`), expose via PLAT-4 Prometheus + a report
   endpoint. *Accept: `/metrics` exposes mtta/mttr histograms that move when an incident is acked/closed.*

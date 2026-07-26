@@ -22,6 +22,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
+	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/notify"
 	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
@@ -39,6 +40,8 @@ func main() {
 			os.Exit(revokeAgent(dsn, os.Args[2:]))
 		case "migrate":
 			os.Exit(runMigrate(dsn))
+		case "ingest-feed":
+			os.Exit(ingestFeed(dsn, os.Args[2:]))
 		}
 	}
 	natsURL := env("OPENSHIELD_NATS_URL", "nats://127.0.0.1:4222")
@@ -124,6 +127,43 @@ func main() {
 				fmt.Fprintf(os.Stderr, "openshield-server: playbook orchestration ACTIVE every %s — "+
 					"%d playbook(s) from %s, Tier-1 only (no actuation) (leader only)\n", pi, len(pbs), path)
 			}
+		}
+
+		// SOAR-5: keep the IOC store fresh without a human. LEADER-ONLY — every replica re-ingesting
+		// the same snapshot would be redundant writes, not a correctness problem, but the leader lease
+		// is where the singleton maintenance work belongs.
+		//
+		// A failure here is LOUD and never fatal: the previously ingested snapshot stays in place, which
+		// is the right degradation — stale threat intel beats none, and beats a control plane that exits.
+		if fp := os.Getenv("OPENSHIELD_TI_FEED"); fp != "" {
+			ti := envDuration("OPENSHIELD_TI_FEED_INTERVAL", time.Hour)
+			feedName := env("OPENSHIELD_TI_FEED_NAME", "operator")
+			go retain.Loop(leaderCtx, ti, func(ctx context.Context) {
+				pub, err := feedVerificationKey()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: TI feed key: %v\n", err)
+					return
+				}
+				data, err := os.ReadFile(fp)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: reading TI feed %s: %v\n", fp, err)
+					return
+				}
+				var sig []byte
+				if len(pub) != 0 {
+					if sig, err = os.ReadFile(fp + ".sig"); err != nil {
+						fmt.Fprintf(os.Stderr, "openshield-server: reading TI feed signature: %v\n", err)
+						return
+					}
+				}
+				n, err := srv.IngestFeed(ctx, feedName, data, sig, pub,
+					nips.Format(env("OPENSHIELD_TI_FEED_FORMAT", string(nips.FormatNative))))
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: TI feed REFUSED (previous snapshot kept): %v\n", err)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "openshield-server: TI feed %q refreshed: %d indicator(s)\n", feedName, n)
+			})
 		}
 
 		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
@@ -469,4 +509,76 @@ func loadPlaybookFile(path string) ([]controlplane.Playbook, error) {
 	}
 	defer f.Close()
 	return controlplane.LoadPlaybooks(f)
+}
+
+// ingestFeed is the operator-local threat-intel ingest (SOAR-5):
+//
+//	openshield-server ingest-feed <name> <feed-file> [<signature-file>]
+//
+// A SUBCOMMAND, not an HTTP route, for the D51 reason token issuance is not one: an endpoint that accepts
+// indicator sets would let anything able to reach it decide what the platform calls a threat, which
+// defeats the signature requirement standing next to it.
+//
+// The verification key comes from OPENSHIELD_TI_FEED_KEY (a raw ed25519 public key file). Without it the
+// feed loads UNSIGNED — a visible configuration choice, printed as a warning, never a silent default.
+func ingestFeed(dsn string, args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: openshield-server ingest-feed <name> <feed-file> [<signature-file>]")
+		return 2
+	}
+	name, path := args[0], args[1]
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: reading feed: %v\n", err)
+		return 1
+	}
+	var sig []byte
+	if len(args) > 2 {
+		if sig, err = os.ReadFile(args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-server: reading signature: %v\n", err)
+			return 1
+		}
+	}
+	pub, err := feedVerificationKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: %v\n", err)
+		return 1
+	}
+	if len(pub) == 0 {
+		fmt.Fprintf(os.Stderr, "openshield-server: WARNING — OPENSHIELD_TI_FEED_KEY is unset, so %q is "+
+			"ingested UNVERIFIED: whatever wrote that file decides what this platform calls a threat\n", path)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: connecting: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+	srv := controlplane.New(pool)
+	n, err := srv.IngestFeed(ctx, name, data, sig, pub, nips.Format(env("OPENSHIELD_TI_FEED_FORMAT", string(nips.FormatNative))))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "openshield-server: ingested %d indicator(s) into feed %q (signed=%v)\n",
+		n, name, len(pub) != 0)
+	return 0
+}
+
+// feedVerificationKey loads the ed25519 public key feeds are verified against, if configured.
+func feedVerificationKey() (ed25519.PublicKey, error) {
+	kp := os.Getenv("OPENSHIELD_TI_FEED_KEY")
+	if kp == "" {
+		return nil, nil
+	}
+	key, err := os.ReadFile(kp)
+	if err != nil {
+		return nil, fmt.Errorf("reading TI feed key: %w", err)
+	}
+	if len(key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("TI feed key is %d bytes, want %d (raw ed25519 public key)", len(key), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(key), nil
 }

@@ -152,30 +152,8 @@ func ParseFeed(r io.Reader) (*Feed, error) {
 			return nil, fmt.Errorf("nips: line %d: want '<kind> <indicator>', got %q", line, text)
 		}
 		kind, indicator := strings.ToLower(fields[0]), fields[1]
-		switch kind {
-		case "domain":
-			f.domains[strings.ToLower(strings.TrimSuffix(indicator, "."))] = struct{}{}
-		case "ip":
-			if net.ParseIP(indicator) == nil {
-				return nil, fmt.Errorf("nips: line %d: bad IP %q", line, indicator)
-			}
-			f.ips[indicator] = struct{}{}
-		case "cidr":
-			_, n, err := net.ParseCIDR(indicator)
-			if err != nil {
-				return nil, fmt.Errorf("nips: line %d: bad CIDR %q: %w", line, indicator, err)
-			}
-			f.cidrs = append(f.cidrs, n)
-		case "uri":
-			// R34-13: a URI IOC is matched by substring, so a degenerate short token like "/"
-			// would match essentially every HTTP path — a feed typo that silently flags all
-			// traffic. Require a discriminating minimum length; a real path/URI IOC is far longer.
-			if len(indicator) < minURIIndicator {
-				return nil, fmt.Errorf("nips: line %d: uri indicator %q too short (min %d chars) — it would match nearly every flow", line, indicator, minURIIndicator)
-			}
-			f.uris = append(f.uris, indicator)
-		default:
-			return nil, fmt.Errorf("nips: line %d: unknown kind %q (want domain|ip|cidr|uri)", line, kind)
+		if err := addIndicator(f, kind, indicator, fmt.Sprintf("line %d", line)); err != nil {
+			return nil, err
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -183,6 +161,49 @@ func ParseFeed(r io.Reader) (*Feed, error) {
 	}
 	return f, nil
 }
+
+// addIndicator validates and installs ONE indicator. Every format (native, CSV) and every reconstruction
+// path (BuildFeed, from the IOC store) goes through it, so the validation rules — a parseable IP, a
+// parseable CIDR, and the R34-13 minimum URI length — have exactly one home. A second format with its own
+// copy of these checks is how a degenerate indicator eventually gets in through the newer door.
+func addIndicator(f *Feed, kind, indicator, where string) error {
+	switch kind {
+	case KindDomain:
+		f.domains[strings.ToLower(strings.TrimSuffix(indicator, "."))] = struct{}{}
+	case KindIP:
+		if net.ParseIP(indicator) == nil {
+			return fmt.Errorf("nips: %s: bad IP %q", where, indicator)
+		}
+		f.ips[indicator] = struct{}{}
+	case KindCIDR:
+		_, n, err := net.ParseCIDR(indicator)
+		if err != nil {
+			return fmt.Errorf("nips: %s: bad CIDR %q: %w", where, indicator, err)
+		}
+		f.cidrs = append(f.cidrs, n)
+	case KindURI:
+		// R34-13: a URI IOC is matched by substring, so a degenerate short token like "/" would match
+		// essentially every HTTP path — a feed typo that silently flags all traffic. Require a
+		// discriminating minimum length; a real path/URI IOC is far longer.
+		if len(indicator) < minURIIndicator {
+			return fmt.Errorf("nips: %s: uri indicator %q too short (min %d chars) — it would match nearly every flow",
+				where, indicator, minURIIndicator)
+		}
+		f.uris = append(f.uris, indicator)
+	default:
+		return fmt.Errorf("nips: %s: unknown kind %q (want domain|ip|cidr|uri)", where, kind)
+	}
+	return nil
+}
+
+// Indicator kinds, named once so the feed formats, the IOC store and the reconstruction path cannot
+// spell them differently.
+const (
+	KindDomain = "domain"
+	KindIP     = "ip"
+	KindCIDR   = "cidr"
+	KindURI    = "uri"
+)
 
 // Size reports the number of indicators loaded, for logging.
 func (f *Feed) Size() int {
