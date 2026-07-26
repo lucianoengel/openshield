@@ -256,7 +256,8 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
   transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
 - **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
-  and schema-skew reporting (D267) DONE; upgrade orchestration + DR runbook remain.**
+  schema-skew reporting (D267) and the operator RUNBOOK + deployment footprint (D268) DONE; upgrade
+  orchestration remains.**
   D267 fixed a real rollback defect: `fullyMigrated`'s `applied >= want` let a rolled-back binary run
   SILENTLY against a newer schema. It now reports the skew (loudly, plus a gauge) and still STARTS —
   refusing would turn a rollback into an outage. Migrations are FORWARD-ONLY: rolling the BINARY back is
