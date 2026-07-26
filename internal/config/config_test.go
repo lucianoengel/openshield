@@ -288,3 +288,74 @@ func TestReadingAnUndeclaredFieldPanics(t *testing.T) {
 	}()
 	config.New(testFields()).String("T_NOT_DECLARED")
 }
+
+// TestEveryGatewayEnvVarIsDeclared — the same drift guard the server has (PLAT-5 follow-up). A field read
+// directly from the environment, bypassing the schema, is a setting no UI can ever show.
+func TestEveryGatewayEnvVarIsDeclared(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "cmd", "openshield-gateway", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]bool{}
+	for _, f := range config.GatewayFields {
+		declared[f.Key] = true
+	}
+	seen := map[string]bool{}
+	for _, k := range regexp.MustCompile(`OPENSHIELD_[A-Z0-9_]+`).FindAllString(string(src), -1) {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if !declared[k] {
+			t.Errorf("%s is read by cmd/openshield-gateway but is NOT declared in GatewayFields", k)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("found no environment variables in the gateway source — the guard proves nothing")
+	}
+}
+
+// TestTheGatewayNeedsNoDatabaseToReadItsConfiguration.
+//
+// Every gateway field is BOOTSTRAP, which is a statement about what the gateway is: a network appliance
+// whose settings are node-local. It also means the most network-exposed component here never needs
+// database credentials to read its own configuration — a property worth pinning, because the easy way to
+// add a "fleet-wide gateway setting" later is to hand it a DSN.
+func TestTheGatewayNeedsNoDatabaseToReadItsConfiguration(t *testing.T) {
+	for _, f := range config.GatewayFields {
+		if f.Scope != config.ScopeBootstrap {
+			t.Errorf("%s is %s-scoped — the gateway would then need database credentials to read its "+
+				"configuration; a fleet-wide gateway setting belongs on the SIGNED channel it already "+
+				"verifies risk and intents on", f.Key, f.Scope)
+		}
+	}
+	// And it resolves with no DB source attached at all.
+	r := config.New(config.GatewayFields, config.EnvSource{})
+	if got := r.String("OPENSHIELD_LISTEN"); got != "127.0.0.1:8080" {
+		t.Errorf("resolving without a database gave %q", got)
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("the declared defaults do not validate: %v", err)
+	}
+}
+
+// TestAnExplicitlySetBadPathStillFails — the other half of the default-path fix. A path an operator TYPED
+// and got wrong is worth failing the boot over; only a path that came from the DECLARED DEFAULT is
+// exempt, because that one names where a feature's file would live and the feature simply is not in use.
+//
+// Mutation: exempt every path, not just defaults → a typo'd path boots → FAILS.
+func TestAnExplicitlySetBadPathStillFails(t *testing.T) {
+	fields := []config.Field{{Key: "T_PATH", Kind: config.KindPath, Default: "/nonexistent/default",
+		Description: "a path"}}
+	// From the default: exempt, because the feature is simply not configured.
+	if err := config.New(fields, config.EnvSource{}).Validate(); err != nil {
+		t.Errorf("a DEFAULT path that does not exist failed validation: %v — that path names where a "+
+			"feature's file would live, and the feature is not in use", err)
+	}
+	// Explicitly set and wrong: a typo, and worth failing the boot over.
+	t.Setenv("T_PATH", "/definitely/not/here")
+	if err := config.New(fields, config.EnvSource{}).Validate(); err == nil {
+		t.Error("an explicitly-set path that does not exist validated — an operator who typed it wrong " +
+			"finds out at first use instead of at boot")
+	}
+}

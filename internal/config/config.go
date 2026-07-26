@@ -291,7 +291,7 @@ func (r *Resolver) Validate() error {
 		if raw == "" {
 			continue // unset and no default: the reader's own required-ness check applies
 		}
-		if err := parseFor(f, raw); err != nil {
+		if err := parseForOrigin(f, raw, origin); err != nil {
 			errs = append(errs, newFieldError(f, raw, err.Error()+" (from "+origin+")"))
 			continue
 		}
@@ -305,6 +305,21 @@ func (r *Resolver) Validate() error {
 		return errs
 	}
 	return nil
+}
+
+// parseForOrigin is parseFor, plus the one check that depends on WHERE a value came from.
+//
+// A KindPath field is checked for existence only when it was EXPLICITLY SET. A path that came from the
+// DECLARED DEFAULT and does not exist is normal — it names where a feature's file WOULD live, and the
+// feature simply is not in use — whereas a path an operator typed and got wrong is worth failing the boot
+// over. Statting a default conflates "is this a path" with "does this file exist right now", which is
+// also a snapshot: a path readable at boot can stop being readable an hour later, so the check must not
+// be mistaken for a guarantee. The reader gives the real error at the point of use.
+func parseForOrigin(f Field, raw, origin string) error {
+	if f.Kind == KindPath && origin == "default" {
+		return nil
+	}
+	return parseFor(f, raw)
 }
 
 // parseFor is the kind's parseability check. A malformed value is an ERROR, never a silent fall back to

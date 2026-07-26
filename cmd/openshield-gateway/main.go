@@ -40,6 +40,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/attest"
 	"github.com/lucianoengel/openshield/internal/casb"
+	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/dnsredirect"
 	"github.com/lucianoengel/openshield/internal/dnssink"
@@ -57,6 +58,27 @@ import (
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// PLAT-5 follow-up: validate EVERY declared field before doing anything. A malformed value now fails
+	// the boot with a precise, field-scoped error instead of silently falling back to a default — the
+	// same defect class D262 fixed for the server, in the component that sits in the network path.
+	//
+	// Every gateway field is BOOTSTRAP, so this needs no database: a network appliance's settings are
+	// node-local, and the most exposed component here should not need database credentials to read its
+	// own configuration.
+	gwCfg := config.New(config.GatewayFields, config.EnvSource{})
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		gwCfg.WriteEffective(os.Stdout)
+		if err := gwCfg.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "\n%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := gwCfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-gateway: %v\n", err)
+		os.Exit(1)
+	}
+
 	listen := env("OPENSHIELD_LISTEN", "127.0.0.1:8080")
 	dsn := env("OPENSHIELD_DSN", "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable")
 	workerBin := env("OPENSHIELD_WORKER_BIN", "/usr/local/bin/openshield-worker")
