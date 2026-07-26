@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -180,6 +181,11 @@ func (s *Server) AddNote(ctx context.Context, id int64, author, note string) err
 
 // RequestClose records an operator's request to close a case. It does NOT close it — a
 // second, different operator must approve (four-eyes, D36).
+//
+// SOAR-3: the four-eyes control now lives in the generic approvals object, and this raises an approval
+// alongside the case columns. The columns stay so historical closures keep their attribution and the case
+// read surface is unchanged; the APPROVAL is what carries the rule, so there is one implementation of it
+// rather than one per feature.
 func (s *Server) RequestClose(ctx context.Context, id int64, operator string) error {
 	ct, err := s.pool.Exec(ctx,
 		`UPDATE cases SET status = 'close_requested', close_requested_by = $1
@@ -190,6 +196,10 @@ func (s *Server) RequestClose(ctx context.Context, id int64, operator string) er
 	if ct.RowsAffected() == 0 {
 		return fmt.Errorf("cases: case %d not found or already closed", id)
 	}
+	// Best-effort: a duplicate pending approval (a re-request) is not an error for the case flow, whose
+	// own predicate already governs the state.
+	_, _ = s.RequestApproval(ctx, ApprovalSubjectCaseClose, strconv.FormatInt(id, 10), operator,
+		"case closure", DefaultApprovalTTL)
 	return nil
 }
 
@@ -210,6 +220,15 @@ func (s *Server) ApproveClose(ctx context.Context, id int64, approver string) er
 	}
 	if approver == requester {
 		return ErrFourEyes
+	}
+	// Resolve the approval too, so the four-eyes decision is recorded in ONE place for every feature that
+	// needs it (SOAR-3). A missing approval (a case whose closure was requested before this shipped) does
+	// not block the close: the case predicate below is still the authority for case state.
+	if a, aerr := s.ApprovalFor(ctx, ApprovalSubjectCaseClose, strconv.FormatInt(id, 10)); aerr == nil &&
+		a.State == ApprovalPending {
+		if rerr := s.ResolveApproval(ctx, a.ID, approver, true); rerr != nil {
+			return rerr // four-eyes / expired / already resolved — the approval object is the control
+		}
 	}
 	ct, err := s.pool.Exec(ctx,
 		`UPDATE cases SET status = 'closed', closed_by = $1, closed_at = now()

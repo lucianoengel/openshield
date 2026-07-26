@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D250.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D251.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D250)
+## What OpenShield is (status at a glance, through D251)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -59,7 +59,7 @@ NOT an infra ticket and not part of the queues below.
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~78% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). **MVP gap:** the *intent*-driven half — an OPA policy reading a signed `CONTAIN` Response-Intent — needs SOAR-7 (Lane B), and XDR-6 stays blocked on it. **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
-| **SOAR** | ~30% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation now runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250) — before this, an incident only existed if an operator did a GET. **MVP gap:** four-eyes approvals, a playbook engine, enrichment, metrics, the signed response-intent seam, and integration runners (SOAR-3…9). |
+| **SOAR** | ~38% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation now runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250) — before this, an incident only existed if an operator did a GET. **MVP gap:** a playbook engine, enrichment, metrics, the signed response-intent seam, and integration runners (SOAR-3…9). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring is
@@ -151,10 +151,11 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   materializes both rules on a ticker inside the LEADER's context; incidents gain a forward-only attributed
   lifecycle + `POST /incidents/transition`. *Residual:* it raises and pages, it does not ACT (SOAR-4/5/7/8);
   no escalation timers or on-call routing (SOAR-9); no reopen; no backfill outside the window.
-- **SOAR-3 · Generic four-eyes approval object** — srv · M. Lift D36 from case-close into a typed
-  `approvals` table (subject kinds: playbook-step, response-intent), same atomic requester≠approver
-  predicate. *Accept: a pending approval approved by its own requester is refused (`ErrFourEyes`),
-  atomically under race.*
+- **SOAR-3 · Generic four-eyes approval object** — ✅ **DONE (D251)** — see Done ledger. An `approvals`
+  table keyed by (subject_kind, subject_id); every condition in the UPDATE predicate so resolution is
+  atomic; expiry enforced in the predicate; one pending approval per subject; case closure rewired onto it.
+  *Residual:* no approval POLICY and no N-of-M (the caller decides), no notification (SOAR-9), and the only
+  consumer so far is case closure — SOAR-4/7 are the intended ones.
 - **SOAR-4 · Playbook engine v1 (server-side only)** — srv · L. Declarative playbook = trigger (incident
   severity/domain/kind) + DAG of steps from a **closed step registry** (enrich, notify, open-case,
   place-hold, tag, annotate, wait-for-approval). Durable step state in Postgres; every transition
