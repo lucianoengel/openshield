@@ -11,8 +11,8 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/agent/identity"
-	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/controlplane"
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 

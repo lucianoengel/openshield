@@ -111,8 +111,8 @@ func (l *Leader) acquire(ctx context.Context) (*pgxpool.Conn, error) {
 		if got {
 			return conn, nil // elected — hold this connection (and its session lock)
 		}
-		conn.Release()      // someone else is leader; retry after the poll interval
-		backoff = l.poll    // a clean "not leader" is not a failure — reset the backoff
+		conn.Release()   // someone else is leader; retry after the poll interval
+		backoff = l.poll // a clean "not leader" is not a failure — reset the backoff
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
