@@ -170,3 +170,78 @@ func TestContentStoreIsBounded(t *testing.T) {
 		t.Errorf("the NEWEST entry = %q, want it retained — it is the live detection", got)
 	}
 }
+
+// countingReader records whether it was ever asked to read — the assertion that matters for exclusions.
+type countingReader struct{ reads int }
+
+func (c *countingReader) Read(context.Context) ([]byte, error) {
+	c.reads++
+	return []byte("the master password"), nil
+}
+func (c *countingReader) DisplayServer() string { return clipboard.DisplayX11 }
+
+// TestExclusionsCoverPasswordManagersByDefault: the default list must protect the obvious case without an
+// operator having to think of it.
+func TestExclusionsCoverPasswordManagersByDefault(t *testing.T) {
+	e := clipboard.NewExclusions()
+	for _, exe := range []string{
+		"/usr/bin/keepassxc", "/usr/bin/bitwarden", "/opt/1Password/1password",
+		"/usr/bin/KeePassXC", "/usr/bin/gnome-keyring-daemon", "/usr/bin/pass",
+	} {
+		if !e.Excluded(exe) {
+			t.Errorf("%s is not excluded by default — a monitor that reads every copy would read every "+
+				"credential copied out of it", exe)
+		}
+	}
+	for _, exe := range []string{"/usr/bin/libreoffice", "/usr/bin/firefox", "/usr/bin/code"} {
+		if e.Excluded(exe) {
+			t.Errorf("%s is excluded by default; only credential sources should be", exe)
+		}
+	}
+}
+
+// TestExclusionsAcceptOperatorEntries: basenames and path substrings (flatpak/snap/AppImage shims).
+func TestExclusionsAcceptOperatorEntries(t *testing.T) {
+	e := clipboard.NewExclusions("my-vault", "/opt/secrets/")
+	if !e.Excluded("/usr/local/bin/my-vault") {
+		t.Error("an operator-added basename was not excluded")
+	}
+	if !e.Excluded("/opt/secrets/launcher.sh") {
+		t.Error("an operator-added path substring was not excluded")
+	}
+	if e.Excluded("/usr/bin/vim") {
+		t.Error("an unrelated binary was excluded")
+	}
+}
+
+// TestUnknownSourceIsNotExcluded pins the deliberate choice: an unattributable copy (the normal Wayland
+// case) is NOT excluded, because failing closed would silently disable monitoring entirely while appearing
+// to work. The capability report is what tells the operator which mode they are in.
+func TestUnknownSourceIsNotExcluded(t *testing.T) {
+	if clipboard.NewExclusions().Excluded("") {
+		t.Error("an unknown source was excluded — that silently disables monitoring wherever attribution " +
+			"is unavailable")
+	}
+}
+
+// TestExcludedSourceIsNeverRead is the ordering assertion, and the reason this control exists: the content
+// must never be READ, not merely discarded after reading.
+//
+// Mutation: read first and filter the result afterwards → reads > 0 → this FAILS.
+func TestExcludedSourceIsNeverRead(t *testing.T) {
+	r := &countingReader{}
+	w := &clipboard.Watcher{Reader: r, Exclusions: clipboard.NewExclusions(), Source: func() string {
+		return "/usr/bin/keepassxc"
+	}}
+	b, changed, err := w.Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || len(b) != 0 {
+		t.Errorf("an excluded source produced content (changed=%v, %d bytes)", changed, len(b))
+	}
+	if r.reads != 0 {
+		t.Fatalf("the clipboard was READ %d times for an excluded source — the secret entered the process; "+
+			"exclusion must happen BEFORE the read, not as a filter after it", r.reads)
+	}
+}

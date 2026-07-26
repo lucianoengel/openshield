@@ -76,7 +76,7 @@ func TestClipboardCopyIsClassifiedAndTheEventCarriesNoContent(t *testing.T) {
 	events := make(chan *corev1.Event, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go clipboardSource(ctx, &scriptedReader{contents: []string{copied}}, store,
+	go clipboardSource(ctx, &scriptedReader{contents: []string{copied}}, store, nil,
 		10*time.Millisecond, events, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 	var ev *corev1.Event
@@ -161,7 +161,7 @@ func TestClipboardProducerDoesNotReEmitUnchangedContent(t *testing.T) {
 	events := make(chan *corev1.Event, 16)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go clipboardSource(ctx, &scriptedReader{contents: []string{"same text forever"}}, store,
+	go clipboardSource(ctx, &scriptedReader{contents: []string{"same text forever"}}, store, nil,
 		5*time.Millisecond, events, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 	// Long enough for many polls.

@@ -349,19 +349,41 @@ func main() {
 	// Disabled unless an interval is set, and it refuses to start LOUDLY when there is no display or no
 	// helper binary — a producer that polls forever with nothing to see would be worse than none.
 	if iv := envDuration("OPENSHIELD_CLIPBOARD_INTERVAL", 0); iv > 0 {
+		excl := clipboard.NewExclusions(splitList(os.Getenv("OPENSHIELD_CLIPBOARD_EXCLUDE"))...)
+		store := clipboard.NewContentStore(nil)
+		eng.SetContentResolver(func(ev *corev1.Event) []byte { return store.Resolve(ev.GetEventId()) })
+
+		// MEDIATION first (DLP-2a inc 2): on X11 the engine can own the selection and DECIDE each paste,
+		// which is what enterprise DLP does. Falls back to observe-only capture when unavailable.
+		mediating := false
+		if clipboard.Detect() == clipboard.DisplayX11 && os.Getenv("OPENSHIELD_CLIPBOARD_MEDIATE") != "" {
+			mediating = mediateClipboard(ctx, os.Getenv("DISPLAY"), store, excl,
+				func(ev *corev1.Event, _ string) bool {
+					dec, derr := eng.Process(ctx, ev)
+					if derr != nil {
+						// Fail SAFE for a clipboard: an evaluation failure must not silently mediate
+						// (and thus block) content we never classified.
+						log.Warn("clipboard: classification failed; not mediating this copy", slog.Any("err", derr))
+						return false
+					}
+					return dec.GetAction() != corev1.Action_ACTION_ALLOW
+				}, events, log)
+		}
+
 		reader, cerr := clipboard.NewReader()
-		if cerr != nil {
+		switch {
+		case mediating:
+			// Mediation owns capture; the polled producer would double-report.
+		case cerr != nil:
 			log.Warn("engine: clipboard monitoring UNAVAILABLE — not started (the engine runs without it)",
 				slog.Any("err", cerr))
-		} else {
-			// Chain, do not overwrite: SetContentResolver holds ONE function, and a future producer's
-			// content source must not be silently displaced.
-			store := clipboard.NewContentStore(nil)
-			eng.SetContentResolver(func(ev *corev1.Event) []byte { return store.Resolve(ev.GetEventId()) })
+		default:
+			log.Warn("engine: clipboard capabilities",
+				slog.String("report", clipboard.PolledHelperCapabilities(reader.DisplayServer()).Summary()))
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				clipboardSource(ctx, reader, store, iv, events, log)
+				clipboardSource(ctx, reader, store, excl, iv, events, log)
 			}()
 			log.Warn("engine: clipboard exfil monitoring ACTIVE — a copy is classified in the sandboxed "+
 				"worker (observe/alert only; it does not block a paste)",

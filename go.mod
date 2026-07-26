@@ -6,6 +6,7 @@ require (
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/google/go-tpm v0.9.8
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jezek/xgb v1.1.1
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/nats-io/nats-server/v2 v2.14.3
 	github.com/nats-io/nats.go v1.52.0

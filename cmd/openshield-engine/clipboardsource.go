@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/clipboard"
@@ -37,8 +38,10 @@ func clipboardEvent(byteCount int, display string) *corev1.Event {
 //
 // It observes; it does not block a paste. Inline clipboard prevention is deliberately not in this increment.
 func clipboardSource(ctx context.Context, r clipboard.Reader, store *clipboard.ContentStore,
-	interval time.Duration, events chan<- *corev1.Event, log *slog.Logger) {
-	w := &clipboard.Watcher{Reader: r}
+	excl *clipboard.Exclusions, interval time.Duration, events chan<- *corev1.Event, log *slog.Logger) {
+	// The polled backend has no source attribution, so exclusions cannot be applied here — the capability
+	// report says so rather than implying a protection that is not in effect.
+	w := &clipboard.Watcher{Reader: r, Exclusions: excl}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	// consecutiveErrors keeps a broken helper from logging once per interval forever while still surfacing
@@ -78,4 +81,15 @@ func clipboardSource(ctx context.Context, r clipboard.Reader, store *clipboard.C
 			}
 		}
 	}
+}
+
+// splitList parses a comma-separated operator list, ignoring blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

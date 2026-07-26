@@ -90,6 +90,12 @@ func Digest(b []byte) [32]byte { return sha256.Sum256(b) }
 // "exfiltration event", and an idle desktop would generate an alert per interval.
 type Watcher struct {
 	Reader Reader
+	// Exclusions, when set, suppresses copies from excluded SOURCE applications — checked BEFORE the read,
+	// so an excluded secret never enters this process (see exclusions.go). nil = no exclusions.
+	Exclusions *Exclusions
+	// Source reports the application that owns the current clipboard, for the exclusion check and for the
+	// event's attribution. nil or "" = attribution unavailable on this display server.
+	Source func() string
 
 	haveLast bool
 	last     [32]byte
@@ -99,6 +105,13 @@ type Watcher struct {
 // call; otherwise (nil, false, nil). An empty clipboard is treated as content like any other, so clearing
 // the clipboard is a change but does not report bytes.
 func (w *Watcher) Poll(ctx context.Context) ([]byte, bool, error) {
+	// Exclusions FIRST: the whole value of this control is that an excluded application's copy is never
+	// read. Reading it and discarding the classification would still have pulled the secret in here.
+	if w.Exclusions != nil && w.Source != nil {
+		if src := w.Source(); w.Exclusions.Excluded(src) {
+			return nil, false, nil
+		}
+	}
 	b, err := w.Reader.Read(ctx)
 	if err != nil {
 		return nil, false, err
