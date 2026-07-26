@@ -9,6 +9,7 @@ package corev1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -85,6 +86,69 @@ func (x ThreatCategory) Number() protoreflect.EnumNumber {
 // Deprecated: Use ThreatCategory.Descriptor instead.
 func (ThreatCategory) EnumDescriptor() ([]byte, []int) {
 	return file_openshield_v1_threat_proto_rawDescGZIP(), []int{0}
+}
+
+// IntentVerb is the CLOSED vocabulary of coordinated response (ADR-12 Tier-2, SOAR-7).
+//
+// Closed for the same reason Action is (D14): the threat is a compromised control plane expressing an
+// arbitrary action that an endpoint then performs. Three verbs, each meaning something a LOCAL policy
+// interprets — the server publishes DATA, the endpoint decides. Adding a member here is a one-at-a-time
+// owner decision and must also edit the enum-completeness test.
+type IntentVerb int32
+
+const (
+	IntentVerb_INTENT_VERB_UNSPECIFIED IntentVerb = 0
+	// Watch this subject harder: a policy may lower thresholds, sample more, or require step-up auth.
+	IntentVerb_INTENT_VERB_ELEVATE_SCRUTINY IntentVerb = 1
+	// Contain this subject: a policy may block its flows and refuse its new executions. HIGH-IMPACT —
+	// publication requires a four-eyes approval and a bounded blast radius.
+	IntentVerb_INTENT_VERB_CONTAIN IntentVerb = 2
+	// Stop trusting this subject's credentials: a policy may refuse its tokens and require re-attestation.
+	// HIGH-IMPACT.
+	IntentVerb_INTENT_VERB_REVOKE_TRUST IntentVerb = 3
+)
+
+// Enum value maps for IntentVerb.
+var (
+	IntentVerb_name = map[int32]string{
+		0: "INTENT_VERB_UNSPECIFIED",
+		1: "INTENT_VERB_ELEVATE_SCRUTINY",
+		2: "INTENT_VERB_CONTAIN",
+		3: "INTENT_VERB_REVOKE_TRUST",
+	}
+	IntentVerb_value = map[string]int32{
+		"INTENT_VERB_UNSPECIFIED":      0,
+		"INTENT_VERB_ELEVATE_SCRUTINY": 1,
+		"INTENT_VERB_CONTAIN":          2,
+		"INTENT_VERB_REVOKE_TRUST":     3,
+	}
+)
+
+func (x IntentVerb) Enum() *IntentVerb {
+	p := new(IntentVerb)
+	*p = x
+	return p
+}
+
+func (x IntentVerb) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (IntentVerb) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshield_v1_threat_proto_enumTypes[1].Descriptor()
+}
+
+func (IntentVerb) Type() protoreflect.EnumType {
+	return &file_openshield_v1_threat_proto_enumTypes[1]
+}
+
+func (x IntentVerb) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use IntentVerb.Descriptor instead.
+func (IntentVerb) EnumDescriptor() ([]byte, []int) {
+	return file_openshield_v1_threat_proto_rawDescGZIP(), []int{1}
 }
 
 // ThreatMatch is one threat-intel hit on a flow. It carries the category and a
@@ -205,11 +269,113 @@ func (x *ThreatClassification) GetMatches() []*ThreatMatch {
 	return nil
 }
 
+// ResponseIntent is the control plane's coordinated-response signal (SOAR-7/ADR-12 Tier-2).
+//
+// It is DATA, not an instruction. A consumer verifies the signature, reads it as typed policy CONTEXT, and
+// its own policy decides what the verb means for it — an endpoint whose policy ignores intents is
+// unaffected, which is a property of the design rather than a gap in it.
+//
+// It carries no content (D10/D29): a pseudonymous subject (D23), a closed verb, and time bounds.
+type ResponseIntent struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	IntentId string                 `protobuf:"bytes,1,opt,name=intent_id,json=intentId,proto3" json:"intent_id,omitempty"` // stable id; the four-eyes approval is bound to it
+	Verb     IntentVerb             `protobuf:"varint,2,opt,name=verb,proto3,enum=openshield.v1.IntentVerb" json:"verb,omitempty"`
+	Subject  string                 `protobuf:"bytes,3,opt,name=subject,proto3" json:"subject,omitempty"`  // pseudonymous subject or entity key (D23)
+	Version  uint32                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"` // consumers reject a version they do not understand
+	IssuedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	// expires_at is MANDATORY in practice: a contain with no expiry is a permanent quarantine nobody
+	// remembers issuing. A consumer treats an expired intent as absent, so a stale containment cannot
+	// outlive the control plane that issued it.
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Reason        string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"` // operator-facing justification; never content
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResponseIntent) Reset() {
+	*x = ResponseIntent{}
+	mi := &file_openshield_v1_threat_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResponseIntent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResponseIntent) ProtoMessage() {}
+
+func (x *ResponseIntent) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_threat_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResponseIntent.ProtoReflect.Descriptor instead.
+func (*ResponseIntent) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_threat_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ResponseIntent) GetIntentId() string {
+	if x != nil {
+		return x.IntentId
+	}
+	return ""
+}
+
+func (x *ResponseIntent) GetVerb() IntentVerb {
+	if x != nil {
+		return x.Verb
+	}
+	return IntentVerb_INTENT_VERB_UNSPECIFIED
+}
+
+func (x *ResponseIntent) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *ResponseIntent) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *ResponseIntent) GetIssuedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.IssuedAt
+	}
+	return nil
+}
+
+func (x *ResponseIntent) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *ResponseIntent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_openshield_v1_threat_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_threat_proto_rawDesc = "" +
 	"\n" +
-	"\x1aopenshield/v1/threat.proto\x12\ropenshield.v1\"\x8b\x01\n" +
+	"\x1aopenshield/v1/threat.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8b\x01\n" +
 	"\vThreatMatch\x129\n" +
 	"\bcategory\x18\x01 \x01(\x0e2\x1d.openshield.v1.ThreatCategoryR\bcategory\x12\x1e\n" +
 	"\n" +
@@ -218,13 +384,28 @@ const file_openshield_v1_threat_proto_rawDesc = "" +
 	"\findicator_id\x18\x03 \x01(\tR\vindicatorId\"g\n" +
 	"\x14ThreatClassification\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x124\n" +
-	"\amatches\x18\x02 \x03(\v2\x1a.openshield.v1.ThreatMatchR\amatches*\xb7\x01\n" +
+	"\amatches\x18\x02 \x03(\v2\x1a.openshield.v1.ThreatMatchR\amatches\"\x9c\x02\n" +
+	"\x0eResponseIntent\x12\x1b\n" +
+	"\tintent_id\x18\x01 \x01(\tR\bintentId\x12-\n" +
+	"\x04verb\x18\x02 \x01(\x0e2\x19.openshield.v1.IntentVerbR\x04verb\x12\x18\n" +
+	"\asubject\x18\x03 \x01(\tR\asubject\x12\x18\n" +
+	"\aversion\x18\x04 \x01(\rR\aversion\x127\n" +
+	"\tissued_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason*\xb7\x01\n" +
 	"\x0eThreatCategory\x12\x1f\n" +
 	"\x1bTHREAT_CATEGORY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aTHREAT_CATEGORY_IOC_DOMAIN\x10\x01\x12\x1a\n" +
 	"\x16THREAT_CATEGORY_IOC_IP\x10\x02\x12!\n" +
 	"\x1dTHREAT_CATEGORY_URI_SIGNATURE\x10\x03\x12%\n" +
-	"!THREAT_CATEGORY_CONTENT_SIGNATURE\x10\x04B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"!THREAT_CATEGORY_CONTENT_SIGNATURE\x10\x04*\x82\x01\n" +
+	"\n" +
+	"IntentVerb\x12\x1b\n" +
+	"\x17INTENT_VERB_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cINTENT_VERB_ELEVATE_SCRUTINY\x10\x01\x12\x17\n" +
+	"\x13INTENT_VERB_CONTAIN\x10\x02\x12\x1c\n" +
+	"\x18INTENT_VERB_REVOKE_TRUST\x10\x03B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_threat_proto_rawDescOnce sync.Once
@@ -238,21 +419,27 @@ func file_openshield_v1_threat_proto_rawDescGZIP() []byte {
 	return file_openshield_v1_threat_proto_rawDescData
 }
 
-var file_openshield_v1_threat_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_openshield_v1_threat_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_openshield_v1_threat_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_openshield_v1_threat_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_openshield_v1_threat_proto_goTypes = []any{
-	(ThreatCategory)(0),          // 0: openshield.v1.ThreatCategory
-	(*ThreatMatch)(nil),          // 1: openshield.v1.ThreatMatch
-	(*ThreatClassification)(nil), // 2: openshield.v1.ThreatClassification
+	(ThreatCategory)(0),           // 0: openshield.v1.ThreatCategory
+	(IntentVerb)(0),               // 1: openshield.v1.IntentVerb
+	(*ThreatMatch)(nil),           // 2: openshield.v1.ThreatMatch
+	(*ThreatClassification)(nil),  // 3: openshield.v1.ThreatClassification
+	(*ResponseIntent)(nil),        // 4: openshield.v1.ResponseIntent
+	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
 }
 var file_openshield_v1_threat_proto_depIdxs = []int32{
 	0, // 0: openshield.v1.ThreatMatch.category:type_name -> openshield.v1.ThreatCategory
-	1, // 1: openshield.v1.ThreatClassification.matches:type_name -> openshield.v1.ThreatMatch
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 1: openshield.v1.ThreatClassification.matches:type_name -> openshield.v1.ThreatMatch
+	1, // 2: openshield.v1.ResponseIntent.verb:type_name -> openshield.v1.IntentVerb
+	5, // 3: openshield.v1.ResponseIntent.issued_at:type_name -> google.protobuf.Timestamp
+	5, // 4: openshield.v1.ResponseIntent.expires_at:type_name -> google.protobuf.Timestamp
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_threat_proto_init() }
@@ -265,8 +452,8 @@ func file_openshield_v1_threat_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_threat_proto_rawDesc), len(file_openshield_v1_threat_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   2,
+			NumEnums:      2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

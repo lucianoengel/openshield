@@ -117,6 +117,11 @@ type Server struct {
 	// update came from the control plane, not a forging publisher. nil = risk publishing
 	// off (PublishRisk does not emit an unsigned update the gateway would reject anyway).
 	riskSigner ed25519.PrivateKey
+	// intentSigner signs published Response-Intents (SOAR-7). Without it PublishIntents refuses: an
+	// unsigned containment signal is a forgery target, not a convenience.
+	intentSigner ed25519.PrivateKey
+	// intentBlastRadius caps how many subjects one publication run may target; 0 = no ceiling.
+	intentBlastRadius int
 
 	// graph is the XDR entity graph (XDR-1-WIRE): enrollment and verified telemetry ingest resolve a
 	// device entity into it so every domain's detections coalesce onto one entity. It is a DERIVED

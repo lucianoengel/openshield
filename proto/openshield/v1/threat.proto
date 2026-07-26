@@ -4,6 +4,8 @@ package openshield.v1;
 
 option go_package = "github.com/lucianoengel/openshield/internal/core/corev1;corev1";
 
+import "google/protobuf/timestamp.proto";
+
 // ThreatCategory is the closed set of network threat-intel signal kinds (NIPS-2).
 // It is DISTINCT from the DLP DetectorType: a DLP detector flags sensitive CONTENT
 // (and its enum is closed to avoid leaking what was detected), whereas a threat
@@ -38,4 +40,42 @@ message ThreatMatch {
 message ThreatClassification {
   string event_id = 1;
   repeated ThreatMatch matches = 2;
+}
+
+// IntentVerb is the CLOSED vocabulary of coordinated response (ADR-12 Tier-2, SOAR-7).
+//
+// Closed for the same reason Action is (D14): the threat is a compromised control plane expressing an
+// arbitrary action that an endpoint then performs. Three verbs, each meaning something a LOCAL policy
+// interprets — the server publishes DATA, the endpoint decides. Adding a member here is a one-at-a-time
+// owner decision and must also edit the enum-completeness test.
+enum IntentVerb {
+  INTENT_VERB_UNSPECIFIED = 0;
+  // Watch this subject harder: a policy may lower thresholds, sample more, or require step-up auth.
+  INTENT_VERB_ELEVATE_SCRUTINY = 1;
+  // Contain this subject: a policy may block its flows and refuse its new executions. HIGH-IMPACT —
+  // publication requires a four-eyes approval and a bounded blast radius.
+  INTENT_VERB_CONTAIN = 2;
+  // Stop trusting this subject's credentials: a policy may refuse its tokens and require re-attestation.
+  // HIGH-IMPACT.
+  INTENT_VERB_REVOKE_TRUST = 3;
+}
+
+// ResponseIntent is the control plane's coordinated-response signal (SOAR-7/ADR-12 Tier-2).
+//
+// It is DATA, not an instruction. A consumer verifies the signature, reads it as typed policy CONTEXT, and
+// its own policy decides what the verb means for it — an endpoint whose policy ignores intents is
+// unaffected, which is a property of the design rather than a gap in it.
+//
+// It carries no content (D10/D29): a pseudonymous subject (D23), a closed verb, and time bounds.
+message ResponseIntent {
+  string intent_id = 1;                          // stable id; the four-eyes approval is bound to it
+  IntentVerb verb = 2;
+  string subject = 3;                            // pseudonymous subject or entity key (D23)
+  uint32 version = 4;                            // consumers reject a version they do not understand
+  google.protobuf.Timestamp issued_at = 5;
+  // expires_at is MANDATORY in practice: a contain with no expiry is a permanent quarantine nobody
+  // remembers issuing. A consumer treats an expired intent as absent, so a stale containment cannot
+  // outlive the control plane that issued it.
+  google.protobuf.Timestamp expires_at = 6;
+  string reason = 7;                             // operator-facing justification; never content
 }

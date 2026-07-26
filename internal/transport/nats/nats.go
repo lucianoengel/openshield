@@ -48,7 +48,10 @@ const (
 	SubjectDecisions      = "openshield.v1.decisions"
 	SubjectHeartbeat      = "openshield.v1.heartbeats"
 	SubjectRisk           = "openshield.v1.risk"
-	SubjectPosture        = "openshield.v1.posture"
+	// SubjectIntent carries signed Response-Intents (SOAR-7/ADR-12 Tier-2). Like risk, it is DATA the
+	// consumer's LOCAL policy interprets — never a command channel (T2/D14).
+	SubjectIntent  = "openshield.v1.intent"
+	SubjectPosture = "openshield.v1.posture"
 	// SubjectAttestChallenge is request/reply: a device sends its subject, the
 	// gateway replies with a fresh attestation nonce (ZT-1).
 	SubjectAttestChallenge = "openshield.v1.attest.challenge"
