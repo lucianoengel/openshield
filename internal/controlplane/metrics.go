@@ -1,8 +1,10 @@
 package controlplane
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // MetricsHandler serves the control plane's operational counters in the Prometheus text
@@ -21,6 +23,14 @@ func (s *Server) MetricsHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// The aggregate is computed BEFORE anything is written, so the "degrade, never fail" decision is
+		// EXPLICIT rather than an accident of write ordering. (Querying after the first Write would make
+		// a non-200 impossible anyway — the status is already committed — which would leave the property
+		// structurally true but untestable, and a later refactor could silently lose it.)
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		hist, histErr := s.responseHistograms(ctx)
+
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		metrics := []struct {
 			name, help string
@@ -42,5 +52,17 @@ func (s *Server) MetricsHandler() http.Handler {
 			fmt.Fprintf(w, "# TYPE %s counter\n", m.name)
 			fmt.Fprintf(w, "%s %d\n", m.name, m.val)
 		}
+		// SOAR-6 response histograms.
+		//
+		// A FAILURE IS NOT AN ERROR RESPONSE. The counters above are what the "no silent loss" alerts
+		// fire on; failing the scrape because an aggregate did not compute would take alerting down with
+		// it — a reporting problem becoming an outage in the very system that would have reported the
+		// outage. So: emit what we have, omit what we could not, and SAY SO in a comment line the scraper
+		// ignores, because a silent omission is indistinguishable from a healthy zero.
+		if histErr != nil {
+			fmt.Fprintf(w, "# response metrics unavailable: %v\n", histErr)
+			return
+		}
+		fmt.Fprint(w, hist)
 	})
 }

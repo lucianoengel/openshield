@@ -219,6 +219,7 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	mux.HandleFunc("/incidents/ack", s.incidentAckHandler)
 	mux.HandleFunc("/incidents/transition", s.incidentTransitionHandler) // SOAR-2: advance the lifecycle
 	mux.HandleFunc("/incidents/timeline", s.incidentTimelineHandler)     // XDR-5: an incident's contributing alerts + evidence refs
+	mux.HandleFunc("/report/response", s.responseReportHandler)          // SOAR-6: MTTA/MTTR + detection latency
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

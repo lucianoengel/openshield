@@ -59,7 +59,7 @@ NOT an infra ticket and not part of the queues below.
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~85% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). The intent-driven half is DONE too: a `CONTAIN` Response-Intent makes the entity's next exec kernel-REFUSED via a real OPA policy, VM-proven (D253). **The endpoint half of coordinated response is complete.** **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
-| **SOAR** | ~72% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). Threat intel is real: signed feed ingest into a shared IOC store, and incidents are enriched from observables the verified events already carry (SOAR-5, D257). **MVP gap:** analyst metrics, integration runners and notification routing (SOAR-6/8/9). |
+| **SOAR** | ~80% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). Threat intel is real: signed feed ingest into a shared IOC store, and incidents are enriched from observables the verified events already carry (SOAR-5, D257). Response time is measured — detection latency, MTTA and MTTR, each reported with the population it excludes (SOAR-6, D258). **MVP gap:** integration runners and notification routing (SOAR-8/9). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring is
@@ -173,9 +173,14 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   STIX** (a large untrusted-JSON surface; an external converter is the right shape); no IOC ageing,
   confidence or TLP; no retro-hunt when a feed lands; no signed URL fetch; unsigned feeds still load when
   no key is configured (warned, not silent); and a hit ANNOTATES, never enforces.
-- **SOAR-6 · MTTA/MTTR + analyst metrics** — srv · S. Derive from existing timestamps
-  (`detected_at`/`acknowledged_at`/`opened_at`/`closed_at`), expose via PLAT-4 Prometheus + a report
-  endpoint. *Accept: `/metrics` exposes mtta/mttr histograms that move when an incident is acked/closed.*
+- **SOAR-6 · MTTA/MTTR + analyst metrics** — ✅ **DONE (D258)** — see Done ledger. Three durations kept
+  APART (detection latency = our lag, MTTA = the analyst's, MTTR = closed only), Prometheus histograms +
+  `GET /report/response`, every average reported next to its EXCLUDED population. No migration — SOAR-2's
+  forward-only lifecycle is what made `transitioned_at` readable as a closure time. Fixed a defect it
+  surfaced: a transition straight to `triaged` never stamped `acknowledged_at`. *Residual, named:* **no
+  per-analyst aggregation** (deliberate — that is workforce surveillance, and a test asserts no series
+  names an operator); no SLA targets or breach alerting; no per-severity/domain split; contained-but-open
+  is not counted as resolved; the aggregate is computed per scrape, not incrementally maintained.
 - **SOAR-7 · Response-Intent seam (Tier-2)** — ✅ **DONE (D252)** — see Done ledger. Closed 3-verb signed
   TTL'd `ResponseIntent`; publication gated on four-eyes (bound to the intent id) + a blast-radius ceiling
   refused as a whole; consumed as VERIFIED policy context with expiry evaluated on read. **This unblocks

@@ -58,8 +58,17 @@ func (s *Server) TransitionIncident(ctx context.Context, id int64, to, operator 
 		return ErrNoViewer
 	}
 	// The CASE mirrors incidentRank in SQL so the comparison is atomic with the write.
+	//
+	// SOAR-6: the first move OFF `open` also records the acknowledgement. Before this, an operator who
+	// transitioned straight to `triaged` left `acknowledged_at` NULL forever, so that incident could
+	// never be measured for time-to-acknowledge — the exact outcome the forward-only lifecycle exists to
+	// prevent (D250). COALESCE means an existing acknowledgement is NEVER overwritten, so first-ack-wins
+	// attribution (SIEM-11b) is preserved: the recorded acknowledger stays whoever actually got there
+	// first. The stamp is atomic with the transition, so a refused (backward) move records nothing.
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE incidents SET state = $1, transitioned_by = $2, transitioned_at = now(), updated_at = now()
+		`UPDATE incidents SET state = $1, transitioned_by = $2, transitioned_at = now(), updated_at = now(),
+		        acknowledged_by = COALESCE(NULLIF(acknowledged_by, ''), $2),
+		        acknowledged_at = COALESCE(acknowledged_at, now())
 		  WHERE id = $3
 		    AND CASE state WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 WHEN 'triaged' THEN 2
 		                   WHEN 'contained' THEN 3 WHEN 'closed' THEN 4 ELSE -1 END < $4`,
