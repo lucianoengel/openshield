@@ -23,6 +23,10 @@ const (
 	KindPeerAlert    Kind = "peer-alert"    // a subject anomalous vs its peers (D54)
 	KindAgentOverdue Kind = "agent-overdue" // an agent silent past the threshold (D50/D51)
 	KindIncident     Kind = "incident"      // a correlated incident was raised (SOAR-1); pseudonymous, no content
+	// KindApprovalPending is a four-eyes request waiting on a human (SOAR-9, closing SOAR-3's residual).
+	// Without it a request waits for someone who was never told — and a playbook step gated on approval
+	// (SOAR-4) parks indefinitely on a decision nobody knows is pending.
+	KindApprovalPending Kind = "approval-pending"
 )
 
 // Notification is one alert. Subject and AgentID are pseudonymous (D23) — the
@@ -31,13 +35,17 @@ type Notification struct {
 	// ID is a stable idempotency key for this logical alert (SIEM-12). A receiver dedupes on it, so a
 	// client-timeout-after-server-success retry does not double-page. It is stable across the
 	// delivery retry (the same Notification is retried), and distinct per logical alert.
-	ID        string    `json:"id,omitempty"`
-	Kind      Kind      `json:"kind"`
-	Subject   string    `json:"subject,omitempty"`
-	AgentID   string    `json:"agent_id,omitempty"`
-	RiskScore float64   `json:"risk_score,omitempty"`
-	At        time.Time `json:"at"`
-	Detail    string    `json:"detail,omitempty"`
+	ID        string  `json:"id,omitempty"`
+	Kind      Kind    `json:"kind"`
+	Subject   string  `json:"subject,omitempty"`
+	AgentID   string  `json:"agent_id,omitempty"`
+	RiskScore float64 `json:"risk_score,omitempty"`
+	// Severity is the triage bucket this notification ROUTES on (SOAR-9). The producer sets it, or the
+	// control plane's emit stamps it from the risk score — the risk→bucket MAPPING stays in one place
+	// (SIEM-6) and is deliberately not duplicated in this package.
+	Severity string    `json:"severity,omitempty"`
+	At       time.Time `json:"at"`
+	Detail   string    `json:"detail,omitempty"`
 }
 
 // Notifier delivers a Notification. Implementations are best-effort from the

@@ -92,6 +92,13 @@ func (s *Server) emit(ctx context.Context, n notify.Notification) {
 	if n.ID == "" {
 		n.ID = notifyID(n)
 	}
+	// SOAR-9: stamp the routing severity HERE, in the single funnel every notification passes through,
+	// using the one risk→bucket mapping (SIEM-6). The notify package must not learn that mapping: a
+	// second copy is exactly the drift SOAR-5 refused when it made the IOC store and the inline engine
+	// share one matcher. A producer that already set a severity is left alone.
+	if n.Severity == "" && n.RiskScore > 0 {
+		n.Severity = Severity(n.RiskScore)
+	}
 	// Server-side idempotency: a logical alert already emitted this window is suppressed, so a
 	// re-detection does not double-page (SIEM-12). markNew is atomic (check-and-record). This
 	// in-memory set is the FAST pre-filter — a same-process duplicate is caught here without a DB hit.
@@ -201,4 +208,18 @@ func newlyOverdue(prev map[string]bool, current []string) (fresh []string, next 
 		}
 	}
 	return fresh, next
+}
+
+// NotifyUnrouted reports how many notifications matched no routing rule and were therefore delivered to
+// every sink (SOAR-9). It reads through to the installed Router; with no routing table configured there
+// is nothing to be unrouted from, so it is zero.
+//
+// This is the counter that makes the fail-open visible. Routing that silently dropped an unmatched
+// notification would be indistinguishable from a quiet fleet, and the notification that fits no rule is
+// disproportionately likely to be the novel one.
+func (s *Server) NotifyUnrouted() int64 {
+	if r, ok := s.notifier.(*notify.Router); ok && r != nil {
+		return r.Unrouted.Load()
+	}
+	return 0
 }

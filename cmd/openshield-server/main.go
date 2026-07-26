@@ -246,19 +246,51 @@ func main() {
 			// receiver can verify the alert came from this control plane (unset = unsigned, unchanged).
 			attempts := envInt("OPENSHIELD_ALERT_RETRIES", 3)
 			secret := []byte(os.Getenv("OPENSHIELD_ALERT_WEBHOOK_SECRET"))
+			//
+			// SOAR-9: an entry may be `name=url` so a routing table can select it. A BARE URL still
+			// works and is auto-named, so an existing deployment is untouched.
 			var sinks []notify.Notifier
-			for _, u := range strings.Split(hook, ",") {
+			named := map[string]notify.Notifier{}
+			var order []string
+			for i, u := range strings.Split(hook, ",") {
 				u = strings.TrimSpace(u)
 				if u == "" {
 					continue
+				}
+				name := fmt.Sprintf("sink-%d", i)
+				if eq := strings.Index(u, "="); eq > 0 && !strings.Contains(u[:eq], "/") {
+					name, u = strings.TrimSpace(u[:eq]), strings.TrimSpace(u[eq+1:])
 				}
 				w := notify.NewWebhook(u)
 				if len(secret) > 0 {
 					w.Secret = secret
 				}
-				sinks = append(sinks, notify.NewRetrying(w, attempts, 200*time.Millisecond))
+				sink := notify.NewRetrying(w, attempts, 200*time.Millisecond)
+				sinks = append(sinks, sink)
+				named[name] = sink
+				order = append(order, name)
 			}
-			srv.SetNotifier(notify.NewMulti(sinks...))
+			// With no routing table the Router is not installed at all: delivery is exactly today's
+			// fan-out-to-all. Nothing changes for a deployment until an operator writes a table.
+			//
+			// A table that fails to load leaves the fanout in place rather than taking notification down
+			// — a misconfigured route must not become "nobody is paged".
+			installed := false
+			if rp := os.Getenv("OPENSHIELD_ALERT_ROUTES"); rp != "" {
+				if routes, err := loadRoutesFile(rp, order); err != nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: alert routes NOT loaded from %s: %v — "+
+						"falling back to fan-out-to-ALL sinks (over-notifying, never silent)\n", rp, err)
+				} else {
+					srv.SetNotifier(&notify.Router{Sinks: named, Routes: routes})
+					fmt.Fprintf(os.Stderr, "openshield-server: alert routing ACTIVE — %d rule(s) over %d "+
+						"named sink(s); an unmatched notification goes to every sink and is counted\n",
+						len(routes), len(named))
+					installed = true
+				}
+			}
+			if !installed {
+				srv.SetNotifier(notify.NewMulti(sinks...))
+			}
 			overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
 			overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
 			go retain.Loop(leaderCtx, overdueInterval, func(ctx context.Context) {
@@ -581,4 +613,16 @@ func feedVerificationKey() (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("TI feed key is %d bytes, want %d (raw ed25519 public key)", len(key), ed25519.PublicKeySize)
 	}
 	return ed25519.PublicKey(key), nil
+}
+
+// loadRoutesFile reads and VALIDATES an operator routing table against the configured sink names
+// (SOAR-9). Validation is at load because a routing mistake found at delivery time is found by an alert
+// not arriving.
+func loadRoutesFile(path string, sinkNames []string) ([]notify.Route, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return notify.LoadRoutes(f, sinkNames)
 }

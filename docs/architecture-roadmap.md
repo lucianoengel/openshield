@@ -59,7 +59,7 @@ NOT an infra ticket and not part of the queues below.
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~85% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). The intent-driven half is DONE too: a `CONTAIN` Response-Intent makes the entity's next exec kernel-REFUSED via a real OPA policy, VM-proven (D253). **The endpoint half of coordinated response is complete.** **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
-| **SOAR** | ~80% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). Threat intel is real: signed feed ingest into a shared IOC store, and incidents are enriched from observables the verified events already carry (SOAR-5, D257). Response time is measured — detection latency, MTTA and MTTR, each reported with the population it excludes (SOAR-6, D258). **MVP gap:** integration runners and notification routing (SOAR-8/9). |
+| **SOAR** | ~88% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). Threat intel is real: signed feed ingest into a shared IOC store, and incidents are enriched from observables the verified events already carry (SOAR-5, D257). Response time is measured — detection latency, MTTA and MTTR, each reported with the population it excludes (SOAR-6, D258) — and notifications are ROUTED by kind/severity to named sinks, with a pending approval finally paging a human (SOAR-9, D259). **MVP gap:** integration runners (SOAR-8). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring is
@@ -151,12 +151,13 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
 - **SOAR-2 · Scheduled correlation + escalation** — ✅ **DONE (D250)** — see Done ledger. `RunCorrelationLoop`
   materializes both rules on a ticker inside the LEADER's context; incidents gain a forward-only attributed
   lifecycle + `POST /incidents/transition`. *Residual:* it raises and pages, it does not ACT (SOAR-4/5/7/8);
-  no escalation timers or on-call routing (SOAR-9); no reopen; no backfill outside the window.
+  no escalation timers (SOAR-9 shipped routing, not schedules); no reopen; no backfill outside the window.
 - **SOAR-3 · Generic four-eyes approval object** — ✅ **DONE (D251)** — see Done ledger. An `approvals`
   table keyed by (subject_kind, subject_id); every condition in the UPDATE predicate so resolution is
   atomic; expiry enforced in the predicate; one pending approval per subject; case closure rewired onto it.
-  *Residual:* no approval POLICY and no N-of-M (the caller decides), no notification (SOAR-9), and the only
-  consumer so far is case closure — SOAR-4/7 are the intended ones.
+  *Residual:* no approval POLICY and no N-of-M (the caller decides). A pending request now NOTIFIES
+  (SOAR-9/D259), and SOAR-4's `wait-for-approval` plus SOAR-7's intents are live consumers — the
+  "one caller" residual is closed.
 - **SOAR-4 · Playbook engine v1 (server-side only)** — ✅ **DONE (D256)** — see Done ledger. A trigger
   (severity floor / kinds / domains) plus an ORDERED LIST of steps from a closed registry refused at LOAD;
   durable resumable run state whose already-done guard lives in the SQL claim; `wait-for-approval` is the
@@ -191,9 +192,16 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   (disable-user/revoke-sessions) as an intent *subscriber* with a per-connector closed verb set,
   four-eyes always. *Accept: (a) closing the ticket transitions the incident; (b) an unapproved intent is
   never executed, and the runner's ledger entry links intent-id→API call.*
-- **SOAR-9 · Notification routing/templating** — srv · S. Severity/kind→sink routing table over the
-  existing multi-sink fanout. *Accept: CRITICAL routes to the pager sink only, INFO to the chat sink
-  only, proven with two sinks.*
+- **SOAR-9 · Notification routing/templating** — ✅ **DONE (D259)** — see Done ledger. An ordered
+  kind/severity → named-sink table with FIRST-MATCH-WINS (the only semantic that can express "critical to
+  the pager ONLY"); an unmatched notification goes to every sink and is COUNTED, so a table with a hole
+  over-notifies visibly rather than going silent. Also closes SOAR-3's residual: a pending approval now
+  notifies, which is what makes SOAR-4's `wait-for-approval` a gate rather than a deadlock. *Residual,
+  named:* **no templating** (an injection surface into whatever renders it; formatting belongs in the
+  receiver); no escalation ladders, on-call schedules, rotations or reminders (they need a schedule model
+  this does not have); no per-sink rate limiting or digesting; routing matches kind and severity ONLY —
+  never a subject, which would be a re-identification surface and a way to route one person's alerts out
+  of sight.
 
 ### Lane C · Zero Trust — the ZTNA client
 

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/lucianoengel/openshield/internal/notify"
 )
 
 // Four-eyes approvals (SOAR-3), generalized from D36's case-close control.
@@ -78,6 +80,24 @@ func (s *Server) RequestApproval(ctx context.Context, kind, subjectID, requester
 	if err != nil {
 		return 0, err
 	}
+	// SOAR-9: TELL SOMEONE. Until this, a four-eyes request waited on a human who was never informed —
+	// and SOAR-4's wait-for-approval step parked a run indefinitely on a decision nobody knew was
+	// pending, which is the difference between a control and a deadlock.
+	//
+	// Best-effort and off the write path (emit queues; a nil/absent sink is a no-op): the approvals ROW
+	// is the record, delivery is an additive copy, so a failing sink must never fail the request.
+	//
+	// The requester's free-text REASON is deliberately not carried in a field routing matches on —
+	// routing decides on a closed vocabulary, and matching on free text would make the routing decision
+	// depend on what a requester typed.
+	s.emit(ctx, notify.Notification{
+		Kind:     notify.KindApprovalPending,
+		Subject:  subjectID,
+		Severity: SeverityHigh,
+		At:       s.now(),
+		ID:       fmt.Sprintf("approval_%d", id),
+		Detail:   fmt.Sprintf("approval %d pending: %s %s (requested by %s)", id, kind, subjectID, requester),
+	})
 	return id, nil
 }
 
