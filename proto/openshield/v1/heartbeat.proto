@@ -20,4 +20,17 @@ message Heartbeat {
   string agent_id = 1;
   uint64 sequence = 2;
   google.protobuf.Timestamp observed_at = 3;
+
+  // ACKNOWLEDGEMENT OF FLEET-WIDE CONTROL (PLAT-9). D269 could publish a fleet disable but the control
+  // plane could not tell whether it ARRIVED — "did my disable reach the fleet?" is the question an
+  // operator asks thirty seconds after issuing one. These two fields answer it over the channel that
+  // already exists, rather than building an acknowledgement transport.
+  //
+  // enforcement_disabled is the agent's ACTUAL state, not merely what it was told: an agent disabled by
+  // its LOCAL break-glass file reports true here too, which is information the control plane has no other
+  // way to learn.
+  bool enforcement_disabled = 4;
+  // applied_fleet_sequence is the highest fleet-control sequence this agent has applied — the answer to
+  // "which hosts have not caught up yet".
+  uint64 applied_fleet_sequence = 5;
 }

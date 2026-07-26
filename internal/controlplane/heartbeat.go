@@ -54,6 +54,54 @@ func (s *Server) recordHeartbeat(ctx context.Context, data []byte) {
 	if err := s.insert(ctx, "heartbeat", h.GetAgentId(), "", data, false); err != nil {
 		s.DecodeFailures.Add(1)
 	}
+	s.recordEnforcementState(ctx, &h)
+}
+
+// recordEnforcementState projects the heartbeat's enforcement acknowledgement (PLAT-9), so "did my fleet
+// disable arrive?" is an indexed query rather than a scan of heartbeat payloads.
+//
+// Best-effort and never fatal: the heartbeat's own purpose is last-seen, and a projection failure must not
+// cost the fleet its liveness signal. The write is a plain upsert — the LATEST report wins, because an
+// agent's current state is what an operator is asking about.
+func (s *Server) recordEnforcementState(ctx context.Context, h *corev1.Heartbeat) {
+	if h.GetAgentId() == "" {
+		return
+	}
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO agent_enforcement (agent_id, disabled, applied_sequence, reported_at)
+		 VALUES ($1,$2,$3, now())
+		 ON CONFLICT (agent_id) DO UPDATE SET disabled = EXCLUDED.disabled,
+		     applied_sequence = EXCLUDED.applied_sequence, reported_at = now()`,
+		h.GetAgentId(), h.GetEnforcementDisabled(), int64(h.GetAppliedFleetSequence())); err != nil {
+		s.DecodeFailures.Add(1)
+	}
+}
+
+// FleetEnforcement summarizes what the fleet is actually doing.
+type FleetEnforcement struct {
+	Agents         int    `json:"agents"`
+	Disabled       int    `json:"disabled"`
+	Enforcing      int    `json:"enforcing"`
+	NotCaughtUp    int    `json:"not_caught_up"`
+	TargetSequence uint64 `json:"target_sequence"`
+}
+
+// FleetEnforcementState answers the two questions an operator has after issuing a fleet-wide disable:
+// which hosts are still ENFORCING, and which have not yet CAUGHT UP to the latest control.
+//
+// THE HONEST LIMIT, and it matters: this reports only what agents have TOLD us. A silent agent contributes
+// nothing, so "no news" is NOT "still enforcing" — an agent that is gone looks exactly like one that has
+// not checked in. Absence is the overdue mechanism's job (D50/D51), and this must not be read as covering
+// it.
+func (s *Server) FleetEnforcementState(ctx context.Context, target uint64) (FleetEnforcement, error) {
+	var f FleetEnforcement
+	f.TargetSequence = target
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE disabled), count(*) FILTER (WHERE NOT disabled),
+		        count(*) FILTER (WHERE applied_sequence < $1)
+		   FROM agent_enforcement`, int64(target)).
+		Scan(&f.Agents, &f.Disabled, &f.Enforcing, &f.NotCaughtUp)
+	return f, err
 }
 
 // LastSeen returns when the control plane last heard from an agent — via any

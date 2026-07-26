@@ -33,12 +33,24 @@ const (
 // Sequence is monotonic per agent so a gap is visible; a suppressed heartbeat
 // is not a substitute for the agent being gone, but a gap is one more sign.
 type Heartbeat struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	Sequence      uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	AgentId    string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Sequence   uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	ObservedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	// ACKNOWLEDGEMENT OF FLEET-WIDE CONTROL (PLAT-9). D269 could publish a fleet disable but the control
+	// plane could not tell whether it ARRIVED — "did my disable reach the fleet?" is the question an
+	// operator asks thirty seconds after issuing one. These two fields answer it over the channel that
+	// already exists, rather than building an acknowledgement transport.
+	//
+	// enforcement_disabled is the agent's ACTUAL state, not merely what it was told: an agent disabled by
+	// its LOCAL break-glass file reports true here too, which is information the control plane has no other
+	// way to learn.
+	EnforcementDisabled bool `protobuf:"varint,4,opt,name=enforcement_disabled,json=enforcementDisabled,proto3" json:"enforcement_disabled,omitempty"`
+	// applied_fleet_sequence is the highest fleet-control sequence this agent has applied — the answer to
+	// "which hosts have not caught up yet".
+	AppliedFleetSequence uint64 `protobuf:"varint,5,opt,name=applied_fleet_sequence,json=appliedFleetSequence,proto3" json:"applied_fleet_sequence,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *Heartbeat) Reset() {
@@ -92,16 +104,32 @@ func (x *Heartbeat) GetObservedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Heartbeat) GetEnforcementDisabled() bool {
+	if x != nil {
+		return x.EnforcementDisabled
+	}
+	return false
+}
+
+func (x *Heartbeat) GetAppliedFleetSequence() uint64 {
+	if x != nil {
+		return x.AppliedFleetSequence
+	}
+	return 0
+}
+
 var File_openshield_v1_heartbeat_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_heartbeat_proto_rawDesc = "" +
 	"\n" +
-	"\x1dopenshield/v1/heartbeat.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x7f\n" +
+	"\x1dopenshield/v1/heartbeat.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe8\x01\n" +
 	"\tHeartbeat\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12;\n" +
 	"\vobserved_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"observedAtB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"observedAt\x121\n" +
+	"\x14enforcement_disabled\x18\x04 \x01(\bR\x13enforcementDisabled\x124\n" +
+	"\x16applied_fleet_sequence\x18\x05 \x01(\x04R\x14appliedFleetSequenceB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_heartbeat_proto_rawDescOnce sync.Once

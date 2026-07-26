@@ -98,3 +98,9 @@ func DeclaredPlaybookSteps() []string {
 	sort.Strings(out)
 	return out
 }
+
+// RecordHeartbeatForTest exposes heartbeat ingestion so a test can drive the PLAT-9 enforcement
+// acknowledgement through the REAL path rather than inserting the projection directly.
+func (s *Server) RecordHeartbeatForTest(ctx context.Context, data []byte) {
+	s.recordHeartbeat(ctx, data)
+}

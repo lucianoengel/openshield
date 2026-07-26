@@ -261,7 +261,10 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   D269 closes the gap D265 named about itself: a signed `FleetControl` (its own two-verb vocabulary, NOT
   a fourth IntentVerb) bounded by a monotonic sequence (replay), a mandatory TTL (duration) and four-eyes
   on every disable. *Residual:* the control plane cannot CONFIRM a fleet is disabled — publication is
-  best-effort and an agent offline past the TTL never applies it; an acknowledgement path is separate.
+  best-effort and an agent offline past the TTL never applies it. **D270 closes the reporting half:** the
+  heartbeat now carries each agent's ACTUAL enforcement state and applied sequence, so "how many are
+  still enforcing?" is answerable — with the honest limit that SILENCE IS NOT COMPLIANCE (absence stays
+  the overdue mechanism's job).
   D267 fixed a real rollback defect: `fullyMigrated`'s `applied >= want` let a rolled-back binary run
   SILENTLY against a newer schema. It now reports the skew (loudly, plus a gauge) and still STARTS —
   refusing would turn a rollback into an outage. Migrations are FORWARD-ONLY: rolling the BINARY back is
