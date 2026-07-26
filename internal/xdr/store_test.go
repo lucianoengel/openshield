@@ -203,3 +203,86 @@ func TestLinkMergesAndIsIdempotent(t *testing.T) {
 }
 
 var _ = time.Second
+
+// TestLookupAnyFindsAnotherKindsAlias proves the kind-agnostic lookup resolves a value
+// registered under a DIFFERENT kind — the primitive that stops a domain whose subject is a
+// user identity from forking onto its own entity when the graph already knows that identity.
+func TestLookupAnyFindsAnotherKindsAlias(t *testing.T) {
+	pool := requireDB(t)
+	s := xdr.NewStore(pool)
+	ctx := context.Background()
+
+	userEntity, err := s.Resolve(ctx, xdr.KindUser, "user@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.LookupAny(ctx, "user@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("LookupAny missed a value registered under the user kind")
+	}
+	if got != userEntity {
+		t.Fatalf("LookupAny returned entity %d, want the user alias's %d", got, userEntity)
+	}
+}
+
+// TestLookupAnyCreatesNothing is the read-only property: a miss must not mint an entity or
+// an alias, so a speculative lookup before a kind-specific resolve is free of side effects.
+func TestLookupAnyCreatesNothing(t *testing.T) {
+	pool := requireDB(t)
+	s := xdr.NewStore(pool)
+	ctx := context.Background()
+
+	count := func(table string) int64 {
+		t.Helper()
+		var n int64
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+	entitiesBefore, aliasesBefore := count("entities"), count("entity_aliases")
+
+	if _, ok, err := s.LookupAny(ctx, "sub_never_seen"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("LookupAny reported found for a value with no alias")
+	}
+
+	if got := count("entities"); got != entitiesBefore {
+		t.Fatalf("entities changed from %d to %d — LookupAny must create nothing", entitiesBefore, got)
+	}
+	if got := count("entity_aliases"); got != aliasesBefore {
+		t.Fatalf("entity_aliases changed from %d to %d — LookupAny must create nothing", aliasesBefore, got)
+	}
+}
+
+// TestLookupAnyAcrossLinkedPair proves either half of a linked device⋈user pair resolves to
+// the one entity — the shape a ZT alert (user subject) and an endpoint alert (device
+// subject) must share for cross-domain grouping to be an entity join.
+func TestLookupAnyAcrossLinkedPair(t *testing.T) {
+	pool := requireDB(t)
+	s := xdr.NewStore(pool)
+	ctx := context.Background()
+
+	device := pseudonym.Of("agent-linked")
+	const user = "linked-user@example.test"
+	linked, err := s.Link(ctx, xdr.KindDevice, device, xdr.KindUser, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	viaDevice, ok, err := s.LookupAny(ctx, device)
+	if err != nil || !ok {
+		t.Fatalf("lookup by device: %v ok=%v", err, ok)
+	}
+	viaUser, ok, err := s.LookupAny(ctx, user)
+	if err != nil || !ok {
+		t.Fatalf("lookup by user: %v ok=%v", err, ok)
+	}
+	if viaDevice != viaUser || viaDevice != linked {
+		t.Fatalf("linked pair resolved to device=%d user=%d, want both %d", viaDevice, viaUser, linked)
+	}
+}

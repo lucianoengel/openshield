@@ -32,7 +32,7 @@ func (s *Server) RecordUnifiedAlert(ctx context.Context, domain, subjectKind, su
 		s.UnifiedAlertFailures.Add(1)
 		return fmt.Errorf("unified alert: no entity graph")
 	}
-	entityID, err := s.graph.Resolve(ctx, subjectKind, subject)
+	entityID, err := s.entityForSubject(ctx, subjectKind, subject)
 	if err != nil {
 		s.UnifiedAlertFailures.Add(1)
 		return fmt.Errorf("unified alert: resolving entity for %s %q: %w", subjectKind, subject, err)
@@ -51,6 +51,30 @@ func (s *Server) RecordUnifiedAlert(ctx context.Context, domain, subjectKind, su
 		return fmt.Errorf("unified alert: insert: %w", err)
 	}
 	return nil
+}
+
+// entityForSubject keys a subject onto the entity the graph ALREADY knows for it, whatever alias kind
+// registered it, and only falls back to resolve-or-create under the caller's kind when the subject is
+// genuinely new. Shared by unified-alert keying and by the ingest-time graph population, so both name
+// an asset the same way — one keying rule in the system, not two that can disagree.
+//
+// The fallback alone is not enough, and the difference is load-bearing. The gateway's access proxy
+// authorizes on a verified USER identity (it links device⋈user, XDR-1-WIRE), so its events carry a user
+// subject. Resolving that as a device would find no device alias, mint a SECOND alias holding a user
+// value, and put every ZT detection on an entity of its own — the alerts would look correct and never
+// group with the same host's endpoint alerts. Cross-domain correlation would silently lose a domain.
+//
+// Residual, deliberately out of scope here: if a user-subject event is ingested BEFORE the access proxy
+// has linked device⋈user, the device alias is minted first and the later Link does not reclaim it. A
+// canonical one-alias-per-value rule would close that, and needs the Event to carry its subject's kind
+// — a contract change. Documented rather than half-fixed.
+func (s *Server) entityForSubject(ctx context.Context, subjectKind, subject string) (int64, error) {
+	if id, ok, err := s.graph.LookupAny(ctx, subject); err != nil {
+		return 0, err
+	} else if ok {
+		return id, nil
+	}
+	return s.graph.Resolve(ctx, subjectKind, subject)
 }
 
 // AlertsForEntity returns every domain's alerts for one entity, newest first — the cross-domain view a

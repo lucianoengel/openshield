@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/notify"
 )
 
@@ -52,3 +54,13 @@ func (s *Server) ScanWEFDirForTest(dir string) { s.scanWEFDir(context.Background
 func BackoffFor(numDelivered uint64) time.Duration { return backoffFor(numDelivered) }
 func NakBackoffBase() time.Duration                { return nakBackoffBase }
 func NakBackoffMax() time.Duration                 { return nakBackoffMax }
+
+// UnifiedDomainFor / AlertableAction / SeverityForDecision / AlertTitleFor expose the pure
+// decision→alert mappings (XDR-2) so a test can assert them exhaustively over the closed Action and
+// EventKind enums without driving a full ingest.
+func UnifiedDomainFor(kind corev1.EventKind) (string, bool) { return unifiedDomainFor(kind) }
+func AlertableAction(a corev1.Action) bool                  { return alertableAction(a) }
+func SeverityForDecision(a corev1.Action, confidence float64) string {
+	return severityForDecision(a, confidence)
+}
+func AlertTitleFor(a corev1.Action, kind corev1.EventKind) string { return alertTitleFor(a, kind) }

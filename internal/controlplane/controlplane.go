@@ -147,6 +147,13 @@ type Server struct {
 	// the authoritative per-domain records, so a failure is counted, never fatal (XDR-2).
 	UnifiedAlertFailures atomic.Int64
 
+	// UnprojectedDecisions counts VERIFIED alertable decisions that could not be projected into the
+	// unified stream — no persisted originating event, a subject-less event, or an unmapped event kind
+	// (XDR-2). Distinct from UnifiedAlertFailures: nothing failed, the decision simply could not be
+	// keyed to an entity, so it was dropped rather than grouped wrongly. A rising value means a domain
+	// is silently not reaching correlation, which otherwise only shows up as an empty incident list.
+	UnprojectedDecisions atomic.Int64
+
 	// RetentionRecordFailures counts retention compliance events that could not be recorded (SIEM-10) —
 	// the purge still happened, so a recording failure is counted (the report gap is observable), not
 	// fatal.
@@ -165,14 +172,18 @@ func New(pool *pgxpool.Pool) *Server {
 // the best-effort failure path without mutating the shared schema.
 func (s *Server) SetEntityGraph(g *xdr.Store) { s.graph = g }
 
-// resolveDeviceEntity resolves (find-or-create) the device entity for a canonical subject in the XDR
-// graph, BEST-EFFORT (XDR-1-WIRE): an empty subject or a graph error is counted and dropped, never
+// resolveDeviceEntity resolves the device entity for a canonical subject in the XDR graph,
+// BEST-EFFORT (XDR-1-WIRE): an empty subject or a graph error is counted and dropped, never
 // propagated — the graph is a derived index, so a write failure must not break the primary action.
+//
+// It goes through entityForSubject rather than Resolve directly, so a subject another domain already
+// registered under a different kind (the gateway's user identity) is NOT re-minted as a second device
+// alias on its own entity — see entityForSubject for why that fork silently costs a domain.
 func (s *Server) resolveDeviceEntity(ctx context.Context, subject string) {
 	if s.graph == nil || subject == "" {
 		return
 	}
-	if _, err := s.graph.Resolve(ctx, xdr.KindDevice, subject); err != nil {
+	if _, err := s.entityForSubject(ctx, xdr.KindDevice, subject); err != nil {
 		s.EntityResolveFailures.Add(1)
 		fmt.Fprintf(os.Stderr, "openshield-server: entity-graph device resolve failed (subject %s): %v\n", subject, err)
 	}

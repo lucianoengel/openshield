@@ -34,6 +34,8 @@ func (s *Server) MetricsHandler() http.Handler {
 		{"openshield_notify_dropped_total", "Notifications dropped because the async delivery queue was full (SIEM-12).", s.NotifyDropped.Load()},
 			{"openshield_notify_deduped_total", "Duplicate notifications suppressed by the server-side idempotency check (SIEM-12).", s.NotifyDeduped.Load()},
 			{"openshield_dropped_messages_total", "NATS async errors / slow-consumer drops (receive-side loss, SEC-4).", s.DroppedMessages.Load()},
+			{"openshield_unified_alert_failures_total", "Unified-alert projections that could not be recorded (XDR-2).", s.UnifiedAlertFailures.Load()},
+			{"openshield_unprojected_decisions_total", "Verified alertable decisions not projected into the unified stream — a domain not reaching correlation (XDR-2).", s.UnprojectedDecisions.Load()},
 		}
 		for _, m := range metrics {
 			fmt.Fprintf(w, "# HELP %s %s\n", m.name, m.help)

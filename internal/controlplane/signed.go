@@ -129,6 +129,15 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 		s.resolveDeviceEntity(ctx, eventSubject)
 	}
 
+	// XDR-2: project this domain's DECISION into the entity-keyed unified alert stream, so DLP, HIPS,
+	// network/DNS/SMTP and the ZT access proxy all feed the one stream XDR-4 correlates over — not just
+	// server-side peer-UEBA. Only on the VERIFIED path (D44): unverified telemetry is not evidence and
+	// must not be able to steer correlation. Best-effort and AFTER the commit, so it cannot roll back or
+	// delay the durable ingest it derives from (D38).
+	if env.GetKind() == "decision" {
+		s.projectDecisionAlert(ctx, env.GetPayload())
+	}
+
 	// Server-side peer-UEBA (D54), only for a VERIFIED event: an unverified
 	// message is not evidence and must never move a subject's baseline (D50).
 	// Order: Observe THEN evaluate, so the subject's own event is in the baseline

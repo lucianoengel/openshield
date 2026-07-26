@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D240.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D241.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D240)
+## What OpenShield is (status at a glance, through D241)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ NOT an infra ticket and not part of the queues below.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| **XDR** (umbrella) | ~42% | Entity graph WIRED and populated by real producers (enrollment + verified ingest resolve device⋈user, D203); a normalized entity-keyed `unified_alerts` stream + first producer (peer-UEBA) shipped (D213). **MVP gap:** wire the remaining domain producers, correlate cross-domain, build the incident timeline + coordinated response (XDR-2/4/5/6/7). |
+| **XDR** (umbrella) | ~48% | Entity graph WIRED and populated by real producers (enrollment + verified ingest resolve device⋈user, D203); the normalized entity-keyed `unified_alerts` stream is now fed by **every** domain — each verified non-`ALLOW` decision is projected at ingest, so DLP, HIPS, network/DNS/SMTP and the ZT access proxy land in one entity-keyed stream (D213 inc 1, D241 inc 2). **MVP gap:** correlate cross-domain (`Correlate()` still reads only `peer_alerts`), then the incident timeline + coordinated response (XDR-4/5/6/7). |
 | Zero Trust (ZTNA) | ~75% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. **MVP gap:** an agent-brokered ZTNA client (ZT-4). |
 | DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **MVP gap:** endpoint exfil producers (clipboard/print, Lane E). **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
@@ -108,17 +108,19 @@ The headline. Turns per-domain alerts into one correlated incident with a tamper
 one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-7) → XDR-7.**
 (XDR-1 entity graph + XDR-3 subject stamping already shipped — see Done ledger.)
 
-- **XDR-2 · Cross-domain alert normalization** — srv (schema+writers) · L. Increment 1 shipped
-  (`unified_alerts` stream + writer + `AlertsForEntity`, peer-UEBA producer wired). **Remaining:** wire
-  the other domain producers (DLP verdicts, HIPS behavioral, DNS/SMTP classify hits, ZT denials) so every
-  domain writes the unified table. *Accept: a HIPS KILL and a DNS classify alert on one host land as
-  unified-alert rows sharing an entity key, via real ingest.*
-- **XDR-4 · Cross-domain correlation rules** — srv · M. Same-entity multi-domain window rule (distinct-
-  domain count ≥ N → incident, severity boosted per domain) + sequence rules (identity-anomaly → exec →
-  DNS within window). **Must read the XDR-2 `unified_alerts` stream, not `peer_alerts`** — today
-  `controlplane.Correlate()` only groups the single-domain UEBA `peer_alerts` table by subject, so the
-  XDR-2 unified stream and this correlator are not yet connected; XDR-4 is where they join (hence the hard
-  precedence on XDR-2 wiring the remaining producers). Extends `CorrelationRule`; reuse SIEM-7 ATT&CK tags
+- **XDR-2 · Cross-domain alert normalization** — ✅ **DONE (D213 inc 1, D241 inc 2)** — see Done ledger.
+  Increment 2 wired every remaining domain by projecting each VERIFIED non-`ALLOW` `Decision` at ingest,
+  so DLP, HIPS, network/DNS/SMTP and the ZT access proxy all write the unified table. *Residual, NOT
+  gating XDR-4:* a detection that never reaches a decision is not projected, and the domain label is a
+  coarse grouping hint (ZT denials land under `nips`; giving ZT its own domain needs the Event to
+  distinguish access from egress — a contract change deliberately not made for a label).
+- **XDR-4 · Cross-domain correlation rules** — srv · M. **← next in this lane.** Same-entity multi-domain
+  window rule (distinct-domain count ≥ N → incident, severity boosted per domain) + sequence rules
+  (identity-anomaly → exec → DNS within window). **Must read the XDR-2 `unified_alerts` stream, not
+  `peer_alerts`** — `controlplane.Correlate()` still only groups the single-domain UEBA `peer_alerts`
+  table by subject, so the unified stream and this correlator remain unconnected; XDR-4 is where they
+  join. The stream is now genuinely multi-domain (D241), so this is unblocked: re-pointing `Correlate()`
+  at `unified_alerts` is its FIRST job. Extends `CorrelationRule`; reuse SIEM-7 ATT&CK tags
   as the sequence vocabulary. *Accept: seeded exec+DNS+auth-anomaly on one entity in 10m → ONE incident
   `domain_count=3` sourced from `unified_alerts`; the same three on different entities → none. Mutation:
   dropping the entity join must fail it.*
@@ -414,8 +416,9 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   memory-injection W^X detection (D233).
 - **Platform:** JetStream durable consumers env-gated (D180, ADR-2); active-passive HA via Postgres
   advisory-lock leader lease (PLAT-2b, D181, ADR-3); cross-platform OBSERVE path (D187, ADR-11). XDR-1 entity
-  graph populated by real producers (D195/203); XDR-3 canonical subject stamping (D196); XDR-2 increment 1
-  unified-alert stream (D213). SOAR-1 incident→notify (D220).
+  graph populated by real producers (D195/203); XDR-3 canonical subject stamping (D196); XDR-2 unified-alert
+  stream — increment 1 the stream + peer-UEBA producer (D213), increment 2 EVERY domain's producer via the
+  verified-decision projection + kind-agnostic entity keying (D241). SOAR-1 incident→notify (D220).
 
 ---
 

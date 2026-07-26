@@ -77,6 +77,36 @@ func resolveTx(ctx context.Context, tx pgx.Tx, kind, value string) (int64, error
 	return id, nil
 }
 
+// LookupAny resolves an entity by an alias VALUE across every alias kind, and CREATES
+// NOTHING. It is the primitive for a consumer that holds an identifier but not the kind
+// under which another domain already registered it — the device⋈user case, where the
+// gateway knows a subject as a user and the endpoint knows the same entity as a device.
+// Speculative by design: a miss is (0, false, nil), so the caller falls back to a
+// kind-specific Resolve rather than minting an alias under a guessed kind (which would
+// fork that domain's detections onto their own entity and silently break correlation).
+//
+// Read-only is the whole point — an error return is an infrastructure error only.
+// A value held under two DIFFERENT kinds resolves to the oldest alias's entity: the
+// namespaces are disjoint by construction (device values are pseudonym derivations, user
+// values are the verified identity), so a collision would mean the string genuinely names
+// both, and the FIRST-SEEN one wins deterministically rather than by scan order.
+func (s *Store) LookupAny(ctx context.Context, value string) (int64, bool, error) {
+	if value == "" {
+		return 0, false, nil
+	}
+	// The alias PK is (kind, value); migration 027 adds the value-only index this needs.
+	var id int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT entity_id FROM entity_aliases WHERE value=$1 ORDER BY first_seen, kind LIMIT 1`, value).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("xdr: lookup alias: %w", err)
+	}
+	return id, true, nil
+}
+
 // Link ties two aliases to the same entity (device ⋈ user), merging their entities
 // if separate. It returns the surviving entity id. Both aliases are locked in a
 // fixed sorted order so concurrent links of the same pair cannot deadlock (D3); the
