@@ -50,8 +50,12 @@ const (
 	SubjectRisk           = "openshield.v1.risk"
 	// SubjectIntent carries signed Response-Intents (SOAR-7/ADR-12 Tier-2). Like risk, it is DATA the
 	// consumer's LOCAL policy interprets — never a command channel (T2/D14).
-	SubjectIntent  = "openshield.v1.intent"
-	SubjectPosture = "openshield.v1.posture"
+	SubjectIntent = "openshield.v1.intent"
+	// SubjectFleetControl carries signed fleet-wide operational control (PLAT-9): stop/resume enforcing.
+	// Separate from intents because it is the OPPOSITE kind of instruction — every intent verb causes
+	// enforcement, and this stops it.
+	SubjectFleetControl = "openshield.v1.fleetcontrol"
+	SubjectPosture      = "openshield.v1.posture"
 	// SubjectAttestChallenge is request/reply: a device sends its subject, the
 	// gateway replies with a fresh attestation nonce (ZT-1).
 	SubjectAttestChallenge = "openshield.v1.attest.challenge"

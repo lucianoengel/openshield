@@ -17,6 +17,8 @@ package engine
 
 import (
 	"context"
+	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -24,8 +26,11 @@ import (
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
+	"github.com/nats-io/nats.go"
+
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/intent"
 	"github.com/lucianoengel/openshield/internal/pseudonym"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -359,4 +364,19 @@ func NewFromWorker(w *privileged.Worker, policy core.Stage, ledger core.Ledger, 
 func (e *Engine) recordSuppression(ctx context.Context, dec *corev1.Decision, reason string) {
 	e.recordEnforcement(ctx, dec, fmt.Errorf("enforcement SUPPRESSED by the emergency disable (%s) — "+
 		"the decision stands and is recorded; nothing was enforced", reason))
+}
+
+// SubscribeFleetControl wires the ENDPOINT to fleet-wide operational control (PLAT-9), closing the gap
+// D265 named: the kill switch reached server-side components through the configuration store, and
+// endpoint agents do not read it — until this they were disabled only by a local break-glass file.
+//
+// The subscriber verifies the signature, refuses a replayed sequence, refuses an expired or
+// unknown-version control, and only then drives the same KillSwitch a local file does. Everything it
+// refuses leaves enforcement ON.
+func (e *Engine) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey) (*nats.Subscription, error) {
+	if e.KillSwitch == nil {
+		return nil, errors.New("engine: no kill switch installed; refusing to accept fleet control that " +
+			"would have nothing to act on")
+	}
+	return intent.NewFleetControlSubscriber(key, e.KillSwitch).Subscribe(conn)
 }

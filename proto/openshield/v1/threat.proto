@@ -79,3 +79,41 @@ message ResponseIntent {
   google.protobuf.Timestamp expires_at = 6;
   string reason = 7;                             // operator-facing justification; never content
 }
+
+// FleetVerb is the CLOSED vocabulary of fleet-wide operational control (PLAT-9).
+//
+// DELIBERATELY NOT a fourth IntentVerb. Every member of that vocabulary CAUSES enforcement — contain,
+// revoke trust, elevate scrutiny — and "stop enforcing" is its opposite. Folding them together would mean
+// one signed-message type whose members both start and stop the product's action, and any consumer
+// mis-handling the discriminator fails in the most dangerous possible direction.
+//
+// It is also the most attractive forgery target in the system: ONE accepted message turns the product off
+// across a fleet. That is why it carries a monotonic SEQUENCE (a captured message cannot be replayed) and
+// MANDATORY time bounds (a captured message cannot last), on top of the signature.
+enum FleetVerb {
+  FLEET_VERB_UNSPECIFIED = 0;
+  // Stop ENFORCING fleet-wide. Detection, decisions and the audit trail continue — this is not "stop
+  // seeing". Publication requires a four-eyes approval.
+  FLEET_VERB_ENFORCEMENT_DISABLE = 1;
+  // Resume enforcing. Signed too: a forged restore would undo a disable an operator engaged during an
+  // incident.
+  FLEET_VERB_ENFORCEMENT_RESTORE = 2;
+}
+
+// FleetControl is a signed fleet-wide operational instruction (PLAT-9).
+//
+// It carries no subject: it applies to every consumer, which is precisely what makes it dangerous and
+// what the sequence and expiry bound.
+message FleetControl {
+  string control_id = 1;
+  FleetVerb verb = 2;
+  uint32 version = 3;                            // consumers reject a version they do not understand
+  // sequence is MONOTONIC per control plane. A consumer refuses anything at or below the highest it has
+  // applied, so a captured DISABLE cannot be replayed after an operator restored enforcement.
+  uint64 sequence = 4;
+  google.protobuf.Timestamp issued_at = 5;
+  // expires_at is MANDATORY: a disable with no expiry is a product that is off and nobody remembers
+  // turning off. A consumer treats an expired control as absent.
+  google.protobuf.Timestamp expires_at = 6;
+  string reason = 7;                             // operator-facing justification; never content
+}

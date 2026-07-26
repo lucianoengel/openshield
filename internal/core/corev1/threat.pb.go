@@ -151,6 +151,69 @@ func (IntentVerb) EnumDescriptor() ([]byte, []int) {
 	return file_openshield_v1_threat_proto_rawDescGZIP(), []int{1}
 }
 
+// FleetVerb is the CLOSED vocabulary of fleet-wide operational control (PLAT-9).
+//
+// DELIBERATELY NOT a fourth IntentVerb. Every member of that vocabulary CAUSES enforcement — contain,
+// revoke trust, elevate scrutiny — and "stop enforcing" is its opposite. Folding them together would mean
+// one signed-message type whose members both start and stop the product's action, and any consumer
+// mis-handling the discriminator fails in the most dangerous possible direction.
+//
+// It is also the most attractive forgery target in the system: ONE accepted message turns the product off
+// across a fleet. That is why it carries a monotonic SEQUENCE (a captured message cannot be replayed) and
+// MANDATORY time bounds (a captured message cannot last), on top of the signature.
+type FleetVerb int32
+
+const (
+	FleetVerb_FLEET_VERB_UNSPECIFIED FleetVerb = 0
+	// Stop ENFORCING fleet-wide. Detection, decisions and the audit trail continue — this is not "stop
+	// seeing". Publication requires a four-eyes approval.
+	FleetVerb_FLEET_VERB_ENFORCEMENT_DISABLE FleetVerb = 1
+	// Resume enforcing. Signed too: a forged restore would undo a disable an operator engaged during an
+	// incident.
+	FleetVerb_FLEET_VERB_ENFORCEMENT_RESTORE FleetVerb = 2
+)
+
+// Enum value maps for FleetVerb.
+var (
+	FleetVerb_name = map[int32]string{
+		0: "FLEET_VERB_UNSPECIFIED",
+		1: "FLEET_VERB_ENFORCEMENT_DISABLE",
+		2: "FLEET_VERB_ENFORCEMENT_RESTORE",
+	}
+	FleetVerb_value = map[string]int32{
+		"FLEET_VERB_UNSPECIFIED":         0,
+		"FLEET_VERB_ENFORCEMENT_DISABLE": 1,
+		"FLEET_VERB_ENFORCEMENT_RESTORE": 2,
+	}
+)
+
+func (x FleetVerb) Enum() *FleetVerb {
+	p := new(FleetVerb)
+	*p = x
+	return p
+}
+
+func (x FleetVerb) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FleetVerb) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshield_v1_threat_proto_enumTypes[2].Descriptor()
+}
+
+func (FleetVerb) Type() protoreflect.EnumType {
+	return &file_openshield_v1_threat_proto_enumTypes[2]
+}
+
+func (x FleetVerb) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FleetVerb.Descriptor instead.
+func (FleetVerb) EnumDescriptor() ([]byte, []int) {
+	return file_openshield_v1_threat_proto_rawDescGZIP(), []int{2}
+}
+
 // ThreatMatch is one threat-intel hit on a flow. It carries the category and a
 // confidence (1.0 for a definitive IOC match) and an OPAQUE indicator id (a feed or
 // rule identifier an analyst can trace) — never the matched content, so the
@@ -371,6 +434,106 @@ func (x *ResponseIntent) GetReason() string {
 	return ""
 }
 
+// FleetControl is a signed fleet-wide operational instruction (PLAT-9).
+//
+// It carries no subject: it applies to every consumer, which is precisely what makes it dangerous and
+// what the sequence and expiry bound.
+type FleetControl struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ControlId string                 `protobuf:"bytes,1,opt,name=control_id,json=controlId,proto3" json:"control_id,omitempty"`
+	Verb      FleetVerb              `protobuf:"varint,2,opt,name=verb,proto3,enum=openshield.v1.FleetVerb" json:"verb,omitempty"`
+	Version   uint32                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"` // consumers reject a version they do not understand
+	// sequence is MONOTONIC per control plane. A consumer refuses anything at or below the highest it has
+	// applied, so a captured DISABLE cannot be replayed after an operator restored enforcement.
+	Sequence uint64                 `protobuf:"varint,4,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	IssuedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	// expires_at is MANDATORY: a disable with no expiry is a product that is off and nobody remembers
+	// turning off. A consumer treats an expired control as absent.
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Reason        string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"` // operator-facing justification; never content
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FleetControl) Reset() {
+	*x = FleetControl{}
+	mi := &file_openshield_v1_threat_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FleetControl) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FleetControl) ProtoMessage() {}
+
+func (x *FleetControl) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_threat_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FleetControl.ProtoReflect.Descriptor instead.
+func (*FleetControl) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_threat_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *FleetControl) GetControlId() string {
+	if x != nil {
+		return x.ControlId
+	}
+	return ""
+}
+
+func (x *FleetControl) GetVerb() FleetVerb {
+	if x != nil {
+		return x.Verb
+	}
+	return FleetVerb_FLEET_VERB_UNSPECIFIED
+}
+
+func (x *FleetControl) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *FleetControl) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *FleetControl) GetIssuedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.IssuedAt
+	}
+	return nil
+}
+
+func (x *FleetControl) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *FleetControl) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_openshield_v1_threat_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_threat_proto_rawDesc = "" +
@@ -393,6 +556,16 @@ const file_openshield_v1_threat_proto_rawDesc = "" +
 	"\tissued_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\"\x9d\x02\n" +
+	"\fFleetControl\x12\x1d\n" +
+	"\n" +
+	"control_id\x18\x01 \x01(\tR\tcontrolId\x12,\n" +
+	"\x04verb\x18\x02 \x01(\x0e2\x18.openshield.v1.FleetVerbR\x04verb\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\rR\aversion\x12\x1a\n" +
+	"\bsequence\x18\x04 \x01(\x04R\bsequence\x127\n" +
+	"\tissued_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
 	"\x06reason\x18\a \x01(\tR\x06reason*\xb7\x01\n" +
 	"\x0eThreatCategory\x12\x1f\n" +
 	"\x1bTHREAT_CATEGORY_UNSPECIFIED\x10\x00\x12\x1e\n" +
@@ -405,7 +578,11 @@ const file_openshield_v1_threat_proto_rawDesc = "" +
 	"\x17INTENT_VERB_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cINTENT_VERB_ELEVATE_SCRUTINY\x10\x01\x12\x17\n" +
 	"\x13INTENT_VERB_CONTAIN\x10\x02\x12\x1c\n" +
-	"\x18INTENT_VERB_REVOKE_TRUST\x10\x03B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x18INTENT_VERB_REVOKE_TRUST\x10\x03*o\n" +
+	"\tFleetVerb\x12\x1a\n" +
+	"\x16FLEET_VERB_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eFLEET_VERB_ENFORCEMENT_DISABLE\x10\x01\x12\"\n" +
+	"\x1eFLEET_VERB_ENFORCEMENT_RESTORE\x10\x02B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_threat_proto_rawDescOnce sync.Once
@@ -419,27 +596,32 @@ func file_openshield_v1_threat_proto_rawDescGZIP() []byte {
 	return file_openshield_v1_threat_proto_rawDescData
 }
 
-var file_openshield_v1_threat_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_openshield_v1_threat_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_openshield_v1_threat_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_openshield_v1_threat_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_openshield_v1_threat_proto_goTypes = []any{
 	(ThreatCategory)(0),           // 0: openshield.v1.ThreatCategory
 	(IntentVerb)(0),               // 1: openshield.v1.IntentVerb
-	(*ThreatMatch)(nil),           // 2: openshield.v1.ThreatMatch
-	(*ThreatClassification)(nil),  // 3: openshield.v1.ThreatClassification
-	(*ResponseIntent)(nil),        // 4: openshield.v1.ResponseIntent
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(FleetVerb)(0),                // 2: openshield.v1.FleetVerb
+	(*ThreatMatch)(nil),           // 3: openshield.v1.ThreatMatch
+	(*ThreatClassification)(nil),  // 4: openshield.v1.ThreatClassification
+	(*ResponseIntent)(nil),        // 5: openshield.v1.ResponseIntent
+	(*FleetControl)(nil),          // 6: openshield.v1.FleetControl
+	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
 }
 var file_openshield_v1_threat_proto_depIdxs = []int32{
 	0, // 0: openshield.v1.ThreatMatch.category:type_name -> openshield.v1.ThreatCategory
-	2, // 1: openshield.v1.ThreatClassification.matches:type_name -> openshield.v1.ThreatMatch
+	3, // 1: openshield.v1.ThreatClassification.matches:type_name -> openshield.v1.ThreatMatch
 	1, // 2: openshield.v1.ResponseIntent.verb:type_name -> openshield.v1.IntentVerb
-	5, // 3: openshield.v1.ResponseIntent.issued_at:type_name -> google.protobuf.Timestamp
-	5, // 4: openshield.v1.ResponseIntent.expires_at:type_name -> google.protobuf.Timestamp
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	7, // 3: openshield.v1.ResponseIntent.issued_at:type_name -> google.protobuf.Timestamp
+	7, // 4: openshield.v1.ResponseIntent.expires_at:type_name -> google.protobuf.Timestamp
+	2, // 5: openshield.v1.FleetControl.verb:type_name -> openshield.v1.FleetVerb
+	7, // 6: openshield.v1.FleetControl.issued_at:type_name -> google.protobuf.Timestamp
+	7, // 7: openshield.v1.FleetControl.expires_at:type_name -> google.protobuf.Timestamp
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_threat_proto_init() }
@@ -452,8 +634,8 @@ func file_openshield_v1_threat_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_threat_proto_rawDesc), len(file_openshield_v1_threat_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   3,
+			NumEnums:      3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

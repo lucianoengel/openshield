@@ -256,8 +256,12 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
   transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
 - **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
-  schema-skew reporting (D267) and the operator RUNBOOK + deployment footprint (D268) DONE; upgrade
-  orchestration remains.**
+  schema-skew reporting (D267), the operator RUNBOOK + footprint (D268) and the ENDPOINT fleet-wide
+  disable over the signed channel (D269) DONE; upgrade orchestration remains.**
+  D269 closes the gap D265 named about itself: a signed `FleetControl` (its own two-verb vocabulary, NOT
+  a fourth IntentVerb) bounded by a monotonic sequence (replay), a mandatory TTL (duration) and four-eyes
+  on every disable. *Residual:* the control plane cannot CONFIRM a fleet is disabled — publication is
+  best-effort and an agent offline past the TTL never applies it; an acknowledgement path is separate.
   D267 fixed a real rollback defect: `fullyMigrated`'s `applied >= want` let a rolled-back binary run
   SILENTLY against a newer schema. It now reports the skew (loudly, plus a gauge) and still STARTS —
   refusing would turn a rollback into an outage. Migrations are FORWARD-ONLY: rolling the BINARY back is
