@@ -15,7 +15,7 @@ import (
 // PLAT-6. The two properties that make an artifact verifiable, and they depend on each other:
 // reproducible builds, and a signature over the SET rather than over each file.
 
-func stageRelease(t *testing.T) (dir string, pub ed25519.PublicKey, priv ed25519.PrivateKey) {
+func stageRelease(t *testing.T) (dir string, pub ed25519.PublicKey, priv ed25519.PrivateKey) { //nolint:unparam
 	t.Helper()
 	dir = t.TempDir()
 	for name, body := range map[string]string{
@@ -185,5 +185,89 @@ func TestReleaseBuildIsReproducible(t *testing.T) {
 		t.Errorf("two builds of the same commit differ (%s vs %s) — a signature over a non-reproducible "+
 			"artifact attests only that the signer had A binary, not that it came from this source",
 			first[:16], second[:16])
+	}
+}
+
+// TestSBOMIsCoveredByTheSignature is the property that makes an SBOM evidence rather than paperwork.
+//
+// An UNSIGNED SBOM is worthless — anyone can hand you a clean document about someone else's binary — so it
+// is written into the release directory BEFORE the manifest, digested like any other artifact.
+//
+// Mutation: write the SBOM AFTER the manifest is built → it becomes an unlisted extra file (or, if also
+// excluded from verification, an unsigned document) → FAILS.
+func TestSBOMIsCoveredByTheSignature(t *testing.T) {
+	dir, _, priv := stageRelease(t)
+	// Re-stage with an SBOM present before the manifest, as the real release path does.
+	sbom, err := release.BuildSBOM(dir, "v0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := release.WriteSBOM(dir, sbom); err != nil {
+		t.Fatal(err)
+	}
+	m, err := release.Build(dir, "v0.1.0", "abc123", "go1.24", func(string) string { return "linux/amd64" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := release.Sign(m, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := m.Canonical()
+	write(t, dir, release.ManifestName, canonical)
+	write(t, dir, release.SignatureName, sig)
+
+	if _, err := release.LoadAndVerify(dir); err != nil {
+		t.Fatalf("a release with an SBOM did not verify: %v", err)
+	}
+	var listed bool
+	for _, e := range m.Entries {
+		if e.Name == release.SBOMName {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Fatal("the SBOM is not in the manifest — it is then a document anyone can swap for a clean one")
+	}
+	// Tampering with it must fail, which is the whole point of covering it.
+	write(t, dir, release.SBOMName, []byte(`{"format":"openshield-sbom/v1","artifacts":[]}`))
+	if _, err := release.LoadAndVerify(dir); err == nil {
+		t.Error("a REPLACED SBOM verified — an SBOM that can be swapped after signing attests nothing")
+	}
+}
+
+// TestSBOMDescribesWhatSHIPPED, not what was intended: it is read from the binary's recorded module
+// graph, so a go.mod that disagrees with the artifact cannot hide behind the document.
+func TestSBOMDescribesWhatShipped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+	dir := t.TempDir()
+	out := filepath.Join(dir, "openshield-anchor_linux_amd64")
+	cmd := exec.Command("go", "build", "-trimpath", "-o", out,
+		"github.com/lucianoengel/openshield/cmd/openshield-anchor")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if o, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, o)
+	}
+	s, err := release.BuildSBOM(dir, "v0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Artifacts) != 1 {
+		t.Fatalf("SBOM covers %d artifacts, want 1", len(s.Artifacts))
+	}
+	a := s.Artifacts[0]
+	if a.GoVersion == "" || a.Main == "" {
+		t.Errorf("SBOM entry lacks build metadata: %+v", a)
+	}
+	if len(a.Components) == 0 {
+		t.Error("SBOM lists no components — read from the binary's recorded module graph, a real build " +
+			"has dependencies; an empty list means it was not actually read")
+	}
+	for _, c := range a.Components {
+		if c.Name == "" || c.Version == "" {
+			t.Errorf("component with no name or version: %+v", c)
+		}
 	}
 }

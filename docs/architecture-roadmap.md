@@ -259,8 +259,12 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   SHA-256 manifest signed with a detached ed25519 signature; `make verify-release` re-checks every digest,
   the signature, and **files present that the manifest does not name**. Reproducibility is asserted by a
   test that builds twice, because without it a signature attests only that the signer had *a* binary.
-  `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
-  transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
+  `deploy/` already carried the systemd/install path. **D276 adds a SIGNED SBOM** — written before the
+  manifest so the signature covers it, and generated from the BINARIES (`debug/buildinfo`) so it describes
+  what shipped rather than what go.mod intended. *Remaining:* Sigstore/cosign + transparency log, .deb/.rpm,
+  macOS notarization, CI tag automation. **goreleaser and Helm are REFUSED, not deferred** (D276):
+  goreleaser would replace working tested code with a toolchain for conveniences not needed, and a Helm
+  chart would contradict the compose/systemd footprint this project documents.
 - **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
   schema-skew reporting (D267), the operator RUNBOOK + footprint (D268) and the ENDPOINT fleet-wide
   disable over the signed channel (D269) DONE; upgrade orchestration remains.**
