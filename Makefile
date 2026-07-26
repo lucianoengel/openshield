@@ -1,7 +1,7 @@
 GO ?= go
 PROTOC ?= protoc
 
-.PHONY: all build test vet check cross-compile proto proto-check tidy
+.PHONY: all build test vet check cross-compile proto proto-check tidy release verify-release
 
 all: vet test check build cross-compile
 
@@ -41,3 +41,13 @@ proto-check: proto
 tidy:
 	$(GO) mod tidy
 	@git diff --exit-code -- go.mod go.sum
+
+# PLAT-6: a REPRODUCIBLE, SIGNED artifact set. Verification is a command an operator runs, not a
+# paragraph in a README — `make verify-release` re-checks every digest against the signed manifest, and
+# reports a file present that the manifest does NOT name (a verifier that only walks the manifest happily
+# accepts an extra binary).
+release:
+	./scripts/release.sh
+
+verify-release:
+	$(GO) run ./cmd/openshieldctl verify-release --dir $${DIST:-dist}

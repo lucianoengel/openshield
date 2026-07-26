@@ -248,9 +248,13 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   channel rather than hold DB credentials; no per-node dynamic values; no staged rollout; no keystore.
   **BREAKING:** a dynamic field set in the environment no longer takes effect — it is reported, not
   silent (`OPENSHIELD_BREAKGLASS` is the deliberate, reported override).
-- **PLAT-6 · Release, packaging & deploy** — M. Tagged releases + reproducible signed binaries
-  (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact. *Accept: `make
-  release` produces signed, verifiable artifacts; a clean host installs and runs the stack from them.*
+- **PLAT-6 · Release, packaging & deploy** — 🟡 **increment 1 DONE (D264)** — see Done ledger. `make
+  release` builds every command reproducibly (`-trimpath`, `CGO_ENABLED=0`, `-buildvcs=false`) and emits a
+  SHA-256 manifest signed with a detached ed25519 signature; `make verify-release` re-checks every digest,
+  the signature, and **files present that the manifest does not name**. Reproducibility is asserted by a
+  test that builds twice, because without it a signature attests only that the signer had *a* binary.
+  `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
+  transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
 - **PLAT-9 · Operational lifecycle & recovery** — M–L. The question a CISO asks first — *how do I run
   this?* — and today the roadmap answers only "packaging." Deliver: rolling agent + server upgrade with
   version-skew tolerance and **rollback**; a fleet-wide **emergency disable** ("stop enforcing now") that

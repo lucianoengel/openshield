@@ -45,6 +45,13 @@ func run(args []string) int {
 	}
 
 	cmd := args[0]
+	// PLAT-6 subcommands take their own flags and no subject.
+	switch cmd {
+	case "release-manifest":
+		return releaseManifest(args[1:])
+	case "verify-release":
+		return verifyRelease(args[1:])
+	}
 	fs := newFlags()
 	sub := parseSubject(cmd, args[1:])
 	if err := fs.parse(sub.rest); err != nil {
