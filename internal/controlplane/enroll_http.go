@@ -97,7 +97,8 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/logs", requireTier(RoleAnalyst, opRead))                 // SIEM-4: search ingested third-party external logs
 		mux.Handle("/compliance/retention", requireTier(RoleAnalyst, opRead)) // SIEM-10: retention compliance report
 		mux.Handle("/incidents", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/incidents/ack", requireTier(RoleResponder, opRead)) // SIEM-11b: acknowledge an incident (POST)
+		mux.Handle("/incidents/ack", requireTier(RoleResponder, opRead))        // SIEM-11b: acknowledge an incident (POST)
+		mux.Handle("/incidents/transition", requireTier(RoleResponder, opRead)) // SOAR-2: advance the lifecycle
 		// XDR-5: an incident's contributing alerts + evidence references. Analyst tier — it is the drill-down
 		// of the analyst's incident queue and carries no evidence CONTENT (only references and closed-
 		// vocabulary metadata). Serving it records the view, so a read always leaves a trace (D20/L1).

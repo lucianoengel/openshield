@@ -82,6 +82,27 @@ func main() {
 	// over on leader failure. A single deployed instance becomes leader immediately (unchanged).
 	leader := controlplane.NewLeader(pool)
 	lerr := leader.Run(ctx, func(leaderCtx context.Context) {
+		// SOAR-2: correlate on a CLOCK, not only when an operator asks. Before this, both materializers
+		// were called from exactly one place — the GET /incidents handler — so an incident existed only if
+		// a human happened to look, and SOAR-1's automatic page (D220) followed someone else's request.
+		//
+		// LEADER-ONLY (leaderCtx): every replica correlating would multiply materializations, and
+		// materialization pages. The context is cancelled the moment leadership is lost, so a demoted
+		// instance stops immediately rather than at the next tick.
+		if ci := envDuration("OPENSHIELD_CORRELATE_INTERVAL", 0); ci > 0 {
+			burst := controlplane.CorrelationRule{
+				Window:    envDuration("OPENSHIELD_CORRELATE_WINDOW", time.Hour),
+				MinAlerts: envInt("OPENSHIELD_CORRELATE_MIN_ALERTS", 3),
+			}
+			cross := controlplane.CrossDomainRule{
+				Window:     envDuration("OPENSHIELD_CORRELATE_WINDOW", time.Hour),
+				MinDomains: envInt("OPENSHIELD_CORRELATE_MIN_DOMAINS", 2),
+			}
+			go srv.RunCorrelationLoop(leaderCtx, ci, burst, cross, nil)
+			fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation ACTIVE every %s — incidents "+
+				"are raised and paged without an operator request (leader only)\n", ci)
+		}
+
 		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
 		// and derived peer alerts older than the window, on a timer. The aggregate is a
 		// derived view, so this is a hard delete (the evidentiary ledger tombstones
