@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/connectors/cef"
+	"github.com/lucianoengel/openshield/internal/connectors/rfc5424"
 	"github.com/lucianoengel/openshield/internal/connectors/syslog"
 )
 
@@ -209,7 +210,17 @@ func (s *Server) RunCEFSyslog(ctx context.Context, addr string) error {
 	sink := func(m syslog.Message) {
 		msg, ok := cef.FromSyslog(m.Msg)
 		if !ok {
-			s.CEFDropped.Add(1) // a non-CEF or malformed-CEF line — this listener ingests CEF only
+			// SIEM-9: not CEF — try modern syslog (RFC 5424) before giving up. One listener accepting
+			// both is deliberate: an estate rarely emits one format, and making an operator run a second
+			// port per format is how log sources end up not onboarded at all.
+			//
+			// CEF is tried FIRST because a CEF payload is normally carried INSIDE a syslog line, so a
+			// message can legitimately be both — and the CEF reading is the more specific one.
+			if e, rok := rfc5424Log(m); rok {
+				s.persistExternalLog(e)
+				return
+			}
+			s.CEFDropped.Add(1) // neither format parsed
 			return
 		}
 		host := m.Host // the syslog-reported sender
@@ -224,14 +235,7 @@ func (s *Server) RunCEFSyslog(ctx context.Context, addr string) error {
 			Raw:         cefMarkerLine(m.Msg),
 			Fields:      msg.Extensions, // the CEF key=value extension, huntable per-field
 		}
-		// Best-effort persist: a DB error is counted, not fatal (a down DB must not crash the listener).
-		ictx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.InsertExternalLog(ictx, e); err != nil {
-			s.CEFDropped.Add(1)
-			return
-		}
-		s.CEFIngested.Add(1)
+		s.persistExternalLog(e)
 	}
 	l, err := syslog.Listen(addr, sink, nil)
 	if err != nil {
@@ -266,4 +270,47 @@ func cefMarkerLine(syslogMsg string) string {
 		return syslogMsg[i:]
 	}
 	return syslogMsg
+}
+
+// rfc5424Log maps a modern-syslog line onto the same ExternalLog shape CEF produces, so both are hunted
+// with one query rather than two.
+//
+// Vendor/Product are the APP-NAME rather than invented: RFC 5424 has no vendor concept, and filling those
+// columns with a guess would make a cross-source filter silently wrong. Structured data becomes `fields`,
+// which is the point — an SD element and a CEF extension are then the same searchable key/value.
+func rfc5424Log(m syslog.Message) (ExternalLog, bool) {
+	// Parse the RAW line: syslog.Parse deliberately strips structured data to leave Msg as free text, so
+	// the fields this exists to capture are not in Msg at all. Re-parsing the raw line is the only way to
+	// see them without teaching the framing layer a second job.
+	msg, err := rfc5424.Parse(m.Raw)
+	if err != nil {
+		return ExternalLog{}, false
+	}
+	host := msg.Hostname
+	if host == "" {
+		host = m.Host // fall back to the transport-reported sender
+	}
+	return ExternalLog{
+		SourceHost:  host,
+		Vendor:      "syslog",
+		Product:     msg.AppName,
+		SignatureID: msg.MsgID,
+		Name:        msg.AppName,
+		Severity:    rfc5424.SeverityName(msg.Severity),
+		Message:     msg.Message,
+		Raw:         m.Msg,
+		Fields:      msg.StructuredData,
+	}, true
+}
+
+// persistExternalLog stores one parsed record. Best-effort: a DB error is COUNTED, not fatal — a down
+// database must not crash a listener that other sources are still sending to.
+func (s *Server) persistExternalLog(e ExternalLog) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.InsertExternalLog(ctx, e); err != nil {
+		s.CEFDropped.Add(1)
+		return
+	}
+	s.CEFIngested.Add(1)
 }

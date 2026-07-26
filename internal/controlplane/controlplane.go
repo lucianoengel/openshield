@@ -132,7 +132,16 @@ type Server struct {
 	// means some device/user did not land in the graph, observable rather than silent.
 	EntityResolveFailures atomic.Int64
 
-	// CEFIngested / CEFDropped count CEF-over-syslog external logs (SIEM-4) that were persisted vs.
+	// SIEM-9 WIDENED THESE, and the names are now narrower than the meaning: the listener accepts CEF
+	// AND RFC 5424, so Dropped counts lines that parsed as NEITHER — not "was not CEF". The names are
+	// kept because they are exposed on /metrics and renaming them would break every dashboard built on
+	// them; the meaning is documented here and in the metric help text instead.
+	//
+	// A pre-existing test caught this widening: its "non-CEF" fixture was a valid RFC 5424 line, so it
+	// became ingested rather than dropped. That was the change working, and the fixture — not the
+	// assertion — was what needed updating.
+	//
+	// CEFIngested / CEFDropped count external logs (SIEM-4/SIEM-9) that were persisted vs.
 	// skipped (a non-CEF/malformed datagram, or a persist failure) — the drop is counted, never silent.
 	CEFIngested   atomic.Int64
 	CEFDropped    atomic.Int64

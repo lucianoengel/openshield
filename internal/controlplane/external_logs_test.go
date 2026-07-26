@@ -97,9 +97,13 @@ func TestCEFSyslogListenerEndToEnd(t *testing.T) {
 		t.Fatal("CEFIngested did not increment for a valid CEF datagram")
 	}
 
-	// A non-CEF datagram is dropped (counted), and the listener keeps serving.
+	// An UNPARSEABLE datagram is dropped (counted), and the listener keeps serving.
+	//
+	// This fixture used to be a plain RFC 5424 line, which SIEM-9 now legitimately INGESTS — the listener
+	// accepts CEF and modern syslog, so "not CEF" is no longer the same as "not a log". The assertion is
+	// unchanged and still the right one; only the fixture had to become something neither parser accepts.
 	beforeDrop := srv.CEFDropped.Load()
-	if _, err := conn.Write([]byte(`<134>1 2026-07-22T10:00:01Z host2 sshd - - - Accepted password for alice`)); err != nil {
+	if _, err := conn.Write([]byte(`<134>garbage: neither CEF nor RFC 5424`)); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return srv.CEFDropped.Load() > beforeDrop })

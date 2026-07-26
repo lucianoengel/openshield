@@ -25,6 +25,11 @@ type Message struct {
 	Host      string
 	App       string // APP-NAME (5424) or TAG (3164)
 	Msg       string // the free-text message
+	// Raw is the line exactly as received (SIEM-9). This parser deliberately DISCARDS RFC 5424 structured
+	// data to leave Msg as free text, which is right for the fields above and wrong for a consumer that
+	// wants those key/values — so the raw line is carried through rather than reconstructed downstream,
+	// where the reconstruction would have to guess at what was stripped.
+	Raw string
 }
 
 // maxLine bounds a syslog line; a source that sends a multi-megabyte "line" is an
@@ -43,11 +48,12 @@ func Parse(line []byte) (Message, error) {
 		return Message{}, fmt.Errorf("syslog: line exceeds %d bytes", maxLine)
 	}
 	s := string(line)
+	raw := s
 	pri, rest, err := parsePriority(s)
 	if err != nil {
 		return Message{}, err
 	}
-	m := Message{Facility: pri / 8, Severity: pri % 8}
+	m := Message{Facility: pri / 8, Severity: pri % 8, Raw: raw}
 
 	// RFC 5424 begins with a version digit immediately after the PRI: "<PRI>1 ...".
 	if len(rest) > 0 && rest[0] == '1' && (len(rest) == 1 || rest[1] == ' ') {
