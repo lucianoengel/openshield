@@ -103,6 +103,29 @@ func main() {
 				"are raised and paged without an operator request (leader only)\n", ci)
 		}
 
+		// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
+		// is — every replica running playbooks would multiply notifications, cases and legal holds.
+		//
+		// Off unless a config file is named. A parse or validation failure is FATAL to the feature, not
+		// to the process: a playbook naming an unknown step must never partially load (the registry is
+		// closed at load, and a half-accepted playbook would make that meaningless), but orchestration
+		// being misconfigured must not take detection down with it.
+		if path := os.Getenv("OPENSHIELD_PLAYBOOKS"); path != "" {
+			pbs, err := loadPlaybookFile(path)
+			switch {
+			case err != nil:
+				fmt.Fprintf(os.Stderr, "openshield-server: playbooks NOT loaded from %s: %v — "+
+					"orchestration is OFF (detection and paging are unaffected)\n", path, err)
+			case len(pbs) == 0:
+				fmt.Fprintf(os.Stderr, "openshield-server: %s defines no playbooks — orchestration is OFF\n", path)
+			default:
+				pi := envDuration("OPENSHIELD_PLAYBOOK_INTERVAL", time.Minute)
+				go srv.RunPlaybookLoop(leaderCtx, pi, pbs, nil)
+				fmt.Fprintf(os.Stderr, "openshield-server: playbook orchestration ACTIVE every %s — "+
+					"%d playbook(s) from %s, Tier-1 only (no actuation) (leader only)\n", pi, len(pbs), path)
+			}
+		}
+
 		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
 		// and derived peer alerts older than the window, on a timer. The aggregate is a
 		// derived view, so this is a hard delete (the evidentiary ledger tombstones
@@ -434,4 +457,16 @@ func envInt(k string, def int) int {
 		}
 	}
 	return def
+}
+
+// loadPlaybookFile reads and VALIDATES operator-supplied playbooks. Validation (including the closed
+// step registry) happens here, at load — an unknown step name reaching execution would mean the registry
+// was decorative.
+func loadPlaybookFile(path string) ([]controlplane.Playbook, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return controlplane.LoadPlaybooks(f)
 }

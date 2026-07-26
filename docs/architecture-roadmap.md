@@ -59,7 +59,7 @@ NOT an infra ticket and not part of the queues below.
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~85% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). The intent-driven half is DONE too: a `CONTAIN` Response-Intent makes the entity's next exec kernel-REFUSED via a real OPA policy, VM-proven (D253). **The endpoint half of coordinated response is complete.** **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
-| **SOAR** | ~48% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation now runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250) — before this, an incident only existed if an operator did a GET. **MVP gap:** a playbook engine, enrichment, metrics, and integration runners (SOAR-4/5/6/8/9). |
+| **SOAR** | ~62% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). **MVP gap:** enrichment/TI, analyst metrics, integration runners and notification routing (SOAR-5/6/8/9). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
 **Crown jewel (protect it):** the per-agent forward-secure hash-chained ledger + external anchoring is
@@ -157,11 +157,13 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   atomic; expiry enforced in the predicate; one pending approval per subject; case closure rewired onto it.
   *Residual:* no approval POLICY and no N-of-M (the caller decides), no notification (SOAR-9), and the only
   consumer so far is case closure — SOAR-4/7 are the intended ones.
-- **SOAR-4 · Playbook engine v1 (server-side only)** — srv · L. Declarative playbook = trigger (incident
-  severity/domain/kind) + DAG of steps from a **closed step registry** (enrich, notify, open-case,
-  place-hold, tag, annotate, wait-for-approval). Durable step state in Postgres; every transition
-  ledgered. **No actuation steps in v1** (ADR-12 Tier-1). *Accept: a high-sev incident auto-runs
-  enrich→notify→open-case; killing the server mid-run resumes without duplicating a step.*
+- **SOAR-4 · Playbook engine v1 (server-side only)** — ✅ **DONE (D256)** — see Done ledger. A trigger
+  (severity floor / kinds / domains) plus an ORDERED LIST of steps from a closed registry refused at LOAD;
+  durable resumable run state whose already-done guard lives in the SQL claim; `wait-for-approval` is the
+  approvals object's first automation consumer; leader-only. *Residual, named:* **no actuation** (Tier-1 by
+  construction — SOAR-7/8 own that); no DAG, no retries/backoff, no rate limit on playbook starts;
+  `enrich` is local context assembly, not threat intel (SOAR-5); the approval gate is a one-operator
+  human-in-the-loop gate, NOT two-human four-eyes, because the requester is the playbook.
 - **SOAR-5 · Enrichment + threat-intel** — srv + C · L. Signed TI feed ingest (STIX/CSV) → local IOC
   store; enrichment step annotates the incident timeline with IOC hits, EPSS/KEV, geo/ASN. **Shares the
   IOC store NIPS-2 already needs — build once.** *Accept: an incident whose alerts carry a known-bad

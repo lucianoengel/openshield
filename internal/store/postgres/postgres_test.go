@@ -89,7 +89,7 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 	// leftovers from a previous run would make sequence numbers unpredictable.
 	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dropCancel()
-	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, case_notes, cases, approvals, legal_holds, incidents, incident_alerts, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, case_notes, cases, approvals, legal_holds, incidents, incident_alerts, playbook_steps, playbook_runs, incident_annotations, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	t.Cleanup(pool.Close)
@@ -186,10 +186,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..031), and no more no matter how many times
+	// One row per migration FILE (001..032), and no more no matter how many times
 	// Migrate runs — that stability is the property under test.
-	if n != 31 {
-		t.Errorf("schema_migrations rows = %d, want 31 — a migration applied twice "+
+	if n != 32 {
+		t.Errorf("schema_migrations rows = %d, want 32 — a migration applied twice "+
 			"is a migration whose ledger is not what its version claims", n)
 	}
 }

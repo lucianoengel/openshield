@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,3 +75,26 @@ func EscalateSeverity(base string, domainCount int) string {
 }
 func MaxSeverity(severities []string) string   { return maxSeverity(severities) }
 func DistinctInOrder(values []string) []string { return distinctInOrder(values) }
+
+// PlaybookStepRegistry exposes the CLOSED step registry's key set (SOAR-4), so a test can assert both
+// that it equals the declared vocabulary and that it contains exactly the seven Tier-1 (non-actuating)
+// steps — an actuating addition then cannot land without changing an assertion that says so.
+func PlaybookStepRegistry() []string {
+	out := make([]string, 0, len(playbookSteps))
+	for k := range playbookSteps {
+		out = append(out, string(k))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DeclaredPlaybookSteps is the vocabulary as DECLARED (the StepName constants), listed independently of
+// the registry so the two sets can be compared in both directions.
+func DeclaredPlaybookSteps() []string {
+	out := []string{
+		string(StepEnrich), string(StepNotify), string(StepOpenCase), string(StepPlaceHold),
+		string(StepTag), string(StepAnnotate), string(StepWaitForApproval),
+	}
+	sort.Strings(out)
+	return out
+}
