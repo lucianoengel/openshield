@@ -90,6 +90,8 @@ type IntentSubscriber struct {
 	// Rejected counts intents dropped for a bad signature, an unknown version, or a malformed payload —
 	// a forged-intent flood must be observable, not silent.
 	Rejected atomic.Int64
+	// OnApply, when set, is called for each VERIFIED intent (SOAR-8's runner). See apply().
+	OnApply func(*corev1.ResponseIntent)
 }
 
 func NewSubscriber(key ed25519.PublicKey, store *IntentStore) *IntentSubscriber {
@@ -106,6 +108,9 @@ var ErrIntentVersion = errors.New("intent: unsupported response-intent version")
 // Rejections are counted HERE rather than in the Subscribe callback: a counter that only increments on one
 // entry point lies the moment anything else calls Apply, and this counter's whole job is to make a
 // forged-intent flood observable.
+// SetOnApply installs the hook fired for each VERIFIED intent (SOAR-8). Set it before Subscribe.
+func (r *IntentSubscriber) SetOnApply(f func(*corev1.ResponseIntent)) { r.OnApply = f }
+
 func (r *IntentSubscriber) Apply(raw []byte) error {
 	err := r.apply(raw)
 	if err != nil {
@@ -136,6 +141,16 @@ func (r *IntentSubscriber) apply(raw []byte) error {
 		return errors.New("intent: intent has no subject or verb")
 	}
 	r.store.Set(&in)
+	// SOAR-8: a RUNNER needs the intent itself, not just the store, because it ACTS on it once rather
+	// than reading it on every decision. The hook fires only for an intent that VERIFIED and parsed — a
+	// forged or malformed one never reaches it — and it runs after the store is updated so a consumer
+	// reading the store from the hook sees the intent in effect.
+	//
+	// It is deliberately a single hook rather than a subscriber list: exactly one component in a process
+	// executes intents externally, and a fan-out here would make "who acted on this" ambiguous.
+	if r.OnApply != nil {
+		r.OnApply(&in)
+	}
 	return nil
 }
 

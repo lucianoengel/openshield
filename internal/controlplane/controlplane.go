@@ -31,6 +31,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/analytics/peerueba"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/notify"
+	"github.com/lucianoengel/openshield/internal/runner"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"github.com/lucianoengel/openshield/internal/xdr"
 )
@@ -158,6 +159,14 @@ type Server struct {
 	// keyed to an entity, so it was dropped rather than grouped wrongly. A rising value means a domain
 	// is silently not reaching correlation, which otherwise only shows up as an empty incident list.
 	UnprojectedDecisions atomic.Int64
+	// SOAR-8: RunnerActions counts IRREVERSIBLE external actions performed; RunnerRefusals counts intents
+	// the runner declined (unapproved, expired, undeclared verb, already enacted). Both matter: a
+	// responder that silently does nothing and one that silently does everything look identical without
+	// them.
+	RunnerActions  atomic.Int64
+	RunnerRefusals atomic.Int64
+	responderKey   ed25519.PublicKey
+	responder      *runner.Connector
 
 	// RetentionRecordFailures counts retention compliance events that could not be recorded (SIEM-10) —
 	// the purge still happened, so a recording failure is counted (the report gap is observable), not
@@ -410,6 +419,11 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	s.mu.Lock()
 	s.conn = conn
 	s.mu.Unlock()
+
+	// SOAR-8: the intent responder, if configured. Wired here because the Server owns this connection.
+	if err := s.subscribeIntentResponder(conn); err != nil {
+		return fmt.Errorf("controlplane: subscribing the intent responder: %w", err)
+	}
 
 	subjects := []struct {
 		subject string

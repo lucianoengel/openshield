@@ -22,9 +22,11 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/notify"
 	"github.com/lucianoengel/openshield/internal/retain"
+	"github.com/lucianoengel/openshield/internal/runner"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 )
@@ -164,6 +166,37 @@ func main() {
 				}
 				fmt.Fprintf(os.Stderr, "openshield-server: TI feed %q refreshed: %d indicator(s)\n", feedName, n)
 			})
+		}
+
+		// SOAR-8(b): the IdP responder. The Server owns the NATS connection, so the connector is
+		// INSTALLED here and wired by Run.
+		//
+		// Off unless an endpoint is configured, and refused without a verification key: an intent that
+		// does not verify against the control plane's key is not from the control plane, and an
+		// unverifiable intent must never disable an account. The startup notice states plainly that these
+		// actions are NOT undone by intent expiry — every other enactment in this platform is (D253/D254
+		// both prove TTL restoration), so an operator's reasonable generalisation is wrong here.
+		if ep := os.Getenv("OPENSHIELD_IDP_ENDPOINT"); ep != "" {
+			key, kerr := intentVerificationKey()
+			switch {
+			case kerr != nil:
+				fmt.Fprintf(os.Stderr, "openshield-server: IdP responder NOT started: %v\n", kerr)
+			case len(key) == 0:
+				fmt.Fprintln(os.Stderr, "openshield-server: IdP responder NOT started — OPENSHIELD_INTENT_KEY "+
+					"is unset, and an unverifiable intent must never disable an account")
+			default:
+				srv.SetIntentResponder(key, &runner.Connector{
+					Name:     env("OPENSHIELD_IDP_NAME", "idp"),
+					Endpoint: ep,
+					Token:    os.Getenv("OPENSHIELD_IDP_TOKEN"),
+					Actions: map[corev1.IntentVerb][]runner.Action{
+						corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST: {
+							runner.ActionDisableUser, runner.ActionRevokeSessions,
+						},
+					},
+					Timeout: envDuration("OPENSHIELD_IDP_TIMEOUT", 10*time.Second),
+				})
+			}
 		}
 
 		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
@@ -625,4 +658,22 @@ func loadRoutesFile(path string, sinkNames []string) ([]notify.Route, error) {
 	}
 	defer f.Close()
 	return notify.LoadRoutes(f, sinkNames)
+}
+
+// intentVerificationKey loads the control-plane public key an intent must verify against before the
+// runner will act on it. Unset means the responder does not start: an unverifiable intent must never
+// disable an account.
+func intentVerificationKey() (ed25519.PublicKey, error) {
+	kp := os.Getenv("OPENSHIELD_INTENT_KEY")
+	if kp == "" {
+		return nil, nil
+	}
+	key, err := os.ReadFile(kp)
+	if err != nil {
+		return nil, fmt.Errorf("reading intent verification key: %w", err)
+	}
+	if len(key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("intent key is %d bytes, want %d (raw ed25519 public key)", len(key), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(key), nil
 }
