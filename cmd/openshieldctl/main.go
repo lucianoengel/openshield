@@ -103,6 +103,30 @@ func run(args []string) int {
 		}
 		return cli.Verify(ctx, os.Stdout, r, anchor)
 
+	case "restore-verify":
+		// PLAT-9: the post-restore gate. Unlike `verify`, this REFUSES to degrade: a restore report that
+		// prints OK while unable to detect truncation is worse than no report.
+		anchor, err := loadAnchor(fs.anchor)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
+			return cli.ExitUnavailable
+		}
+		r, err := postgres.OpenForVerify(ctx, fs.dsn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
+			return cli.ExitUnavailable
+		}
+		defer r.Close()
+		var wpub ed25519.PublicKey
+		if fs.witness != "" {
+			if wpub, err = loadWitnessPub(fs.witness); err != nil {
+				fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
+				return cli.ExitUnavailable
+			}
+			r.WitnessPub = wpub
+		}
+		return cli.RestoreVerify(ctx, os.Stdout, r, anchor, wpub)
+
 	case "anchor":
 		if sub.verb != "export" {
 			fmt.Fprint(os.Stderr, usage)

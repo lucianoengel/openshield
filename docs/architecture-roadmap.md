@@ -255,7 +255,12 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   test that builds twice, because without it a signature attests only that the signer had *a* binary.
   `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
   transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
-- **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable DONE (D265); the rest remains.**
+- **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265) + verified restore (D266) DONE; the rest remains.**
+  `openshieldctl restore-verify` is the post-restore gate: the witness key is MANDATORY and "I cannot
+  tell" is a FAILURE, because a truncated ledger is internally CONSISTENT (it hashes perfectly and stops
+  early) and only an anchor detects that. It reports the tail an anchor cannot cover, and separates
+  verified / damaged / undetermined. *Residual:* it verifies, it does not back up or restore; anchor
+  cadence bounds what completeness can prove.
   `core.KillSwitch` is consulted by BOTH enforcement call sites, sits between the Decision and the
   Enforcer (so detection and the ledger continue — stop acting, keep seeing), fails TOWARD enforcing (an
   unreadable source never disables the product), counts every suppression with its reason, and is engaged
