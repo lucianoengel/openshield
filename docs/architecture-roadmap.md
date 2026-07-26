@@ -269,7 +269,8 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
 - **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
   schema-skew reporting (D267), the RUNBOOK + footprint (D268), the ENDPOINT fleet-wide disable (D269),
   fleet acknowledgement (D270/D271), the wire-version contract + upgrade ORDER (D275) and the
-  backup/restore DRILL + node-recovery table (D277) all DONE. **PLAT-9 is complete.**
+  backup/restore DRILL + node-recovery table (D277) all DONE, and the drill is now RUN end-to-end against
+  real pg_dump/pg_restore with truncation detection proven (D278). **PLAT-9 is complete.**
   D269 closes the gap D265 named about itself: a signed `FleetControl` (its own two-verb vocabulary, NOT
   a fourth IntentVerb) bounded by a monotonic sequence (replay), a mandatory TTL (duration) and four-eyes
   on every disable. *Residual:* the control plane cannot CONFIRM a fleet is disabled — publication is
