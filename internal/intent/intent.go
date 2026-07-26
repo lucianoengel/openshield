@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
@@ -134,7 +135,9 @@ func (r *IntentSubscriber) apply(raw []byte) error {
 	if err := proto.Unmarshal(signed.GetPayload(), &in); err != nil {
 		return fmt.Errorf("intent: bad intent payload: %w", err)
 	}
-	if in.GetVersion() != 1 {
+	// One rule, one home (core.AcceptsWireVersion): a version check spelled per package is a version
+	// rule with a different answer per package.
+	if !core.AcceptsWireVersion(in.GetVersion()) {
 		return fmt.Errorf("%w: %d", ErrIntentVersion, in.GetVersion())
 	}
 	if in.GetSubject() == "" || in.GetVerb() == corev1.IntentVerb_INTENT_VERB_UNSPECIFIED {

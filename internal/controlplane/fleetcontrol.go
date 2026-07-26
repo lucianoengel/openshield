@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
@@ -99,7 +100,7 @@ func (s *Server) PublishFleetControl(ctx context.Context, verb corev1.FleetVerb,
 	}
 	now := s.now()
 	payload, err := proto.Marshal(&corev1.FleetControl{
-		ControlId: id, Verb: verb, Version: 1, Sequence: seq,
+		ControlId: id, Verb: verb, Version: core.WireVersion, Sequence: seq,
 		IssuedAt: timestamppb.New(now), ExpiresAt: timestamppb.New(now.Add(ttl)), Reason: reason,
 	})
 	if err != nil {

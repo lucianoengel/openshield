@@ -84,6 +84,24 @@ hashes perfectly and simply stops early — and truncation is the most likely wa
 *Limit:* completeness is proven only through the highest anchored sequence; the command reports how many
 entries lie beyond it. Anchor cadence bounds this, not verification.
 
+### Upgrade order: consumers before publishers
+
+Every signed message carries a version, and **a consumer rejects a version it does not understand** rather
+than partially applying it — the right direction for a containment or a fleet-wide disable, and the reason
+order matters:
+
+1. Endpoints and gateways (the consumers) **first**.
+2. The control plane (the publisher) **second**.
+
+Upgrading the control plane first is the failure mode: it publishes the new version to consumers that
+reject it, and it looks like nothing is wrong from the publisher's side. Upgrading consumers first is
+always safe — a newer consumer accepts the older version, because the accepted set is a RANGE and what a
+build produces is a point inside it.
+
+*Limit:* this ordering is a property of the wire contract, not something the software enforces across
+hosts. Nothing stops an operator upgrading the control plane first; the consequence is rejected messages,
+which are counted on each consumer.
+
 ### After a rollback: check schema skew
 
 `openshield_schema_skew` (and a startup warning) reports how many migrations the database has that this

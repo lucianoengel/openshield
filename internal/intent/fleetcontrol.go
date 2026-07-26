@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
@@ -90,7 +91,9 @@ func (f *FleetControlSubscriber) apply(raw []byte) error {
 	if err := proto.Unmarshal(signed.GetPayload(), &c); err != nil {
 		return fmt.Errorf("intent: bad fleet-control payload: %w", err)
 	}
-	if c.GetVersion() != 1 {
+	// One rule, one home (core.AcceptsWireVersion): a version check spelled per package is a version
+	// rule with a different answer per package.
+	if !core.AcceptsWireVersion(c.GetVersion()) {
 		return fmt.Errorf("%w: %d", ErrFleetVersion, c.GetVersion())
 	}
 	if v := c.GetVerb(); v == corev1.FleetVerb_FLEET_VERB_UNSPECIFIED {

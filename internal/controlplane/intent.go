@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
@@ -23,9 +24,13 @@ import (
 // DATA; it never commands (T2/D14). An open command channel would let a compromised control plane express
 // "run this", which is exactly what the closed vocabularies exist to make unexpressible.
 //
-// IntentVersion is what a consumer checks before applying an intent. Bump it only for a change a consumer
+// IntentVersion is what this build PRODUCES for intents. It is core.WireVersion rather than its own
+// literal: two packages already spelled the CONSUMER side of this rule separately, and a producer with a
+// third copy is how a publisher and its consumers come to disagree about what "version 1" means.
+//
+// Bump it only for a change a consumer
 // must understand; an unrecognized version is REJECTED rather than partially applied.
-const IntentVersion = 1
+const IntentVersion = core.WireVersion
 
 // DefaultIntentTTL bounds an intent. A contain with no expiry is a permanent quarantine nobody remembers
 // issuing, so there is no "no expiry" option.
