@@ -104,3 +104,14 @@ func DeclaredPlaybookSteps() []string {
 func (s *Server) RecordHeartbeatForTest(ctx context.Context, data []byte) {
 	s.recordHeartbeat(ctx, data)
 }
+
+// InsertFleetTelemetryForTest seeds one aggregate row, so a detector test can drive the REAL read path
+// (verified-only, proto-decoded) rather than a hand-built in-memory fixture.
+func (s *Server) InsertFleetTelemetryForTest(t interface{ Fatalf(string, ...any) },
+	agentID, eventID string, payload []byte, verified bool) {
+	if _, err := s.pool.Exec(context.Background(),
+		`INSERT INTO fleet_telemetry (agent_id, kind, event_id, payload, verified) VALUES ($1,'event',$2,$3,$4)`,
+		agentID, eventID, payload, verified); err != nil {
+		t.Fatalf("seeding fleet telemetry: %v", err)
+	}
+}
