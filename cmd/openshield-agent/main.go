@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lucianoengel/openshield/internal/agent/execipc"
 	"github.com/lucianoengel/openshield/internal/agent/execmon"
 	"github.com/lucianoengel/openshield/internal/agent/watchdog"
 )
@@ -46,10 +47,30 @@ func main() {
 		os.Exit(2)
 	}
 
-	ev, err := buildEvaluator()
+	ipcSocket := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_IPC_SOCKET"))
+	ev, err := buildEvaluator(ipcSocket != "")
 	if err != nil {
 		logf("loading exec deny-list: %v", err)
 		os.Exit(1)
+	}
+
+	// HIPS-3 increment 2a: with a verdict socket configured, the inline decision comes from the ENGINE's
+	// pipeline instead of the static deny-list above. Unset (the default) keeps the static path exactly as
+	// it was.
+	//
+	// A socket that is absent or unreachable does NOT stop the agent: an enforcement UPGRADE that prevents
+	// a security agent from starting would trade all of today's protection for a feature. The client dials
+	// lazily and every failure fails open with a loud audit, so an unreachable engine degrades to
+	// allow-and-audit rather than to no agent at all.
+	var evaluator watchdog.Evaluator = ev
+	if ipcSocket != "" {
+		client := execipc.NewClient(ipcSocket)
+		client.Timeout = envDuration("OPENSHIELD_EXEC_IPC_TIMEOUT", execipc.DefaultTimeout)
+		client.Logf = logf
+		defer client.Close()
+		evaluator = client
+		logf("HIPS-3 exec verdicts come from the ENGINE over %s (timeout=%s); every IPC failure FAILS OPEN "+
+			"with a high-severity audit — a dead engine must never brick execution", ipcSocket, client.Timeout)
 	}
 
 	mon, err := execmon.Open(dirs)
@@ -63,7 +84,7 @@ func main() {
 		SelfPID:   int32(os.Getpid()),
 		Budget:    envDuration("OPENSHIELD_EXEC_BUDGET", 500*time.Millisecond),
 		Responder: watchdog.FanotifyResponder{NotifyFD: mon.NotifyFD()},
-		Evaluator: ev,
+		Evaluator: evaluator,
 		Audit: func(_ context.Context, e watchdog.PermissionEvent, sev watchdog.Severity, reason string) error {
 			logf("exec watchdog fail-open pid=%d path=%q severity=%d reason=%q", e.PID, e.Path, int(sev), reason)
 			return nil
@@ -83,7 +104,7 @@ func main() {
 // file (OPENSHIELD_EXEC_DENY) and an optional behavioral score floor
 // (OPENSHIELD_EXEC_BEHAVIOR_FLOOR). At least one signal must be configured, so the agent
 // does not run answering every exec ALLOW (a no-op enforcement is a misconfiguration).
-func buildEvaluator() (execmon.DenyEvaluator, error) {
+func buildEvaluator(ipcGate bool) (execmon.DenyEvaluator, error) {
 	var ev execmon.DenyEvaluator
 	if f := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_DENY")); f != "" {
 		paths, bases, err := execmon.LoadDenyList(f)
@@ -111,8 +132,9 @@ func buildEvaluator() (execmon.DenyEvaluator, error) {
 			"an incomplete allowlist can break the host", f)
 	}
 	if len(ev.DenyPaths) == 0 && len(ev.DenyBasenames) == 0 && ev.BehaviorFloor <= 0 &&
-		len(ev.AllowPaths) == 0 && len(ev.AllowBasenames) == 0 {
-		return ev, fmt.Errorf("no exec signal configured: set OPENSHIELD_EXEC_DENY, OPENSHIELD_EXEC_ALLOW, and/or OPENSHIELD_EXEC_BEHAVIOR_FLOOR")
+		len(ev.AllowPaths) == 0 && len(ev.AllowBasenames) == 0 && !ipcGate {
+		return ev, fmt.Errorf("no exec signal configured: set OPENSHIELD_EXEC_DENY, OPENSHIELD_EXEC_ALLOW, " +
+			"OPENSHIELD_EXEC_BEHAVIOR_FLOOR, and/or OPENSHIELD_EXEC_IPC_SOCKET")
 	}
 	return ev, nil
 }

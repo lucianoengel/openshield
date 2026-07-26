@@ -17,7 +17,13 @@ PRIVILEGED_PKG="./cmd/openshield-agent"
 # archive/* and compress/* handle attacker-controlled containers; encoding/*
 # covers the structured-format decoders. text/template and html/template are
 # here because template execution on untrusted input is its own hazard.
-BANNED_RE='^(archive/|compress/|encoding/(json|xml|csv|asn1|gob|pem)|text/template|html/template|image/|github.com/.*(pdf|docx|tika|ocr))'
+#
+# protobuf and the generated corev1 package are banned for the SAME reason, not a different one: a
+# wire-format decoder is a parser, and this process decodes only fixed-width fields from a socket it must
+# defend against (internal/agent/execipc). corev1 also pulls encoding/json transitively via protobuf's
+# JSON support, so it would breach the ban above anyway. The exec-verdict transport is hand-rolled
+# precisely so this line can stay true (HIPS-3 increment 2a).
+BANNED_RE='^(archive/|compress/|encoding/(json|xml|csv|asn1|gob|pem)|text/template|html/template|image/|google.golang.org/protobuf|github.com/.*(pdf|docx|tika|ocr)|github.com/lucianoengel/openshield/internal/core/corev1$)'
 
 deps="$(go list -deps "$PRIVILEGED_PKG" 2>/dev/null || true)"
 if [ -z "$deps" ]; then

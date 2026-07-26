@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D243.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D244.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D243)
+## What OpenShield is (status at a glance, through D244)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -58,7 +58,7 @@ NOT an infra ticket and not part of the queues below.
 | DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **MVP gap:** endpoint exfil producers (clipboard/print, Lane E). **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
-| HIPS | ~70% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. **MVP gap:** full-pipeline inline `DENY_EXEC` — a *dynamic* intent evaluated by OPA at the exec gate (Lane E, HIPS-3 inc 2), required by XDR-6. **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
+| HIPS | ~78% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). **MVP gap:** the *intent*-driven half — an OPA policy reading a signed `CONTAIN` Response-Intent — needs SOAR-7 (Lane B), and XDR-6 stays blocked on it. **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
 | **SOAR** | ~20% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). **MVP gap:** the whole orchestration story — scheduled correlation, four-eyes approvals, a playbook engine, enrichment, metrics, the signed response-intent seam, and integration runners (SOAR-2…9). |
 | NAC · VPN | 0% | Absent; off-pipeline. **Parked** (ADR-0). Not in the headline category set. |
 
@@ -131,8 +131,9 @@ one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-
   COORDINATES and does not verify the chain (the anchor binary owns that); no timeline for `ueba_burst`
   incidents (explicit 409, never an empty list); `unified_alerts` retention must eventually cascade to the
   join — a retention-ticket item.
-- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7 + HIPS-3 inc 2
-  (Lane E — the endpoint inline-deny path).** One approved `CONTAIN(entity)` intent consumed by BOTH
+- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7 + HIPS-3 inc 2b.**
+  (Inc 2a's IPC bridge is DONE, D244 — what remains is the intent-as-policy-context half, which needs
+  SOAR-7. So XDR-6 is blocked on Lane B, not on the endpoint transport.) One approved `CONTAIN(entity)` intent consumed by BOTH
   gateway (flows) and endpoint (exec) local policies, both enactments ledgered under one intent id.
   *Accept: CONTAIN on entity E → gateway blocks E's flows AND E's agent denies new execs (prevented at
   the exec gate, not killed after); one intent id in the ledger; TTL expiry restores both.*
@@ -221,25 +222,21 @@ Makes containment bite where the process runs, and makes the DLP domain watch th
 actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a hard dependency of XDR-6.
 (DLP-2 is split: 2a/2b clipboard+print are MVP here; screenshot + CASB refinements stay DLP-2 in enrichment.)
 
-- **HIPS-3 increment 2 · Full-pipeline inline `DENY_EXEC`** — A · L · **owner-approved** (the MVP
-  prevent-inline decision is the T1 sign-off; the `DENY_EXEC` verb itself already landed T1-gated at D217,
-  so this is wiring an approved verb through the dynamic path, not adding a new Action-set entry). Today the inline exec gate
-  (`FAN_OPEN_EXEC_PERM`, D224) decides from a parser-free static deny-list/whitelist — it cannot evaluate
-  a *dynamic* `CONTAIN` intent. Bridge the privileged exec-gate to the unprivileged engine over IPC
-  (`execguard.ExecEvaluator` is the seam) so the OPA policy — reading the ResponseIntent as typed context
-  (SOAR-7) — returns DENY/ALLOW inline, kernel-enforced. Keeps the privileged binary parser-free. *Accept:
-  a `CONTAIN(entity)` intent makes the entity's next exec kernel-REFUSED (EACCES) via the engine's policy,
-  proven on the rooted VM; the intent-absent path still runs. Mutation: bypassing the IPC verdict lets the
-  exec through → VM test FAILs.*
-  **The IPC is the highest-risk surface in the whole MVP — engineer it as such, not as a happy-path RPC.**
-  Bounded per-exec verdict timeout; on timeout / engine crash / queue overflow / partial response the gate
-  **FAILS OPEN** (allow + high-severity audit) and NEVER wedges exec on the host — the same discipline as
-  the NIPS bypass watchdog and the D73/D17 egress fail-open (a dead engine must not be able to brick a
-  machine's ability to run programs). Defend against fork-storm amplification (verdict cache + per-cmd
-  circuit breaker), engine restart (re-handshake, no stuck EACCES), and unbounded queue growth. *Accept
-  (hardening): a killed or hung engine makes execs ALLOW-with-loud-audit within the timeout rather than
-  hang; a fork-storm trips the circuit breaker instead of the engine. Mutation: making the gate fail
-  CLOSED on timeout must FAIL this test — fail-open here is a load-bearing safety property, not a bug.*
+- **HIPS-3 increment 2a · The exec-gate IPC bridge** — ✅ **DONE (D244, VM-proven on kernel 6.8)** — see
+  Done ledger. `internal/agent/execipc` is a parser-free hand-rolled transport (the privileged binary still
+  carries no protobuf/`corev1`, now CI-enforced); the client is only a `watchdog.Evaluator`, so the existing
+  budget/fail-open stays the single source of truth; hardening shipped and tested (verdict cache, per-path
+  circuit breaker, deadline-aware connection lock, bounded in-flight). Five mutations verified failing,
+  including "always allow" against the real kernel.
+- **HIPS-3 increment 2b · Intent-driven inline `DENY_EXEC`** — A · M · **dep SOAR-7.** What 2a deliberately
+  did NOT do: make the OPA policy read a signed `CONTAIN` **Response-Intent** as typed context, so
+  containment PREVENTS the entity's next exec. The transport, the kernel path and the DENY_EXEC mapping are
+  all proven — this is the policy-input half, and it cannot be built before SOAR-7 exists. **XDR-6 is
+  blocked on this, not on 2a.** *Accept: a `CONTAIN(entity)` intent makes the entity's next exec
+  kernel-REFUSED via the engine's policy, proven on the rooted VM; the intent-absent path still runs.*
+  **Residual from 2a to keep in mind:** fail-open is the only supported mode, so an operator who can stop
+  the engine gets unchecked execs (the deliberate D17/D73 trade, made detectable by the loud audit), and a
+  repeated exec can be answered from a verdict up to one cache-TTL stale.
 - **DLP-2a · Clipboard exfil producer** — P · L. An endpoint producer that emits a content-free
   clipboard-copy Event (channel-tagged, D194 model) so a sensitive copy is classified + policy-gated.
   **MVP is Linux only (X11 + Wayland)** — the attestation-free Windows/macOS clipboard producer rides
@@ -416,7 +413,8 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   critical-process guard (D174); pid-reuse revalidation (D175); inline exec PREVENTION on a live kernel —
   `DENY_EXEC` logic (D217) + `FAN_OPEN_EXEC_PERM` producer (D224) + default-deny whitelisting (D230);
   FIM baseline/real-time/signed/real-time-delete (D223/228/229/236); ransomware canary (D232);
-  memory-injection W^X detection (D233).
+  memory-injection W^X detection (D233); HIPS-3 inc 2a exec-gate IPC bridge — parser-free transport,
+  watchdog-owned fail-open, verdict cache + per-path breaker + deadline-aware lock, VM-proven (D244).
 - **Platform:** JetStream durable consumers env-gated (D180, ADR-2); active-passive HA via Postgres
   advisory-lock leader lease (PLAT-2b, D181, ADR-3); cross-platform OBSERVE path (D187, ADR-11). XDR-1 entity
   graph populated by real producers (D195/203); XDR-3 canonical subject stamping (D196); XDR-2 unified-alert

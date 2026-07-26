@@ -26,6 +26,8 @@ import (
 	"time"
 
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
+	"github.com/lucianoengel/openshield/internal/agent/execguard"
+	"github.com/lucianoengel/openshield/internal/agent/execipc"
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/canary"
@@ -329,6 +331,35 @@ func main() {
 			memScanSource(ctx, "/proc", iv, events, log)
 		}()
 		log.Info("engine: memory-injection scan ENABLED (W^X detection)", slog.Duration("interval", iv))
+	}
+
+	// HIPS-3 increment 2a: serve exec verdicts to the PRIVILEGED gate over a unix socket. The gate holds
+	// CAP_SYS_ADMIN and cannot parse anything, so it asks us — the unprivileged process that owns the
+	// policy — for a verdict, and we answer DENY only when the pipeline decides DENY_EXEC.
+	//
+	// The DENY_EXEC semantics live in execguard (ExecEvaluator), not here: re-deriving "which actions
+	// block an exec" at a second site is how two answers to one question start to drift.
+	//
+	// NOTE (honest scope): what makes this a FULL-PIPELINE verdict is that OPA decides it. Acting on a
+	// signed CONTAIN Response-Intent needs SOAR-7, which does not exist yet — so this serves
+	// policy-driven denials, not intent-driven containment.
+	if sock := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_IPC_SOCKET")); sock != "" {
+		verdictSrv := &execipc.Server{
+			Evaluate: execguard.ExecEvaluator{Decide: execguard.Decider(eng)}.Evaluate,
+			Logf:     func(format string, a ...any) { log.Warn(fmt.Sprintf(format, a...)) },
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := verdictSrv.Listen(ctx, sock); err != nil && ctx.Err() == nil {
+				// Not fatal: losing the verdict socket degrades the exec gate to its static path (and to
+				// audited fail-opens), which is strictly better than taking the whole engine down.
+				log.Error("engine: exec-verdict server stopped", slog.Any("err", err))
+			}
+		}()
+		log.Warn("engine: exec-verdict IPC ACTIVE — the privileged gate's inline exec decisions now come "+
+			"from this pipeline (policy-driven; intent-driven containment awaits SOAR-7)",
+			slog.String("socket", sock))
 	}
 
 	go func() { wg.Wait(); close(events) }()
