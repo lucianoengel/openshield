@@ -302,7 +302,7 @@ func TestUnverifiedEvidenceDoesNotSteerEnrichment(t *testing.T) {
 	// The verified, HIT incident above is a separate test; here the local-context annotation must still
 	// have been written, proving enrich ran at all.
 	if n := countRows(t, pool, `SELECT count(*) FROM incident_annotations WHERE kind='enrichment'`); n == 0 {
-		t.Error("the enrich step wrote no local-context annotation — it did not run, so the ti assertions "+
+		t.Error("the enrich step wrote no local-context annotation — it did not run, so the ti assertions " +
 			"above are vacuous")
 	}
 }

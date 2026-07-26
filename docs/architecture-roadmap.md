@@ -255,7 +255,12 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   test that builds twice, because without it a signature attests only that the signer had *a* binary.
   `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
   transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
-- **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265) + verified restore (D266) DONE; the rest remains.**
+- **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
+  and schema-skew reporting (D267) DONE; upgrade orchestration + DR runbook remain.**
+  D267 fixed a real rollback defect: `fullyMigrated`'s `applied >= want` let a rolled-back binary run
+  SILENTLY against a newer schema. It now reports the skew (loudly, plus a gauge) and still STARTS —
+  refusing would turn a rollback into an outage. Migrations are FORWARD-ONLY: rolling the BINARY back is
+  supported, rolling the SCHEMA back is not.
   `openshieldctl restore-verify` is the post-restore gate: the witness key is MANDATORY and "I cannot
   tell" is a FAILURE, because a truncated ledger is internally CONSISTENT (it hashes perfectly and stops
   early) and only an anchor detects that. It reports the tail an anchor cannot cover, and separates

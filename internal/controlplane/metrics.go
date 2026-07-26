@@ -45,6 +45,7 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_notify_deduped_total", "Duplicate notifications suppressed by the server-side idempotency check (SIEM-12).", s.NotifyDeduped.Load()},
 			{"openshield_dropped_messages_total", "NATS async errors / slow-consumer drops (receive-side loss, SEC-4).", s.DroppedMessages.Load()},
 			{"openshield_unified_alert_failures_total", "Unified-alert projections that could not be recorded (XDR-2).", s.UnifiedAlertFailures.Load()},
+			{"openshield_schema_skew", "Migrations the DATABASE has applied that this binary does not embed (PLAT-9) — non-zero means a binary rollback left this process reading a schema ahead of it.", SchemaSkew.Load()},
 			{"openshield_runner_actions_total", "IRREVERSIBLE external actions performed under an approved intent (SOAR-8) — these are not undone by intent expiry.", s.RunnerActions.Load()},
 			{"openshield_runner_refusals_total", "Intents the runner declined (unapproved, expired, undeclared verb, already enacted) — a responder that silently does nothing looks identical to one that works, without this.", s.RunnerRefusals.Load()},
 			{"openshield_notify_unrouted_total", "Notifications that matched NO routing rule and were therefore delivered to every sink (SOAR-9) — a non-zero value means the routing table has a hole.", s.NotifyUnrouted()},

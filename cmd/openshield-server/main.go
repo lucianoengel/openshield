@@ -71,6 +71,19 @@ func main() {
 	if err := postgres.MigrateIfNeeded(ctx, pool); err != nil {
 		fatal("migrating: %v", err)
 	}
+	// PLAT-9: report SCHEMA SKEW. `applied > embedded` is what a BINARY ROLLBACK looks like — this
+	// process is reading a schema whose changes it cannot know. It starts anyway (refusing would turn a
+	// rollback into an outage), but never silently: silence is the actual defect.
+	if embedded, applied, serr := postgres.SchemaSkew(ctx, pool); serr != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: could not determine schema skew: %v\n", serr)
+	} else if applied > embedded {
+		controlplane.SchemaSkew.Store(int64(applied - embedded))
+		fmt.Fprintf(os.Stderr, "openshield-server: WARNING — the database has %d migration(s) this binary "+
+			"does not know (applied=%d, embedded=%d). This is what a BINARY ROLLBACK looks like: the "+
+			"schema is ahead of this process. Starting anyway. Note that migrations are FORWARD-ONLY — "+
+			"rolling the BINARY back is supported, rolling the SCHEMA back is not.\n",
+			applied-embedded, applied, embedded)
+	}
 
 	srv := controlplane.New(pool)
 

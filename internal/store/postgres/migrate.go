@@ -166,3 +166,43 @@ func MigrateIfNeeded(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	return Migrate(ctx, pool)
 }
+
+// SchemaSkew reports how many migrations this BINARY embeds and how many the DATABASE has applied.
+//
+// The interesting case is applied > embedded, which is what a BINARY ROLLBACK looks like: the operator
+// rolled back after a migration ran, and this process is now reading a schema whose changes it cannot
+// know — a column may have gained meaning, a constraint may reject its writes, a table it never heard of
+// holds state it will not maintain.
+//
+// `fullyMigrated` answers `applied >= want`, which is correct for "may I skip migrating?" and SILENT
+// about this. Silence is the actual defect: the risk of running against a newer schema is bounded and
+// usually benign (migrations here are additive by convention), but running that way with NOBODY KNOWING
+// is not.
+//
+// It reports rather than refuses. Refusing would make rollback impossible after any migration — an
+// outage in place of a recovery, and a direct contradiction of the ability to roll back at all.
+//
+// The asymmetry an operator needs before they need it: MIGRATIONS ARE FORWARD-ONLY. Rolling the BINARY
+// back is supported; rolling the SCHEMA back is not.
+func SchemaSkew(ctx context.Context, pool *pgxpool.Pool) (embedded, applied int, err error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".sql") {
+			embedded++
+		}
+	}
+	var reg *string
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.schema_migrations')::text`).Scan(&reg); err != nil {
+		return embedded, 0, fmt.Errorf("checking migration state: %w", err)
+	}
+	if reg == nil {
+		return embedded, 0, nil // never migrated
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
+		return embedded, 0, fmt.Errorf("counting applied migrations: %w", err)
+	}
+	return embedded, applied, nil
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/config"
@@ -246,3 +247,11 @@ func (s *Server) WatchSettings(ctx context.Context, db *config.DBSource, interva
 		}
 	}
 }
+
+// SchemaSkew is how many migrations the DATABASE has applied that this binary does not embed (PLAT-9).
+//
+// Non-zero means a BINARY ROLLBACK left this process reading a schema ahead of it. Package-level because
+// it is determined during migration, before a Server exists — and exposed as a gauge because a fleet
+// mid-rollback is a fleet-level question: a log line answers it per host, a metric answers it for the
+// deployment, which is what is actually being asked during an upgrade.
+var SchemaSkew atomic.Int64
