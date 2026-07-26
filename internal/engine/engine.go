@@ -130,10 +130,14 @@ func (c classifyStage) classify(ctx context.Context, s *core.State, req *corev1.
 
 // Engine runs the assembled pipeline for one event.
 type Engine struct {
-	disp   *core.Dispatcher
-	ledger core.Ledger
-	now    func() time.Time
-	logger *slog.Logger
+	// KillSwitch, when set, stops this component ENFORCING without stopping it detecting (PLAT-9). Nil
+	// means none was installed and enforcement behaves exactly as before: a component never given a
+	// switch must enforce normally rather than silently do nothing.
+	KillSwitch *core.KillSwitch
+	disp       *core.Dispatcher
+	ledger     core.Ledger
+	now        func() time.Time
+	logger     *slog.Logger
 
 	// enforceAuditDropped counts enforcement-audit appends that failed (R34-7) — a
 	// silently-dropped ledger append for an automated action would be a hole in the
@@ -276,6 +280,13 @@ func (e *Engine) Process(ctx context.Context, ev *corev1.Event) (*corev1.Decisio
 // high-severity and never silent (D14). With no enforcers this is a no-op
 // (observe-only, D1).
 func (e *Engine) enforce(ctx context.Context, ev *corev1.Event, dec *corev1.Decision) {
+	// PLAT-9: the emergency disable. It sits HERE — between the Decision and the Enforcer — and nowhere
+	// earlier, so classification, the policy and the ledger all still ran. Stop acting; keep seeing: the
+	// record of what WOULD have been enforced is exactly what an operator needs afterwards.
+	if suppressed, reason := e.KillSwitch.SuppressEnforcement(dec); suppressed {
+		e.recordSuppression(ctx, dec, reason)
+		return
+	}
 	for _, enf := range e.Enforcers {
 		if !core.CanEnforce(enf, dec) {
 			continue
@@ -339,4 +350,13 @@ func (e *Engine) EnforceAuditDropped() int64 { return e.enforceAuditDropped.Load
 // NewFromWorker is the production constructor: it takes a started *privileged.Worker.
 func NewFromWorker(w *privileged.Worker, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Engine {
 	return New(w, policy, ledger, logger, stageDeadline)
+}
+
+// recordSuppression audits an enforcement the emergency disable prevented (PLAT-9). Recorded
+// INDIVIDUALLY, not merely as switch state: an operator asking "what did we not block during those forty
+// minutes" needs a number and a reason, and a silent kill switch is indistinguishable from a product that
+// has stopped working.
+func (e *Engine) recordSuppression(ctx context.Context, dec *corev1.Decision, reason string) {
+	e.recordEnforcement(ctx, dec, fmt.Errorf("enforcement SUPPRESSED by the emergency disable (%s) — "+
+		"the decision stands and is recorded; nothing was enforced", reason))
 }

@@ -255,7 +255,14 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   test that builds twice, because without it a signature attests only that the signer had *a* binary.
   `deploy/` already carried the systemd/install path. *Remaining:* goreleaser, Helm, Sigstore/cosign +
   transparency log, SBOM, .deb/.rpm, macOS notarization, CI tag automation.
-- **PLAT-9 · Operational lifecycle & recovery** — M–L. The question a CISO asks first — *how do I run
+- **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable DONE (D265); the rest remains.**
+  `core.KillSwitch` is consulted by BOTH enforcement call sites, sits between the Decision and the
+  Enforcer (so detection and the ledger continue — stop acting, keep seeing), fails TOWARD enforcing (an
+  unreadable source never disables the product), counts every suppression with its reason, and is engaged
+  either by a local break-glass file or by a dynamic setting that propagates fleet-wide via PLAT-5b's
+  watcher. *Residual, named:* the fleet path reaches only components that read the config store —
+  **endpoint agents do not**, so their fleet-wide disable needs the signed channel (increment 2).
+  **Still to do:** the question a CISO asks first — *how do I run
   this?* — and today the roadmap answers only "packaging." Deliver: rolling agent + server upgrade with
   version-skew tolerance and **rollback**; a fleet-wide **emergency disable** ("stop enforcing now") that
   fails safe and is itself ledgered; **backup + verified restore** of the Postgres system-of-record and the

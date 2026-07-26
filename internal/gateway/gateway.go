@@ -68,6 +68,10 @@ type Request struct {
 
 // Gateway runs the assembled network pipeline for one request.
 type Gateway struct {
+	// KillSwitch, when set, stops this component ENFORCING without stopping it detecting (PLAT-9). Nil
+	// means none was installed and enforcement behaves exactly as before: a component never given a
+	// switch must enforce normally rather than silently do nothing.
+	KillSwitch *core.KillSwitch
 	classifier classifier
 	policy     core.Stage
 	ledger     core.Ledger
@@ -366,6 +370,13 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 // outcome is audited: a failure is high-severity and never silent (D14). With no
 // enforcers this is a no-op (observe-only, D1).
 func (g *Gateway) enforce(ctx context.Context, ev *corev1.Event, dec *corev1.Decision) {
+	// PLAT-9: the emergency disable. It sits HERE — between the Decision and the Enforcer — and nowhere
+	// earlier, so classification, the policy and the ledger all still ran. Stop acting; keep seeing: the
+	// record of what WOULD have been enforced is exactly what an operator needs afterwards.
+	if suppressed, reason := g.KillSwitch.SuppressEnforcement(dec); suppressed {
+		g.recordSuppression(ctx, dec, reason)
+		return
+	}
 	for _, enf := range g.Enforcers {
 		if !core.CanEnforce(enf, dec) {
 			continue
@@ -418,4 +429,13 @@ func (g *Gateway) recordEnforcement(ctx context.Context, dec *corev1.Decision, e
 		entry.OutcomeKind = "enforced"
 	}
 	_ = g.ledger.Append(ctx, entry)
+}
+
+// recordSuppression audits an enforcement the emergency disable prevented (PLAT-9). Recorded
+// INDIVIDUALLY, not merely as switch state: an operator asking "what did we not block during those forty
+// minutes" needs a number and a reason, and a silent kill switch is indistinguishable from a product that
+// has stopped working.
+func (g *Gateway) recordSuppression(ctx context.Context, dec *corev1.Decision, reason string) {
+	g.recordEnforcement(ctx, dec, fmt.Errorf("enforcement SUPPRESSED by the emergency disable (%s) — "+
+		"the decision stands and is recorded; nothing was enforced", reason))
 }
