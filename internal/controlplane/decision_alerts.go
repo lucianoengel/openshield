@@ -41,7 +41,10 @@ func unifiedDomainFor(kind corev1.EventKind) (string, bool) {
 	case corev1.EventKind_EVENT_KIND_FILE_OPENED,
 		corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
 		corev1.EventKind_EVENT_KIND_FILE_CREATED,
-		corev1.EventKind_EVENT_KIND_USB_INSERTED:
+		corev1.EventKind_EVENT_KIND_USB_INSERTED,
+		// A clipboard copy (DLP-2a) is a DLP detection on an exfil CHANNEL, like a write to removable
+		// media — the domain is about which detection plane saw it, not about whether a file was involved.
+		corev1.EventKind_EVENT_KIND_CLIPBOARD_COPY:
 		return domainDLP, true
 	case corev1.EventKind_EVENT_KIND_PROCESS_EXEC,
 		corev1.EventKind_EVENT_KIND_FILE_DELETED,

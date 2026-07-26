@@ -80,4 +80,3 @@ decision := {"action":"ALLOW","reason":"clean","confidence":0.9} if { not sensit
 		t.Fatalf("clean cloud-sync write = %v, want ALLOW", got)
 	}
 }
-

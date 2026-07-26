@@ -31,6 +31,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/canary"
+	"github.com/lucianoengel/openshield/internal/clipboard"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
@@ -338,6 +339,34 @@ func main() {
 			memScanSource(ctx, "/proc", iv, events, log)
 		}()
 		log.Info("engine: memory-injection scan ENABLED (W^X detection)", slog.Duration("interval", iv))
+	}
+
+	// DLP-2a: the CLIPBOARD exfil producer. Copy-paste is the channel a desktop user actually reaches for,
+	// and watching directories while ignoring it is the gap "not a DLP without the exfil channels" names.
+	//
+	// The copied bytes reach the SANDBOXED WORKER through a content store chained into the engine's content
+	// resolver; they never touch the Event (D10/D29) and the privileged agent is not involved (D13).
+	// Disabled unless an interval is set, and it refuses to start LOUDLY when there is no display or no
+	// helper binary — a producer that polls forever with nothing to see would be worse than none.
+	if iv := envDuration("OPENSHIELD_CLIPBOARD_INTERVAL", 0); iv > 0 {
+		reader, cerr := clipboard.NewReader()
+		if cerr != nil {
+			log.Warn("engine: clipboard monitoring UNAVAILABLE — not started (the engine runs without it)",
+				slog.Any("err", cerr))
+		} else {
+			// Chain, do not overwrite: SetContentResolver holds ONE function, and a future producer's
+			// content source must not be silently displaced.
+			store := clipboard.NewContentStore(nil)
+			eng.SetContentResolver(func(ev *corev1.Event) []byte { return store.Resolve(ev.GetEventId()) })
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				clipboardSource(ctx, reader, store, iv, events, log)
+			}()
+			log.Warn("engine: clipboard exfil monitoring ACTIVE — a copy is classified in the sandboxed "+
+				"worker (observe/alert only; it does not block a paste)",
+				slog.Duration("interval", iv), slog.String("display", reader.DisplayServer()))
+		}
 	}
 
 	// HIPS-3 increment 2a: serve exec verdicts to the PRIVILEGED gate over a unix socket. The gate holds

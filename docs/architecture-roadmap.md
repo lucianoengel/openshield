@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D245.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D246.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D245)
+## What OpenShield is (status at a glance, through D246)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -55,7 +55,7 @@ NOT an infra ticket and not part of the queues below.
 |---|---|---|
 | **XDR** (umbrella) | ~62% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). **MVP gap:** coordinated response (XDR-6, needs SOAR-7 + HIPS-3 inc 2), per-entity risk aggregation (XDR-7). |
 | Zero Trust (ZTNA) | ~75% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. **MVP gap:** an agent-brokered ZTNA client (ZT-4). |
-| DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **MVP gap:** endpoint exfil producers (clipboard/print, Lane E). **Enrichment:** OCR, screenshot, CASB refinements. |
+| DLP | ~68% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. Clipboard COPY is now an observed exfil channel — content classified in the sandboxed worker, the Event content-free, real X11 capture VM-proven (DLP-2a, D246). **MVP gap:** the PRINT producer (DLP-2b). **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
 | SIEM | ~46% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~78% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). **MVP gap:** the *intent*-driven half — an OPA policy reading a signed `CONTAIN` Response-Intent — needs SOAR-7 (Lane B), and XDR-6 stays blocked on it. **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
@@ -239,11 +239,12 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   **Residual from 2a to keep in mind:** fail-open is the only supported mode, so an operator who can stop
   the engine gets unchecked execs (the deliberate D17/D73 trade, made detectable by the loud audit), and a
   repeated exec can be answered from a verdict up to one cache-TTL stale.
-- **DLP-2a · Clipboard exfil producer** — P · L. An endpoint producer that emits a content-free
-  clipboard-copy Event (channel-tagged, D194 model) so a sensitive copy is classified + policy-gated.
-  **MVP is Linux only (X11 + Wayland)** — the attestation-free Windows/macOS clipboard producer rides
-  PLAT-7 (enrichment), keeping the Linux-first MVP invariant intact. *Accept: copying a seeded CPF to the
-  clipboard produces a classified exfil Event → policy ALERT; a non-sensitive copy does not.*
+- **DLP-2a · Clipboard exfil producer** — ✅ **DONE (D246)** — see Done ledger. `internal/clipboard` +
+  `EVENT_KIND_CLIPBOARD_COPY` + `ChannelClipboard`; content goes to the sandboxed worker, the Event is
+  content-free (proven on the serialized bytes), real X11 capture VM-proven under Xvfb. *Residual, honest:*
+  POLLED (a copy replaced inside one interval is missed), TEXT ONLY, needs `wl-paste`/`xclip`, the engine
+  holds the bytes in memory to forward them (same trade as the gateway's bodies), and it does NOT block a
+  paste. Event-driven capture (XFIXES / `wl-paste --watch`) and Windows/macOS (PLAT-7) stay deferred.
 - **DLP-2b · Print exfil producer** — P · L. Emit a content-free print-job Event (**CUPS on Linux for the
   MVP**; the Windows print-spooler producer rides PLAT-7, enrichment) so a sensitive print is classified +
   gated. *Accept: printing a seeded sensitive doc produces a classified exfil Event → policy ALERT.*
@@ -415,7 +416,8 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   critical-process guard (D174); pid-reuse revalidation (D175); inline exec PREVENTION on a live kernel —
   `DENY_EXEC` logic (D217) + `FAN_OPEN_EXEC_PERM` producer (D224) + default-deny whitelisting (D230);
   FIM baseline/real-time/signed/real-time-delete (D223/228/229/236); ransomware canary (D232);
-  memory-injection W^X detection (D233); HIPS-3 inc 2a exec-gate IPC bridge — parser-free transport,
+  memory-injection W^X detection (D233); DLP-2a clipboard exfil producer — content-free Event, worker-side
+  classification, `ChannelClipboard`, real X11 capture VM-proven (D246); HIPS-3 inc 2a exec-gate IPC bridge — parser-free transport,
   watchdog-owned fail-open, verdict cache + per-path breaker + deadline-aware lock, VM-proven (D244).
 - **Platform:** JetStream durable consumers env-gated (D180, ADR-2) then made the DEFAULT with all three
   producers wired + fail-fast (PLAT-2, D245); active-passive HA via Postgres

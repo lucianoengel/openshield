@@ -8,12 +8,12 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/lucianoengel/openshield/internal/core"
-	"github.com/lucianoengel/openshield/internal/behavioral"
 	"github.com/lucianoengel/openshield/internal/attack"
+	"github.com/lucianoengel/openshield/internal/behavioral"
 	"github.com/lucianoengel/openshield/internal/casb"
-	"github.com/lucianoengel/openshield/internal/exfil"
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/exfil"
 )
 
 // actionNames is the CLOSED mapping between the enum and the bare names a policy
@@ -123,6 +123,15 @@ func buildInput(st *core.State) map[string]interface{} {
 			event["exfil_channel"] = exfil.Classify(p).String()
 		}
 	}
+	// A CLIPBOARD copy is an exfil channel too (DLP-2a), but it has NO path — so the channel comes from the
+	// event KIND, not from exfil.Classify. Feeding the path classifier a pseudo-path ("clipboard://…") would
+	// invent a filesystem entity that other code would eventually try to open. A channel-aware policy now
+	// gates copy-paste with the same rule it uses for a cloud-sync write, knowing nothing clipboard-specific.
+	if cb := st.Event.GetClipboard(); cb != nil {
+		event["exfil_channel"] = exfil.ChannelClipboard.String()
+		event["clipboard_bytes"] = int(cb.GetByteCount())
+		event["display_server"] = cb.GetDisplayServer()
+	}
 	// For a process-exec event, expose the exec path, args, and parent path so a
 	// behavioral policy can decide on LOLBins and process lineage (Phase E, HIPS). Exec
 	// metadata only (D10/D29) — no process memory or file content.
@@ -206,6 +215,12 @@ func attackSignals(st *core.State) attack.Signals {
 		if p := fs.GetResolvedPath(); p != "" {
 			s.ExfilChannel = exfil.Classify(p).String()
 		}
+	}
+	// DLP-2a: the clipboard channel, assigned by kind (see buildInput above for why not by path). This also
+	// makes a sensitive copy map to the exfil-over-physical-medium/cloud ATT&CK techniques the same way a
+	// channelled file write does.
+	if cb := st.Event.GetClipboard(); cb != nil {
+		s.ExfilChannel = exfil.ChannelClipboard.String()
 	}
 	if ps := st.Event.GetProcess(); ps != nil {
 		f := behavioral.Analyze(ps.GetExecPath(), ps.GetParentPath(), ps.GetArgs())

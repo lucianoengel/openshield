@@ -45,6 +45,7 @@ func TestUnifiedDomainMapping(t *testing.T) {
 		{corev1.EventKind_EVENT_KIND_FILE_MODIFIED, "dlp"},
 		{corev1.EventKind_EVENT_KIND_FILE_CREATED, "dlp"},
 		{corev1.EventKind_EVENT_KIND_USB_INSERTED, "dlp"},
+		{corev1.EventKind_EVENT_KIND_CLIPBOARD_COPY, "dlp"},
 		{corev1.EventKind_EVENT_KIND_PROCESS_EXEC, "hips"},
 		{corev1.EventKind_EVENT_KIND_FILE_DELETED, "hips"},
 		{corev1.EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED, "hips"},

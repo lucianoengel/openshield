@@ -24,6 +24,11 @@ const (
 	ChannelRemovable
 	// ChannelCloudSync is a path inside a cloud-sync folder.
 	ChannelCloudSync
+	// ChannelClipboard is a copy to the system clipboard (DLP-2a). Unlike the others it is NOT derived
+	// from a path — a clipboard copy has no path — so it is assigned from the EVENT KIND. Inventing a
+	// pseudo-path ("clipboard://…") to feed Classify would create a fake filesystem entity that some
+	// later code would try to open.
+	ChannelClipboard
 )
 
 // String returns a stable lowercase token for the policy input.
@@ -33,6 +38,8 @@ func (c Channel) String() string {
 		return "removable"
 	case ChannelCloudSync:
 		return "cloud_sync"
+	case ChannelClipboard:
+		return "clipboard"
 	default:
 		return "local"
 	}

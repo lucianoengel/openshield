@@ -30,6 +30,7 @@ enum EventKind {
   EVENT_KIND_FILE_DELETED = 10; // a watched file was removed (HIPS-4 FIM — a delete is a tamper signal)
   EVENT_KIND_RANSOMWARE_SUSPECTED = 11; // a mass canary change — a suspected ransomware attack (HIPS-4)
   EVENT_KIND_MEMORY_INJECTION_SUSPECTED = 12; // a process with writable+executable memory (HIPS-4 W^X)
+  EVENT_KIND_CLIPBOARD_COPY = 13; // content copied to the clipboard (DLP-2a — an exfil CHANNEL, not a file)
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
@@ -113,6 +114,7 @@ message Event {
     UsbSubject usb = 10;
     NetworkSubject network = 11;
     ProcessSubject process = 12;
+    ClipboardSubject clipboard = 13;
   }
 }
 
@@ -131,4 +133,18 @@ message ProcessSubject {
   // With the pid it identifies the specific process instance, so an enforcement can revalidate at
   // kill time and spare a recycled pid (HIPS-7). 0 = unknown (the process had exited at capture).
   uint64 start_ticks = 6;
+}
+
+// ClipboardSubject is a clipboard copy the endpoint observed (DLP-2a). It is the exfil channel a desktop
+// user actually reaches for, and it has no path — so it carries the only two facts that are both useful
+// and content-free: how much was copied, and which display server it came from.
+//
+// There is DELIBERATELY no field here that could hold the copied text. The copied bytes go to the
+// SANDBOXED WORKER as inline classify content (D71/D29) and never onto an Event, so a clipboard event
+// cannot express content even by mistake (D10). The Event-tree bytes-field guard in
+// internal/core/schema_test.go passes with its allowlist UNCHANGED, which is the mechanical proof of that
+// — adding `bytes text` here would break it, which is the point.
+message ClipboardSubject {
+  uint32 byte_count = 1;      // how much was copied (metadata; a size is not content)
+  string display_server = 2;  // "x11" | "wayland" — which capture path observed it
 }

@@ -93,6 +93,7 @@ const (
 	EventKind_EVENT_KIND_FILE_DELETED               EventKind = 10 // a watched file was removed (HIPS-4 FIM — a delete is a tamper signal)
 	EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED       EventKind = 11 // a mass canary change — a suspected ransomware attack (HIPS-4)
 	EventKind_EVENT_KIND_MEMORY_INJECTION_SUSPECTED EventKind = 12 // a process with writable+executable memory (HIPS-4 W^X)
+	EventKind_EVENT_KIND_CLIPBOARD_COPY             EventKind = 13 // content copied to the clipboard (DLP-2a — an exfil CHANNEL, not a file)
 )
 
 // Enum value maps for EventKind.
@@ -111,6 +112,7 @@ var (
 		10: "EVENT_KIND_FILE_DELETED",
 		11: "EVENT_KIND_RANSOMWARE_SUSPECTED",
 		12: "EVENT_KIND_MEMORY_INJECTION_SUSPECTED",
+		13: "EVENT_KIND_CLIPBOARD_COPY",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":                0,
@@ -126,6 +128,7 @@ var (
 		"EVENT_KIND_FILE_DELETED":               10,
 		"EVENT_KIND_RANSOMWARE_SUSPECTED":       11,
 		"EVENT_KIND_MEMORY_INJECTION_SUSPECTED": 12,
+		"EVENT_KIND_CLIPBOARD_COPY":             13,
 	}
 )
 
@@ -615,6 +618,7 @@ type Event struct {
 	//	*Event_Usb
 	//	*Event_Network
 	//	*Event_Process
+	//	*Event_Clipboard
 	Target        isEvent_Target `protobuf_oneof:"target"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -749,6 +753,15 @@ func (x *Event) GetProcess() *ProcessSubject {
 	return nil
 }
 
+func (x *Event) GetClipboard() *ClipboardSubject {
+	if x != nil {
+		if x, ok := x.Target.(*Event_Clipboard); ok {
+			return x.Clipboard
+		}
+	}
+	return nil
+}
+
 type isEvent_Target interface {
 	isEvent_Target()
 }
@@ -769,6 +782,10 @@ type Event_Process struct {
 	Process *ProcessSubject `protobuf:"bytes,12,opt,name=process,proto3,oneof"`
 }
 
+type Event_Clipboard struct {
+	Clipboard *ClipboardSubject `protobuf:"bytes,13,opt,name=clipboard,proto3,oneof"`
+}
+
 func (*Event_Filesystem) isEvent_Target() {}
 
 func (*Event_Usb) isEvent_Target() {}
@@ -776,6 +793,8 @@ func (*Event_Usb) isEvent_Target() {}
 func (*Event_Network) isEvent_Target() {}
 
 func (*Event_Process) isEvent_Target() {}
+
+func (*Event_Clipboard) isEvent_Target() {}
 
 // ProcessSubject is a process execution the HIPS producer observed (Phase E). It carries
 // exec METADATA ONLY (D10/D29) — the executable path, the argument vector, the pid, and the
@@ -869,6 +888,67 @@ func (x *ProcessSubject) GetStartTicks() uint64 {
 	return 0
 }
 
+// ClipboardSubject is a clipboard copy the endpoint observed (DLP-2a). It is the exfil channel a desktop
+// user actually reaches for, and it has no path — so it carries the only two facts that are both useful
+// and content-free: how much was copied, and which display server it came from.
+//
+// There is DELIBERATELY no field here that could hold the copied text. The copied bytes go to the
+// SANDBOXED WORKER as inline classify content (D71/D29) and never onto an Event, so a clipboard event
+// cannot express content even by mistake (D10). The Event-tree bytes-field guard in
+// internal/core/schema_test.go passes with its allowlist UNCHANGED, which is the mechanical proof of that
+// — adding `bytes text` here would break it, which is the point.
+type ClipboardSubject struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ByteCount     uint32                 `protobuf:"varint,1,opt,name=byte_count,json=byteCount,proto3" json:"byte_count,omitempty"`            // how much was copied (metadata; a size is not content)
+	DisplayServer string                 `protobuf:"bytes,2,opt,name=display_server,json=displayServer,proto3" json:"display_server,omitempty"` // "x11" | "wayland" — which capture path observed it
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClipboardSubject) Reset() {
+	*x = ClipboardSubject{}
+	mi := &file_openshield_v1_event_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClipboardSubject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClipboardSubject) ProtoMessage() {}
+
+func (x *ClipboardSubject) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_event_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClipboardSubject.ProtoReflect.Descriptor instead.
+func (*ClipboardSubject) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ClipboardSubject) GetByteCount() uint32 {
+	if x != nil {
+		return x.ByteCount
+	}
+	return 0
+}
+
+func (x *ClipboardSubject) GetDisplayServer() string {
+	if x != nil {
+		return x.DisplayServer
+	}
+	return ""
+}
+
 var File_openshield_v1_event_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_event_proto_rawDesc = "" +
@@ -904,7 +984,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"httpMethod\x12\x1b\n" +
 	"\thttp_path\x18\t \x01(\tR\bhttpPath\x12=\n" +
 	"\tdirection\x18\n" +
-	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xbe\x04\n" +
+	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xff\x04\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12!\n" +
@@ -921,7 +1001,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x03usb\x18\n" +
 	" \x01(\v2\x19.openshield.v1.UsbSubjectH\x00R\x03usb\x129\n" +
 	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetwork\x129\n" +
-	"\aprocess\x18\f \x01(\v2\x1d.openshield.v1.ProcessSubjectH\x00R\aprocessB\b\n" +
+	"\aprocess\x18\f \x01(\v2\x1d.openshield.v1.ProcessSubjectH\x00R\aprocess\x12?\n" +
+	"\tclipboard\x18\r \x01(\v2\x1f.openshield.v1.ClipboardSubjectH\x00R\tclipboardB\b\n" +
 	"\x06target\"\xa9\x01\n" +
 	"\x0eProcessSubject\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x12\n" +
@@ -931,12 +1012,16 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\vparent_path\x18\x05 \x01(\tR\n" +
 	"parentPath\x12\x1f\n" +
 	"\vstart_ticks\x18\x06 \x01(\x04R\n" +
-	"startTicks*k\n" +
+	"startTicks\"X\n" +
+	"\x10ClipboardSubject\x12\x1d\n" +
+	"\n" +
+	"byte_count\x18\x01 \x01(\rR\tbyteCount\x12%\n" +
+	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer*k\n" +
 	"\aPurpose\x12\x17\n" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\x96\x03\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xb5\x03\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
@@ -951,7 +1036,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x17EVENT_KIND_FILE_DELETED\x10\n" +
 	"\x12#\n" +
 	"\x1fEVENT_KIND_RANSOMWARE_SUSPECTED\x10\v\x12)\n" +
-	"%EVENT_KIND_MEMORY_INJECTION_SUSPECTED\x10\f*r\n" +
+	"%EVENT_KIND_MEMORY_INJECTION_SUSPECTED\x10\f\x12\x1d\n" +
+	"\x19EVENT_KIND_CLIPBOARD_COPY\x10\r*r\n" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +
@@ -970,7 +1056,7 @@ func file_openshield_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_openshield_v1_event_proto_goTypes = []any{
 	(Purpose)(0),                  // 0: openshield.v1.Purpose
 	(EventKind)(0),                // 1: openshield.v1.EventKind
@@ -982,12 +1068,13 @@ var file_openshield_v1_event_proto_goTypes = []any{
 	(*NetworkSubject)(nil),        // 7: openshield.v1.NetworkSubject
 	(*Event)(nil),                 // 8: openshield.v1.Event
 	(*ProcessSubject)(nil),        // 9: openshield.v1.ProcessSubject
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*ClipboardSubject)(nil),      // 10: openshield.v1.ClipboardSubject
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_openshield_v1_event_proto_depIdxs = []int32{
 	4,  // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
 	2,  // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
-	10, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
+	11, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
 	3,  // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
 	0,  // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
 	1,  // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
@@ -995,11 +1082,12 @@ var file_openshield_v1_event_proto_depIdxs = []int32{
 	6,  // 7: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
 	7,  // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
 	9,  // 9: openshield.v1.Event.process:type_name -> openshield.v1.ProcessSubject
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	10, // 10: openshield.v1.Event.clipboard:type_name -> openshield.v1.ClipboardSubject
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_event_proto_init() }
@@ -1017,6 +1105,7 @@ func file_openshield_v1_event_proto_init() {
 		(*Event_Usb)(nil),
 		(*Event_Network)(nil),
 		(*Event_Process)(nil),
+		(*Event_Clipboard)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1024,7 +1113,7 @@ func file_openshield_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_event_proto_rawDesc), len(file_openshield_v1_event_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
