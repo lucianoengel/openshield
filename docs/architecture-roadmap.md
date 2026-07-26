@@ -244,7 +244,10 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   carrying author/diff/rollback, validation at save, and LIVE APPLY (a watcher swaps an immutable
   snapshot; loops read parameters per tick). **Secrets are never stored**, so a config-DB dump is not a
   credential dump. *Residual, named:* no UI yet (this is the model and the API it will call); the
-  **agent binaries** still use the old helpers — the GATEWAY adopted the package in D272, declared
+  **openshield-engine and openshield-fleet-agent** still use the old helpers — the GATEWAY (D272) and
+  the privileged AGENT + sandboxed WORKER (D273) adopted the package; the latter proves it works at the
+  tightest boundary, being stdlib-only so the agent's dependency ban and the worker's seccomp filter both
+  still hold. The gateway is declared
   ALL-BOOTSTRAP because a network appliance's settings are node-local, so it needs no database
   credentials and a future fleet-wide gateway setting belongs on the signed channel; no per-node dynamic
   values; no staged rollout; no keystore.

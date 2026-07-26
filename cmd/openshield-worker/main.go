@@ -15,6 +15,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/lucianoengel/openshield/internal/config"
 	"io"
 	"os"
 	"sync/atomic"
@@ -29,6 +30,26 @@ import (
 )
 
 func main() {
+	// PLAT-5 follow-up: validate every declared field before anything else. A malformed value fails the
+	// boot with a precise, field-scoped error instead of silently falling back to a default — the defect
+	// class D262 fixed for the server, applied here where a silently-defaulted value is most dangerous.
+	//
+	// All fields are BOOTSTRAP and this package is stdlib-only, so nothing here reaches a database or the
+	// network: the agent's dependency ban and the worker's seccomp filter both forbid it.
+	cfg := config.New(config.WorkerFields, config.EnvSource{})
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		cfg.WriteEffective(os.Stdout)
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "\n%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-worker: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Harden BEFORE reading any attacker-controlled input (T-012). The seccomp
 	// filter denies the network syscalls, so a parser RCE — the threat the
 	// privilege split exists for — cannot phone home. A filter that could not be

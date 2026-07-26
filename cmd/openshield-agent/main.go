@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/lucianoengel/openshield/internal/config"
 	"os"
 	"os/signal"
 	"strconv"
@@ -38,6 +39,26 @@ import (
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, "openshield-agent: "+format+"\n", a...) }
 
 func main() {
+	// PLAT-5 follow-up: validate every declared field before anything else. A malformed value fails the
+	// boot with a precise, field-scoped error instead of silently falling back to a default — the defect
+	// class D262 fixed for the server, applied here where a silently-defaulted value is most dangerous.
+	//
+	// All fields are BOOTSTRAP and this package is stdlib-only, so nothing here reaches a database or the
+	// network: the agent's dependency ban and the worker's seccomp filter both forbid it.
+	cfg := config.New(config.AgentFields, config.EnvSource{})
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		cfg.WriteEffective(os.Stdout)
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "\n%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-agent: %v\n", err)
+		os.Exit(1)
+	}
+
 	dirs := splitEnv("OPENSHIELD_EXEC_MONITOR_DIRS")
 	if len(dirs) == 0 {
 		logf("no exec-monitor configured. Set OPENSHIELD_EXEC_MONITOR_DIRS (comma-separated paths) + " +

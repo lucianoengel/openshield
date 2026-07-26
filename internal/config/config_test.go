@@ -359,3 +359,58 @@ func TestAnExplicitlySetBadPathStillFails(t *testing.T) {
 			"finds out at first use instead of at boot")
 	}
 }
+
+// TestEndpointEnvVarsAreDeclared — the drift guard for the two boundary components.
+func TestEndpointEnvVarsAreDeclared(t *testing.T) {
+	for _, tc := range []struct {
+		cmd    string
+		fields []config.Field
+	}{
+		{"openshield-agent", config.AgentFields},
+		{"openshield-worker", config.WorkerFields},
+	} {
+		src, err := os.ReadFile(filepath.Join("..", "..", "cmd", tc.cmd, "main.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		declared := map[string]bool{}
+		for _, f := range tc.fields {
+			declared[f.Key] = true
+		}
+		seen := map[string]bool{}
+		for _, k := range regexp.MustCompile(`OPENSHIELD_[A-Z0-9_]+`).FindAllString(string(src), -1) {
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			if !declared[k] {
+				t.Errorf("%s is read by cmd/%s but is NOT declared", k, tc.cmd)
+			}
+		}
+		if len(seen) == 0 {
+			t.Errorf("found no environment variables in cmd/%s — the guard proves nothing", tc.cmd)
+		}
+	}
+}
+
+// TestEndpointConfigNeedsNoDatabaseOrNetwork.
+//
+// A stronger requirement than the gateway's: the privileged agent's dependency ban exists because it
+// never parses attacker-controlled bytes, and the worker's seccomp filter DENIES network. A config layer
+// needing either would be unusable in both — so every field here is bootstrap, and the package stays
+// stdlib-only. `make all` proves the dependency half; this proves the scope half.
+func TestEndpointConfigNeedsNoDatabaseOrNetwork(t *testing.T) {
+	for name, fields := range map[string][]config.Field{
+		"agent": config.AgentFields, "worker": config.WorkerFields,
+	} {
+		for _, f := range fields {
+			if f.Scope != config.ScopeBootstrap {
+				t.Errorf("%s field %s is %s-scoped — reading it would require a database the %s must not "+
+					"reach", name, f.Key, f.Scope, name)
+			}
+		}
+		if err := config.New(fields, config.EnvSource{}).Validate(); err != nil {
+			t.Errorf("%s defaults do not validate: %v", name, err)
+		}
+	}
+}
