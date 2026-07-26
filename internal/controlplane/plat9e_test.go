@@ -2,6 +2,8 @@ package controlplane_test
 
 import (
 	"context"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,5 +86,42 @@ func TestLocallyDisabledAgentIsVisible(t *testing.T) {
 	if f.Disabled != 1 {
 		t.Errorf("a locally-disabled agent is invisible (%+v) — reporting only what we TOLD an agent "+
 			"would miss the host someone stopped by hand", f)
+	}
+}
+
+// TestFleetStateIsExposedOnMetrics closes an honesty gap I introduced: D270's proposal said "the summary
+// and the metric are the operator surface", and only the summary existed — FleetEnforcementState had NO
+// caller, which is the unwired-code failure this project's audits look for.
+//
+// Mutation: drop the fleet block from the metrics handler → FAILS.
+func TestFleetStateIsExposedOnMetrics(t *testing.T) {
+	pool := requireDB(t)
+	srv := controlplane.New(pool)
+	ctx := context.Background()
+
+	srv.RecordHeartbeatForTest(ctx, heartbeat(t, "agent-m1", true, 3))
+	srv.RecordHeartbeatForTest(ctx, heartbeat(t, "agent-m2", false, 1))
+
+	rec := httptest.NewRecorder()
+	srv.MetricsHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != 200 {
+		t.Fatalf("scrape returned %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"openshield_fleet_agents_reporting 2",
+		"openshield_fleet_agents_disabled 1",
+		"openshield_fleet_agents_enforcing 1",
+		"openshield_fleet_agents_behind",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics do not expose %q — the summary function exists but nothing calls it, which "+
+				"is a feature that reads as shipped and is not", want)
+		}
+	}
+	// The gauge must carry its own caveat: a silent agent counts in none of these.
+	if !strings.Contains(body, "absence is openshield_agents_overdue") {
+		t.Error("the HELP text does not warn that a silent agent counts in none of these — a gauge " +
+			"invites the reading that 0 enforcing means the fleet complied")
 	}
 }

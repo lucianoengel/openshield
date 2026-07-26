@@ -30,6 +30,7 @@ func (s *Server) MetricsHandler() http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		hist, histErr := s.responseHistograms(ctx)
+		fleet, fleetErr := s.fleetEnforcementMetrics(ctx)
 
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		metrics := []struct {
@@ -68,5 +69,12 @@ func (s *Server) MetricsHandler() http.Handler {
 			return
 		}
 		fmt.Fprint(w, hist)
+		// Same degradation rule: emit what we have, say what we could not compute. A scrape that fails
+		// takes alerting down with it.
+		if fleetErr != nil {
+			fmt.Fprintf(w, "# fleet enforcement state unavailable: %v\n", fleetErr)
+			return
+		}
+		fmt.Fprint(w, fleet)
 	})
 }

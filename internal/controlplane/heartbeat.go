@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -161,4 +162,57 @@ func (s *Server) Overdue(ctx context.Context, threshold time.Duration, now time.
 		return nil, err
 	}
 	return OverdueAgents(statuses, threshold, now), nil
+}
+
+// CurrentFleetSequence is the highest fleet-control sequence this control plane has published — the
+// TARGET agents are measured against. Zero when none has ever been published, in which case no agent can
+// be behind.
+func (s *Server) CurrentFleetSequence(ctx context.Context) uint64 {
+	if s.pool == nil {
+		return 0
+	}
+	var seq uint64
+	if err := s.pool.QueryRow(ctx,
+		`SELECT coalesce((SELECT value::bigint FROM config_settings WHERE key='__fleet_control_sequence'),0)`).
+		Scan(&seq); err != nil {
+		return 0
+	}
+	return seq
+}
+
+// fleetEnforcementMetrics renders the fleet's enforcement state for the Prometheus endpoint.
+//
+// This is the operator surface the acknowledgement exists for: during an incident the question is "how
+// many are still enforcing?", and a gauge answers it for the deployment where a log line answers it per
+// host.
+//
+// NOTE ON WHAT THE NUMBERS MEAN, because a gauge invites the wrong reading: these count agents that have
+// REPORTED. A silent agent contributes to none of them — "no news" is not "still enforcing", and absence
+// is the overdue metric's job, not this one.
+func (s *Server) fleetEnforcementMetrics(ctx context.Context) (string, error) {
+	if s.pool == nil {
+		// The counters half of /metrics needs no database and must keep serving without one — the same
+		// rule the response histograms follow, and the reason the gate caught this.
+		return "", errors.New("controlplane: fleet enforcement state needs a database")
+	}
+	target := s.CurrentFleetSequence(ctx)
+	f, err := s.FleetEnforcementState(ctx, target)
+	if err != nil {
+		return "", err
+	}
+	out := ""
+	for _, m := range []struct {
+		name, help string
+		val        int
+	}{
+		{"openshield_fleet_agents_reporting", "Agents that have reported an enforcement state. A silent agent counts in NONE of these — absence is openshield_agents_overdue's job.", f.Agents},
+		{"openshield_fleet_agents_enforcing", "Reporting agents whose enforcement is ACTIVE.", f.Enforcing},
+		{"openshield_fleet_agents_disabled", "Reporting agents whose enforcement is DISABLED — by a fleet control or by a local break-glass file.", f.Disabled},
+		{"openshield_fleet_agents_behind", "Reporting agents that have not applied the current fleet control.", f.NotCaughtUp},
+	} {
+		out += fmt.Sprintf("# HELP %s %s\n# TYPE %s gauge\n%s %d\n", m.name, m.help, m.name, m.name, m.val)
+	}
+	out += fmt.Sprintf("# HELP openshield_fleet_control_sequence The highest fleet-control sequence published.\n"+
+		"# TYPE openshield_fleet_control_sequence gauge\nopenshield_fleet_control_sequence %d\n", target)
+	return out, nil
 }
