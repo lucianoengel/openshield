@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D253.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D254.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D253)
+## What OpenShield is (status at a glance, through D254)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ NOT an infra ticket and not part of the queues below.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| **XDR** (umbrella) | ~62% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). **MVP gap:** coordinated response (XDR-6, needs SOAR-7 + HIPS-3 inc 2), per-entity risk aggregation (XDR-7). |
+| **XDR** (umbrella) | ~72% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). **MVP gap:** coordinated response (XDR-6, needs SOAR-7 + HIPS-3 inc 2), per-entity risk aggregation (XDR-7). |
 | Zero Trust (ZTNA) | ~85% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. The endpoint half now exists: an agent-brokered client presents the DEVICE certificate to the access proxy, refuses to start without an identity, binds loopback only and never falls back (ZT-4, D249). **Residual:** it brokers access but does not yet PREVENT bypass (routing/firewall enforcement over the NIPS-1 plane is a separate ticket); HTTP(S) only, no CONNECT/SOCKS, no split DNS. |
 | DLP | ~78% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. Clipboard is now MEDIATED on X11 — the engine owns the selection and DECIDES each paste per destination (source→destination, enforced, VM-proven with a real cross-process paste refused), with password-manager exclusions applied before the read (D246/D247). Wayland stays observe-only: its protocol cannot identify a paste's destination. PRINT is intercepted in the CUPS filter chain and a sensitive job is ABORTED before it prints (DLP-2b, D248, proven on a real spooler). **Lane E DLP work is complete for the MVP.** **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
@@ -131,12 +131,12 @@ one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-
   COORDINATES and does not verify the chain (the anchor binary owns that); no timeline for `ueba_burst`
   incidents (explicit 409, never an empty list); `unified_alerts` retention must eventually cascade to the
   join — a retention-ticket item.
-- **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **← next in this lane; both deps are
-  DONE** (SOAR-7 signed intent seam D252, HIPS-3 inc 2b endpoint enactment D253). What remains is the
-  GATEWAY half — reading the same intent for flows — plus ledgering both enactments under one intent id. One approved `CONTAIN(entity)` intent consumed by BOTH
-  gateway (flows) and endpoint (exec) local policies, both enactments ledgered under one intent id.
-  *Accept: CONTAIN on entity E → gateway blocks E's flows AND E's agent denies new execs (prevented at
-  the exec gate, not killed after); one intent id in the ledger; TTL expiry restores both.*
+- **XDR-6 · Coordinated cross-domain response** — ✅ **DONE (D254)** — see Done ledger. One signed,
+  four-eyes-approved CONTAIN → gateway BLOCKs the entity's flows and the endpoint DENIES its execs, each by
+  its own local policy, both stamping the SAME intent id via `Context.Version` (the D27 field already
+  carried to the ledger — no hashed-column change). TTL expiry restores both. *Residual:* a policy that does
+  not read `response_intent` is unaffected (data-not-command); the exec gate still fails open; an entity
+  that never crosses the gateway is not blocked by it.
 - **XDR-7 · Entity risk aggregation** — X · M. `PublishRisk` publishes per-**entity** risk aggregated
   across domains (today per-gateway-subject only), so a HIPS detection raises the risk the ZT proxy
   sees — closing the T2 loop *across* domains. *Accept: a high-risk HIPS alert on device A measurably

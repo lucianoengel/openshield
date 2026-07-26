@@ -193,17 +193,24 @@ func (e *Engine) SetContentResolver(r ContentResolver) { e.content.resolve = r }
 // It resolves into the CLOSED typed Context, and the policy decides what the verb means: the control plane
 // publishes data, the endpoint decides (T2/D14). An engine with no resolver, or a policy that does not read
 // the field, is unaffected by any intent — by design.
-func (e *Engine) SetIntentResolver(r func(subject string) (corev1.IntentVerb, bool)) {
+func (e *Engine) SetIntentResolver(r func(subject string) (verb corev1.IntentVerb, intentID string, ok bool)) {
 	e.disp.ResolveContext = func(ev *corev1.Event) *core.Context {
 		subject := ev.GetSubject().GetPseudonymousId()
 		if subject == "" {
 			return nil
 		}
-		verb, ok := r(subject)
+		verb, intentID, ok := r(subject)
 		if !ok {
 			return nil
 		}
-		return &core.Context{ResponseIntent: verb, HasResponseIntent: true, ComputedAt: time.Now()}
+		// Version carries the INTENT ID. That field exists so a replay can evaluate against the Context
+		// that actually applied (D27), and it is already recorded on the Decision and in the ledger — so
+		// stamping it here is what makes both the gateway's flow block and the endpoint's exec denial
+		// traceable to ONE intent id (XDR-6) WITHOUT adding a hashed ledger column, which migration 001
+		// warns would break chain continuity.
+		return &core.Context{
+			Version: intentID, ResponseIntent: verb, HasResponseIntent: true, ComputedAt: time.Now(),
+		}
 	}
 }
 

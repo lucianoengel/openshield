@@ -48,6 +48,21 @@ func (s *IntentStore) Set(in *corev1.ResponseIntent) {
 	s.m[in.GetSubject()] = in
 }
 
+// Current returns the subject's intent IN EFFECT, or nil. Callers that need the intent ID (to stamp both
+// enactments with the same one — XDR-6) use this; Get is the verb-only convenience.
+func (s *IntentStore) Current(subject string) *corev1.ResponseIntent {
+	s.mu.RLock()
+	in, ok := s.m[subject]
+	s.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	if exp := in.GetExpiresAt(); exp != nil && !exp.AsTime().After(time.Now()) {
+		return nil // expired: absent, so a stale containment cannot outlive its TTL
+	}
+	return in
+}
+
 // Get returns the subject's current intent verb, or UNSPECIFIED when there is none IN EFFECT.
 //
 // Expiry is evaluated HERE, on read: a consumer must not act on a stale containment even if the control

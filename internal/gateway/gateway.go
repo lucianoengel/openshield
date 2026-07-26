@@ -31,6 +31,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/intent"
 	"github.com/lucianoengel/openshield/internal/nips"
 )
 
@@ -78,6 +79,8 @@ type Gateway struct {
 	// ceiling, D13). Zero lets the worker apply its own default.
 	maxBytes uint64
 
+	// intents holds the coordinated-response intents this gateway consults (XDR-6). nil = not consulted.
+	intents *intent.IntentStore
 	// telemetry projects a boundary-safe view of decisions to the control plane.
 	// nil = no projection (the default); the local ledger is the system of record
 	// (D30). Set via SetTelemetry.
@@ -327,7 +330,24 @@ func (g *Gateway) Process(ctx context.Context, req *Request) (*corev1.Decision, 
 	// input.context.{identity, role, device_posture}.
 	if req.Identity != nil {
 		ident := req.Identity
-		disp.ResolveContext = func(*corev1.Event) *core.Context { return ident }
+		disp.ResolveContext = func(*corev1.Event) *core.Context {
+			// XDR-6: overlay the coordinated-response intent for this subject onto the identity context, so
+			// ONE approved CONTAIN is enacted by the gateway (flows) and the endpoint (execs) alike, each
+			// stamping the same intent id as the Context version — the field already carried to the ledger
+			// (D27), which is how both enactments are traceable to one intent without a schema change.
+			//
+			// The gateway still DECIDES: this is context its local policy reads, not a command (T2/D14).
+			if g.intents != nil && ident != nil {
+				if in := g.intents.Current(ident.Identity); in != nil {
+					c := *ident
+					c.Version = in.GetIntentId()
+					c.ResponseIntent = in.GetVerb()
+					c.HasResponseIntent = true
+					return &c
+				}
+			}
+			return ident
+		}
 	}
 
 	dec, err := disp.Dispatch(ctx, ev)

@@ -176,6 +176,7 @@ func TestKernelExecDeniedByContainIntent(t *testing.T) {
 	copyExecutable(t, target)
 
 	const subject = "sub_contained_entity"
+	const containIntentID = "INTENT_VERB_CONTAIN:sub_contained_entity:1"
 	var contained bool // flipped between the two halves of the test
 
 	pol, err := policy.New(context.Background(), "intent-exec", "1", intentPolicyRego)
@@ -183,11 +184,11 @@ func TestKernelExecDeniedByContainIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng := engine.New(passThroughWorker{}, pol, noopLedger{}, nil, 5*time.Second)
-	eng.SetIntentResolver(func(s string) (corev1.IntentVerb, bool) {
+	eng.SetIntentResolver(func(s string) (corev1.IntentVerb, string, bool) {
 		if s == subject && contained {
-			return corev1.IntentVerb_INTENT_VERB_CONTAIN, true
+			return corev1.IntentVerb_INTENT_VERB_CONTAIN, containIntentID, true
 		}
-		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, false
+		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, "", false
 	})
 
 	socket := filepath.Join(t.TempDir(), "verdict.sock")
