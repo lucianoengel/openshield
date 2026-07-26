@@ -199,6 +199,27 @@ func main() {
 			}
 		}
 
+		// SOAR-8(a): incident ⇄ ticket sync. LEADER-ONLY — several replicas syncing would open duplicate
+		// tickets in someone else's system. POLLING, not a webhook: a webhook needs an authenticated
+		// inbound route a third-party SaaS can reach, which is a new trust boundary; the cost here is that
+		// sync-back lags by up to one interval.
+		if ep := os.Getenv("OPENSHIELD_ITSM_ENDPOINT"); ep != "" {
+			statuses := strings.Split(env("OPENSHIELD_ITSM_CLOSED_STATUSES", "closed,resolved,done"), ",")
+			itsm := &runner.ITSMConnector{
+				Name:           env("OPENSHIELD_ITSM_NAME", "tickets"),
+				Endpoint:       ep,
+				Token:          os.Getenv("OPENSHIELD_ITSM_TOKEN"),
+				ClosedStatuses: statuses,
+				MinSeverity:    env("OPENSHIELD_ITSM_MIN_SEVERITY", controlplane.SeverityHigh),
+				Timeout:        envDuration("OPENSHIELD_ITSM_TIMEOUT", 10*time.Second),
+			}
+			si := envDuration("OPENSHIELD_ITSM_INTERVAL", 5*time.Minute)
+			go srv.RunITSMLoop(leaderCtx, si, itsm, nil)
+			fmt.Fprintf(os.Stderr, "openshield-server: ITSM sync ACTIVE every %s against %s — a ticket "+
+				"reaching %v closes its incident; any OTHER status is ignored, never assumed closed "+
+				"(leader only)\n", si, ep, statuses)
+		}
+
 		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
 		// and derived peer alerts older than the window, on a timer. The aggregate is a
 		// derived view, so this is a hard delete (the evidentiary ledger tombstones
