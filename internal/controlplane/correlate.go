@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -89,6 +90,17 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 	// SEC-8: a malformed correlation param is a 400, not a silent fall-back to the default — a
 	// silently-ignored bad window/min_risk widens the result and looks authoritative.
 	q := r.URL.Query()
+	// XDR-4: an operator can select the entity-keyed cross-domain rule instead of the default burst
+	// rule. Omitting `rule` behaves EXACTLY as before, so no existing client's request changes meaning.
+	switch q.Get("rule") {
+	case "", IncidentKindUEBABurst: // fall through to the burst rule below
+	case IncidentKindCrossDomain:
+		s.crossDomainIncidents(w, r, q)
+		return
+	default:
+		http.Error(w, "bad rule: want "+IncidentKindUEBABurst+" or "+IncidentKindCrossDomain, http.StatusBadRequest)
+		return
+	}
 	var rule CorrelationRule
 	var err error
 	if rule.MinAlerts, err = intParam(q, "min_alerts", 3); err != nil {
@@ -135,6 +147,70 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, incidents)
+}
+
+// crossDomainIncidents serves the XDR-4 entity-keyed rule on GET /incidents?rule=cross_domain. It
+// materializes the current correlation (so the incidents carry stable ids and page once) and returns the
+// computed set.
+//
+// Every parameter is fail-loud (SEC-8): a malformed window, domain minimum or sequence is a 400, never a
+// silent fall-back — a silently-widened rule returns incidents that look authoritative but answer a
+// different question than the operator asked.
+func (s *Server) crossDomainIncidents(w http.ResponseWriter, r *http.Request, q url.Values) {
+	var rule CrossDomainRule
+	var err error
+	if rule.MinDomains, err = intParam(q, "min_domains", 2); err != nil {
+		http.Error(w, "bad min_domains: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if v := q.Get("window"); v != "" {
+		d, derr := time.ParseDuration(v)
+		if derr != nil {
+			http.Error(w, "bad window: "+derr.Error(), http.StatusBadRequest)
+			return
+		}
+		rule.Window = d
+	}
+	if v := q.Get("min_severity"); v != "" {
+		if _, ok := severityFloor(v); !ok {
+			http.Error(w, "bad min_severity: not a severity bucket", http.StatusBadRequest)
+			return
+		}
+		rule.MinSeverity = v
+	}
+	if v := q.Get("sequence"); v != "" {
+		for _, step := range strings.Split(v, ",") {
+			step = strings.TrimSpace(step)
+			// A step naming a domain no producer emits would silently never match, and the operator
+			// would read "no incidents" as "nothing happened". Refuse it instead.
+			if !knownDomain(step) {
+				http.Error(w, "bad sequence: unknown domain "+strconv.Quote(step), http.StatusBadRequest)
+				return
+			}
+			rule.Sequence = append(rule.Sequence, step)
+		}
+	}
+	if _, err := s.MaterializeCrossDomainIncidents(r.Context(), rule, time.Now()); err != nil {
+		http.Error(w, "read failed", http.StatusInternalServerError)
+		return
+	}
+	incidents, err := s.CorrelateCrossDomain(r.Context(), rule, time.Now())
+	if err != nil {
+		http.Error(w, "read failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, incidents)
+}
+
+// knownDomain reports whether a sequence step names a domain the platform actually emits (the D241
+// label set plus the server-side UEBA domain).
+func knownDomain(d string) bool {
+	switch d {
+	case domainDLP, domainHIPS, domainNIPS, domainUEBA:
+		return true
+	default:
+		return false
+	}
 }
 
 // intParam reads a positive-integer query param, returning def when absent and an error when

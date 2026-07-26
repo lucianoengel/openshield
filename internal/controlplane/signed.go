@@ -207,7 +207,7 @@ func (s *Server) recordPeerAlert(ctx context.Context, subject string, risk float
 	// cross-domain correlation engine sees it beside other domains' alerts. Best-effort (a failure is
 	// counted, never breaks the authoritative peer_alerts write above); the same detector-namespaced
 	// dedup_key keeps it one row per logical alert.
-	s.recordDeviceUnifiedAlert(ctx, "ueba", subject, Severity(risk), "peer risk anomaly", "peer-ueba:"+subject, at)
+	s.recordDeviceUnifiedAlert(ctx, domainUEBA, subject, Severity(risk), "peer risk anomaly", "peer-ueba:"+subject, at)
 	return nil
 }
 

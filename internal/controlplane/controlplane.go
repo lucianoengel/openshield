@@ -31,8 +31,8 @@ import (
 	"github.com/lucianoengel/openshield/internal/analytics/peerueba"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/notify"
-	"github.com/lucianoengel/openshield/internal/xdr"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/lucianoengel/openshield/internal/xdr"
 )
 
 // TelemetryRow is one persisted aggregate record.

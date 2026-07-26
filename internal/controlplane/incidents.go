@@ -50,9 +50,9 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 		var id int64
 		var inserted bool
 		if err := s.pool.QueryRow(ctx,
-			`INSERT INTO incidents (subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen)
-			 VALUES ($1,'open',$2,$3,$4,$5,$6)
-			 ON CONFLICT (subject_id) WHERE state = 'open'
+			`INSERT INTO incidents (kind, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen)
+			 VALUES ('ueba_burst',$1,'open',$2,$3,$4,$5,$6)
+			 ON CONFLICT (kind, subject_id) WHERE state = 'open'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, max_risk = EXCLUDED.max_risk,
 			              host_count = EXCLUDED.host_count, last_seen = EXCLUDED.last_seen,
 			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()

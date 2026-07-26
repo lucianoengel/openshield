@@ -64,3 +64,13 @@ func SeverityForDecision(a corev1.Action, confidence float64) string {
 	return severityForDecision(a, confidence)
 }
 func AlertTitleFor(a corev1.Action, kind corev1.EventKind) string { return alertTitleFor(a, kind) }
+
+// MatchesSequence / EscalateSeverity / MaxSeverity / DistinctInOrder expose the pure cross-domain rule
+// logic (XDR-4) so the ordering and escalation semantics — the subtle part of the rule — are testable
+// exhaustively without a database.
+func MatchesSequence(ordered, want []string) bool { return matchesSequence(ordered, want) }
+func EscalateSeverity(base string, domainCount int) string {
+	return escalateSeverity(base, domainCount)
+}
+func MaxSeverity(severities []string) string   { return maxSeverity(severities) }
+func DistinctInOrder(values []string) []string { return distinctInOrder(values) }

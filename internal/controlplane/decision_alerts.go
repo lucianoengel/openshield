@@ -19,6 +19,10 @@ const (
 	domainDLP  = "dlp"
 	domainHIPS = "hips"
 	domainNIPS = "nips"
+	// domainUEBA is the server-side peer-baseline domain (D54). It has no EventKind — it is a
+	// server derivation, not an endpoint/gateway decision — so it never appears in the mapping
+	// below, but it IS a first-class domain in the unified stream and in a cross-domain sequence.
+	domainUEBA = "ueba"
 )
 
 // unifiedDomainFor maps an event kind to its detection domain. Total over the CLOSED EventKind enum
