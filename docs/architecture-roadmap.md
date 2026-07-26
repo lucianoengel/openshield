@@ -232,9 +232,16 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   loss-free (unspooled-unpublished is gone; the stream's bounds still drop on a long outage), at-least-once
   not exactly-once, and the non-telemetry subjects stay core-NATS best-effort by design. **BREAKING:** a
   JetStream-less broker must enable it or opt out — a PLAT-9 runbook item.
-- **PLAT-5 · Config management beyond env vars** — S–M. Typed config (file + env override), validated
-  fail-fast at boot; secrets as file paths. *Accept: an invalid config fails the binary at boot with a
-  precise error; env overrides a file value.*
+- **PLAT-5 · Config management beyond env vars** — ✅ **DONE, server (D262)** — see Done ledger. Typed
+  fields declared ONCE and used for both reading and describing, so the schema is derived rather than
+  maintained beside the code — **because config will eventually be set mostly in the UI (PLAT-1), and a
+  hand-written schema drifts silently from what the binary reads.** Secrets are a KIND and are never
+  readable back (not in the schema, the effective output, the printed form, or a validation error);
+  errors are field-scoped and all reported at once; sources are an interface, env → file → default.
+  `openshield-server config` prints the effective values with their origin. *Residual, named:* the
+  **gateway and agent binaries** still use the old helpers (a follow-up reusing the package); no write
+  path or UI (the `Source` interface is the seam, not the feature); no hot reload; no secret management;
+  no per-tenant config.
 - **PLAT-6 · Release, packaging & deploy** — M. Tagged releases + reproducible signed binaries
   (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact. *Accept: `make
   release` produces signed, verifiable artifacts; a clean host installs and runs the stack from them.*

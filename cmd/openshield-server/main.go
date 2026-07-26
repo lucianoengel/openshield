@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 
+	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/controlplane"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/nips"
@@ -44,7 +45,15 @@ func main() {
 			os.Exit(runMigrate(dsn))
 		case "ingest-feed":
 			os.Exit(ingestFeed(dsn, os.Args[2:]))
+		case "config":
+			os.Exit(showConfig())
 		}
+	}
+	// PLAT-5: validate EVERY declared field before doing anything. A malformed value now fails the boot
+	// with a precise, field-scoped error instead of silently falling back to a default — which is how a
+	// typo'd OPENSHIELD_CORRELATE_INTERVAL used to disable scheduled correlation with no signal at all.
+	if err := serverConfig().Validate(); err != nil {
+		fatal("%v", err)
 	}
 	natsURL := env("OPENSHIELD_NATS_URL", "nats://127.0.0.1:4222")
 
@@ -697,4 +706,33 @@ func intentVerificationKey() (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("intent key is %d bytes, want %d (raw ed25519 public key)", len(key), ed25519.PublicKeySize)
 	}
 	return ed25519.PublicKey(key), nil
+}
+
+// serverConfig builds the resolver over the DECLARED field set, env taking precedence over an optional
+// file (OPENSHIELD_CONFIG_FILE) over the declared default. Env stays on top so an operator can override a
+// stored value on a single host during an incident, without a database — the property that matters when a
+// UI is eventually the usual way these are set.
+func serverConfig() *config.Resolver {
+	sources := []config.Source{config.EnvSource{}}
+	if path := os.Getenv("OPENSHIELD_CONFIG_FILE"); path != "" {
+		fs, err := config.LoadFile(path)
+		if err != nil {
+			fatal("reading %s: %v", path, err)
+		}
+		sources = append(sources, fs)
+	}
+	return config.New(config.ServerFields, sources...)
+}
+
+// showConfig prints the schema and what this process would actually honour, with SECRETS REDACTED — the
+// operator-visible half of PLAT-5 now, and the same data a UI will render later.
+func showConfig() int {
+	r := serverConfig()
+	fmt.Fprintln(os.Stdout, "# effective configuration (secrets shown as set/unset, never by value)")
+	r.WriteEffective(os.Stdout)
+	if err := r.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "\n%v\n", err)
+		return 1
+	}
+	return 0
 }
