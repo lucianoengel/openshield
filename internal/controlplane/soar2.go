@@ -113,6 +113,15 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval time.Duration,
 				log.Error("scheduled correlation (cross-domain rule) failed", slog.Any("err", err))
 			}
 		}
+		// XDR-7: recompute cross-domain entity risk on the same tick, so an endpoint detection raises the
+		// risk the access proxy applies to that asset's next request — the T2 loop (D89/D91) closed ACROSS
+		// domains rather than within peer-UEBA alone.
+		if _, err := s.PublishEntityRisk(c, cross.Window, now); err != nil {
+			CorrelationFailures.Add(1)
+			if log != nil {
+				log.Error("scheduled entity-risk publication failed", slog.Any("err", err))
+			}
+		}
 	})
 }
 

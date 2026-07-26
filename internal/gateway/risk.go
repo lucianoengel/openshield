@@ -20,10 +20,21 @@ type RiskStore struct {
 
 func NewRiskStore() *RiskStore { return &RiskStore{scores: map[string]float64{}} }
 
-// Set records the latest published risk for a subject (pseudonymous, D23).
+// Set records published risk for a subject (pseudonymous, D23). It RAISES but never lowers.
+//
+// Cross-domain entity risk (XDR-7) and per-subject peer-UEBA risk (D91) both publish here, and turning the
+// former on must not be able to make a subject look SAFER than the behavioural signal already says it is:
+// the highest signal wins, so a decision fails toward suspicion.
+//
+// The honest cost of that asymmetry: risk is STICKY — it decays only when the process restarts, until a
+// future ticket adds explicit decay. Stated rather than hidden, because a number that only ever rises will
+// eventually pin an asset if nothing ages it.
 func (r *RiskStore) Set(subject string, score float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if cur, ok := r.scores[subject]; ok && cur >= score {
+		return
+	}
 	r.scores[subject] = score
 }
 
