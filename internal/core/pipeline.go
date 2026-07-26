@@ -168,6 +168,19 @@ type Context struct {
 	// fail-closed posture, not a gap.
 	Identity string
 	Role     string
+
+	// ResponseIntent is the coordinated-response verb currently in effect for this event's subject
+	// (SOAR-7/ADR-12 Tier-2), and HasResponseIntent distinguishes "no intent" from "an intent that says
+	// nothing" — the same reasoning as HasRiskScore.
+	//
+	// It is a CLOSED enum value, not a string: this Context is deliberately not a map precisely so a
+	// compromised control plane cannot influence decisions by inventing keys a policy happens to read
+	// (D14's threat arriving by a different door), and a free-text intent would reopen that door.
+	//
+	// Policy CONSULTS it; nothing here enacts it. An agent whose policy never reads this field is
+	// unaffected by any intent, which is the data-not-command property (T2/D14), not a gap.
+	ResponseIntent    corev1.IntentVerb
+	HasResponseIntent bool
 	// DevicePosture is the device's compliance state. Like RiskScore, its presence
 	// flag (HasPosture) distinguishes "not computed" from "computed and compliant":
 	// a defaulted "compliant" when posture is ABSENT is a silent fail-open, so

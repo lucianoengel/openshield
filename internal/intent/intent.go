@@ -1,4 +1,4 @@
-package gateway
+package intent
 
 import (
 	"crypto/ed25519"
@@ -15,6 +15,12 @@ import (
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
+// Package intent consumes signed Response-Intents (SOAR-7/ADR-12 Tier-2) as verified policy context.
+//
+// It lives in its own package because BOTH sides consume intents: the network gateway (flows) and the
+// endpoint engine (execs, HIPS-3 inc 2b). The endpoint must never import the network layer, so a shared
+// consumer cannot live in internal/gateway.
+//
 // Response-Intent consumption (SOAR-7, ADR-12 Tier-2).
 //
 // An intent is DATA the LOCAL policy interprets — never an instruction this code executes. Nothing here
@@ -32,7 +38,7 @@ type IntentStore struct {
 	m  map[string]*corev1.ResponseIntent
 }
 
-func NewIntentStore() *IntentStore { return &IntentStore{m: map[string]*corev1.ResponseIntent{}} }
+func NewStore() *IntentStore { return &IntentStore{m: map[string]*corev1.ResponseIntent{}} }
 
 // Set records an intent, replacing any earlier one for the same subject. A superseding intent is the only
 // "undo" besides expiry — there is deliberately no recall message to forge.
@@ -71,14 +77,14 @@ type IntentSubscriber struct {
 	Rejected atomic.Int64
 }
 
-func NewIntentSubscriber(key ed25519.PublicKey, store *IntentStore) *IntentSubscriber {
+func NewSubscriber(key ed25519.PublicKey, store *IntentStore) *IntentSubscriber {
 	return &IntentSubscriber{Key: key, store: store}
 }
 
 // ErrIntentVersion means the intent's version is not one this consumer understands. Rejected rather than
 // partially applied: applying the parts we recognize from a message we do not fully understand is how a
 // consumer ends up enacting something the publisher did not mean.
-var ErrIntentVersion = errors.New("gateway: unsupported response-intent version")
+var ErrIntentVersion = errors.New("intent: unsupported response-intent version")
 
 // Apply verifies and stores one intent.
 //
@@ -96,23 +102,23 @@ func (r *IntentSubscriber) Apply(raw []byte) error {
 func (r *IntentSubscriber) apply(raw []byte) error {
 	var signed corev1.SignedUpdate
 	if err := proto.Unmarshal(raw, &signed); err != nil {
-		return fmt.Errorf("gateway: bad signed intent: %w", err)
+		return fmt.Errorf("intent: bad signed intent: %w", err)
 	}
 	if len(r.Key) == 0 {
-		return errors.New("gateway: no control-plane key configured; refusing an unverifiable intent")
+		return errors.New("intent: no control-plane key configured; refusing an unverifiable intent")
 	}
 	if !ed25519.Verify(r.Key, signed.GetPayload(), signed.GetSignature()) {
-		return errors.New("gateway: response-intent signature does not verify")
+		return errors.New("intent: response-intent signature does not verify")
 	}
 	var in corev1.ResponseIntent
 	if err := proto.Unmarshal(signed.GetPayload(), &in); err != nil {
-		return fmt.Errorf("gateway: bad intent payload: %w", err)
+		return fmt.Errorf("intent: bad intent payload: %w", err)
 	}
 	if in.GetVersion() != 1 {
 		return fmt.Errorf("%w: %d", ErrIntentVersion, in.GetVersion())
 	}
 	if in.GetSubject() == "" || in.GetVerb() == corev1.IntentVerb_INTENT_VERB_UNSPECIFIED {
-		return errors.New("gateway: intent has no subject or verb")
+		return errors.New("intent: intent has no subject or verb")
 	}
 	r.store.Set(&in)
 	return nil

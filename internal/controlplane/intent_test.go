@@ -13,7 +13,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
-	"github.com/lucianoengel/openshield/internal/gateway"
+	"github.com/lucianoengel/openshield/internal/intent"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
@@ -152,8 +152,8 @@ func TestBlastRadiusCeilingRefusesBeforePublishing(t *testing.T) {
 // Mutation: skip verification → the forged intent becomes policy context → this FAILS.
 func TestForgedIntentIsRejectedAndCounted(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	store := gateway.NewIntentStore()
-	sub := gateway.NewIntentSubscriber(pub, store)
+	store := intent.NewStore()
+	sub := intent.NewSubscriber(pub, store)
 
 	valid := signedIntent(t, priv, corev1.IntentVerb_INTENT_VERB_CONTAIN, "sub_x", 1, time.Now().Add(time.Hour))
 	if err := sub.Apply(valid); err != nil {
@@ -178,7 +178,7 @@ func TestForgedIntentIsRejectedAndCounted(t *testing.T) {
 
 	// An unknown version is rejected rather than partially applied.
 	future := signedIntent(t, priv, corev1.IntentVerb_INTENT_VERB_CONTAIN, "sub_z", 99, time.Now().Add(time.Hour))
-	if err := sub.Apply(future); !errors.Is(err, gateway.ErrIntentVersion) {
+	if err := sub.Apply(future); !errors.Is(err, intent.ErrIntentVersion) {
 		t.Errorf("unknown version err = %v, want ErrIntentVersion", err)
 	}
 }
@@ -188,8 +188,8 @@ func TestForgedIntentIsRejectedAndCounted(t *testing.T) {
 // Mutation: ignore expires_at on read → the expired intent still contains → this FAILS.
 func TestExpiredIntentIsNotInEffect(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	store := gateway.NewIntentStore()
-	sub := gateway.NewIntentSubscriber(pub, store)
+	store := intent.NewStore()
+	sub := intent.NewSubscriber(pub, store)
 
 	expired := signedIntent(t, priv, corev1.IntentVerb_INTENT_VERB_CONTAIN, "sub_old", 1, time.Now().Add(-time.Minute))
 	if err := sub.Apply(expired); err != nil {

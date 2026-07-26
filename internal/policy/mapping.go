@@ -80,6 +80,11 @@ func buildInput(st *core.State) map[string]interface{} {
 			// false) lets the policy fail CLOSED for access — the tamper-lockout.
 			"identity": c.Identity,
 			"role":     c.Role,
+			// SOAR-7 / HIPS-3 inc 2b: the coordinated-response verb in effect for this subject, as a
+			// closed-enum NAME. A policy can refuse an exec for a CONTAINed entity; one that does not read
+			// this is unaffected by any intent, by design.
+			"response_intent":     c.ResponseIntent.String(),
+			"has_response_intent": c.HasResponseIntent,
 			"device_posture": map[string]interface{}{
 				"has_posture":    c.DevicePosture.HasPosture,
 				"compliant":      c.DevicePosture.Compliant,

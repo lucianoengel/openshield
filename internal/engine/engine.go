@@ -186,6 +186,27 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 // the classify stage sends it to the sandboxed worker. Without it, network events are metadata-only.
 func (e *Engine) SetContentResolver(r ContentResolver) { e.content.resolve = r }
 
+// SetIntentResolver installs the source of the coordinated-response verb in effect for an event's subject
+// (SOAR-7 / HIPS-3 inc 2b), so the local policy can refuse a CONTAINed entity's next exec INLINE rather
+// than killing the process after it has already run.
+//
+// It resolves into the CLOSED typed Context, and the policy decides what the verb means: the control plane
+// publishes data, the endpoint decides (T2/D14). An engine with no resolver, or a policy that does not read
+// the field, is unaffected by any intent — by design.
+func (e *Engine) SetIntentResolver(r func(subject string) (corev1.IntentVerb, bool)) {
+	e.disp.ResolveContext = func(ev *corev1.Event) *core.Context {
+		subject := ev.GetSubject().GetPseudonymousId()
+		if subject == "" {
+			return nil
+		}
+		verb, ok := r(subject)
+		if !ok {
+			return nil
+		}
+		return &core.Context{ResponseIntent: verb, HasResponseIntent: true, ComputedAt: time.Now()}
+	}
+}
+
 // ContentResolver returns the installed resolver, so a second producer can CHAIN onto it rather than
 // displace it. The seam holds exactly one function; without a way to read it, the second producer to
 // install one silently breaks the first — a lost classification with no error.
