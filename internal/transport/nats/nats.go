@@ -1,12 +1,24 @@
-// Package nats implements core.Transport over CORE NATS (D66).
+// Package nats implements core.Transport over NATS (D66) in two modes, and the mode matters — so it is
+// spelled out here rather than left to the reader.
 //
-// It uses plain conn.Publish/Subscribe — at-most-once, fire-and-forget. It is NOT
-// JetStream: a publish while the control-plane subscriber is down returns success
-// with nothing durably stored. DURABILITY across a control-plane outage is the
-// OFFLINE QUEUE's job (D40), which wraps this transport and stores-then-flushes;
-// this package does not claim it. Message ATTRIBUTION and gap/replay detection
-// are the signed path's (D50), and the signed sequence is persisted so a restart
-// is forward-monotonic, not a false replay (D66).
+// SIGNED TELEMETRY (the attributable agent→control-plane record) is DURABLE BY DEFAULT since PLAT-2: it is
+// published into the JetStream telemetry stream and delivered to a durable, explicit-acknowledgement
+// consumer, so a message published while the control plane is down is retained and delivered when it
+// returns — AT-LEAST-ONCE, not at-most-once. Redelivery is safe because ingest is idempotent by verified
+// sequence, NOT because the broker deduplicates. A deployment whose broker has no JetStream opts out with
+// OPENSHIELD_JETSTREAM=0 and is then back to core NATS, at-most-once (see JetStreamEnabled).
+//
+// This is NOT a loss-free claim. A message the producer never managed to publish and never spooled is
+// gone; the OFFLINE QUEUE (D40/D67) is the pre-broker durability in BOTH modes; and the stream's bounded
+// age/size backstops mean a long enough consumer outage still drops. The stream is a delivery BUS — the
+// hash-chained ledger is the evidence store (D12/ADR-2), so stream retention is never evidence.
+//
+// EVERY OTHER SUBJECT here — the events/classification/decision fanout, risk, posture, attestation — uses
+// plain conn.Publish/Subscribe: at-most-once, fire-and-forget, by design. Those are coordination signals
+// where a missed update is corrected by the next one, not the attributable record.
+//
+// Message ATTRIBUTION and gap/replay detection are the signed path's (D50), and the signed sequence is
+// persisted so a restart is forward-monotonic, not a false replay (D66).
 //
 // This is the agent↔control-plane boundary ONLY. It is deliberately not used
 // inside the endpoint pipeline: the fanotify permission responder answers while
