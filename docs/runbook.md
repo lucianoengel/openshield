@@ -70,6 +70,35 @@ they are disabled by their local file until the signed-channel path ships.
 *Reversal:* remove the file, or unset the setting. The switch must be affirmatively engaged; an unreadable
 source never disables enforcement.
 
+### Back up, and drill the restore
+
+```
+OPENSHIELD_DSN=... ./scripts/backup.sh                       # pg_dump, custom format
+OPENSHIELD_DSN=<scratch> OPENSHIELD_WITNESS_PUB=... \
+  ./scripts/restore-drill.sh openshield-....dump             # restore, then PROVE it
+```
+
+**A backup you have never restored is not a backup.** The drill is the half that tells you whether those
+files are evidence or bytes, and it does not report success until the ledger re-verifies.
+
+Back up alongside the dump: each agent's forward-secure ledger state, and the **witness/anchor keys** — a
+dump cannot be verified without the anchor it is checked against, so losing those keys turns every future
+restore into an unprovable one.
+
+*Limit:* the drill is destructive to the database it restores into. Point it at a scratch instance.
+
+### Node / database recovery
+
+| Lost | Recover by | What you cannot get back |
+| --- | --- | --- |
+| Control plane host | Reinstall, restore the dump, run the drill | Nothing, if the dump and anchors survived |
+| Postgres only | Restore the dump into a new instance; re-point `OPENSHIELD_DSN` | Telemetry since the last dump |
+| An agent host | Re-enrol it; a new identity is issued | That agent's local ledger — its entries are gone, and the gap is VISIBLE in the chain rather than silent |
+| Witness/anchor keys | Nothing restores them | Completeness proof for everything anchored under them. Existing entries still hash-verify; they can no longer be proven un-truncated |
+
+The last row is the one to plan around: the keys are the trust root, and no backup of the database
+substitutes for them.
+
 ### Verify a restore
 
 ```

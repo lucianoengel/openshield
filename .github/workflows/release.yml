@@ -1,0 +1,63 @@
+# PLAT-6: build a signed, reproducible release on a tag.
+#
+# THE ORDERING IS THE POINT: verify-release runs BEFORE anything is published. A release pipeline that
+# uploads first and verifies afterwards has already distributed whatever it produced, and the verification
+# becomes a report rather than a gate.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the manifest records the commit; a shallow clone cannot describe the tag
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false   # the toolchain version affects output; pinning it is what keeps builds reproducible
+
+      # The signing key never enters the repository. It is a secret, written to a file for this job only.
+      - name: Stage the signing key
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/keys"
+          printf '%s' "${{ secrets.OPENSHIELD_RELEASE_KEY }}" | base64 -d > "$RUNNER_TEMP/keys/release.key"
+          chmod 600 "$RUNNER_TEMP/keys/release.key"
+
+      - name: Build a reproducible, signed release
+        env:
+          OPENSHIELD_RELEASE_KEY: ${{ runner.temp }}/keys/release.key
+        run: make release
+
+      # THE GATE. Digests, the manifest signature, and any file present that the manifest does not name.
+      - name: Verify before publishing
+        run: make verify-release
+
+      # Reproducibility is what makes the signature mean something: rebuild and compare, so a release that
+      # cannot be reproduced fails here rather than being discovered by someone else months later.
+      - name: Prove the build reproduces
+        run: |
+          mv dist dist-first
+          OPENSHIELD_RELEASE_KEY="$RUNNER_TEMP/keys/release.key" make release
+          for f in dist/*; do
+            n=$(basename "$f")
+            case "$n" in SHA256SUMS.json|SHA256SUMS.json.sig|release-key.pub|sbom.json) continue ;; esac
+            a=$(sha256sum "dist-first/$n" | cut -d' ' -f1)
+            b=$(sha256sum "$f" | cut -d' ' -f1)
+            [ "$a" = "$b" ] || { echo "NOT REPRODUCIBLE: $n ($a vs $b)"; exit 1; }
+          done
+          echo "all artifacts reproduced byte-for-byte"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true

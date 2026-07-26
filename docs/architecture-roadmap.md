@@ -261,13 +261,15 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   test that builds twice, because without it a signature attests only that the signer had *a* binary.
   `deploy/` already carried the systemd/install path. **D276 adds a SIGNED SBOM** — written before the
   manifest so the signature covers it, and generated from the BINARIES (`debug/buildinfo`) so it describes
-  what shipped rather than what go.mod intended. *Remaining:* Sigstore/cosign + transparency log, .deb/.rpm,
-  macOS notarization, CI tag automation. **goreleaser and Helm are REFUSED, not deferred** (D276):
+  what shipped rather than what go.mod intended. **D277 adds tag-triggered release automation** that VERIFIES and proves
+  reproducibility before publishing. *Remaining:* Sigstore/cosign + transparency log, .deb/.rpm, macOS
+  notarization — each a separate trust or distribution decision rather than leftover work. **goreleaser and Helm are REFUSED, not deferred** (D276):
   goreleaser would replace working tested code with a toolchain for conveniences not needed, and a Helm
   chart would contradict the compose/systemd footprint this project documents.
 - **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
-  schema-skew reporting (D267), the operator RUNBOOK + footprint (D268) and the ENDPOINT fleet-wide
-  disable over the signed channel (D269) DONE; upgrade orchestration remains.**
+  schema-skew reporting (D267), the RUNBOOK + footprint (D268), the ENDPOINT fleet-wide disable (D269),
+  fleet acknowledgement (D270/D271), the wire-version contract + upgrade ORDER (D275) and the
+  backup/restore DRILL + node-recovery table (D277) all DONE. **PLAT-9 is complete.**
   D269 closes the gap D265 named about itself: a signed `FleetControl` (its own two-verb vocabulary, NOT
   a fourth IntentVerb) bounded by a monotonic sequence (replay), a mandatory TTL (duration) and four-eyes
   on every disable. *Residual:* the control plane cannot CONFIRM a fleet is disabled — publication is
