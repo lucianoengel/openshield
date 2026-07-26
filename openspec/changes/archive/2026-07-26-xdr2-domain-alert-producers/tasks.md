@@ -55,8 +55,8 @@
 
 ## 5. Gate and land
 
-- [ ] 5.1 `OPENSHIELD_REQUIRE_POSTGRES=1 make all` green locally (build, vet, lint, full test suite).
-- [ ] 5.2 Update the `unified-alerts` and `entity-model` capability specs via the change's delta specs at
+- [x] 5.1 `OPENSHIELD_REQUIRE_POSTGRES=1 make all` green locally (build, vet, lint, full test suite).
+- [x] 5.2 Update the `unified-alerts` and `entity-model` capability specs via the change's delta specs at
   archive time; update `docs/architecture-roadmap.md` — XDR-2 increment 2 done, the remaining XDR-2 note
   retired, and XDR-4's "must read `unified_alerts`" precondition now satisfied.
-- [ ] 5.3 Commit with the ticket handle in the message (`XDR-2`), then archive the OpenSpec change.
+- [x] 5.3 Commit with the ticket handle in the message (`XDR-2`), then archive the OpenSpec change.
