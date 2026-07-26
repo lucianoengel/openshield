@@ -232,16 +232,22 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   loss-free (unspooled-unpublished is gone; the stream's bounds still drop on a long outage), at-least-once
   not exactly-once, and the non-telemetry subjects stay core-NATS best-effort by design. **BREAKING:** a
   JetStream-less broker must enable it or opt out — a PLAT-9 runbook item.
-- **PLAT-5 · Config management beyond env vars** — ✅ **DONE, server (D262)** — see Done ledger. Typed
+- **PLAT-5 · Config management beyond env vars** — ✅ **DONE, server (D262 + D263)** — see Done ledger. Typed
   fields declared ONCE and used for both reading and describing, so the schema is derived rather than
   maintained beside the code — **because config will eventually be set mostly in the UI (PLAT-1), and a
   hand-written schema drifts silently from what the binary reads.** Secrets are a KIND and are never
   readable back (not in the schema, the effective output, the printed form, or a validation error);
   errors are field-scoped and all reported at once; sources are an interface, env → file → default.
-  `openshield-server config` prints the effective values with their origin. *Residual, named:* the
-  **gateway and agent binaries** still use the old helpers (a follow-up reusing the package); no write
-  path or UI (the `Source` interface is the seam, not the feature); no hot reload; no secret management;
-  no per-tenant config.
+  `openshield-server config` prints the effective values with their origin. **D263 then made the model
+  enterprise-shaped:** every field declares a SCOPE — bootstrap (env/file, ~16 fields: reach-the-database
+  settings) vs dynamic (**the database is the only source**, cluster-wide, ~33 fields) — with revisions
+  carrying author/diff/rollback, validation at save, and LIVE APPLY (a watcher swaps an immutable
+  snapshot; loops read parameters per tick). **Secrets are never stored**, so a config-DB dump is not a
+  credential dump. *Residual, named:* no UI yet (this is the model and the API it will call); the
+  **gateway and agent** still use the old helpers, and likely should receive settings over the signed
+  channel rather than hold DB credentials; no per-node dynamic values; no staged rollout; no keystore.
+  **BREAKING:** a dynamic field set in the environment no longer takes effect — it is reported, not
+  silent (`OPENSHIELD_BREAKGLASS` is the deliberate, reported override).
 - **PLAT-6 · Release, packaging & deploy** — M. Tagged releases + reproducible signed binaries
   (goreleaser), container/systemd/Helm deploy path. Keep the open-core boundary intact. *Accept: `make
   release` produces signed, verifiable artifacts; a clean host installs and runs the stack from them.*

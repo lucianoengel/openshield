@@ -74,6 +74,21 @@ func main() {
 
 	srv := controlplane.New(pool)
 
+	// PLAT-5b: dynamic settings come from the DATABASE, and a watcher keeps them current in this process
+	// so a saved change applies without a restart. Bootstrap fields still come from env/file — they have
+	// to reach the process before the database does.
+	settings := config.NewDBSource()
+	cfg := serverConfig()
+	cfg.DB = settings
+	go srv.WatchSettings(ctx, settings, envDuration("OPENSHIELD_CONFIG_POLL", 15*time.Second))
+	// A dynamic field set in the environment does NOT take effect — and is never silent about it, because
+	// the operator who set one believes it is doing something.
+	if ignored := cfg.IgnoredOverrides(); len(ignored) > 0 {
+		fmt.Fprintf(os.Stderr, "openshield-server: IGNORING environment values for dynamic settings %v — "+
+			"these are stored in the database and changed there; set %s=<KEY> to override one deliberately "+
+			"(it will then be reported as an override)\n", ignored, config.BreakGlassEnv)
+	}
+
 	// Risk-signing key (SEC-1): risk updates published to the gateway MUST be signed with
 	// the control-plane key so the gateway can verify they came from here, not a forging
 	// publisher. When OPENSHIELD_RISK_SIGNING_KEY is set, load it and enable signed risk
@@ -103,19 +118,24 @@ func main() {
 		// LEADER-ONLY (leaderCtx): every replica correlating would multiply materializations, and
 		// materialization pages. The context is cancelled the moment leadership is lost, so a demoted
 		// instance stops immediately rather than at the next tick.
-		if ci := envDuration("OPENSHIELD_CORRELATE_INTERVAL", 0); ci > 0 {
-			burst := controlplane.CorrelationRule{
-				Window:    envDuration("OPENSHIELD_CORRELATE_WINDOW", time.Hour),
-				MinAlerts: envInt("OPENSHIELD_CORRELATE_MIN_ALERTS", 3),
-			}
-			cross := controlplane.CrossDomainRule{
-				Window:     envDuration("OPENSHIELD_CORRELATE_WINDOW", time.Hour),
-				MinDomains: envInt("OPENSHIELD_CORRELATE_MIN_DOMAINS", 2),
-			}
-			go srv.RunCorrelationLoop(leaderCtx, ci, burst, cross, nil)
-			fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation ACTIVE every %s — incidents "+
-				"are raised and paged without an operator request (leader only)\n", ci)
-		}
+		// PLAT-5b: the interval and both rules are read PER TICK from the live resolver, so a
+		// configuration change applies to this running server without a restart. The loop always runs;
+		// an interval of 0 means "not configured" and it simply does no work until one is set — so
+		// turning correlation ON no longer requires a restart either.
+		go srv.RunCorrelationLoop(leaderCtx,
+			func() time.Duration { return cfg.Duration("OPENSHIELD_CORRELATE_INTERVAL") },
+			func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
+				window := cfg.Duration("OPENSHIELD_CORRELATE_WINDOW")
+				return controlplane.CorrelationRule{
+						Window:    window,
+						MinAlerts: cfg.Int("OPENSHIELD_CORRELATE_MIN_ALERTS"),
+					}, controlplane.CrossDomainRule{
+						Window:     window,
+						MinDomains: cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
+					}
+			}, nil)
+		fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation loop ACTIVE (interval read live "+
+			"from configuration; 0 = idle, no restart needed to change it)\n")
 
 		// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
 		// is — every replica running playbooks would multiply notifications, cases and legal holds.

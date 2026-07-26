@@ -52,6 +52,7 @@ const (
 // syntax is a small language to reimplement. More lines, checked by the compiler, and a validator is code.
 type Field struct {
 	Key         string
+	Scope       Scope
 	Kind        Kind
 	Default     string
 	Description string
@@ -167,9 +168,14 @@ func LoadFile(path string) (*FileSource, error) {
 // first — that preserves today's behaviour and the container idiom, and it means an operator can override
 // a UI-set value on a single host during an incident without touching a database.
 type Resolver struct {
+	// Sources serve BOOTSTRAP fields, in order (env, then an optional file, then the declared default).
 	Sources []Source
-	fields  map[string]Field
-	order   []string
+	// DB is the ONLY source for a DYNAMIC field. Nil means none is attached yet, and every dynamic field
+	// falls back to its declared default — which is what a deployment that has never written a setting
+	// should get, rather than a failure.
+	DB     *DBSource
+	fields map[string]Field
+	order  []string
 }
 
 // New builds a resolver over a field set. A duplicate key is a programming error and panics: two
@@ -188,6 +194,13 @@ func New(fields []Field, sources ...Source) *Resolver {
 }
 
 // raw returns a key's value and the name of the source that supplied it.
+//
+// THE SPLIT LIVES HERE. A bootstrap field reads env → file → default. A dynamic field reads the DATABASE,
+// then its default — and NOT the environment, because an env value that silently shadowed a stored one is
+// exactly how a console and a host come to disagree with no signal.
+//
+// The one exception is explicit and reported: a field named in OPENSHIELD_BREAKGLASS takes its env value,
+// and Effective() labels it an override so nobody has to guess why a host differs.
 func (r *Resolver) raw(key string) (value, origin string) {
 	f, ok := r.fields[key]
 	if !ok {
@@ -195,12 +208,53 @@ func (r *Resolver) raw(key string) (value, origin string) {
 		// reads a field nobody declared would be invisible to the UI, so it must not be possible.
 		panic("config: read of undeclared field " + key)
 	}
+	if f.Scope == ScopeDynamic {
+		if v, ok := r.envOverride(f); ok {
+			return v, "env(break-glass)"
+		}
+		if r.DB != nil {
+			if v, ok := r.DB.Lookup(key); ok {
+				return v, "db"
+			}
+		}
+		return f.Default, "default"
+	}
 	for _, s := range r.Sources {
 		if v, ok := s.Lookup(key); ok {
 			return v, s.Name()
 		}
 	}
 	return f.Default, "default"
+}
+
+// envOverride reports a break-glass env value for a dynamic field.
+func (r *Resolver) envOverride(f Field) (string, bool) {
+	if f.Scope != ScopeDynamic || !breakGlassKeys()[f.Key] {
+		return "", false
+	}
+	v, ok := os.LookupEnv(f.Key)
+	if !ok || v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+// IgnoredOverrides lists dynamic fields set in the environment WITHOUT break-glass. They do not take
+// effect — and they are reported, at boot and in the effective output, because the operator who set one
+// believes it is doing something.
+func (r *Resolver) IgnoredOverrides() []string {
+	var out []string
+	for _, key := range r.order {
+		f := r.fields[key]
+		if f.Scope != ScopeDynamic || breakGlassKeys()[key] {
+			continue
+		}
+		if v, ok := os.LookupEnv(key); ok && v != "" {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // String returns a field's effective value.
@@ -280,6 +334,7 @@ func parseFor(f Field, raw string) error {
 // FieldDesc is one field as a UI would render it. IT CARRIES NO VALUE — only the declaration.
 type FieldDesc struct {
 	Key         string `json:"key"`
+	Scope       Scope  `json:"scope"`
 	Kind        Kind   `json:"kind"`
 	Default     string `json:"default,omitempty"`
 	Description string `json:"description"`
@@ -291,7 +346,7 @@ func (r *Resolver) Describe() []FieldDesc {
 	out := make([]FieldDesc, 0, len(r.order))
 	for _, key := range r.order {
 		f := r.fields[key]
-		d := FieldDesc{Key: f.Key, Kind: f.Kind, Description: f.Description, Secret: f.Secret()}
+		d := FieldDesc{Key: f.Key, Scope: f.Scope, Kind: f.Kind, Description: f.Description, Secret: f.Secret()}
 		if !f.Secret() {
 			// A secret's DEFAULT is not shown either: a default credential is a credential.
 			d.Default = f.Default
@@ -308,6 +363,7 @@ func (r *Resolver) Describe() []FieldDesc {
 // because the moment there is one, something will pass it.
 type EffectiveValue struct {
 	Key    string `json:"key"`
+	Scope  Scope  `json:"scope"`
 	Kind   Kind   `json:"kind"`
 	Value  string `json:"value,omitempty"`
 	Set    bool   `json:"set"`
@@ -322,7 +378,7 @@ func (r *Resolver) Effective() []EffectiveValue {
 	for _, key := range r.order {
 		f := r.fields[key]
 		raw, origin := r.raw(key)
-		ev := EffectiveValue{Key: key, Kind: f.Kind, Set: raw != "", Origin: origin, Secret: f.Secret()}
+		ev := EffectiveValue{Key: key, Scope: f.Scope, Kind: f.Kind, Set: raw != "", Origin: origin, Secret: f.Secret()}
 		if !f.Secret() {
 			ev.Value = raw
 		}
@@ -353,4 +409,23 @@ func (r *Resolver) WriteEffective(w io.Writer) {
 			fmt.Fprintf(w, "%-44s %-24s [%s]\n", ev.Key, ev.Value, ev.Origin)
 		}
 	}
+}
+
+// Field returns a declaration, so the write path can validate a proposed value against the SAME
+// declaration the reader uses — there is no second copy of a field's contract.
+func (r *Resolver) Field(key string) (Field, bool) {
+	f, ok := r.fields[key]
+	return f, ok
+}
+
+// Check validates ONE proposed value against its declaration, for a write path that must refuse a bad
+// value at the moment an operator types it rather than at the next restart.
+func (f Field) Check(raw string) error {
+	if err := parseFor(f, raw); err != nil {
+		return err
+	}
+	if f.Validate != nil {
+		return f.Validate(raw)
+	}
+	return nil
 }

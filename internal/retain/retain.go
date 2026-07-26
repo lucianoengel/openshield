@@ -28,3 +28,33 @@ func Loop(ctx context.Context, interval time.Duration, fn func(context.Context))
 		}
 	}
 }
+
+// DynamicLoop is Loop with an interval that is RE-EVALUATED every iteration (PLAT-5b).
+//
+// It exists because live-applied configuration is worthless if a running loop keeps using the interval it
+// captured at start: a setting saved in the console would then not take effect until someone restarted
+// the fleet, which is a config file with extra steps. The interval is read fresh each time, so a change
+// takes effect on the next iteration.
+//
+// A non-positive interval is treated as "not configured" and the loop waits a short beat before asking
+// again, so turning a feature on does not require a restart either.
+func DynamicLoop(ctx context.Context, next func() time.Duration, fn func(context.Context)) {
+	const idle = time.Second
+	for {
+		d := next()
+		if d <= 0 {
+			d = idle
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(d):
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if next() > 0 {
+			fn(ctx)
+		}
+	}
+}

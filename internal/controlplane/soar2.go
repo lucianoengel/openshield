@@ -106,9 +106,13 @@ var CorrelationFailures atomic.Int64
 //
 // A failing tick is counted and logged, never fatal — one bad run must not stop detection for the process
 // lifetime.
-func (s *Server) RunCorrelationLoop(ctx context.Context, interval time.Duration,
-	burst CorrelationRule, cross CrossDomainRule, log *slog.Logger) {
-	retain.Loop(ctx, interval, func(c context.Context) {
+// PLAT-5b: the interval and BOTH rules are read PER TICK from providers rather than captured at start, so
+// a configuration change applies to a running server without a restart. A loop holding the values it was
+// constructed with is what makes database-backed configuration a config file with extra steps.
+func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Duration,
+	rules func() (CorrelationRule, CrossDomainRule), log *slog.Logger) {
+	retain.DynamicLoop(ctx, interval, func(c context.Context) {
+		burst, cross := rules()
 		now := s.now()
 		if _, err := s.MaterializeIncidents(c, burst, now); err != nil {
 			CorrelationFailures.Add(1)

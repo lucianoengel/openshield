@@ -34,10 +34,14 @@ func TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest(t *testing.T) {
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// PLAT-5b: the interval and rules are read PER TICK from providers, so a configuration change reaches
+	// a running loop without a restart.
 	go srv.RunCorrelationLoop(loopCtx,
-		50*time.Millisecond,
-		controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
-		controlplane.CrossDomainRule{Window: 30 * time.Minute, MinDomains: 2},
+		func() time.Duration { return 50 * time.Millisecond },
+		func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
+			return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
+				controlplane.CrossDomainRule{Window: 30 * time.Minute, MinDomains: 2}
+		},
 		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 
 	// An incident appears without anyone asking for one.
