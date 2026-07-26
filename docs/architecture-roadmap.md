@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D242.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D243.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D242)
+## What OpenShield is (status at a glance, through D243)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ NOT an infra ticket and not part of the queues below.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| **XDR** (umbrella) | ~55% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). **MVP gap:** the incident timeline (XDR-5), coordinated response (XDR-6, needs SOAR-7 + HIPS-3 inc 2), per-entity risk aggregation (XDR-7). |
+| **XDR** (umbrella) | ~62% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). **MVP gap:** coordinated response (XDR-6, needs SOAR-7 + HIPS-3 inc 2), per-entity risk aggregation (XDR-7). |
 | Zero Trust (ZTNA) | ~75% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. **MVP gap:** an agent-brokered ZTNA client (ZT-4). |
 | DLP | ~62% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. **MVP gap:** endpoint exfil producers (clipboard/print, Lane E). **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~55% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
@@ -122,11 +122,15 @@ one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-
   INPUT (`internal/policy/mapping.go`) and are never persisted on an alert, so technique-level sequences
   need a `Decision` contract change. Named, not faked. No alert-storm suppression; no retro-correlation
   outside the window.
-- **XDR-5 · Incident timeline** — srv · M. **← next in this lane.** `incident_alerts` join (incident →
-  contributing alerts, all domains) + ledger refs; `GET /incidents/{id}/timeline`; incidents gain
-  `domains[]` (XDR-4 already added `entity_id`, `domain_count` and the `kind` discriminator in migration
-  028 — build on those, do not re-add). *Accept: the timeline of an XDR-4 incident lists all contributing
-  alerts, cross-domain, time-ordered, each linking its evidence.*
+- **XDR-5 · Incident timeline** — ✅ **DONE (D243)** — see Done ledger. `incident_alerts` join +
+  `unified_alerts.event_id`/`.decision_id` evidence references + `incidents.domains[]`;
+  `IncidentTimeline` orders by `detected_at` and resolves evidence against `audit_entries` in three
+  honest states (`resolved` with ledger coordinates / `unresolved` with the reference intact /
+  `derived` for a server-side alert); `GET /incidents/timeline?id=N` is analyst-tier and records the view.
+  *Residual, NOT gating XDR-6:* no backfill for pre-existing alerts/incidents; the timeline reports ledger
+  COORDINATES and does not verify the chain (the anchor binary owns that); no timeline for `ueba_burst`
+  incidents (explicit 409, never an empty list); `unified_alerts` retention must eventually cascade to the
+  join — a retention-ticket item.
 - **XDR-6 · Coordinated cross-domain response** — X + existing A · M · **dep SOAR-7 + HIPS-3 inc 2
   (Lane E — the endpoint inline-deny path).** One approved `CONTAIN(entity)` intent consumed by BOTH
   gateway (flows) and endpoint (exec) local policies, both enactments ledgered under one intent id.
@@ -419,7 +423,9 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   stream — increment 1 the stream + peer-UEBA producer (D213), increment 2 EVERY domain's producer via the
   verified-decision projection + kind-agnostic entity keying (D241); XDR-4 entity-keyed cross-domain
   correlation — distinct-domain window rule + ordered domain-sequence rule, per-domain severity
-  escalation, kind-scoped incidents (D242). SOAR-1 incident→notify (D220).
+  escalation, kind-scoped incidents (D242); XDR-5 incident timeline — contributing-alert join, alert
+  evidence references, three-state ledger resolution, view-audited endpoint (D243). SOAR-1
+  incident→notify (D220).
 
 ---
 

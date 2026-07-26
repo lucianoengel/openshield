@@ -48,6 +48,10 @@ type CrossDomainIncident struct {
 	Domains     []string  `json:"domains"`  // distinct domains, in first-seen order
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
+	// AlertIDs are the contributing unified alerts, in detection order (XDR-5). Recorded at
+	// materialization so an incident's evidence set is what the correlation ACTUALLY saw — recomputing it
+	// at read time would let the set silently shrink as alerts aged out of the window.
+	AlertIDs []int64 `json:"-"`
 }
 
 // severityRank orders the four buckets so "the highest severity among these alerts" and "one bucket
@@ -178,7 +182,8 @@ func (s *Server) CorrelateCrossDomain(ctx context.Context, rule CrossDomainRule,
 		`SELECT entity_id, count(*), count(DISTINCT domain), min(detected_at), max(detected_at),
 		        array_agg(domain   ORDER BY detected_at, id),
 		        array_agg(severity ORDER BY detected_at, id),
-		        (array_agg(subject_id ORDER BY detected_at, id))[1]
+		        (array_agg(subject_id ORDER BY detected_at, id))[1],
+		        array_agg(id ORDER BY detected_at, id)
 		   FROM unified_alerts
 		  WHERE detected_at >= $1
 		    AND CASE severity WHEN 'critical' THEN 3 WHEN 'high' THEN 2 WHEN 'medium' THEN 1
@@ -198,7 +203,7 @@ func (s *Server) CorrelateCrossDomain(ctx context.Context, rule CrossDomainRule,
 			severities []string
 		)
 		if err := rows.Scan(&inc.EntityID, &inc.AlertCount, &inc.DomainCount,
-			&inc.FirstSeen, &inc.LastSeen, &domains, &severities, &inc.SubjectID); err != nil {
+			&inc.FirstSeen, &inc.LastSeen, &domains, &severities, &inc.SubjectID, &inc.AlertIDs); err != nil {
 			return nil, err
 		}
 		if !matchesSequence(domains, rule.Sequence) {
@@ -249,16 +254,29 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 		var inserted bool
 		if err := s.pool.QueryRow(ctx,
 			`INSERT INTO incidents (kind, subject_id, entity_id, state, alert_count, max_risk, host_count,
-			                        domain_count, first_seen, last_seen)
-			 VALUES ('cross_domain',$1,$2,'open',$3,0,0,$4,$5,$6)
+			                        domain_count, domains, first_seen, last_seen)
+			 VALUES ('cross_domain',$1,$2,'open',$3,0,0,$4,$5,$6,$7)
 			 ON CONFLICT (entity_id) WHERE state = 'open' AND kind = 'cross_domain'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, domain_count = EXCLUDED.domain_count,
+			              domains = EXCLUDED.domains,
 			              subject_id = EXCLUDED.subject_id, last_seen = EXCLUDED.last_seen,
 			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()
 			 RETURNING id, (xmax = 0) AS inserted`,
-			inc.SubjectID, inc.EntityID, inc.AlertCount, inc.DomainCount, inc.FirstSeen, inc.LastSeen).
+			inc.SubjectID, inc.EntityID, inc.AlertCount, inc.DomainCount, inc.Domains,
+			inc.FirstSeen, inc.LastSeen).
 			Scan(&id, &inserted); err != nil {
 			return 0, err
+		}
+		// XDR-5: record WHICH alerts this incident is made of, so it has a timeline. ON CONFLICT DO
+		// NOTHING on the composite key makes a re-correlation CONVERGE: the same alerts are seen again
+		// every tick, and the evidence set must be the union — without it a scheduled correlation loop
+		// would multiply every incident's evidence on every run.
+		if len(inc.AlertIDs) > 0 {
+			if _, err := s.pool.Exec(ctx,
+				`INSERT INTO incident_alerts (incident_id, alert_id)
+				 SELECT $1, unnest($2::bigint[]) ON CONFLICT DO NOTHING`, id, inc.AlertIDs); err != nil {
+				return 0, err
+			}
 		}
 		if inserted {
 			s.notifyCrossDomainIncident(ctx, id, inc, now)

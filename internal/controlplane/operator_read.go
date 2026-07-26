@@ -217,6 +217,7 @@ func (s *Server) OperatorReadHandler() http.Handler {
 
 	mux.HandleFunc("/incidents", s.incidentsHandler)
 	mux.HandleFunc("/incidents/ack", s.incidentAckHandler)
+	mux.HandleFunc("/incidents/timeline", s.incidentTimelineHandler) // XDR-5: an incident's contributing alerts + evidence refs
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

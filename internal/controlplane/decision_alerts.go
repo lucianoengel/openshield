@@ -153,10 +153,20 @@ func (s *Server) projectDecisionAlert(ctx context.Context, payload []byte) {
 	if !d.GetDecidedAt().IsValid() {
 		at = s.now()
 	}
-	// Best-effort: RecordUnifiedAlert counts its own graph/insert failures.
-	_ = s.RecordUnifiedAlert(ctx, domain, xdr.KindDevice, subject,
-		severityForDecision(d.GetAction(), d.GetConfidence()),
-		alertTitleFor(d.GetAction(), kind), dedup, at)
+	// Best-effort: RecordUnifiedAlert counts its own graph/insert failures. The event and decision ids
+	// ride along as the EVIDENCE REFERENCE (XDR-5), so an incident timeline can reach the ledger entry
+	// behind this alert without parsing the dedup key.
+	_ = s.RecordUnifiedAlert(ctx, AlertRecord{
+		Domain:      domain,
+		SubjectKind: xdr.KindDevice,
+		Subject:     subject,
+		Severity:    severityForDecision(d.GetAction(), d.GetConfidence()),
+		Title:       alertTitleFor(d.GetAction(), kind),
+		DedupKey:    dedup,
+		DetectedAt:  at,
+		EventID:     d.GetEventId(),
+		DecisionID:  d.GetDecisionId(),
+	})
 }
 
 // originatingEvent loads the VERIFIED event a decision was made about and returns the two facts the

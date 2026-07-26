@@ -22,30 +22,58 @@ type UnifiedAlert struct {
 	DetectedAt time.Time
 }
 
+// AlertRecord is what a detector hands RecordUnifiedAlert. It is a struct rather than a parameter list
+// because the list had already reached seven same-typed strings, where transposing two (severity and
+// title, subject and dedup key) compiles cleanly and silently writes a wrong alert; XDR-5's evidence
+// references would have made it nine.
+type AlertRecord struct {
+	Domain      string // ueba | dlp | hips | nips | ...
+	SubjectKind string // the entity alias kind to key by when the subject is new
+	Subject     string
+	Severity    string
+	Title       string
+	DedupKey    string // detector-namespaced idempotency key
+	DetectedAt  time.Time
+
+	// EventID / DecisionID are the EVIDENCE REFERENCE (XDR-5): what produced this alert, so an incident
+	// timeline can reach the evidence behind it. BOTH EMPTY IS MEANINGFUL, not missing — a server-side
+	// derivation (peer-UEBA) has no originating endpoint event or decision, and the timeline reports that
+	// as its own state rather than as a blank field.
+	EventID    string
+	DecisionID string
+}
+
 // RecordUnifiedAlert records a normalized alert keyed to the XDR entity graph (XDR-2). It resolves the
 // subject to an entity via the graph — so the alert binds to the SAME entity the device/user model
 // knows, making cross-domain grouping an entity JOIN rather than a string match — then inserts,
-// deduplicated by dedupKey. An alert whose subject cannot be resolved is NOT written as an unkeyed row
+// deduplicated by DedupKey. An alert whose subject cannot be resolved is NOT written as an unkeyed row
 // (it would be uncorrelatable): the failure is counted and the caller's own recording is unaffected.
-func (s *Server) RecordUnifiedAlert(ctx context.Context, domain, subjectKind, subject, severity, title, dedupKey string, at time.Time) error {
+func (s *Server) RecordUnifiedAlert(ctx context.Context, a AlertRecord) error {
 	if s.graph == nil {
 		s.UnifiedAlertFailures.Add(1)
 		return fmt.Errorf("unified alert: no entity graph")
 	}
-	entityID, err := s.entityForSubject(ctx, subjectKind, subject)
+	entityID, err := s.entityForSubject(ctx, a.SubjectKind, a.Subject)
 	if err != nil {
 		s.UnifiedAlertFailures.Add(1)
-		return fmt.Errorf("unified alert: resolving entity for %s %q: %w", subjectKind, subject, err)
+		return fmt.Errorf("unified alert: resolving entity for %s %q: %w", a.SubjectKind, a.Subject, err)
 	}
+	at := a.DetectedAt
 	if at.IsZero() {
 		at = s.now()
 	}
 	// Dedup on the detector-namespaced key so a re-detection is one row (not multiplied correlation
 	// input). ON CONFLICT DO NOTHING is atomic — no read-then-write race.
+	//
+	// The evidence references go in as NULL when empty rather than as '': the timeline distinguishes
+	// "no originating decision" (a server derivation) from "a decision we cannot resolve", and an empty
+	// string would collapse that distinction into a value that looks like a reference.
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO unified_alerts (entity_id, domain, subject_id, severity, title, dedup_key, detected_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (dedup_key) DO NOTHING`,
-		entityID, domain, subject, severity, title, dedupKey, at.UTC())
+		`INSERT INTO unified_alerts (entity_id, domain, subject_id, severity, title, dedup_key, detected_at,
+		                             event_id, decision_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''))
+		 ON CONFLICT (dedup_key) DO NOTHING`,
+		entityID, a.Domain, a.Subject, a.Severity, a.Title, a.DedupKey, at.UTC(), a.EventID, a.DecisionID)
 	if err != nil {
 		s.UnifiedAlertFailures.Add(1)
 		return fmt.Errorf("unified alert: insert: %w", err)
@@ -99,11 +127,18 @@ func (s *Server) AlertsForEntity(ctx context.Context, entityID int64) ([]Unified
 	return out, rows.Err()
 }
 
-// recordDeviceUnifiedAlert is the best-effort helper a server-side detector calls to project its alert
+// recordDeviceUnifiedAlert is the best-effort helper a SERVER-SIDE detector calls to project its alert
 // into the unified stream, keyed by the subject's DEVICE entity (XDR-2). Best-effort: a failure is
 // counted (in RecordUnifiedAlert) but never propagated, so the detector's authoritative record stands.
+//
+// It carries NO evidence reference, deliberately: a server-side derivation (peer-UEBA) is computed here
+// from a fleet baseline — there is no originating endpoint event or decision to point at. The timeline
+// reports that as `derived` rather than as an unresolvable reference (XDR-5).
 func (s *Server) recordDeviceUnifiedAlert(ctx context.Context, domain, subject, severity, title, dedupKey string, at time.Time) {
-	if err := s.RecordUnifiedAlert(ctx, domain, xdr.KindDevice, subject, severity, title, dedupKey, at); err != nil {
+	if err := s.RecordUnifiedAlert(ctx, AlertRecord{
+		Domain: domain, SubjectKind: xdr.KindDevice, Subject: subject,
+		Severity: severity, Title: title, DedupKey: dedupKey, DetectedAt: at,
+	}); err != nil {
 		// Counted inside RecordUnifiedAlert; the derived projection is not the system of record.
 		return
 	}

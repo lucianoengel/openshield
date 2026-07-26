@@ -36,8 +36,11 @@ func (c *countingSink) count() int {
 // dedup key, the lot) — never a direct INSERT, so the test exercises the same keying production does.
 func recordAlert(t *testing.T, srv *controlplane.Server, domain, subject, severity string, at time.Time) {
 	t.Helper()
-	if err := srv.RecordUnifiedAlert(context.Background(), domain, xdr.KindDevice, subject, severity,
-		domain+" detection", domain+":"+subject+":"+at.Format(time.RFC3339Nano), at); err != nil {
+	if err := srv.RecordUnifiedAlert(context.Background(), controlplane.AlertRecord{
+		Domain: domain, SubjectKind: xdr.KindDevice, Subject: subject, Severity: severity,
+		Title: domain + " detection", DedupKey: domain + ":" + subject + ":" + at.Format(time.RFC3339Nano),
+		DetectedAt: at,
+	}); err != nil {
 		t.Fatalf("record %s alert for %s: %v", domain, subject, err)
 	}
 }

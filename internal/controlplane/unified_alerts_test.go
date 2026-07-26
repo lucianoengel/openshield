@@ -69,7 +69,9 @@ func TestPeerAlertProjectsToEntityKeyedUnifiedAlert(t *testing.T) {
 	}
 
 	// A SECOND domain's alert for the same subject resolves to the SAME entity → both group under it.
-	if err := srv.RecordUnifiedAlert(ctx, "dlp", xdr.KindDevice, outlier, "high", "sensitive exfil", "dlp:"+outlier, time.Now()); err != nil {
+	if err := srv.RecordUnifiedAlert(ctx, controlplane.AlertRecord{
+		Domain: "dlp", SubjectKind: xdr.KindDevice, Subject: outlier, Severity: "high",
+		Title: "sensitive exfil", DedupKey: "dlp:" + outlier, DetectedAt: time.Now()}); err != nil {
 		t.Fatalf("record dlp unified alert: %v", err)
 	}
 	alerts, err := srv.AlertsForEntity(ctx, entityID)
@@ -99,7 +101,9 @@ func TestUnifiedAlertDedupes(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 2; i++ {
-		if err := srv.RecordUnifiedAlert(ctx, "hips", xdr.KindDevice, "sub_dedup", "high", "process kill", "hips-kill:sub_dedup:42", time.Now()); err != nil {
+		if err := srv.RecordUnifiedAlert(ctx, controlplane.AlertRecord{
+			Domain: "hips", SubjectKind: xdr.KindDevice, Subject: "sub_dedup", Severity: "high",
+			Title: "process kill", DedupKey: "hips-kill:sub_dedup:42", DetectedAt: time.Now()}); err != nil {
 			t.Fatalf("record %d: %v", i, err)
 		}
 	}
