@@ -67,7 +67,7 @@ func isCriticalProcess(id ProcIdentity) bool {
 type KillEnforcer struct {
 	selfPID  int
 	kill     func(pid int, startTicks uint64) error // injectable; the platform kill, which revalidates startTicks (HIPS-7)
-	identify func(pid int) (ProcIdentity, error)     // trusted identity for the critical-process guard; injectable
+	identify func(pid int) (ProcIdentity, error)    // trusted identity for the critical-process guard; injectable
 }
 
 // NewKillEnforcer builds the enforcer with the platform's real kill and this process's pid

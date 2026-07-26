@@ -40,6 +40,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/fim"
 	"github.com/lucianoengel/openshield/internal/policy"
+	"github.com/lucianoengel/openshield/internal/printguard"
 	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
@@ -389,6 +390,37 @@ func main() {
 				"worker (observe/alert only; it does not block a paste)",
 				slog.Duration("interval", iv), slog.String("display", reader.DisplayServer()))
 		}
+	}
+
+	// DLP-2b: answer print-job verdicts for the CUPS filter. The filter sits in the spooler chain where a
+	// non-zero exit ABORTS the job, so this is prevention, not reporting — and the filter parses nothing:
+	// the job is classified here, in the sandboxed worker.
+	if sock := strings.TrimSpace(os.Getenv("OPENSHIELD_PRINT_SOCKET")); sock != "" {
+		pstore := clipboard.NewContentStore(nil)
+		prev := eng.ContentResolver()
+		eng.SetContentResolver(func(ev *corev1.Event) []byte {
+			if b := pstore.Resolve(ev.GetEventId()); len(b) > 0 {
+				return b
+			}
+			if prev != nil {
+				return prev(ev)
+			}
+			return nil
+		})
+		psrv := &printguard.Server{
+			Decide: printDecider(ctx, eng, pstore, events, log),
+			Logf:   func(format string, a ...any) { log.Warn(fmt.Sprintf(format, a...)) },
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := psrv.Listen(ctx, sock); err != nil && ctx.Err() == nil {
+				log.Error("engine: print-verdict server stopped (printing continues unchecked — the filter "+
+					"fails open by design)", slog.Any("err", err))
+			}
+		}()
+		log.Warn("engine: print DLP ACTIVE — a job is classified in the sandboxed worker and can be REFUSED "+
+			"before it prints", slog.String("socket", sock))
 	}
 
 	// HIPS-3 increment 2a: serve exec verdicts to the PRIVILEGED gate over a unix socket. The gate holds

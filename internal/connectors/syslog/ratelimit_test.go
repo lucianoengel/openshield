@@ -77,7 +77,7 @@ func TestListenerRecoversFromSinkPanic(t *testing.T) {
 	}
 	defer client.Close()
 
-	client.Write([]byte(`<13>Feb  5 17:32:18 boomhost myapp: boom`))  // panics in the sink → recovered
+	client.Write([]byte(`<13>Feb  5 17:32:18 boomhost myapp: boom`)) // panics in the sink → recovered
 	client.Write([]byte(`<13>Feb  5 17:32:18 goodhost myapp: fine`)) // must still be delivered
 
 	deadline := time.Now().Add(2 * time.Second)

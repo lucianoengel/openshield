@@ -16,6 +16,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/engine"
+	"github.com/lucianoengel/openshield/internal/printguard"
 )
 
 // seededCPF is a valid test CPF (check digits correct, so the REAL validator accepts it). It stands in for
@@ -185,4 +186,75 @@ func (s stageFnT) Run(ctx context.Context, st *core.State) (core.Outcome, error)
 
 func stageFn(name string, run func(context.Context, *core.State) (core.Outcome, error)) core.Stage {
 	return stageFnT{name: name, run: run}
+}
+
+// TestPrintJobIsClassifiedAndTheEventCarriesNoDocument is DLP-2b's real-pipeline claim: a print job runs
+// through the REAL engine (real worker, real CPF detector), the verdict follows the policy, and the event
+// carries no document content — not even the title, which is often the sensitive fact itself.
+func TestPrintJobIsClassifiedAndTheEventCarriesNoDocument(t *testing.T) {
+	job := []byte("%!PS\nEmployee record: CPF " + seededCPF + "\n")
+
+	store := clipboard.NewContentStore(nil)
+	events := make(chan *corev1.Event, 4)
+	var gotClassification *corev1.LocalClassification
+	policy := stageFn("policy", func(_ context.Context, s *core.State) (core.Outcome, error) {
+		gotClassification = s.Classification
+		action := corev1.Action_ACTION_ALLOW
+		// Deny when the classifier found anything — a real policy would be richer; this proves the verdict
+		// follows the CLASSIFICATION rather than a hardcoded answer.
+		if s.Classification != nil && len(s.Classification.GetMatches()) > 0 {
+			action = corev1.Action_ACTION_BLOCK
+		}
+		return core.Decided(&corev1.Decision{DecisionId: "d-print", EventId: s.Event.GetEventId(),
+			Action: action, Confidence: 0.9}), nil
+	})
+	eng := engine.New(inProcessWorker{c: classify.New()}, policy, &recordingLedger{}, nil, 5*time.Second)
+	eng.SetContentResolver(func(e *corev1.Event) []byte { return store.Resolve(e.GetEventId()) })
+
+	decide := printDecider(context.Background(), eng, store, events,
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+
+	v, err := decide(context.Background(), printguard.Request{
+		ID: 1, Printer: "lobby-printer", User: "alice", HasTitle: true, Job: job,
+	})
+	if err != nil {
+		t.Fatalf("deciding the print job: %v", err)
+	}
+	if v != printguard.VerdictDeny {
+		t.Fatalf("a job containing a CPF was ALLOWED — the classification did not drive the verdict")
+	}
+	if gotClassification == nil || len(gotClassification.GetMatches()) == 0 {
+		t.Fatal("the job produced no detector hits — the document never reached the classifier")
+	}
+
+	ev := <-events
+	raw, err := proto.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{seededCPF, "Employee record", "Q3 layoffs"} {
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Errorf("the serialized print Event contains %q — a print event carries metadata only", secret)
+		}
+	}
+	ps := ev.GetPrint()
+	if ps == nil || ps.GetPrinter() != "lobby-printer" || ps.GetJobUser() != "alice" {
+		t.Fatalf("print metadata missing or wrong: %+v", ps)
+	}
+	if !ps.GetJobTitlePresent() {
+		t.Error("job_title_present is false though a title was supplied")
+	}
+	// And a clean job is allowed.
+	store2 := clipboard.NewContentStore(nil)
+	eng.SetContentResolver(func(e *corev1.Event) []byte { return store2.Resolve(e.GetEventId()) })
+	decide2 := printDecider(context.Background(), eng, store2, events,
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	v2, err := decide2(context.Background(), printguard.Request{ID: 2, Printer: "p", User: "bob",
+		Job: []byte("%!PS\nnothing sensitive here\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2 != printguard.VerdictAllow {
+		t.Error("a clean job was refused — the product must not block ordinary printing")
+	}
 }

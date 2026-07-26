@@ -71,9 +71,9 @@ func TestExtractSNI(t *testing.T) {
 // extension whose declared length (0xFFFF) runs far past the buffer — the exact input the
 // extension bounds check exists to reject.
 func craftedHelloWithHugeExt() []byte {
-	body := []byte{0x03, 0x03} // client version
-	body = append(body, make([]byte, 32)...) // random
-	body = append(body, 0x00)                // session id length 0
+	body := []byte{0x03, 0x03}                  // client version
+	body = append(body, make([]byte, 32)...)    // random
+	body = append(body, 0x00)                   // session id length 0
 	body = append(body, 0x00, 0x02, 0xc0, 0x2f) // cipher suites: len 2 + one suite
 	body = append(body, 0x01, 0x00)             // compression: len 1 + null
 	// extensions: total length 4 (one ext header), then an ext claiming 0xFFFF bytes of data.

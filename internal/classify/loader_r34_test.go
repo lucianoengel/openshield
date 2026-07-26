@@ -12,12 +12,12 @@ func TestRecordIndexLoaderRejectsHugeAllocation(t *testing.T) {
 	// header: threshold=2, nRecords=0, nFP=1; then one fingerprint (8B) + m=0xFFFFFFFF.
 	b := make([]byte, 0, 24)
 	var hdr [12]byte
-	binary.BigEndian.PutUint32(hdr[0:4], 2)          // threshold
-	binary.BigEndian.PutUint32(hdr[4:8], 0)          // nRecords
-	binary.BigEndian.PutUint32(hdr[8:12], 1)         // nFP
+	binary.BigEndian.PutUint32(hdr[0:4], 2)  // threshold
+	binary.BigEndian.PutUint32(hdr[4:8], 0)  // nRecords
+	binary.BigEndian.PutUint32(hdr[8:12], 1) // nFP
 	b = append(b, hdr[:]...)
 	var fpEntry [12]byte
-	binary.BigEndian.PutUint64(fpEntry[0:8], 0xDEAD) // fingerprint
+	binary.BigEndian.PutUint64(fpEntry[0:8], 0xDEAD)      // fingerprint
 	binary.BigEndian.PutUint32(fpEntry[8:12], 0xFFFFFFFF) // absurd id count
 	b = append(b, fpEntry[:]...)
 
@@ -31,10 +31,10 @@ func TestDocumentIndexLoaderRejectsHugeAllocation(t *testing.T) {
 	// header: k=5, fraction, nDocs=0, nFP=1; then one shingle (8B) + m=0xFFFFFFFF.
 	b := make([]byte, 0, 32)
 	var hdr [20]byte
-	binary.BigEndian.PutUint32(hdr[0:4], 5)              // k
+	binary.BigEndian.PutUint32(hdr[0:4], 5)                   // k
 	binary.BigEndian.PutUint64(hdr[4:12], 0x3FD0000000000000) // some fraction bits (~0.25)
-	binary.BigEndian.PutUint32(hdr[12:16], 0)            // nDocs
-	binary.BigEndian.PutUint32(hdr[16:20], 1)            // nFP
+	binary.BigEndian.PutUint32(hdr[12:16], 0)                 // nDocs
+	binary.BigEndian.PutUint32(hdr[16:20], 1)                 // nFP
 	b = append(b, hdr[:]...)
 	var fpEntry [12]byte
 	binary.BigEndian.PutUint64(fpEntry[0:8], 0xBEEF)

@@ -15,7 +15,8 @@ import "strings"
 // Handshake:       [1=ClientHello][len:3] then the ClientHello body.
 // ClientHello:     [ver:2][random:32][sid_len:1][sid][cs_len:2][cs][comp_len:1][comp][ext_len:2][exts]
 // Extension:       [type:2][len:2][data]; server_name is type 0x0000, whose data is
-//                  [list_len:2] then entries [name_type:1][name_len:2][name].
+//
+//	[list_len:2] then entries [name_type:1][name_len:2][name].
 func extractSNI(b []byte) string {
 	// Record header: content type 22 (handshake), 2-byte version, 2-byte length.
 	if len(b) < 5 || b[0] != 22 {

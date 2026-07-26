@@ -10,4 +10,6 @@ func InstallTProxyRules(listenPort int, dports []int, mark, table int, log *slog
 }
 
 // RemoveTProxyRules is a no-op off linux (nothing was installed).
-func RemoveTProxyRules(listenPort int, dports []int, mark, table int, log *slog.Logger) error { return nil }
+func RemoveTProxyRules(listenPort int, dports []int, mark, table int, log *slog.Logger) error {
+	return nil
+}

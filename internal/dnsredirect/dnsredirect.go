@@ -23,8 +23,8 @@ var errUnsupported = errors.New("dnsredirect: transparent DNS redirect is linux-
 // unrelated operator rules.
 const (
 	iptChain    = "OPENSHIELD_DNSREDIR"     // custom nat chain for the LOCAL (OUTPUT) redirect
-	iptChainFwd = "OPENSHIELD_DNSREDIR_FWD"  // custom nat chain for the FORWARDED (PREROUTING) redirect
-	nftTable    = "openshield_dnsredirect"   // dedicated table (nft backend)
+	iptChainFwd = "OPENSHIELD_DNSREDIR_FWD" // custom nat chain for the FORWARDED (PREROUTING) redirect
+	nftTable    = "openshield_dnsredirect"  // dedicated table (nft backend)
 )
 
 // markHex renders a firewall mark the way iptables/nft accept it.

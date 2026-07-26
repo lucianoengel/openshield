@@ -9,8 +9,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lucianoengel/openshield/internal/gateway"
-	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"github.com/lucianoengel/openshield/internal/posture"
+	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
 func embeddedNATSURL(t *testing.T) string {

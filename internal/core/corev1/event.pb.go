@@ -94,6 +94,7 @@ const (
 	EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED       EventKind = 11 // a mass canary change — a suspected ransomware attack (HIPS-4)
 	EventKind_EVENT_KIND_MEMORY_INJECTION_SUSPECTED EventKind = 12 // a process with writable+executable memory (HIPS-4 W^X)
 	EventKind_EVENT_KIND_CLIPBOARD_COPY             EventKind = 13 // content copied to the clipboard (DLP-2a — an exfil CHANNEL, not a file)
+	EventKind_EVENT_KIND_PRINT_JOB                  EventKind = 14 // a document submitted to a printer (DLP-2b — the other endpoint exfil channel)
 )
 
 // Enum value maps for EventKind.
@@ -113,6 +114,7 @@ var (
 		11: "EVENT_KIND_RANSOMWARE_SUSPECTED",
 		12: "EVENT_KIND_MEMORY_INJECTION_SUSPECTED",
 		13: "EVENT_KIND_CLIPBOARD_COPY",
+		14: "EVENT_KIND_PRINT_JOB",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":                0,
@@ -129,6 +131,7 @@ var (
 		"EVENT_KIND_RANSOMWARE_SUSPECTED":       11,
 		"EVENT_KIND_MEMORY_INJECTION_SUSPECTED": 12,
 		"EVENT_KIND_CLIPBOARD_COPY":             13,
+		"EVENT_KIND_PRINT_JOB":                  14,
 	}
 )
 
@@ -619,6 +622,7 @@ type Event struct {
 	//	*Event_Network
 	//	*Event_Process
 	//	*Event_Clipboard
+	//	*Event_Print
 	Target        isEvent_Target `protobuf_oneof:"target"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -762,6 +766,15 @@ func (x *Event) GetClipboard() *ClipboardSubject {
 	return nil
 }
 
+func (x *Event) GetPrint() *PrintSubject {
+	if x != nil {
+		if x, ok := x.Target.(*Event_Print); ok {
+			return x.Print
+		}
+	}
+	return nil
+}
+
 type isEvent_Target interface {
 	isEvent_Target()
 }
@@ -786,6 +799,10 @@ type Event_Clipboard struct {
 	Clipboard *ClipboardSubject `protobuf:"bytes,13,opt,name=clipboard,proto3,oneof"`
 }
 
+type Event_Print struct {
+	Print *PrintSubject `protobuf:"bytes,14,opt,name=print,proto3,oneof"`
+}
+
 func (*Event_Filesystem) isEvent_Target() {}
 
 func (*Event_Usb) isEvent_Target() {}
@@ -795,6 +812,8 @@ func (*Event_Network) isEvent_Target() {}
 func (*Event_Process) isEvent_Target() {}
 
 func (*Event_Clipboard) isEvent_Target() {}
+
+func (*Event_Print) isEvent_Target() {}
 
 // ProcessSubject is a process execution the HIPS producer observed (Phase E). It carries
 // exec METADATA ONLY (D10/D29) — the executable path, the argument vector, the pid, and the
@@ -949,6 +968,80 @@ func (x *ClipboardSubject) GetDisplayServer() string {
 	return ""
 }
 
+// PrintSubject is a print job the endpoint intercepted in the spooler's filter chain (DLP-2b).
+//
+// Content-free, and one field is content-free by DELIBERATE OMISSION: there is no job title. A document's
+// title routinely IS the sensitive fact ("Q3 layoffs.docx", "patient-1234-results.pdf"), so the event
+// records only WHETHER a title was present, never the string. The document itself goes to the sandboxed
+// worker for classification and never onto an Event (D10/D29).
+type PrintSubject struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Printer         string                 `protobuf:"bytes,1,opt,name=printer,proto3" json:"printer,omitempty"`                                           // destination queue name (metadata, not content)
+	JobUser         string                 `protobuf:"bytes,2,opt,name=job_user,json=jobUser,proto3" json:"job_user,omitempty"`                            // the submitting user as the spooler reports it
+	ByteCount       uint32                 `protobuf:"varint,3,opt,name=byte_count,json=byteCount,proto3" json:"byte_count,omitempty"`                     // how much was submitted
+	JobTitlePresent bool                   `protobuf:"varint,4,opt,name=job_title_present,json=jobTitlePresent,proto3" json:"job_title_present,omitempty"` // whether a title existed — NEVER the title itself
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PrintSubject) Reset() {
+	*x = PrintSubject{}
+	mi := &file_openshield_v1_event_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrintSubject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrintSubject) ProtoMessage() {}
+
+func (x *PrintSubject) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_event_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrintSubject.ProtoReflect.Descriptor instead.
+func (*PrintSubject) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PrintSubject) GetPrinter() string {
+	if x != nil {
+		return x.Printer
+	}
+	return ""
+}
+
+func (x *PrintSubject) GetJobUser() string {
+	if x != nil {
+		return x.JobUser
+	}
+	return ""
+}
+
+func (x *PrintSubject) GetByteCount() uint32 {
+	if x != nil {
+		return x.ByteCount
+	}
+	return 0
+}
+
+func (x *PrintSubject) GetJobTitlePresent() bool {
+	if x != nil {
+		return x.JobTitlePresent
+	}
+	return false
+}
+
 var File_openshield_v1_event_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_event_proto_rawDesc = "" +
@@ -984,7 +1077,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"httpMethod\x12\x1b\n" +
 	"\thttp_path\x18\t \x01(\tR\bhttpPath\x12=\n" +
 	"\tdirection\x18\n" +
-	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xff\x04\n" +
+	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xb4\x05\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12!\n" +
@@ -1002,7 +1095,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	" \x01(\v2\x19.openshield.v1.UsbSubjectH\x00R\x03usb\x129\n" +
 	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetwork\x129\n" +
 	"\aprocess\x18\f \x01(\v2\x1d.openshield.v1.ProcessSubjectH\x00R\aprocess\x12?\n" +
-	"\tclipboard\x18\r \x01(\v2\x1f.openshield.v1.ClipboardSubjectH\x00R\tclipboardB\b\n" +
+	"\tclipboard\x18\r \x01(\v2\x1f.openshield.v1.ClipboardSubjectH\x00R\tclipboard\x123\n" +
+	"\x05print\x18\x0e \x01(\v2\x1b.openshield.v1.PrintSubjectH\x00R\x05printB\b\n" +
 	"\x06target\"\xa9\x01\n" +
 	"\x0eProcessSubject\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x12\n" +
@@ -1016,12 +1110,18 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x10ClipboardSubject\x12\x1d\n" +
 	"\n" +
 	"byte_count\x18\x01 \x01(\rR\tbyteCount\x12%\n" +
-	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer*k\n" +
+	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer\"\x8e\x01\n" +
+	"\fPrintSubject\x12\x18\n" +
+	"\aprinter\x18\x01 \x01(\tR\aprinter\x12\x19\n" +
+	"\bjob_user\x18\x02 \x01(\tR\ajobUser\x12\x1d\n" +
+	"\n" +
+	"byte_count\x18\x03 \x01(\rR\tbyteCount\x12*\n" +
+	"\x11job_title_present\x18\x04 \x01(\bR\x0fjobTitlePresent*k\n" +
 	"\aPurpose\x12\x17\n" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xb5\x03\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xcf\x03\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
@@ -1037,7 +1137,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x12#\n" +
 	"\x1fEVENT_KIND_RANSOMWARE_SUSPECTED\x10\v\x12)\n" +
 	"%EVENT_KIND_MEMORY_INJECTION_SUSPECTED\x10\f\x12\x1d\n" +
-	"\x19EVENT_KIND_CLIPBOARD_COPY\x10\r*r\n" +
+	"\x19EVENT_KIND_CLIPBOARD_COPY\x10\r\x12\x18\n" +
+	"\x14EVENT_KIND_PRINT_JOB\x10\x0e*r\n" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +
@@ -1056,7 +1157,7 @@ func file_openshield_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_openshield_v1_event_proto_goTypes = []any{
 	(Purpose)(0),                  // 0: openshield.v1.Purpose
 	(EventKind)(0),                // 1: openshield.v1.EventKind
@@ -1069,12 +1170,13 @@ var file_openshield_v1_event_proto_goTypes = []any{
 	(*Event)(nil),                 // 8: openshield.v1.Event
 	(*ProcessSubject)(nil),        // 9: openshield.v1.ProcessSubject
 	(*ClipboardSubject)(nil),      // 10: openshield.v1.ClipboardSubject
-	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
+	(*PrintSubject)(nil),          // 11: openshield.v1.PrintSubject
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_openshield_v1_event_proto_depIdxs = []int32{
 	4,  // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
 	2,  // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
-	11, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
+	12, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
 	3,  // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
 	0,  // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
 	1,  // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
@@ -1083,11 +1185,12 @@ var file_openshield_v1_event_proto_depIdxs = []int32{
 	7,  // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
 	9,  // 9: openshield.v1.Event.process:type_name -> openshield.v1.ProcessSubject
 	10, // 10: openshield.v1.Event.clipboard:type_name -> openshield.v1.ClipboardSubject
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	11, // 11: openshield.v1.Event.print:type_name -> openshield.v1.PrintSubject
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_event_proto_init() }
@@ -1106,6 +1209,7 @@ func file_openshield_v1_event_proto_init() {
 		(*Event_Network)(nil),
 		(*Event_Process)(nil),
 		(*Event_Clipboard)(nil),
+		(*Event_Print)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1113,7 +1217,7 @@ func file_openshield_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_event_proto_rawDesc), len(file_openshield_v1_event_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

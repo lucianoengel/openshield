@@ -29,6 +29,9 @@ const (
 	// pseudo-path ("clipboard://…") to feed Classify would create a fake filesystem entity that some
 	// later code would try to open.
 	ChannelClipboard
+	// ChannelPrint is a document submitted to a printer (DLP-2b). Like the clipboard it has no path, so it
+	// is assigned from the event kind.
+	ChannelPrint
 )
 
 // String returns a stable lowercase token for the policy input.
@@ -40,6 +43,8 @@ func (c Channel) String() string {
 		return "cloud_sync"
 	case ChannelClipboard:
 		return "clipboard"
+	case ChannelPrint:
+		return "print"
 	default:
 		return "local"
 	}

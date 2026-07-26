@@ -31,6 +31,7 @@ enum EventKind {
   EVENT_KIND_RANSOMWARE_SUSPECTED = 11; // a mass canary change — a suspected ransomware attack (HIPS-4)
   EVENT_KIND_MEMORY_INJECTION_SUSPECTED = 12; // a process with writable+executable memory (HIPS-4 W^X)
   EVENT_KIND_CLIPBOARD_COPY = 13; // content copied to the clipboard (DLP-2a — an exfil CHANNEL, not a file)
+  EVENT_KIND_PRINT_JOB = 14;      // a document submitted to a printer (DLP-2b — the other endpoint exfil channel)
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
@@ -115,6 +116,7 @@ message Event {
     NetworkSubject network = 11;
     ProcessSubject process = 12;
     ClipboardSubject clipboard = 13;
+    PrintSubject print = 14;
   }
 }
 
@@ -147,4 +149,17 @@ message ProcessSubject {
 message ClipboardSubject {
   uint32 byte_count = 1;      // how much was copied (metadata; a size is not content)
   string display_server = 2;  // "x11" | "wayland" — which capture path observed it
+}
+
+// PrintSubject is a print job the endpoint intercepted in the spooler's filter chain (DLP-2b).
+//
+// Content-free, and one field is content-free by DELIBERATE OMISSION: there is no job title. A document's
+// title routinely IS the sensitive fact ("Q3 layoffs.docx", "patient-1234-results.pdf"), so the event
+// records only WHETHER a title was present, never the string. The document itself goes to the sandboxed
+// worker for classification and never onto an Event (D10/D29).
+message PrintSubject {
+  string printer = 1;          // destination queue name (metadata, not content)
+  string job_user = 2;         // the submitting user as the spooler reports it
+  uint32 byte_count = 3;       // how much was submitted
+  bool job_title_present = 4;  // whether a title existed — NEVER the title itself
 }

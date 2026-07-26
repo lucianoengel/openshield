@@ -35,7 +35,7 @@ func newAttributingEngine(t *testing.T, agentID string) *engine.Engine {
 func connectorEvent(id, path string) *corev1.Event {
 	return &corev1.Event{
 		EventId: id, ConnectorId: "fanotify", Purpose: corev1.Purpose_PURPOSE_DLP,
-		Kind:   corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
+		Kind: corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
 		Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
 			Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: path}}},
 	}

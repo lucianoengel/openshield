@@ -132,6 +132,15 @@ func buildInput(st *core.State) map[string]interface{} {
 		event["clipboard_bytes"] = int(cb.GetByteCount())
 		event["display_server"] = cb.GetDisplayServer()
 	}
+	// A PRINT job (DLP-2b) is likewise a pathless exfil channel. The printer and submitting user are
+	// metadata a policy can gate on ("no sensitive printing to the lobby printer"); the document's title is
+	// deliberately absent from the contract, because a title is often the sensitive fact itself.
+	if pr := st.Event.GetPrint(); pr != nil {
+		event["exfil_channel"] = exfil.ChannelPrint.String()
+		event["printer"] = pr.GetPrinter()
+		event["print_bytes"] = int(pr.GetByteCount())
+		event["job_user"] = pr.GetJobUser()
+	}
 	// For a process-exec event, expose the exec path, args, and parent path so a
 	// behavioral policy can decide on LOLBins and process lineage (Phase E, HIPS). Exec
 	// metadata only (D10/D29) — no process memory or file content.
@@ -221,6 +230,9 @@ func attackSignals(st *core.State) attack.Signals {
 	// channelled file write does.
 	if cb := st.Event.GetClipboard(); cb != nil {
 		s.ExfilChannel = exfil.ChannelClipboard.String()
+	}
+	if pr := st.Event.GetPrint(); pr != nil {
+		s.ExfilChannel = exfil.ChannelPrint.String()
 	}
 	if ps := st.Event.GetProcess(); ps != nil {
 		f := behavioral.Analyze(ps.GetExecPath(), ps.GetParentPath(), ps.GetArgs())

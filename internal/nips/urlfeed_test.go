@@ -21,7 +21,11 @@ func TestFetchFeed(t *testing.T) {
 		body   string
 		etag   string
 	}
-	set := func(status int, body, etag string) { mode.Lock(); mode.status, mode.body, mode.etag = status, body, etag; mode.Unlock() }
+	set := func(status int, body, etag string) {
+		mode.Lock()
+		mode.status, mode.body, mode.etag = status, body, etag
+		mode.Unlock()
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mode.Lock()
 		st, body, etag := mode.status, mode.body, mode.etag

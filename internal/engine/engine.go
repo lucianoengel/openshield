@@ -186,6 +186,11 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 // the classify stage sends it to the sandboxed worker. Without it, network events are metadata-only.
 func (e *Engine) SetContentResolver(r ContentResolver) { e.content.resolve = r }
 
+// ContentResolver returns the installed resolver, so a second producer can CHAIN onto it rather than
+// displace it. The seam holds exactly one function; without a way to read it, the second producer to
+// install one silently breaks the first — a lost classification with no error.
+func (e *Engine) ContentResolver() ContentResolver { return e.content.resolve }
+
 // SetSubject configures the engine's device identity: it stores the CANONICAL
 // pseudonym of agentID (pseudonym.Of, the one derivation the gateway, posture, and
 // the entity model share). When set, Process attributes endpoint events to this

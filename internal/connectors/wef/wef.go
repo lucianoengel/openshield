@@ -24,14 +24,14 @@ const MaxDelivery = 32 << 20
 // Record is one parsed Windows event — the security-relevant subset of the schema. The full event XML
 // is preserved separately (Raw) for follow-on field-level hunting.
 type Record struct {
-	EventID   string
-	Provider  string
-	Level     string    // 0..5 (0/4 informational, 2 error, 3 warning, …)
+	EventID     string
+	Provider    string
+	Level       string // 0..5 (0/4 informational, 2 error, 3 warning, …)
 	TimeCreated time.Time
-	Computer  string
-	Channel   string            // e.g. "Security"
-	Data      map[string]string // EventData Name -> Value
-	Raw       string            // this event's XML
+	Computer    string
+	Channel     string            // e.g. "Security"
+	Data        map[string]string // EventData Name -> Value
+	Raw         string            // this event's XML
 }
 
 // eventXML mirrors the Windows Event schema for decoding. Fields match on LOCAL name, so the schema's
