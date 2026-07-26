@@ -147,7 +147,11 @@ func TestTLSDoesNotBypassSigning(t *testing.T) {
 	}
 
 	// Embedded NATS with mutual TLS.
-	opts := &natsserver.Options{Host: "127.0.0.1", Port: -1, TLSConfig: tc.ServerConfig()}
+	// JetStream enabled because durable ingest is the DEFAULT (PLAT-2): a JetStream-less broker now makes
+	// the control plane fail fast rather than silently subscribing at-most-once, so this test (whose
+	// subject is TLS vs signing, not ingest mode) runs on the shipped configuration.
+	opts := &natsserver.Options{Host: "127.0.0.1", Port: -1, TLSConfig: tc.ServerConfig(),
+		JetStream: true, StoreDir: t.TempDir()}
 	ns, err := natsserver.NewServer(opts)
 	if err != nil {
 		t.Fatal(err)

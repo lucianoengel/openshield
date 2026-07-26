@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D244.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D245.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -32,7 +32,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D244)
+## What OpenShield is (status at a glance, through D245)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -192,11 +192,13 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
 
 ### Lane D · Platform — durability, config, packaging, operability
 
-- **PLAT-2 · Durable ingest by default** (ADR-2) — srv · M. JetStream durable consumers are wired and
-  env-gated (D180); flip them on by default and migrate the full suite off core-NATS at-most-once. Keep
-  the agent spool as the pre-broker buffer; the hash-chained ledger stays the system-of-record.
-  *Accept: with no env override, a telemetry event survives a consumer restart mid-backlog (real JS +
-  PG); mutation `Ack→Nak` order still redelivers.*
+- **PLAT-2 · Durable ingest by default** (ADR-2) — ✅ **DONE (D245)** — see Done ledger. Durable ingest is
+  the default (opt-out `OPENSHIELD_JETSTREAM=0`), all THREE producers switch through one helper (before this,
+  only the *simulator* was durable — the engine and gateway published at-most-once), and an unavailable
+  JetStream fails fast on both producer and consumer rather than silently degrading. *Residual, honest:* not
+  loss-free (unspooled-unpublished is gone; the stream's bounds still drop on a long outage), at-least-once
+  not exactly-once, and the non-telemetry subjects stay core-NATS best-effort by design. **BREAKING:** a
+  JetStream-less broker must enable it or opt out — a PLAT-9 runbook item.
 - **PLAT-5 · Config management beyond env vars** — S–M. Typed config (file + env override), validated
   fail-fast at boot; secrets as file paths. *Accept: an invalid config fails the binary at boot with a
   precise error; env overrides a file value.*
@@ -415,7 +417,8 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   FIM baseline/real-time/signed/real-time-delete (D223/228/229/236); ransomware canary (D232);
   memory-injection W^X detection (D233); HIPS-3 inc 2a exec-gate IPC bridge — parser-free transport,
   watchdog-owned fail-open, verdict cache + per-path breaker + deadline-aware lock, VM-proven (D244).
-- **Platform:** JetStream durable consumers env-gated (D180, ADR-2); active-passive HA via Postgres
+- **Platform:** JetStream durable consumers env-gated (D180, ADR-2) then made the DEFAULT with all three
+  producers wired + fail-fast (PLAT-2, D245); active-passive HA via Postgres
   advisory-lock leader lease (PLAT-2b, D181, ADR-3); cross-platform OBSERVE path (D187, ADR-11). XDR-1 entity
   graph populated by real producers (D195/203); XDR-3 canonical subject stamping (D196); XDR-2 unified-alert
   stream — increment 1 the stream + peer-UEBA producer (D213), increment 2 EVERY domain's producer via the

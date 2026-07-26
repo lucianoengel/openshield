@@ -30,6 +30,10 @@ services:
 
   nats:
     image: docker.io/library/nats:2
+    # -js is REQUIRED, not optional: durable telemetry ingest is the default (PLAT-2), and a producer
+    # started against a JetStream-less broker fails fast by design rather than silently degrading to
+    # at-most-once delivery. A deployment that genuinely cannot run JetStream sets OPENSHIELD_JETSTREAM=0.
+    command: ["-js"]
     ports:
       - "127.0.0.1:4222:4222"         # client port, localhost only
 

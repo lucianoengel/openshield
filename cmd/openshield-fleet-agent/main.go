@@ -105,11 +105,13 @@ func main() {
 	// no loss" claim is only real when the PRODUCER is on JetStream. Gated on
 	// OPENSHIELD_JETSTREAM so a deployment without a JetStream-enabled broker keeps the
 	// core-NATS path; a spool (below) still covers a broker outage in both modes.
-	if os.Getenv("OPENSHIELD_JETSTREAM") != "" {
-		if err := pub.UseJetStream(); err != nil {
-			fatal("jetstream: %v (unset OPENSHIELD_JETSTREAM to use core NATS)", err)
-		}
-		fmt.Fprintf(os.Stderr, "fleet-agent %s: durable JetStream ingest enabled\n", agentID)
+	if err := natsx.EnableDurableIfDefault(pub); err != nil {
+		fatal("%v", err)
+	}
+	if natsx.JetStreamEnabled() {
+		fmt.Fprintf(os.Stderr, "fleet-agent %s: durable JetStream ingest enabled (default)\n", agentID)
+	} else {
+		fmt.Fprintf(os.Stderr, "fleet-agent %s: OPENSHIELD_JETSTREAM=0 — core NATS, AT-MOST-ONCE ingest\n", agentID)
 	}
 
 	// Durable offline queue (D40/D67): spool signed telemetry when the control

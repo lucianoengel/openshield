@@ -23,7 +23,6 @@ func memInjectEvent(pid int, exe string) *corev1.Event {
 	}
 }
 
-
 // memScanSource is the memory-injection producer (HIPS-4): on a poll it scans running processes for
 // writable+executable memory (the W^X-violation injection signature) and emits ONE high-severity event
 // per NEW suspect (keyed by pid+exec-path, so a standing suspect does not re-fire every poll). It logs

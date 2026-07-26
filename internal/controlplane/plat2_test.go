@@ -120,3 +120,67 @@ func TestVerifySignedSerializesConcurrentSameAgent(t *testing.T) {
 		t.Errorf("concurrent same-sequence submissions accepted = %d, want exactly 1 (the advisory lock must serialize the sequence check)", accepted)
 	}
 }
+
+// TestDurableIngestIsTheDEFAULT (PLAT-2): the same down-consumer survival, with NO environment override
+// and going through the shared producer helper — so it proves the DEFAULT path is durable, not merely the
+// opted-in one. Before this, durable ingest was opt-in and two of three producers never switched at all.
+//
+// Mutation: revert JetStreamEnabled to opt-in (`!= ""`) → the helper becomes a no-op, the messages are
+// published core-NATS with nothing subscribed, and every one is LOST → this FAILS.
+func TestDurableIngestIsTheDEFAULT(t *testing.T) {
+	t.Setenv("OPENSHIELD_JETSTREAM", "") // no override whatsoever
+	pool := requireDB(t)
+	url := embeddedNATS(t)
+
+	srv := controlplane.New(pool)
+	ctx := context.Background()
+	tok, err := srv.IssueToken(ctx, time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := identity.Generate("agent-default-js")
+	if err := srv.Enroll(ctx, tok, "agent-default-js", id.PublicKey(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	pub, err := natsx.NewSignedPublisherWithSeq("agent-default-js", id, conn,
+		natsx.NewFileSeqStore(filepath.Join(t.TempDir(), "seq")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The SHARED helper every producer calls — not UseJetStream directly, so this exercises the wiring a
+	// real binary uses.
+	if err := natsx.EnableDurableIfDefault(pub); err != nil {
+		t.Fatalf("durable ingest should be the default: %v", err)
+	}
+
+	const N = 4
+	for i := 0; i < N; i++ {
+		if err := pub.PublishEvent(ctx, &corev1.Event{
+			EventId: fmt.Sprintf("dflt-ev-%d", i), AgentId: "agent-default-js",
+			Subject: &corev1.Subject{PseudonymousId: "sub_dflt"},
+		}); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
+		}
+	}
+	if rows, _ := srv.TelemetryForEvent(ctx, "dflt-ev-0"); len(rows) != 0 {
+		t.Fatalf("telemetry persisted before the consumer ran (%d rows)", len(rows))
+	}
+
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.Run(rctx, url) }()
+
+	for i := 0; i < N; i++ {
+		ev := fmt.Sprintf("dflt-ev-%d", i)
+		waitFor(t, func() bool {
+			rows, _ := srv.TelemetryForEvent(ctx, ev)
+			return len(rows) == 1
+		})
+	}
+}

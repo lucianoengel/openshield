@@ -444,12 +444,17 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 	// subscription (auto-ack, at-most-once) is unchanged.
 	var sigSub *nats.Subscription
 	if natsx.JetStreamEnabled() {
+		// PLAT-2: durable ingest is the DEFAULT, so an unavailable JetStream stops the control plane with
+		// an error naming the opt-out — the same fail-fast the producers use. Silently subscribing over core
+		// NATS instead would accept at-most-once telemetry in a deployment that believes it is durable.
 		js, jerr := conn.JetStream()
 		if jerr != nil {
-			return fmt.Errorf("controlplane: JetStream context: %w", jerr)
+			return fmt.Errorf("controlplane: durable ingest is the default but this broker has no JetStream: %w"+
+				" — enable it (nats-server -js) or set OPENSHIELD_JETSTREAM=0 to accept at-most-once delivery", jerr)
 		}
 		if serr := natsx.EnsureTelemetryStream(js); serr != nil {
-			return fmt.Errorf("controlplane: ensuring telemetry stream: %w", serr)
+			return fmt.Errorf("controlplane: ensuring the telemetry stream: %w"+
+				" — enable JetStream on the broker (nats-server -js) or set OPENSHIELD_JETSTREAM=0", serr)
 		}
 		sigSub, err = js.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
 			switch s.handleSigned(context.Background(), m.Data) {

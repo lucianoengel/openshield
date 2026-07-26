@@ -147,9 +147,16 @@ func main() {
 		} else {
 			pub = natsx.NewSignedPublisher(agentID, id, conn)
 		}
+		// PLAT-2: durable ingest is the DEFAULT, so switch the publisher onto the JetStream stream. Before
+		// this, only the fleet SIMULATOR did — meaning every real detection this binary produced went over
+		// core NATS at-most-once while the platform claimed durable ingest. Fatal on failure: silently
+		// degrading to at-most-once telemetry is the missing-evidence failure the durable path exists to fix.
+		if err := natsx.EnableDurableIfDefault(pub); err != nil {
+			fatal(log, "durable telemetry ingest", err)
+		}
 		eng.SetTelemetry(pub)
 		log.Info("engine: fleet telemetry ENABLED — real detections project to the control plane (D80)",
-			slog.String("agent_id", agentID))
+			slog.String("agent_id", agentID), slog.Bool("durable_ingest", natsx.JetStreamEnabled()))
 	}
 
 	// The observe path needs no privileged agent. The engine opens a file watcher

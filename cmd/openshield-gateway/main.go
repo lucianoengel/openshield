@@ -34,24 +34,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 	"github.com/lucianoengel/openshield/internal/agent/identity"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
+	"github.com/lucianoengel/openshield/internal/attest"
 	"github.com/lucianoengel/openshield/internal/casb"
 	"github.com/lucianoengel/openshield/internal/core"
 	"github.com/lucianoengel/openshield/internal/dnsredirect"
 	"github.com/lucianoengel/openshield/internal/dnssink"
-	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
-	"github.com/lucianoengel/openshield/internal/attest"
 	"github.com/lucianoengel/openshield/internal/gateway"
+	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/lucianoengel/openshield/internal/store/postgres"
-	"github.com/lucianoengel/openshield/internal/xdr"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/lucianoengel/openshield/internal/xdr"
 	"github.com/nats-io/nats.go"
 )
 
@@ -202,9 +202,16 @@ func main() {
 		} else {
 			pub = natsx.NewSignedPublisher(agentID, id, conn)
 		}
+		// PLAT-2: durable ingest is the DEFAULT, so switch the publisher onto the JetStream stream. Before
+		// this, only the fleet SIMULATOR did — meaning every real detection this binary produced went over
+		// core NATS at-most-once while the platform claimed durable ingest. Fatal on failure: silently
+		// degrading to at-most-once telemetry is the missing-evidence failure the durable path exists to fix.
+		if err := natsx.EnableDurableIfDefault(pub); err != nil {
+			fatal(log, "durable telemetry ingest", err)
+		}
 		gw.SetTelemetry(pub)
 		log.Info("gateway: telemetry projection ENABLED (boundary-safe: no user IP, no URL path)",
-			slog.String("agent_id", agentID))
+			slog.String("agent_id", agentID), slog.Bool("durable_ingest", natsx.JetStreamEnabled()))
 	}
 
 	srv := &http.Server{Addr: listen, Handler: proxy, ReadHeaderTimeout: 10 * time.Second}
