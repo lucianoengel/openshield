@@ -14,6 +14,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/lucianoengel/openshield/internal/config"
 	"log/slog"
 	"net/http"
 	"os"
@@ -48,6 +49,24 @@ import (
 )
 
 func main() {
+	// PLAT-5 follow-up: validate every declared field before anything else. BOOTSTRAP-only, and here for a
+	// CONSISTENCY reason as much as a capability one: D269 built a signed fleet-control channel on the
+	// premise that endpoints do NOT read the configuration store, and making these dynamic would leave two
+	// disagreeing answers to "how does an endpoint learn something fleet-wide".
+	cfg := config.New(config.EngineFields, config.EnvSource{})
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		cfg.WriteEffective(os.Stdout)
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "\n%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-engine: %v\n", err)
+		os.Exit(1)
+	}
+
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	dsn := env("OPENSHIELD_DSN", "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable")
 	workerBin := env("OPENSHIELD_WORKER_BIN", "/usr/local/bin/openshield-worker")

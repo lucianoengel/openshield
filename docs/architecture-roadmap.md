@@ -244,7 +244,8 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   carrying author/diff/rollback, validation at save, and LIVE APPLY (a watcher swaps an immutable
   snapshot; loops read parameters per tick). **Secrets are never stored**, so a config-DB dump is not a
   credential dump. *Residual, named:* no UI yet (this is the model and the API it will call); the
-  **openshield-engine and openshield-fleet-agent** still use the old helpers — the GATEWAY (D272) and
+  ~~binaries still using the old helpers~~ — **ALL binaries now declare their configuration (D274)**; a
+  whole-tree guard reads `cmd/` so a new one cannot be missed. The GATEWAY (D272) and
   the privileged AGENT + sandboxed WORKER (D273) adopted the package; the latter proves it works at the
   tightest boundary, being stdlib-only so the agent's dependency ban and the worker's seccomp filter both
   still hold. The gateway is declared

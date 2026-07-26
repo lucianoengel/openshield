@@ -125,6 +125,49 @@ func TestEveryInvalidFieldIsReported(t *testing.T) {
 	}
 }
 
+// envReads finds the variables a source ACTUALLY READS, matching the call forms rather than every
+// occurrence of the name.
+//
+// The naive `OPENSHIELD_[A-Z0-9_]+` regex matches names in COMMENTS and HELP TEXT — three of the operator
+// tools "read" nothing and merely tell you which variable to set elsewhere. A guard that reports those is
+// a guard that cries wolf, and a guard that cries wolf gets disabled, which is worse than none.
+func envReads(src string) map[string]bool {
+	out := map[string]bool{}
+	re := regexp.MustCompile(`(?:os\.Getenv|os\.LookupEnv|env|envInt|envDuration|envMark|envPorts|splitEnv)\(\s*"(OPENSHIELD_[A-Z0-9_]+)"`)
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		out[m[1]] = true
+	}
+	return out
+}
+
+// sourceOf concatenates a command's own Go files (excluding tests).
+//
+// Reading the DIRECTORY rather than main.go is DEFENSIVE, not currently load-bearing: mutating this to
+// scan only main.go passes today, because no command presently reads an environment variable outside it.
+// It is here so a future split does not silently under-check a binary — stated plainly rather than
+// claimed as verified coverage.
+func sourceOf(t *testing.T, cmd string) string {
+	t.Helper()
+	dir := filepath.Join("..", "..", "cmd", cmd)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var b bytes.Buffer
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		b.Write(body)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 func asErrors(err error, out *config.Errors) bool {
 	e, ok := err.(config.Errors)
 	if ok {
@@ -238,10 +281,7 @@ func TestSchemaCoversEveryReadableFieldInBothDirections(t *testing.T) {
 // TestEveryServerEnvVarIsDeclared is the drift guard against the OTHER direction: a field read directly
 // from the environment, bypassing the schema, would be a setting the UI can never show.
 func TestEveryServerEnvVarIsDeclared(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "cmd", "openshield-server", "main.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	src := sourceOf(t, "openshield-server")
 	declared := map[string]bool{}
 	for _, f := range config.ServerFields {
 		declared[f.Key] = true
@@ -292,20 +332,13 @@ func TestReadingAnUndeclaredFieldPanics(t *testing.T) {
 // TestEveryGatewayEnvVarIsDeclared — the same drift guard the server has (PLAT-5 follow-up). A field read
 // directly from the environment, bypassing the schema, is a setting no UI can ever show.
 func TestEveryGatewayEnvVarIsDeclared(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "cmd", "openshield-gateway", "main.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	src := sourceOf(t, "openshield-gateway")
 	declared := map[string]bool{}
 	for _, f := range config.GatewayFields {
 		declared[f.Key] = true
 	}
-	seen := map[string]bool{}
-	for _, k := range regexp.MustCompile(`OPENSHIELD_[A-Z0-9_]+`).FindAllString(string(src), -1) {
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
+	seen := envReads(src)
+	for k := range seen {
 		if !declared[k] {
 			t.Errorf("%s is read by cmd/openshield-gateway but is NOT declared in GatewayFields", k)
 		}
@@ -368,25 +401,26 @@ func TestEndpointEnvVarsAreDeclared(t *testing.T) {
 	}{
 		{"openshield-agent", config.AgentFields},
 		{"openshield-worker", config.WorkerFields},
+		{"openshield-engine", config.EngineFields},
+		{"openshield-fleet-agent", config.FleetAgentFields},
 	} {
-		src, err := os.ReadFile(filepath.Join("..", "..", "cmd", tc.cmd, "main.go"))
-		if err != nil {
-			t.Fatal(err)
-		}
+		src := sourceOf(t, tc.cmd)
 		declared := map[string]bool{}
 		for _, f := range tc.fields {
 			declared[f.Key] = true
 		}
-		seen := map[string]bool{}
-		for _, k := range regexp.MustCompile(`OPENSHIELD_[A-Z0-9_]+`).FindAllString(string(src), -1) {
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
+		seen := envReads(src)
+		for k := range seen {
 			if !declared[k] {
 				t.Errorf("%s is read by cmd/%s but is NOT declared", k, tc.cmd)
 			}
 		}
+		// NO REVERSE CHECK, and the reason is worth stating: a binary's configuration surface includes
+		// what its LIBRARIES read. OPENSHIELD_POLICY_PACK is read in internal/policy and
+		// OPENSHIELD_JETSTREAM in internal/transport/nats, so neither appears in the command's own files
+		// — and a "declared but unread" check scoped to the command would flag both as dead. Scoping it
+		// module-wide instead would mark every variable as read by every binary, which proves nothing.
+		// So this guard verifies the direction it CAN: a read in the command's own code must be declared.
 		if len(seen) == 0 {
 			t.Errorf("found no environment variables in cmd/%s — the guard proves nothing", tc.cmd)
 		}
@@ -402,6 +436,7 @@ func TestEndpointEnvVarsAreDeclared(t *testing.T) {
 func TestEndpointConfigNeedsNoDatabaseOrNetwork(t *testing.T) {
 	for name, fields := range map[string][]config.Field{
 		"agent": config.AgentFields, "worker": config.WorkerFields,
+		"engine": config.EngineFields, "fleet-agent": config.FleetAgentFields,
 	} {
 		for _, f := range fields {
 			if f.Scope != config.ScopeBootstrap {
@@ -411,6 +446,38 @@ func TestEndpointConfigNeedsNoDatabaseOrNetwork(t *testing.T) {
 		}
 		if err := config.New(fields, config.EnvSource{}).Validate(); err != nil {
 			t.Errorf("%s defaults do not validate: %v", name, err)
+		}
+	}
+}
+
+// TestEveryBinaryIsCovered closes the adoption: a command that ships with environment variables and no
+// declared field set is one the schema — and any UI built from it — cannot see at all.
+//
+// It reads cmd/ rather than a hand-kept list, so a NEW binary that reads OPENSHIELD_* and is never
+// declared fails here rather than being noticed later.
+func TestEveryBinaryIsCovered(t *testing.T) {
+	declared := map[string][]config.Field{
+		"openshield-server": config.ServerFields, "openshield-gateway": config.GatewayFields,
+		"openshield-agent": config.AgentFields, "openshield-worker": config.WorkerFields,
+		"openshield-engine": config.EngineFields, "openshield-fleet-agent": config.FleetAgentFields,
+		"openshield-anchor": config.AnchorFields, "openshield-print-filter": config.PrintFilterFields,
+		"openshieldctl": config.CtlFields,
+	}
+	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		vars := envReads(sourceOf(t, e.Name()))
+		if len(vars) == 0 {
+			continue // takes no configuration; nothing to declare
+		}
+		if _, ok := declared[e.Name()]; !ok {
+			t.Errorf("cmd/%s reads %d OPENSHIELD_* variable(s) but has NO declared field set — those "+
+				"settings are invisible to the schema and to anything built from it", e.Name(), len(vars))
 		}
 	}
 }
