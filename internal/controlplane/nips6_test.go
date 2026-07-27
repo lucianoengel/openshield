@@ -178,3 +178,58 @@ func TestAFleetIsNotABeacon(t *testing.T) {
 			"the traffic", n)
 	}
 }
+
+// TestBeaconLoopSweepsOnItsOwnSchedule: the detector is inert until something runs it, and "nothing
+// schedules it yet" was the residual this closes.
+//
+// Mutation: never call DetectBeaconing from the loop → no alert appears → FAILS.
+func TestBeaconLoopSweepsOnItsOwnSchedule(t *testing.T) {
+	pool := requireDB(t)
+	srv := controlplane.New(pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Now().UTC()
+
+	for i := 0; i < 20; i++ {
+		seedFlow(t, srv, "subject-loop", "c2.loop.example", now.Add(-time.Duration(20-i)*time.Minute), true)
+	}
+
+	go srv.RunBeaconLoop(ctx,
+		func() time.Duration { return 20 * time.Millisecond },
+		func() controlplane.BeaconRule { return controlplane.BeaconRule{Window: 2 * time.Hour} }, nil)
+
+	waitFor(t, func() bool {
+		return countRows(t, pool, `SELECT count(*) FROM unified_alerts WHERE domain='nips'`) == 1
+	})
+	// It keeps sweeping without re-alerting: a detector that re-raises the same finding every tick is
+	// one an operator silences.
+	time.Sleep(200 * time.Millisecond)
+	if n := countRows(t, pool, `SELECT count(*) FROM unified_alerts WHERE domain='nips'`); n != 1 {
+		t.Errorf("%d alerts after many sweeps, want 1", n)
+	}
+	if controlplane.BeaconFailures.Load() != 0 {
+		t.Errorf("the sweep reported %d failure(s)", controlplane.BeaconFailures.Load())
+	}
+}
+
+// TestAZeroIntervalLeavesTheSweepIdle — the loop always runs, so turning the feature ON needs no restart;
+// an unset interval must therefore mean "do no work", not "sweep constantly".
+func TestAZeroIntervalLeavesTheSweepIdle(t *testing.T) {
+	pool := requireDB(t)
+	srv := controlplane.New(pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Now().UTC()
+	for i := 0; i < 20; i++ {
+		seedFlow(t, srv, "subject-idle", "c2.idle.example", now.Add(-time.Duration(20-i)*time.Minute), true)
+	}
+	go srv.RunBeaconLoop(ctx,
+		func() time.Duration { return 0 }, // not configured
+		func() controlplane.BeaconRule { return controlplane.BeaconRule{Window: 2 * time.Hour} }, nil)
+	// Sleep PAST the loop's idle beat. A shorter wait cannot distinguish "idle by design" from "has not
+	// ticked yet", which is how a fixture silently stops testing the thing it names.
+	time.Sleep(1500 * time.Millisecond)
+	if n := countRows(t, pool, `SELECT count(*) FROM unified_alerts WHERE domain='nips'`); n != 0 {
+		t.Errorf("an unconfigured sweep did %d detection(s) — zero must mean idle, not constant", n)
+	}
+}

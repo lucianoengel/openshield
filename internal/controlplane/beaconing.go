@@ -3,14 +3,17 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lucianoengel/openshield/internal/analytics/beacon"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/xdr"
 )
 
@@ -127,4 +130,34 @@ func (s *Server) DetectBeaconing(ctx context.Context, rule BeaconRule, now time.
 		}
 	}
 	return recorded, nil
+}
+
+// BeaconFailures counts sweeps that errored — a silent detector is one nobody notices has stopped.
+var BeaconFailures atomic.Int64
+
+// RunBeaconLoop sweeps for beaconing on its OWN schedule.
+//
+// Its own loop rather than a passenger on the correlation tick, and the reason is not tidiness: beaconing
+// needs a ~24h window where burst correlation uses ~1h. Sharing a tick would mean either re-scanning a
+// day of telemetry every correlation interval (redundant work, repeatedly), or measuring rhythm over an
+// hour (useless — an hourly beacon has one contact in it).
+//
+// Leader-only, like every other singleton sweep, and read PER TICK from providers so an operator can
+// retune the window or the thresholds without restarting (PLAT-5b). A failing tick is counted and logged,
+// never fatal.
+func (s *Server) RunBeaconLoop(ctx context.Context, interval func() time.Duration,
+	rule func() BeaconRule, log *slog.Logger) {
+	retain.DynamicLoop(ctx, interval, func(c context.Context) {
+		n, err := s.DetectBeaconing(c, rule(), s.now())
+		if err != nil {
+			BeaconFailures.Add(1)
+			if log != nil {
+				log.Error("beaconing sweep failed", slog.Any("err", err))
+			}
+			return
+		}
+		if n > 0 && log != nil {
+			log.Info("beaconing sweep recorded findings", slog.Int("count", n))
+		}
+	})
 }

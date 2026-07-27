@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 
+	"github.com/lucianoengel/openshield/internal/analytics/beacon"
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/controlplane"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
@@ -149,6 +150,27 @@ func main() {
 			}, nil)
 		fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation loop ACTIVE (interval read live "+
 			"from configuration; 0 = idle, no restart needed to change it)\n")
+
+		// NIPS-6: sweep for beaconing on its OWN schedule. A 24h rhythm window on a 1h correlation tick
+		// would either re-scan a day of telemetry every tick or measure rhythm over an hour, and neither
+		// is the job. Interval and thresholds are read PER TICK, so retuning needs no restart.
+		go srv.RunBeaconLoop(leaderCtx,
+			func() time.Duration { return cfg.Duration("OPENSHIELD_BEACON_INTERVAL") },
+			func() controlplane.BeaconRule {
+				reg, _ := strconv.ParseFloat(cfg.String("OPENSHIELD_BEACON_MIN_REGULARITY"), 64)
+				return controlplane.BeaconRule{
+					Window: cfg.Duration("OPENSHIELD_BEACON_WINDOW"),
+					Options: beacon.Options{
+						MinContacts:   cfg.Int("OPENSHIELD_BEACON_MIN_CONTACTS"),
+						MinRegularity: reg,
+						MinInterval:   5 * time.Second,
+					},
+					Allowlist: splitCSV(cfg.String("OPENSHIELD_BEACON_ALLOWLIST")),
+				}
+			}, nil)
+		fmt.Fprintf(os.Stderr, "openshield-server: beaconing sweep loop ACTIVE (interval read live; "+
+			"0 = idle). Most beacons on a real network are legitimate — it raises MEDIUM alerts with "+
+			"their evidence and enforces nothing.\n")
 
 		// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
 		// is — every replica running playbooks would multiply notifications, cases and legal holds.
@@ -768,4 +790,16 @@ func showConfig() int {
 		return 1
 	}
 	return 0
+}
+
+// splitCSV splits a comma-separated setting, dropping blanks. Trivial, but written once: three call sites
+// each trimming differently is how one of them ends up matching " host" and never firing.
+func splitCSV(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

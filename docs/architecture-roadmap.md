@@ -357,8 +357,9 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
 - **NIPS-6 · Raw TCP/L4 metadata connector + anomaly/beaconing detection** — P + C · L. **BEACONING
   SHIPPED (D280)**: MAD-based regularity over verified flow metadata, grouped per subject, medium-severity
   and evidence-carrying with an allowlist as configuration — because legitimate software beacons
-  constantly and a detector that is mostly known-good gets muted. *Remaining:* the raw L4 connector,
-  other anomaly families, process attribution, and scheduling it on a loop.
+  constantly and a detector that is mostly known-good gets muted. **Scheduled on its own leader-only loop (D281)** — a 24h rhythm window cannot ride a 1h correlation tick,
+  and zero means idle so it turns on without a restart. *Remaining:* the raw L4 connector, other anomaly
+  families, and process attribution.
 - **NIPS-8 deferred increments** — D. Local cache + upstream failover, sinkhole-to-walled-garden IP, TCP
   DNS, DoT/DoH, nftables-native backend. (Resolver + transparent redirect (local + forwarded) + bypass
   watchdog already ship.)
