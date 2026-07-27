@@ -90,6 +90,25 @@ func (p *pki) operator(t *testing.T, role, cn string) *http.Client {
 	}
 }
 
+// leafCert issues a role-tagged leaf and loads it as a client certificate.
+func (p *pki) leafCert(t *testing.T, role, cn string, extra ...string) tls.Certificate {
+	t.Helper()
+	out := filepath.Join(p.dir, "leaf-"+role+"-"+cn)
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{"cert", "--ca", filepath.Join(p.dir, "ca"), "--role", role, "--cn", cn,
+		"--out", out}, extra...)
+	if o, err := runCapture(t, "openshield-provision", nil, args...); err != nil {
+		t.Fatalf("issuing %s/%s: %v\n%s", role, cn, err, o)
+	}
+	cert, err := tls.LoadX509KeyPair(filepath.Join(out, "cert.pem"), filepath.Join(out, "key.pem"))
+	if err != nil {
+		t.Fatalf("loading %s/%s: %v", role, cn, err)
+	}
+	return cert
+}
+
 // serverMaterial issues the control plane's own certificate.
 func (p *pki) serverMaterial(t *testing.T) TLSMaterial {
 	t.Helper()

@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,21 +108,82 @@ func hostPort(t *testing.T, container, containerPort string) string {
 	return ""
 }
 
-// StartStack brings up Postgres and NATS on ephemeral ports and returns their addresses.
+// ONE POSTGRES CONTAINER FOR THE WHOLE PACKAGE, one DATABASE per scenario.
+//
+// Starting a Postgres container per scenario was costing more than the scenarios: the image initialises,
+// shuts down and restarts before it serves, and doing that forty-odd times in one run starved the
+// machine badly enough that two scenarios which pass alone failed under `make all` — the control plane
+// was not listening after sixty seconds.
+//
+// The instinct is to raise the timeout. That is the move D284 recorded as wrong: it would make the
+// failures slower to arrive without making them rarer. The load is the defect, so the load is what
+// changed. Isolation is preserved where it matters — every scenario still gets its own DATABASE, so no
+// scenario sees another's rows, and the forward-secure ledger's per-signer chain is unaffected.
+//
+// NATS stays per-scenario: its subjects are fixed constants, so a shared broker would let one scenario's
+// telemetry arrive in another's control plane. It is also the cheap half — it starts in well under a
+// second.
+var (
+	pgOnce sync.Once
+	pgAddr string
+	pgErr  error
+	pgSeq  atomic.Uint64
+)
+
+// sharedPostgres starts the package's single Postgres, once.
+func sharedPostgres(t *testing.T) string {
+	t.Helper()
+	pgOnce.Do(func() {
+		name := fmt.Sprintf("osint-shared-pg-%d", time.Now().UnixNano()%1e9)
+		out, err := exec.Command("podman", "run", "-d", "--rm", "--name", name,
+			"-e", "POSTGRES_USER="+pgUser, "-e", "POSTGRES_PASSWORD="+pgPassword,
+			"-e", "POSTGRES_DB="+pgDatabase,
+			"-p", "127.0.0.1::5432", postgresImage).CombinedOutput()
+		if err != nil {
+			pgErr = fmt.Errorf("starting the shared postgres: %v\n%s", err, out)
+			return
+		}
+		sharedPGName = name
+		port := hostPort(t, name, "5432/tcp")
+		pgAddr = "127.0.0.1:" + port
+		waitTCP(t, pgAddr, 90*time.Second)
+		waitPostgresReady(t, name, 90*time.Second)
+		waitPostgresQueryable(t, fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable",
+			pgUser, pgPassword, pgAddr, pgDatabase))
+	})
+	if pgErr != nil {
+		t.Fatalf("%v", pgErr)
+	}
+	return pgAddr
+}
+
+// sharedPGName is removed by TestMain; a t.Cleanup would tear it down after the first scenario.
+var sharedPGName string
+
+// newDatabase creates a fresh database on the shared server and returns its DSN.
+func newDatabase(t *testing.T, addr string) string {
+	t.Helper()
+	admin := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, addr, pgDatabase)
+	pool, err := pgxpool.New(Ctx(t), admin)
+	if err != nil {
+		t.Fatalf("connecting to the shared postgres: %v", err)
+	}
+	defer pool.Close()
+	name := fmt.Sprintf("osint_%d", pgSeq.Add(1))
+	if _, err := pool.Exec(Ctx(t), `CREATE DATABASE "`+name+`"`); err != nil {
+		t.Fatalf("creating %s: %v", name, err)
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, addr, name)
+}
+
+// StartStack brings up the scenario's infrastructure: a database on the shared Postgres, and its own
+// NATS broker.
 func StartStack(t *testing.T) *Stack {
 	t.Helper()
 	requirePodman(t)
 	s := &Stack{t: t}
-
-	pgName := uniqueName(t, "pg")
-	run(t, "podman", "run", "-d", "--rm", "--name", pgName,
-		"-e", "POSTGRES_USER="+pgUser, "-e", "POSTGRES_PASSWORD="+pgPassword,
-		"-e", "POSTGRES_DB="+pgDatabase,
-		"-p", "127.0.0.1::5432", postgresImage)
-	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", pgName).Run() })
-	pgPort := hostPort(t, pgName, "5432/tcp")
-	s.hostPort = "127.0.0.1:" + pgPort
-	s.DSN = fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, pgDatabase)
+	s.hostPort = sharedPostgres(t)
+	s.DSN = newDatabase(t, s.hostPort)
 
 	natsName := uniqueName(t, "nats")
 	// -js because durable ingest is the DEFAULT (PLAT-2): a producer started against a JetStream-less
@@ -132,13 +194,19 @@ func StartStack(t *testing.T) *Stack {
 	natsPort := hostPort(t, natsName, "4222/tcp")
 	s.NATSURL = "nats://127.0.0.1:" + natsPort
 
-	waitTCP(t, "127.0.0.1:"+pgPort, 60*time.Second)
 	waitTCP(t, "127.0.0.1:"+natsPort, 60*time.Second)
-	// A listening socket is not a ready database: Postgres accepts connections briefly before it will
-	// serve queries, and a harness that raced that would fail in a way that looks like a product bug.
-	waitPostgresReady(t, pgName, 60*time.Second)
-	waitPostgresQueryable(t, s.DSN)
 	return s
+}
+
+// TestMain removes the shared Postgres after the last scenario. A t.Cleanup would tear it down after
+// the FIRST one, and every later scenario would start its own — silently restoring the churn this
+// exists to remove, while still passing.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedPGName != "" {
+		_ = exec.Command("podman", "rm", "-f", sharedPGName).Run()
+	}
+	os.Exit(code)
 }
 
 func waitTCP(t *testing.T, addr string, timeout time.Duration) {

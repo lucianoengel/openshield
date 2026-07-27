@@ -24,8 +24,14 @@ usage:
   openshield-provision ca-init --out DIR
       write ca.pem + ca-key.pem (the CA private key is the trust root — guard it)
 
-  openshield-provision cert --ca DIR --role agent|operator --cn NAME [--san S ...] --out DIR
+  openshield-provision cert --ca DIR --role agent|operator|analyst|responder|admin \
+      --cn NAME [--san S ...] --out DIR
       issue a leaf cert (cert.pem + key.pem) signed by the CA, role in Subject OU
+
+  openshield-provision cert --ca DIR --role client --cn IDENTITY --group GROUP --out DIR
+      issue a ZERO-TRUST CLIENT certificate (D86) for the access proxy. The group
+      is the authorization group an access policy matches on, and is required —
+      a client certificate with no group is one every policy must special-case.
 
   openshield-provision escrow-keygen --out DIR
       write escrow-pub (to endpoints) + escrow-priv (to the off-endpoint vault)
@@ -105,7 +111,25 @@ func cert(f map[string][]string) int {
 	if err != nil {
 		return fail("reading CA key: %v", err)
 	}
-	certPEM, keyPEM, err := provision.IssueCert(caCert, caKey, cn, role, f["san"])
+	// ZERO-TRUST CLIENT certificates have their OWN issuance path, and until D305 nothing could reach
+	// it (`IssueClientCert` had no caller). That was not merely dead code: the access proxy REQUIRES a
+	// certificate with the client role AND an authorization group, and refuses an agent or operator
+	// certificate by design (D86). So the entire access mode was unusable — a deployment could configure
+	// it, the binary would start and log "ZERO-TRUST ACCESS MODE", and no certificate the product could
+	// issue would ever be admitted.
+	//
+	// The GROUP is what a policy authorizes on, so it is required rather than defaulted: a client
+	// certificate with no group is one every policy has to special-case.
+	var certPEM, keyPEM []byte
+	if role == provision.RoleClient {
+		group := one(f, "group")
+		if group == "" {
+			return fail("a client certificate needs --group (the authorization group a policy matches on)")
+		}
+		certPEM, keyPEM, err = provision.IssueClientCert(caCert, caKey, cn, group)
+	} else {
+		certPEM, keyPEM, err = provision.IssueCert(caCert, caKey, cn, role, f["san"])
+	}
 	if err != nil {
 		return fail("%v", err)
 	}
