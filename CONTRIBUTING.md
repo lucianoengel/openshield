@@ -64,7 +64,19 @@ Most of the suite needs only Go. These unlock the tests that would otherwise ski
 | root on a throwaway machine | fanotify exec-permission, TPROXY, DNS redirect, the real USB `authorized_default` write | never run these on a machine you care about; they change kernel state |
 
 Run `go test ./... -v 2>&1 | grep -c SKIP` occasionally. A number that grows is a suite quietly
-shrinking.
+shrinking. And when a gated test finally runs for the first time, **expect it to fail** — one of the
+nineteen root-gated tests had never passed since the day it was written, because it marked a directory
+where it needed to mark a file. A test that has never executed has never been debugged.
+
+### A suite of negatives can be entirely vacuous
+
+Tests that assert "this is refused" all pass when EVERYTHING is refused — including for a reason that has
+nothing to do with what they claim to check. D316 wrote seven OIDC scenarios, six of them negatives; the
+tokens were signed with an algorithm the verifier rejects outright, so every one was refused before any
+checked property was reached. Six tests green and proving nothing. Only the positive case caught it.
+
+**Every set of negative tests needs a positive alongside it**, and the positive is what proves the
+negatives are reachable at all.
 
 ## How work is tracked
 

@@ -29,14 +29,25 @@ func TestFanotifyPermissionAnsweredForReal(t *testing.T) {
 	}
 	defer unix.Close(fd)
 
-	dir := t.TempDir()
-	if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, unix.FAN_OPEN_PERM, unix.AT_FDCWD, dir); err != nil {
-		t.Skipf("LOUD SKIP: cannot add FAN_OPEN_PERM mark (need privilege): %v", err)
-	}
-
-	target := filepath.Join(dir, "watched.txt")
+	// THE FILE IS CREATED FIRST AND THE MARK GOES ON THE FILE, not on its directory (D316).
+	//
+	// This test was written at T-011 and, until it was finally run on real hardware, marked `t.TempDir()`
+	// — and a plain DIRECTORY inode mark does not deliver permission events for files opened WITHIN that
+	// directory. It delivers them for opens of the DIRECTORY ITSELF. So the triggering open produced no
+	// event, nothing was ever read, and the test timed out. It could only ever have failed; it had simply
+	// never run, because it skips without CAP_SYS_ADMIN and the build host deliberately has none.
+	//
+	// This is the SAME kernel fact D224 paid for in `execmon`, where a directory mark silently let a
+	// denied binary execute, and the fix there was FAN_MARK_MOUNT. A mount mark is wrong HERE: the mount
+	// is /tmp, so it would deliver every other process's opens on the whole tmpfs, and this test answers
+	// and CLOSES the fd of whatever it reads — it would interfere with unrelated processes and be flaky
+	// in exactly the way a privileged test must not be. Marking the one file is precise and sufficient.
+	target := filepath.Join(t.TempDir(), "watched.txt")
 	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD, unix.FAN_OPEN_PERM, unix.AT_FDCWD, target); err != nil {
+		t.Skipf("LOUD SKIP: cannot add FAN_OPEN_PERM mark (need privilege): %v", err)
 	}
 
 	// Reader loop: decode one permission event and hand it to the watchdog.
@@ -69,20 +80,45 @@ func TestFanotifyPermissionAnsweredForReal(t *testing.T) {
 		answered <- err
 	}()
 
-	// Trigger the permission event. This open blocks until the watchdog answers.
-	f, err := os.Open(target)
-	if err != nil {
-		t.Fatalf("open blocked/failed unexpectedly: %v", err)
-	}
-	_ = f.Close()
+	// THE TRIGGERING OPEN RUNS IN ITS OWN GOROUTINE, so an unanswered event fails this test with a
+	// diagnosis instead of hanging it (D316).
+	//
+	// The open BLOCKS IN THE KERNEL until something answers, and this process is both the trigger and the
+	// responder. Opening on the main goroutine therefore meant that a responder which never answered
+	// blocked before the select below could fire: the failure surfaced as Go's test-timeout panic, tens of
+	// seconds later, naming nothing. Verified by mutation — deleting the response write produced exactly
+	// that. Off the main goroutine, the select wins and says what went wrong.
+	opened := make(chan error, 1)
+	go func() {
+		f, err := os.Open(target)
+		if err == nil {
+			_ = f.Close()
+		}
+		opened <- err
+	}()
 
 	select {
 	case err := <-answered:
 		if err != nil {
 			t.Fatalf("watchdog failed to answer the real event: %v", err)
 		}
+		// The blocked open must now COMPLETE. An answer the kernel did not act on would leave the caller
+		// stuck, which is the outcome the fail-open contract exists to prevent (D17): a watchdog that
+		// reports success while the process it was gating never resumes has hung the machine, not
+		// protected it.
+		select {
+		case err := <-opened:
+			if err != nil {
+				t.Errorf("the open failed after an ALLOW verdict: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the watchdog answered ALLOW and the open never returned — the caller is still " +
+				"blocked in the kernel, which is an outage rather than an enforcement")
+		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the open was not answered — the kernel edge did not respond")
+		t.Fatal("the open was not answered — the kernel edge did not respond. If the mark was placed on " +
+			"a DIRECTORY, this is the expected outcome and not a product fault: a directory inode mark " +
+			"delivers permission events for opens OF THE DIRECTORY, not for files opened inside it")
 	}
 }
 

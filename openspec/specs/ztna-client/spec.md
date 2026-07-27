@@ -44,3 +44,32 @@ worse than no broker, because it looks like protection.
 #### Scenario: No identity means no listener
 - **WHEN** the client is started without a device certificate
 - **THEN** it exits with an error and opens no local listener
+
+### Requirement: SSO identity is verified on the request path
+When an OIDC issuer is configured, the access proxy MUST resolve the USER identity from a verified bearer
+token, and a request without a valid token MUST be refused even with a valid device certificate.
+
+The mTLS certificate says which DEVICE; the token says which PERSON. A gateway that verified device
+identity perfectly and ignored the token would admit anyone holding a laptop. Eleven settings configured
+this path and none was exercised against a running binary before D316.
+
+#### Scenario: A valid token authorizes and its role reaches the policy
+- **WHEN** a request presents a device certificate and a token signed by an enrolled key, carrying the
+  authorized role
+- **THEN** it is admitted and reaches the origin
+- **AND** a token verified from the SAME key but carrying an unauthorized role is refused, because
+  verifying who someone is, is not deciding what they may reach
+
+#### Scenario: A forged, expired, misaddressed or foreign token is refused
+- **WHEN** a token is signed by an unknown key, expired well beyond the leeway, minted for another
+  audience, or issued by another issuer
+- **THEN** each is refused and the origin is never reached
+- **AND** these are asserted ALONGSIDE the positive case, because negatives all pass when everything is
+  refused: the first version of these signed with an algorithm the verifier rejects outright, so six of
+  seven scenarios were green and vacuous
+
+#### Scenario: A broken identity source aborts startup
+- **WHEN** the OIDC key directory is unreadable, or the JWKS URL is plaintext HTTP
+- **THEN** the gateway refuses to start
+- **AND** a zero-trust gate that comes up with a broken identity source admits requests it cannot
+  attribute, and looks healthy doing it; a plaintext key source lets anyone on the path mint identities

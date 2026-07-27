@@ -244,3 +244,43 @@ Four rounds, four greppable shapes:
 2. A file format with a reader and no writer (three instances).
 3. A gated test whose gate is never satisfied (`swtpm`, `xvfb`, `pg_dump`).
 4. A procedure with no runner (`internal/backup`).
+
+
+## Round 5 (D316): what running the SKIPS found, and a coverage number
+
+The previous rounds hunted unwired CODE. This one asked a different question — **which tests have never
+actually executed** — and got two answers.
+
+### The 19 root-gated tests, run on the VM against current code
+
+18 passed. **`TestFanotifyPermissionAnsweredForReal` failed, and had never passed since it was written at
+T-011.** It marked `t.TempDir()`, and a plain directory inode mark does not deliver permission events for
+files opened INSIDE that directory — the same kernel fact D224 paid for in `execmon`, where a directory
+mark silently let a denied binary run. The test could only ever have failed; it had simply never run,
+because it skips without CAP_SYS_ADMIN and the build host deliberately has none.
+
+It also failed BADLY: the triggering open blocks in the kernel on the main goroutine, so an unanswered
+event hung the test until Go's timeout panicked, naming nothing. It now triggers off the main goroutine
+and fails in five seconds saying the caller is still blocked.
+
+### Integration coverage, measured rather than asserted
+
+**57% of 168 declared settings** are exercised by the integration suite. The largest coherent hole was
+OIDC — eleven settings, the whole ZT-2 identity path, which decides WHO rather than which device — and it
+now has scenarios. The remaining gaps are listed below and are the next work.
+
+### The vacuous-negative trap, in its purest form
+
+The first version of the OIDC scenarios signed tokens with ES256, which the verifier refuses outright as
+an unsupported algorithm. Every token was therefore rejected before any property under test was reached,
+so all six NEGATIVE scenarios passed — "expired token refused", "wrong audience refused", "forged
+signature refused", all green, all proving nothing. One positive case failed and exposed it.
+
+A negative test suite is only as good as the positive that proves its cases are reachable. This is the
+same shape as a gated test that never runs: green means nothing when the code path was never entered.
+
+### Still not covered (the next work)
+
+Beaconing (5 settings), break-glass, ENCRYPT_LOCAL keys, JetStream/queue durability, the exec-gate
+settings at integration level, CASB catalog, the ITSM/IdP integration runners, EDM/IDM indexes, the
+attestation hardening knobs (EK roots, pre-auth tokens, enrollments file), and the external witness key.
