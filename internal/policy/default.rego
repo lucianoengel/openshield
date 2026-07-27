@@ -31,17 +31,40 @@ behavioral_alert if {
 	input.event.behavioral.score >= 0.5
 }
 
-# A single alert flag composes the two alert conditions, so the ALERT/ALLOW decision rules stay
+# NIPS-2 (D300): a threat-intel match on the flow's destination. The engine matched an operator-supplied
+# indicator — a domain, an IP, a CIDR or a URI substring — against this flow.
+#
+# It ALERTS, never blocks, for the same reason everything else here does (D1, observe-only by default):
+# a public feed turning into automatic egress denial is how a poisoned or stale indicator becomes a
+# self-inflicted outage. An operator raises this to BLOCK deliberately, which is what the closed action
+# set is for.
+#
+# WITHOUT THIS RULE THE ENGINE WAS INERT. No shipped policy read `input.threat`, so a gateway logged
+# "NIPS-2 threat-intel engine active", matched indicators, and did nothing with them — the feature
+# existed everywhere except at the point where a match becomes a decision.
+threat_match if {
+	count(input.threat.matches) > 0
+}
+
+# A single alert flag composes the alert conditions, so the ALERT/ALLOW decision rules stay
 # mutually exclusive (no conflicting `decision` value for one input).
 alert if { alerting_hit }
 
 alert if { behavioral_alert }
+
+alert if { threat_match }
 
 reason := "checksum-backed PII detected above the alert threshold" if { alerting_hit }
 
 reason := "suspicious process behavior" if {
 	behavioral_alert
 	not alerting_hit
+}
+
+reason := "destination matched an operator threat-intel indicator" if {
+	threat_match
+	not alerting_hit
+	not behavioral_alert
 }
 
 decision := d if {

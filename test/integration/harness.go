@@ -176,9 +176,24 @@ var (
 	buildErr  error
 )
 
+// BinDirEnv names a directory of PRE-BUILT binaries, used instead of compiling.
+//
+// It exists for the rooted VM (kernel scenarios need real root, which this build host does not have and
+// must not have). The VM has no Go toolchain, so the workflow is: build here, copy the binaries and the
+// compiled test binary over, and run there. Without this the suite would silently skip on the one host
+// where the privileged paths can actually be exercised.
+const BinDirEnv = "OPENSHIELD_INTEGRATION_BIN_DIR"
+
 // Binary builds the named command if needed and returns its path.
 func Binary(t *testing.T, name string) string {
 	t.Helper()
+	if dir := os.Getenv(BinDirEnv); dir != "" {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s=%s but %s is not there: %v", BinDirEnv, dir, name, err)
+		}
+		return p
+	}
 	buildOnce.Do(func() {
 		binDir, buildErr = os.MkdirTemp("", "openshield-integration-bin")
 		if buildErr != nil {
