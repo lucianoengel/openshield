@@ -134,3 +134,27 @@ declarations, list the revision history with what each change replaced, and rest
 #### Scenario: A rollback lengthens the history
 - **WHEN** a prior revision is restored
 - **THEN** the restoration is itself a new revision and no earlier revision is removed
+
+### Requirement: A break-glass override applies and is announced
+A dynamic field named in `OPENSHIELD_BREAKGLASS` SHALL take its environment value, and the process SHALL
+announce every such override at startup as well as reporting its origin on the configuration surface.
+
+The scope split's promise is a conjunction, and only the conjunction is safe: an override that does not
+apply is a broken incident tool, and one that is not reported recreates the silent console/host
+divergence the split exists to refuse. Until D317 the process announced only the HARMLESS case — a
+dynamic env value being IGNORED — and said nothing about the consequential one, so a host deliberately
+not running what the console shows was visible only to somebody who thought to query `/config`. That
+asymmetry is backwards: during an incident, "why is this host different" is asked of logs first.
+
+#### Scenario: The override applies, is logged, and is shown with its origin
+- **WHEN** a dynamic field is named in break-glass and set in the environment, and a different value is
+  stored in the database
+- **THEN** the process honours the environment value, announces the active override at startup, and
+  `/config` reports that field with a break-glass origin and the effective (not stored) value
+
+#### Scenario: An unnamed field is not overridden
+- **WHEN** break-glass names one field and a DIFFERENT dynamic field is also set in the environment
+- **THEN** the stored value wins for the unnamed field
+- **AND** the scenario asserts WHICH value was loaded rather than waiting for silence: the loader runs on
+  a tick, so "nothing happened yet" is not evidence, and a mutation making break-glass a general escape
+  passed against the version that waited

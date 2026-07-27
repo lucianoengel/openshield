@@ -106,6 +106,14 @@ func main() {
 	srv.SetConfigResolver(cfg)
 	// A dynamic field set in the environment does NOT take effect — and is never silent about it, because
 	// the operator who set one believes it is doing something.
+	// The BREAK-GLASS overrides in force. Announced loudly, because this host is deliberately not running
+	// what the console says, and the person who needs to know that is whoever reads the logs during the
+	// next incident — not whoever thinks to query /config (D317).
+	if active := cfg.ActiveOverrides(); len(active) > 0 {
+		fmt.Fprintf(os.Stderr, "openshield-server: BREAK-GLASS OVERRIDES ACTIVE for %v — these are taken "+
+			"from the ENVIRONMENT and this host is NOT running the stored value the console shows. "+
+			"Remove them from %s once the incident is over.\n", active, config.BreakGlassEnv)
+	}
 	if ignored := cfg.IgnoredOverrides(); len(ignored) > 0 {
 		fmt.Fprintf(os.Stderr, "openshield-server: IGNORING environment values for dynamic settings %v — "+
 			"these are stored in the database and changed there; set %s=<KEY> to override one deliberately "+

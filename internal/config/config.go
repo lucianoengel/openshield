@@ -262,6 +262,32 @@ func (r *Resolver) IgnoredOverrides() []string {
 	return out
 }
 
+// ActiveOverrides is every dynamic field this process is taking from the ENVIRONMENT because
+// break-glass named it (D317).
+//
+// The mirror of IgnoredOverrides, and the more important of the two. The scope split's promise is that
+// an override "applies AND is reported" — but until D317 the process only announced the case where an
+// env value was IGNORED, which is the harmless one. The consequential case, where a host is deliberately
+// NOT running what the console says, was visible only to somebody who thought to query /config.
+//
+// That asymmetry is backwards: we shouted about the setting that does nothing and were silent about the
+// one that changes behaviour. During an incident, "why is this host different" is asked of logs first.
+func (r *Resolver) ActiveOverrides() []string {
+	var out []string
+	keys := breakGlassKeys()
+	for _, key := range r.order {
+		f := r.fields[key]
+		if f.Scope != ScopeDynamic || !keys[key] {
+			continue
+		}
+		if v, ok := os.LookupEnv(key); ok && v != "" {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // String returns a field's effective value.
 func (r *Resolver) String(key string) string { v, _ := r.raw(key); return v }
 

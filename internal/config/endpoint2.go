@@ -128,6 +128,8 @@ var FleetAgentFields = []Field{
 		Description: "Maximum spooled events before the oldest are dropped."},
 	{Key: "OPENSHIELD_POSTURE_SIGNING_KEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Signing key for opt-in device-posture reporting (HON-4). Unset means no posture is reported."},
+	{Key: "OPENSHIELD_ENROLL_PREAUTH_TOKEN", Scope: ScopeBootstrap, Kind: KindSecret, Default: "",
+		Description: "A single-use pre-authorization token issued by the operator, presented when self-enrolling an attestation key. Required only when the gateway sets OPENSHIELD_ENROLL_PREAUTH_TOKENS; ignored otherwise, so one agent configuration serves both."},
 	{Key: "OPENSHIELD_ATTEST_SELF_ENROLL", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Set to have the agent enrol its attestation key with the gateway over the network (ZT-1), proving the AK is TPM-resident by credential activation. Opt-in because a device asserting its own identity to the control plane is what OPENSHIELD_ENROLL_PREAUTH_TOKENS and OPENSHIELD_EK_ROOTS exist to constrain. The alternative is an operator-captured file: openshield-provision attest-capture."},
 	{Key: "OPENSHIELD_ATTEST_PCRS", Scope: ScopeBootstrap, Kind: KindString, Default: "",

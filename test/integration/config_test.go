@@ -76,6 +76,11 @@ func TestADynamicSettingSavedInTheDatabaseTakesEffect(t *testing.T) {
 	stack := StartStack(t)
 	migrateStack(t, stack)
 	setDynamic(t, stack, "OPENSHIELD_PLAYBOOKS", writePlaybookFile(t))
+	// The loader's default tick is ONE MINUTE and its FIRST wait uses the value read at loop start, so
+	// without this the scenario spends a minute proving nothing about what it tests: whether the stored
+	// value is honoured, not how often the loop runs. Two scenarios like this were most of the reason
+	// the suite outgrew Go's default binary timeout (D317).
+	setDynamic(t, stack, "OPENSHIELD_PLAYBOOK_INTERVAL", "1s")
 
 	srv := Start(t, "openshield-server", []string{
 		"OPENSHIELD_DSN=" + stack.DSN,

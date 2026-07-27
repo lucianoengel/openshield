@@ -265,7 +265,13 @@ func selfEnroll(conn *nats.Conn, tpm *attest.TPM, ak *attest.AK, subject string,
 		return fmt.Errorf("creating the endorsement key: %w", err)
 	}
 	defer func() { _ = tpm.FlushEK(ek) }()
-	return posture.Enroll(conn, tpm, ek, ak, subject, pcrs)
+	// The operator's PRE-AUTHORIZATION token, when the deployment issues them (D317). Empty is correct
+	// and common: a gateway without OPENSHIELD_ENROLL_PREAUTH_TOKENS ignores the field, so one agent
+	// shape serves both. Until D317 nothing could send one at all, which meant a gateway that turned
+	// the guard ON could not be enrolled by any shipped client — the control did not make enrollment
+	// stricter, it made it impossible.
+	return posture.EnrollWithToken(conn, tpm, ek, ak, subject, pcrs,
+		os.Getenv("OPENSHIELD_ENROLL_PREAUTH_TOKEN"))
 }
 
 // setUpAttestation opens the TPM, creates the AK, optionally self-enrolls, and starts the attest loop.

@@ -368,3 +368,26 @@ the tool's own instructions produced an inert posture channel with one startup w
 - **THEN** the command fails and the file is left byte-for-byte unchanged
 - **AND** rewriting around the bad line would produce a file that loads, having dropped agents nobody
   chose to unenrol — and unenrolled posture is never applied
+
+### Requirement: A device can present an enrollment pre-authorization token
+The enrollment client SHALL be able to carry an operator-issued pre-authorization token, so that a
+gateway requiring one can still be enrolled.
+
+R34-2 added single-use tokens so that not just any device with a co-resident TPM may self-enrol. The
+request field, the constant-time comparison and the single-use accounting were all built while NOTHING
+COULD SEND ONE — `EnrollToken` had no producer anywhere in the tree. That is worse than an unenforced
+control: turning the guard on did not make enrollment stricter, it made the capability IMPOSSIBLE, so the
+only way to run the product was with its own guard disabled.
+
+#### Scenario: A pre-authorized device enrols and an unauthorized one does not
+- **WHEN** a gateway requires pre-authorization tokens and two devices attempt to self-enrol, one
+  presenting the operator's token and one presenting none
+- **THEN** the first enrols and becomes attested; the second is refused and stays unattested
+- **AND** both halves are asserted together, because a gateway that refused EVERY enrollment would
+  satisfy the negative alone — and that was the actual state before this was wired
+
+#### Scenario: A fabricated EK is refused when manufacturer anchoring is required
+- **WHEN** EK-certificate anchoring is configured and a software TPM attempts to self-enrol
+- **THEN** enrollment is refused
+- **AND** the honest limit: this proves an uncertified EK is refused, not that a certified one is
+  accepted, which needs real vendor hardware

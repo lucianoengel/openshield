@@ -39,7 +39,12 @@ func configPost(t *testing.T, c *http.Client, base string, note string, changes 
 // the surface an operator has rather than through SQL.
 func TestASavedSettingTakesEffectThroughTheAPI(t *testing.T) {
 	p := newPKI(t)
-	_, srv, base := mtlsServer(t, p)
+	// Only the TICK is pre-seeded, and it must happen BEFORE the server boots: the loop's first wait uses
+	// the interval read at loop start, so setting it through the API below cannot shorten a minute
+	// already being waited. The scenario would otherwise spend that minute measuring the default rather
+	// than the thing under test — whether a setting saved through the OPERATOR'S SURFACE reaches a
+	// running process. The playbook path, which IS what is under test, still arrives via the API.
+	_, srv, base := mtlsServer(t, p, map[string]string{"OPENSHIELD_PLAYBOOK_INTERVAL": "1s"})
 	admin := p.operator(t, "admin", "root")
 
 	code, body := configPost(t, admin, base, "enable orchestration", map[string]string{

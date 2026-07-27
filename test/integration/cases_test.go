@@ -131,11 +131,19 @@ func tlsEnv(m TLSMaterial) []string {
 
 // mtlsServer starts a control plane whose HTTP surface AND broker connection are mutually
 // authenticated against one CA, and returns its base URL.
-func mtlsServer(t *testing.T, p *pki) (*Stack, *Process, string) {
+func mtlsServer(t *testing.T, p *pki, seed ...map[string]string) (*Stack, *Process, string) {
 	t.Helper()
 	m := p.serverMaterial(t)
 	stack := StartStackTLS(t, m)
 	migrateStack(t, stack)
+	// SEEDED BEFORE THE SERVER STARTS, which is the whole point of the parameter: a loop whose first wait
+	// uses the interval read at start cannot be shortened by setting that interval afterwards. Seeding
+	// after boot looks identical in the source and does nothing.
+	for _, kv := range seed {
+		for k, v := range kv {
+			setDynamic(t, stack, k, v)
+		}
+	}
 	addr := "127.0.0.1:" + freePort(t)
 	srv := Start(t, "openshield-server", append([]string{
 		"OPENSHIELD_DSN=" + stack.DSN,

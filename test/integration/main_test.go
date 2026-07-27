@@ -5,6 +5,7 @@ package integration
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,16 @@ import (
 // suite asserts on. It needs a guard that watches the machine, which is what TestTheSuiteCleansUpAfterItself
 // below does.
 func TestMain(m *testing.M) {
+	// REAP FIRST. A run that DIES — a timeout panic, a SIGKILL, a machine losing power — never reaches
+	// the cleanup below, so its containers and build directory outlive it. That happened the first time
+	// the suite outgrew Go's default 10-minute binary timeout (D317): the panic killed the process
+	// mid-scenario and left three containers behind.
+	//
+	// Reaping at START makes the suite self-healing rather than merely self-reporting, and it does NOT
+	// weaken the guard below. The guard exists to catch TestMain NOT BEING CALLED AT ALL — the defect
+	// that hid it in harness.go for four rounds — and if TestMain is not called then neither is this
+	// reap, so the leftovers persist and the guard still fires. Verified by re-running that mutation.
+	reapLeftovers()
 	code := m.Run()
 	if sharedPGName != "" {
 		_ = exec.Command("podman", "rm", "-f", sharedPGName).Run()
@@ -89,5 +100,28 @@ func TestTheSuiteCleansUpAfterItself(t *testing.T) {
 			"Each holds every command in the tree (~196MB). 130 had accumulated, filling the root "+
 			"filesystem, and the symptom was the gate failing to LINK with 'no space left on device' on a "+
 			"tree whose code was fine.", len(dirs), os.TempDir(), dirs)
+	}
+}
+
+// reapLeftovers removes this suite's containers and build directories from runs that have already
+// finished. It touches ONLY names this suite creates — removing a container we did not start would be a
+// test that damages its host, which is the failure this whole area is about.
+func reapLeftovers() {
+	out, err := exec.Command("podman", "ps", "-a", "--format", "{{.Names}}").Output()
+	if err == nil {
+		for _, name := range strings.Fields(string(out)) {
+			if strings.HasPrefix(name, containerPrefix) {
+				_ = exec.Command("podman", "rm", "-f", name).Run()
+			}
+		}
+	}
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), buildDirPrefix) {
+			_ = os.RemoveAll(filepath.Join(os.TempDir(), e.Name()))
+		}
 	}
 }

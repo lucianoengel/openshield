@@ -284,3 +284,57 @@ same shape as a gated test that never runs: green means nothing when the code pa
 Beaconing (5 settings), break-glass, ENCRYPT_LOCAL keys, JetStream/queue durability, the exec-gate
 settings at integration level, CASB catalog, the ITSM/IdP integration runners, EDM/IDM indexes, the
 attestation hardening knobs (EK roots, pre-auth tokens, enrollments file), and the external witness key.
+
+
+## Round 6 (D317): an UNSATISFIABLE guard, and two more vacuous tests of my own
+
+### The new shape: a control that cannot be satisfied
+
+R34-2's enrollment pre-authorization token was enforced server-side — request field, constant-time
+comparison, single-use accounting, all built and unit-tested — and `EnrollToken` **had no producer
+anywhere in the tree**. A deployment that turned the guard ON could not be enrolled by any shipped
+client: every request arrived with an empty token and was correctly, permanently refused.
+
+That is worse than an unenforced control. An inert feature does nothing; this one made the CAPABILITY
+IMPOSSIBLE, so the only way to run the product was with its own security guard switched off — and an
+operator doing that would reasonably conclude the guard was broken rather than unwired.
+
+**Shape #5: a guard with an enforcer and no way to satisfy it.** Greppable the same way as the others —
+a proto field read on one side and written nowhere.
+
+### Break-glass announced the harmless case and hid the consequential one
+
+The config scope split promises that an override "applies AND is reported". The process announced only
+the case where a dynamic env value was IGNORED — which changes nothing — and was silent when an override
+was actually IN FORCE. A host deliberately not running what the console shows was visible only to
+somebody who thought to query `/config`. Backwards: during an incident, "why is this host different" is
+asked of logs first.
+
+### Two more of my own tests were vacuous
+
+Following D316's OIDC lesson, and it recurred in a new form:
+
+- **`TestAnUnnamedFieldIsNotOverridden` measured its own patience.** It waited two seconds and asserted
+  orchestration had not started — but the playbook loader runs on a TICK, so the absence proved nothing,
+  and the mutation making break-glass a general env escape walked straight through. **The timing form of
+  the vacuous negative:** "X did not happen" is evidence only if X would have been observable in the
+  window.
+- **The fix's first attempt was worse:** a second server as a clock. The loop is LEADER-ONLY, so two
+  servers contend for the lock and the control silently loses — flaky rather than wrong, which is the
+  worse failure. Resolved by making the single subject its own witness: both sources name a valid but
+  DIFFERENT file, so the process announces either way and the announcement names the path. Assert WHICH
+  VALUE WON rather than waiting for silence.
+
+### The running score
+
+Six rounds, five greppable shapes:
+
+1. A protocol with a server and no client.
+2. A file format with a reader and no writer (×3).
+3. A gated test whose gate is never satisfied (×3, one of which had never passed).
+4. A procedure with no runner.
+5. **A guard with an enforcer and no way to satisfy it.**
+
+And three ways a green test can mean nothing: it never ran (skips), everything was refused for an
+unrelated reason (vacuous negatives), or the window was too short for the thing to have happened
+(timing).

@@ -78,6 +78,13 @@ checked property was reached. Six tests green and proving nothing. Only the posi
 **Every set of negative tests needs a positive alongside it**, and the positive is what proves the
 negatives are reachable at all.
 
+The same trap has a TIMING form. "X did not happen" is only evidence if X would have been observable in
+the window you waited. A loop that runs on a tick has not necessarily run after two seconds, so the
+absence measures your patience rather than the product — D317 wrote a test that a mutation walked
+straight through for exactly this reason. Prefer an assertion that names WHICH value won over one that
+waits for silence; and if you do need a clock, note that leader-only work cannot be calibrated by
+starting a second process, because the two contend and one silently loses.
+
 ## How work is tracked
 
 Three documents, three jobs, deliberately no overlap — an earlier setup kept two sources of

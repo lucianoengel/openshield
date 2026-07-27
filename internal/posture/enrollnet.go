@@ -17,6 +17,22 @@ import (
 // secret. On success the gateway has enrolled the device and it can then Attest.
 // subject MUST be the device's canonical pseudonym (the key the gateway will hold).
 func Enroll(conn *nats.Conn, tpm *attest.TPM, ek *attest.EK, ak *attest.AK, subject string, pcrs []int) error {
+	return EnrollWithToken(conn, tpm, ek, ak, subject, pcrs, "")
+}
+
+// EnrollWithToken is Enroll carrying an operator-issued PRE-AUTHORIZATION token (D317).
+//
+// R34-2 added single-use enrollment tokens to the gateway so that not just any device with a co-resident
+// TPM may self-enrol — and the request field, the constant-time comparison and the single-use accounting
+// were all built while NOTHING COULD SEND ONE. `EnrollToken` had no producer anywhere in the tree, so a
+// deployment that turned the guard on could not be enrolled by any shipped client: the agent's request
+// arrived with an empty token and was refused, correctly and permanently.
+//
+// That is a specific and nasty shape — not an inert feature but an UNSATISFIABLE ONE. Turning on the
+// security control made the capability impossible rather than merely stricter, so the only way to run
+// the product was with its own guard disabled.
+func EnrollWithToken(conn *nats.Conn, tpm *attest.TPM, ek *attest.EK, ak *attest.AK, subject string,
+	pcrs []int, token string) error {
 	if subject == "" {
 		return fmt.Errorf("posture: enroll needs a subject")
 	}
@@ -34,6 +50,9 @@ func Enroll(conn *nats.Conn, tpm *attest.TPM, ek *attest.EK, ak *attest.AK, subj
 		AkPublic: ak.PublicKeyBytes(),
 		AkName:   ak.Name(),
 		Golden:   gmap,
+		// Empty when the operator has issued none, which is what a gateway WITHOUT pre-authorization
+		// expects — the field is ignored there, so one client shape serves both deployments.
+		EnrollToken: token,
 	})
 	if err != nil {
 		return fmt.Errorf("posture: marshalling enroll request: %w", err)

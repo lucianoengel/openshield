@@ -31,8 +31,12 @@ test:
 #
 # It IS the gate for the cmd/ wiring, which nothing else reaches: D285, D287, D292, D294 and D296 were all
 # found by it and none by a package test. It skips cleanly without podman.
+# THE TIMEOUT IS EXPLICIT, because Go's default is 10 MINUTES for the whole binary and the suite grew
+# past it (D317) — the failure is a panic with a stack trace from whichever scenario happened to be
+# running, which reads like that scenario hanging rather than like the suite outgrowing its budget. It
+# cost a gate run to diagnose. A generous explicit value fails honestly when something really does hang.
 integration:
-	$(GO) test -tags integration -count=1 ./test/integration/...
+	$(GO) test -tags integration -count=1 -timeout 40m ./test/integration/...
 
 # Architectural boundaries that the compiler cannot express on its own.
 check:

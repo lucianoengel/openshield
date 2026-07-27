@@ -200,9 +200,9 @@ func TestAnUnattestedDeviceIsRefused(t *testing.T) {
 // trust bootstrap), and it is the right refusal. Hardware attestation answers "is this machine in a state
 // I recognise"; it says nothing about WHICH machine is talking, and a device that attested beautifully
 // under an identity it had never proved would be a stronger signal attached to a weaker claim.
-func startAttestingAgent(t *testing.T, stack *Stack, enrollURL, device, tpmAddr string) *Process {
+func startAttestingAgent(t *testing.T, stack *Stack, enrollURL, device, tpmAddr string, extra ...string) *Process {
 	t.Helper()
-	return Start(t, "openshield-fleet-agent", []string{
+	return Start(t, "openshield-fleet-agent", append([]string{
 		"OPENSHIELD_AGENT_ID=" + device,
 		"OPENSHIELD_ENROLL_URL=" + enrollURL,
 		"OPENSHIELD_ENROLL_TOKEN=" + issueToken(t, stack, device),
@@ -212,7 +212,7 @@ func startAttestingAgent(t *testing.T, stack *Stack, enrollURL, device, tpmAddr 
 		"OPENSHIELD_ATTEST_SELF_ENROLL=1",
 		"OPENSHIELD_ATTEST_INTERVAL=2s",
 		"OPENSHIELD_HEARTBEAT=1s",
-	})
+	}, extra...))
 }
 
 // TestADeviceWithARealTPMSelfEnrollsAndIsAdmitted is the whole chain: a real TPM, credential activation
@@ -318,4 +318,107 @@ func TestAttestationExpiresWhenADeviceStopsAttesting(t *testing.T) {
 		"verdict that never lapses is a one-time gate wearing continuous clothing: a machine could attest "+
 		"once at enrollment, be rebooted into anything, and keep its trusted status indefinitely",
 		time.Since(expired.Add(-90*time.Second)), 20)
+}
+
+// PRE-AUTHORIZATION AND EK ANCHORING (D317) — the two guards that decide WHICH devices may self-enrol.
+//
+// Self-enrollment, which D314 made possible, lets a device assert its own identity to the control plane.
+// R34-2 added two constraints on that: an operator-issued single-use token, and a requirement that the
+// device's Endorsement Key chain to a TPM manufacturer root. Both were built, unit-tested and enforced
+// server-side.
+//
+// THE TOKEN GUARD WAS UNSATISFIABLE. `EnrollToken` had no producer anywhere in the tree, so a gateway
+// that turned pre-authorization ON could not be enrolled by any shipped client: the request arrived with
+// an empty token and was refused, correctly and permanently. That is worse than an unenforced control —
+// enabling it did not make enrollment stricter, it made the capability impossible, so the only way to run
+// the product was with its own guard switched off.
+
+// TestAPreAuthorizedDeviceEnrollsAndAnUnauthorizedOneDoesNot.
+//
+// BOTH HALVES IN ONE SCENARIO, deliberately. A gateway that refused every enrollment would satisfy the
+// negative on its own — and that was the ACTUAL STATE before D317, so a negative-only test here would
+// have passed against the bug it exists to catch. This is the lesson D316 paid for with six vacuous
+// OIDC negatives.
+func TestAPreAuthorizedDeviceEnrollsAndAnUnauthorizedOneDoesNot(t *testing.T) {
+	requireSWTPM(t)
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	p := newPKI(t)
+	origin := startUpstream(t)
+	const token = "operator-issued-token-1"
+	addr := attestStack(t, stack, p, origin.addr, "OPENSHIELD_ENROLL_PREAUTH_TOKENS="+token)
+	_, enrollURL := startServer(t, stack)
+
+	// THE POSITIVE: a device presenting the operator's token enrols and becomes attested.
+	good := startAttestingAgent(t, stack, enrollURL, "laptop-authorized", startSWTPM(t),
+		"OPENSHIELD_ENROLL_PREAUTH_TOKEN="+token)
+	good.WaitForOutput("self-enrolled with the gateway", 90*time.Second)
+
+	client := attestClient(t, p, "laptop-authorized", addr)
+	deadline := time.Now().Add(90 * time.Second)
+	var last int
+	for time.Now().Before(deadline) {
+		if last = get(t, client, "https://payroll/report"); last == http.StatusOK {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if last != http.StatusOK {
+		t.Fatalf("a device presenting the operator's pre-auth token was not admitted (last %d). Until "+
+			"D317 nothing could SEND a token at all, so turning the guard on made enrollment impossible "+
+			"rather than stricter\n%s", last, good.Output())
+	}
+
+	// THE NEGATIVE: the same everything, no token.
+	bad := startAttestingAgent(t, stack, enrollURL, "laptop-unauthorized", startSWTPM(t))
+	bad.WaitForOutput("self-enrollment did not complete", 90*time.Second)
+	if contains(bad.Output(), "self-enrolled with the gateway") {
+		t.Errorf("a device with NO pre-auth token enrolled. The token is what stops any machine with a "+
+			"co-resident TPM from adding itself to the fleet's trusted set\n%s", bad.Output())
+	}
+	if code := get(t, attestClient(t, p, "laptop-unauthorized", addr), "https://payroll/report"); code == http.StatusOK {
+		t.Error("an unenrolled device was admitted by an attestation-requiring policy")
+	}
+}
+
+// TestEKCertificateAnchoringRefusesAFabricatedEK.
+//
+// The gateway warns, when anchoring is off, that "a fabricated EK (incl. swtpm) passes enrollment" — and
+// that warning is exactly what makes this testable: a software TPM has no manufacturer-signed EK
+// certificate, so with a real root bundle configured, swtpm is precisely the thing that must be refused.
+//
+// The honest limit this scenario CANNOT cover: it proves an uncertified EK is refused, not that a
+// genuinely certified one is accepted, because that needs real TPM vendor hardware. The positive half is
+// the scenario above, run without anchoring — which is why both live here rather than only the negative.
+func TestEKCertificateAnchoringRefusesAFabricatedEK(t *testing.T) {
+	requireSWTPM(t)
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	p := newPKI(t)
+	origin := startUpstream(t)
+	work := t.TempDir()
+
+	// A real, well-formed root bundle that simply does not include swtpm's (nonexistent) issuer. Using
+	// the fleet CA is deliberate: an EMPTY or malformed file would be refused at startup for parsing
+	// reasons, which would prove nothing about the chain check.
+	roots := filepath.Join(work, "ek-roots.pem")
+	caPEM, err := os.ReadFile(p.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(roots, caPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	addr := attestStack(t, stack, p, origin.addr, "OPENSHIELD_EK_ROOTS="+roots)
+	_ = addr
+	_, enrollURL := startServer(t, stack)
+
+	agent := startAttestingAgent(t, stack, enrollURL, "laptop-fabricated-ek", startSWTPM(t))
+	agent.WaitForOutput("self-enrollment did not complete", 90*time.Second)
+	if contains(agent.Output(), "self-enrolled with the gateway") {
+		t.Errorf("a device with a FABRICATED EK enrolled while manufacturer anchoring was required. "+
+			"Credential activation proves the AK lives in the same TPM as the EK; only the EK certificate "+
+			"proves that TPM is a real one, so without this check an emulator joins the fleet\n%s",
+			agent.Output())
+	}
 }
