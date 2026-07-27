@@ -38,6 +38,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
 	"github.com/lucianoengel/openshield/internal/enforcers/process"
 	"github.com/lucianoengel/openshield/internal/enforcers/quarantine"
+	usbenforce "github.com/lucianoengel/openshield/internal/enforcers/usb"
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/fim"
 	"github.com/lucianoengel/openshield/internal/policy"
@@ -622,6 +623,32 @@ func loadOrCreateSigner(path string, log *slog.Logger) (*core.Signer, error) {
 // ENCRYPT_LOCAL is registered on top when a key (symmetric) or recipient pubkey (escrow, D59)
 // is configured. Containment is post-decision (D16), not prevention.
 func registerEnforcers(eng *engine.Engine, log *slog.Logger) error {
+	// D1/T-020: the USB posture enforcer, registered only when an operator asks for it (D313).
+	//
+	// It was built with the producer and never registered by any binary, so a BLOCK decision on a USB
+	// event had nothing to carry it out — the capability spec claimed "an actual enforcement point" and
+	// there was none. Registering it unconditionally would have been wrong in the other direction: it
+	// writes `authorized_default` on every USB controller, which needs root and changes how the WHOLE
+	// MACHINE treats newly attached devices. That is a deployment decision, so it is a deliberate
+	// setting rather than a consequence of enabling enforcement generally.
+	//
+	// IT IS DELIBERATELY NOT GATED ON OPENSHIELD_ENFORCE. Device control is a distinct posture from file
+	// containment, and "hardware policy on, files observe-only" is a real and common way to roll this
+	// out — a rollout OPENSHIELD_ENFORCE would otherwise make impossible. Suppression still applies:
+	// the kill switch is checked in Engine.Enforce, before any enforcer runs, so break-glass stops this
+	// one exactly as it stops the others.
+	//
+	// The global posture is the honest limit and worth stating: the kernel switch is per-CONTROLLER, not
+	// per-device, so BLOCK deauthorises every subsequently attached device — including the operator's
+	// keyboard. A per-device posture needs a udev rule per device id, which this does not attempt.
+	if os.Getenv("OPENSHIELD_USB_ENFORCE") != "" {
+		eng.Enforcers = append(eng.Enforcers, usbenforce.New(usbenforce.SysfsAuthorizer{
+			Root: os.Getenv("OPENSHIELD_USB_SYSFS"),
+		}))
+		log.Info("engine: usb-posture(authorized_default) enforcer registered — a BLOCK on a USB event " +
+			"deauthorises EVERY subsequently attached device on this machine, not only the one that " +
+			"triggered it")
+	}
 	if os.Getenv("OPENSHIELD_ENFORCE") == "" {
 		log.Info("engine: observe-only (set OPENSHIELD_ENFORCE to register file enforcers)")
 		return nil
@@ -629,6 +656,7 @@ func registerEnforcers(eng *engine.Engine, log *slog.Logger) error {
 	qdir := env("OPENSHIELD_QUARANTINE_DIR", "/var/lib/openshield/quarantine")
 	eng.Enforcers = append(eng.Enforcers, quarantine.New(qdir))
 	names := []string{"quarantine→" + qdir}
+
 	if keyPath := os.Getenv("OPENSHIELD_ENCRYPT_KEY"); keyPath != "" {
 		enc, err := encryptlocal.New(keyPath)
 		if err != nil {

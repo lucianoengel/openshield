@@ -44,7 +44,25 @@ If that model isn't one you want to contribute to, that's a reasonable position.
   `go list -deps`, a wire-byte scan, a syscall audit.
 - **Prefer mechanism over discipline.** Anything that depends on someone remembering will rot.
   Types, CI checks and boundary tests survive; conventions don't.
+- **A SKIPPED TEST IS NOT A PASSING TEST, and a green log hides the difference.** Tests that need
+  optional infrastructure skip without it — which is right — but a suite where they skip EVERYWHERE
+  has never run. The nineteen TPM attestation tests skipped for the project's whole life because
+  `swtpm` was installed nowhere, while the roadmap said the chain was "swtpm-proven end-to-end"
+  (D314). If you add a gated test, install the thing it is gated on somewhere and check it passes.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
+
+### Optional test infrastructure
+
+Most of the suite needs only Go. These unlock the tests that would otherwise skip:
+
+| Component | Unlocks | Note |
+|---|---|---|
+| `podman` | the whole integration suite (Postgres + NATS) | rootless |
+| `swtpm` + `swtpm-tools` | TPM attestation: quotes, EK→AK credential activation, PCR drift, network self-enrollment | **no root, no physical TPM** — a software TPM on a TCP port |
+| root on a throwaway machine | fanotify exec-permission, TPROXY, DNS redirect, the real USB `authorized_default` write | never run these on a machine you care about; they change kernel state |
+
+Run `go test ./... -v 2>&1 | grep -c SKIP` occasionally. A number that grows is a suite quietly
+shrinking.
 
 ## How work is tracked
 

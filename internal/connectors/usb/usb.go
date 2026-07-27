@@ -12,6 +12,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -65,11 +66,34 @@ func (p *Producer) pseudonymiseSerial(raw string) string {
 	return "usbser_" + hex.EncodeToString(mac.Sum(nil)[:12])
 }
 
+// deviceID is the event id: a keyed digest of the device's WHOLE identity, not of its serial alone.
+//
+// Keying it on the serial alone was a real defect (D313): a device with no serial pseudonymises to the
+// empty string, so every serial-less device — a hub, a webcam, most keyboards — arrived with the event id
+// "usb-". The ledger keys on event_id and the decision projection joins on it, so an entire class of
+// hardware collapsed into ONE entity: the second hub's decision would look like a second decision about
+// the first one.
+//
+// THE HONEST LIMIT: two identical models with no serial are still one id, because sysfs offers nothing
+// else that identifies the DEVICE. The bus path would separate them, but a path is a POSITION — keying on
+// it would make the same stick a different device in a different port, which breaks the repeat-device
+// correlation the pseudonym exists for. Indistinguishable hardware reads as indistinguishable.
+func (p *Producer) deviceID(d Device) string {
+	mac := hmac.New(sha256.New, p.key)
+	// Length-prefixed, so ("ab","c") and ("a","bc") are different identities rather than the same joined
+	// string — the classic concatenation ambiguity, and vendor/product ids are exactly the fixed-width
+	// fields where it is easy to assume it cannot happen.
+	for _, f := range []string{d.VendorID, d.ProductID, d.Serial} {
+		fmt.Fprintf(mac, "%d:%s", len(f), f)
+	}
+	return "usb-" + hex.EncodeToString(mac.Sum(nil)[:12])
+}
+
 // Event builds a USB_INSERTED event for a device, pseudonymising the serial
 // BEFORE the event exists.
 func (p *Producer) Event(d Device, seq uint64) *corev1.Event {
 	return &corev1.Event{
-		EventId:     "usb-" + p.pseudonymiseSerial(d.Serial),
+		EventId:     p.deviceID(d),
 		AgentId:     p.AgentID,
 		ConnectorId: p.ConnectorID,
 		Sequence:    seq,

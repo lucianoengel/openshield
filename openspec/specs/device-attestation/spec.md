@@ -294,3 +294,56 @@ preserve the prior (unanchored) behavior and SHALL surface that the anchor is di
 - **WHEN** a device submits a genuine manufacturer-chained EK certificate whose public key does NOT equal
   the submitted EK public key
 - **THEN** the enrollment is refused (the certificate must be bound to the EK being challenged)
+
+### Requirement: A device can enrol its attestation key from a shipped binary
+The fleet agent SHALL be able to run the network enrollment handshake — submitting its EK, AK and PCR
+baseline, and proving AK TPM-residency by credential activation — and an operator SHALL be able to
+capture the same anchors offline into the gateway's enrollments file.
+
+Neither was possible before D314. The gateway had SERVED the enrollment protocol since D184 and
+`posture.Enroll` had no caller in any shipped binary, so nothing spoke it; `attest.MarshalEnrollments`
+had no caller either, so the documented file alternative had no tool that could write one. Because the
+verifier fails closed (D85/D186), the combination was worse than an inert feature: an operator who
+enabled attestation and wrote a policy requiring it got a deployment that refused every device, while
+the gateway logged that network enrollment was active.
+
+Self-enrollment is opt-in (`OPENSHIELD_ATTEST_SELF_ENROLL`). A device asserting its own identity to the
+control plane is exactly what pre-auth tokens and EK-certificate anchoring exist to constrain, and
+enabling it by default would hand that trust decision to a default.
+
+#### Scenario: A device with a real TPM self-enrols and is admitted
+- **WHEN** a fleet agent with a software TPM self-enrols with a gateway and attests
+- **THEN** an access policy requiring `device_posture.attested` admits its request
+- **AND** an integration scenario asserts the ACCESS DECISION rather than a log line, and a device that
+  enrols but never attests is refused — enrollment alone must not confer attestation
+
+#### Scenario: An unenrolled device is refused
+- **WHEN** a device that has never attested requests a service behind an attestation-requiring policy
+- **THEN** the request is refused and the origin is never reached
+
+### Requirement: Attestation setup never blocks the agent
+Opening the TPM, creating the AK and enrolling MUST NOT run on the agent's main path, and the agent
+MUST issue `TPM2_Startup` before its first command.
+
+Both halves were wrong and each hid the other. The agent never called `TPM2_Startup`, which is
+invisible on hardware — platform firmware starts a physical TPM before userspace runs — and fatal
+against a software TPM, which answers no command until started. It does not REFUSE them: it does not
+answer. So `CreateAK` blocked forever, on the main path, before the ticker loop began — no heartbeat,
+no telemetry, no posture, and no log line, because every message in that block came after the call that
+hung. Enabling attestation silently disabled everything else the agent does, and from the control plane
+the machine looked simply absent. A `TPM2_Startup` error is NOT fatal: a firmware-started TPM answers
+"already started", and treating that as failure would disable attestation on every real machine.
+
+#### Scenario: A device whose TPM never answers still reports
+- **WHEN** the TPM is unreachable or unresponsive
+- **THEN** the agent logs it and continues to publish heartbeats, telemetry and posture
+
+### Requirement: An attestation verdict expires
+A verified attestation MUST lapse after a TTL, so that a device which stops attesting loses the signal.
+
+A device that attested once and then went quiet may have been rebooted into anything. Without expiry,
+attestation is a one-time gate wearing continuous clothing.
+
+#### Scenario: A device that stops attesting loses access
+- **WHEN** an attested device's agent stops and the TTL elapses
+- **THEN** a policy requiring attestation refuses it, without any revocation step

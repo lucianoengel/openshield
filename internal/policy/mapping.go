@@ -146,6 +146,27 @@ func buildInput(st *core.State) map[string]interface{} {
 		event["print_bytes"] = int(pr.GetByteCount())
 		event["job_user"] = pr.GetJobUser()
 	}
+	// A USB ATTACHMENT (T-020/D313). The subject has existed since T-020 and reached the policy input
+	// NEVER — `GetUsb` had exactly one non-generated caller in the tree, a log line. So the event flowed
+	// the whole pipeline and arrived at Rego indistinguishable from anything else: a policy could not tell
+	// a memory stick from a file write, and the sentence in default.rego saying an operator who wants USB
+	// to block "writes that rule" named a rule that could not be written.
+	//
+	// WHAT IS EXPOSED IS THE DEVICE'S IDENTITY, NOT ITS BEARER. Vendor and product are model identifiers —
+	// the same for every unit of that model, so they say "a SanDisk stick", never "whose". The serial is
+	// the pseudonym, keyed at the producer (D23), so a policy can say "the same device again" without the
+	// engine ever holding the real serial. That is the whole point of pseudonymising at the source.
+	if u := st.Event.GetUsb(); u != nil {
+		event["usb"] = map[string]interface{}{
+			"vendor_id":        u.GetVendorId(),
+			"product_id":       u.GetProductId(),
+			"serial_pseudonym": u.GetSerialPseudonym(),
+		}
+		// The same channel vocabulary a removable-media WRITE gets, so one rule covers both: an operator
+		// writing "nothing sensitive to removable" should not need to know that an attachment and a copy
+		// arrive as different event kinds.
+		event["exfil_channel"] = exfil.ChannelRemovable.String()
+	}
 	// For a process-exec event, expose the exec path, args, and parent path so a
 	// behavioral policy can decide on LOLBins and process lineage (Phase E, HIPS). Exec
 	// metadata only (D10/D29) — no process memory or file content.

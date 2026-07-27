@@ -29,7 +29,12 @@ func dec(a corev1.Action) *corev1.Decision {
 	return &corev1.Decision{DecisionId: "d1", EventId: "e1", Action: a}
 }
 
-// BLOCK sets the restrictive posture, ALLOW the permissive one.
+// BLOCK sets the restrictive posture. ALLOW IS NOT ENACTED, and that is the D313 correction.
+//
+// The first version asserted [false true]: BLOCK deauthorises, ALLOW re-authorises. Symmetrical, and
+// wrong once real decisions flow — the switch is machine-wide, the decisions are per device, so a
+// permitted keyboard's ALLOW wipes a banned stick's BLOCK. This test passed throughout, because it
+// enforced two decisions and asked what the calls were, never what the POSTURE ended up as.
 func TestEnforcePostures(t *testing.T) {
 	f := &fakeAuthorizer{}
 	e := usbenf.New(f)
@@ -37,11 +42,13 @@ func TestEnforcePostures(t *testing.T) {
 	if err := e.Enforce(context.Background(), dec(corev1.Action_ACTION_BLOCK)); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Enforce(context.Background(), dec(corev1.Action_ACTION_ALLOW)); err != nil {
-		t.Fatal(err)
+	if err := e.Enforce(context.Background(), dec(corev1.Action_ACTION_ALLOW)); err == nil {
+		t.Fatal("ALLOW was enacted. Enforcing an allow means UNDOING containment, so a stream of " +
+			"ordinary permitted devices would release a block nobody chose to release")
 	}
-	if len(f.calls) != 2 || f.calls[0] != false || f.calls[1] != true {
-		t.Errorf("posture calls = %v, want [false true] (BLOCK deauthorises, ALLOW authorises)", f.calls)
+	if len(f.calls) != 1 || f.calls[0] != false {
+		t.Errorf("posture calls = %v, want [false] — BLOCK latches; clearing it is an operator action "+
+			"(openshield-provision usb-authorize), not a consequence of the next device", f.calls)
 	}
 }
 
@@ -63,14 +70,10 @@ func TestUnadvertisedActionRefused(t *testing.T) {
 // The enforcer advertises exactly the actions it can carry out.
 func TestCapabilities(t *testing.T) {
 	caps := usbenf.New(&fakeAuthorizer{}).Capabilities()
-	want := map[corev1.Action]bool{corev1.Action_ACTION_ALLOW: true, corev1.Action_ACTION_BLOCK: true}
-	if len(caps) != len(want) {
-		t.Fatalf("capabilities = %v, want ALLOW and BLOCK", caps)
-	}
-	for _, a := range caps {
-		if !want[a] {
-			t.Errorf("advertises %v, which it does not handle", a)
-		}
+	if len(caps) != 1 || caps[0] != corev1.Action_ACTION_BLOCK {
+		t.Fatalf("capabilities = %v, want BLOCK alone. Advertising ALLOW is what made this enforcer "+
+			"unable to hold a block: it was the only enforcer in the tree that claimed to enact the "+
+			"ABSENCE of containment", caps)
 	}
 }
 

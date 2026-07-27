@@ -41,16 +41,30 @@ func TestUSBEventToEnforcement(t *testing.T) {
 		t.Fatalf("decision action = %v, want ALLOW for a USB event under the default policy", dec.GetAction())
 	}
 
-	// The enforcer acts on the Decision ALONE.
+	// THE ENFORCER IS NOT REACHED BY AN ALLOW (D313). This is the assertion that changed, and the reason
+	// is worth keeping: the enforcer used to advertise ALLOW and enact it as "re-authorise the
+	// controller". The routing layer would therefore hand it every permitted device, and each one would
+	// release whatever block was in place — the machine-wide latch reflecting whichever device happened
+	// to be polled last. An enforcer that claims to enact the ABSENCE of containment cannot hold any.
 	f := &fakeAuthorizer{}
 	e := usbenf.New(f)
-	if !core.CanEnforce(e, dec) {
-		t.Fatal("the USB enforcer cannot carry out the policy's Decision")
+	if core.CanEnforce(e, dec) {
+		t.Fatal("an ALLOW decision was routed to the USB posture enforcer. Nothing needs enacting when " +
+			"a device is permitted — the correct behaviour is to leave the posture exactly as the " +
+			"operator and the last BLOCK left it")
 	}
-	if err := e.Enforce(context.Background(), dec); err != nil {
+
+	// A BLOCK, by contrast, is carried out — so the negative above is not simply an enforcer that
+	// refuses everything.
+	blocked := &corev1.Decision{DecisionId: "d2", EventId: event.GetEventId(),
+		Action: corev1.Action_ACTION_BLOCK}
+	if !core.CanEnforce(e, blocked) {
+		t.Fatal("the USB enforcer cannot carry out a BLOCK, which is the only thing it exists to do")
+	}
+	if err := e.Enforce(context.Background(), blocked); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.calls) != 1 || f.calls[0] != true {
-		t.Errorf("ALLOW did not set the permissive posture end to end: %v", f.calls)
+	if len(f.calls) != 1 || f.calls[0] != false {
+		t.Errorf("BLOCK did not set the restrictive posture end to end: %v", f.calls)
 	}
 }

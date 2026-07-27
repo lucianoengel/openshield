@@ -56,9 +56,9 @@ signed rule bundles and nothing in the product signs one, so the feature is veri
 | `NewDepthTracker` | `internal/agent/sandbox/decompress.go:73` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — same. Archive nesting-depth tracker. |
 | `EnterArchive` | `internal/agent/sandbox/decompress.go:77` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — same.  |
 | `LeaveArchive` | `internal/agent/sandbox/decompress.go:86` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — same.  |
-| `CreateEK` | `internal/attest/ek.go:22` | **PARTIAL** — TPM attestation: the fleet agent opens a TPM and the gateway loads EK roots, but EK creation/PCR extension are not driven by either. TPM endorsement key. |
-| `FlushEK` | `internal/attest/ek.go:38` | **PARTIAL** — same. TPM handle cleanup. |
-| `MarshalEnrollments` | `internal/attest/enrollment.go:52` | **PARTIAL** — same. Attestation enrollment marshalling. |
+| `CreateEK` | `internal/attest/ek.go:22` | **WIRED (D314)** — created for the enrollment handshake by both the fleet agent (`OPENSHIELD_ATTEST_SELF_ENROLL`) and `attest-capture`. |
+| `FlushEK` | `internal/attest/ek.go:38` | **WIRED (D314)** — released after self-enrollment. A TPM has few object slots; an EK left loaded consumes one for the process's life and the next key fails with an out-of-memory error naming nothing about this program. |
+| `MarshalEnrollments` | `internal/attest/enrollment.go:52` | **WIRED (D314)** — `openshield-provision attest-capture` writes the gateway enrollments file. It had no caller, so the documented alternative to network enrollment had no tool that could produce one. |
 | `ExtendPCR` | `internal/attest/pcr.go:44` | **PARTIAL** — same. PCR extension. |
 | `DumpArgs` | `internal/backup/backup.go:34` | **NOT BUILT** — backup is designed, not driven by any command. Backup dump arguments (PLAT-9). |
 | `Script` | `internal/backup/backup.go:81` | **NOT BUILT** — same. Backup script generation. |
@@ -68,7 +68,7 @@ signed rule bundles and nothing in the product signs one, so the feature is veri
 | `NewWithIDM` | `internal/classify/idm.go:158` | **SUPERSEDED** — worker uses `AddIDM`. Indexed-document matching classifier variant. |
 | `SignRuleBundle` | `internal/classify/rules.go:79` | **BUILT (D297).** **TOOLING GAP** — the worker VERIFIES signed rule bundles; nothing in the product SIGNS one. An operator cannot produce the bundle the worker is built to load. Signs a classifier rule bundle. |
 | `StopMediating` | `internal/clipboard/x11/x11.go:202` | **PARTIAL** — clipboard mediation has no teardown caller; a leak at shutdown, not a missing capability. X11 clipboard mediation teardown. |
-| `NewProducer` | `internal/connectors/usb/usb.go:45` | **NOT BUILT** — no production `DeviceSource` exists — only a test fake. The producer cannot read a real device. USB event producer (D1's 'one trivial USB enforcer'). |
+| `NewProducer` | `internal/connectors/usb/usb.go:45` | **WIRED (D312/D313)** — `SysfsSource` reads `/sys/bus/usb/devices`, the engine polls it, the policy sees the device and the enforcer can act on it. |
 | `Produce` | `internal/connectors/usb/usb.go:88` | **NOT BUILT** — same.  |
 | `ExpirePendingApprovals` | `internal/controlplane/approvals.go:183` | **WIRED (D290).** Approvals never expire in a running deployment. 'A request left open for a week is not consent' — but nothing closes it. |
 | `ReleaseLegalHold` | `internal/controlplane/cases.go:116` | **WIRED (D290).** Holds can be placed and never released. |
@@ -168,3 +168,41 @@ The sweep is not a committed script because it is an audit, not a gate — the g
 and sharper case of a pluggable seam nothing installs. Re-run this audit by collecting every
 `func (…) Name(` under `internal/`, stripping comments from all non-test sources, brace-matching
 `type X interface {` bodies to build the exclusion set, and counting remaining references.
+
+
+## Round 3 (D313–D314): what running the product found that reading it did not
+
+Two more capabilities that every unit test passed and no deployment could use, plus three defects that
+only appeared once real processes were connected:
+
+- **The USB subject never reached the policy input.** `GetUsb` had one non-generated caller in the tree:
+  a log line. A policy could not tell a memory stick from a file write, so the rule the default policy
+  told operators to write could not be written. Nothing failed; the capability simply had no effect.
+- **`posture.Enroll` had no caller.** The gateway served the attestation enrollment protocol —
+  challenge, credential activation, pre-auth tokens, EK anchoring — and no shipped binary spoke it. With
+  `MarshalEnrollments` also uncalled, BOTH routes into the verifier were closed, and because the verifier
+  fails closed, enabling attestation refused every device.
+- **Nineteen TPM tests had never run.** They skip without `swtpm`, which was installed nowhere. A suite
+  of skips reads exactly like a suite of passes in a green log, and the roadmap said the chain was
+  "swtpm-proven end-to-end".
+
+### The defects that needed real processes
+
+- **The USB enforcer advertised ALLOW**, enacting it as "re-authorise the controller". Coherent for one
+  decision, incoherent for a stream: the kernel switch is machine-wide and decisions are per-device, so a
+  permitted keyboard released a banned stick's block. It was the only enforcer in the tree advertising
+  ALLOW — the tell, since ALLOW is the absence of containment.
+- **The agent never issued `TPM2_Startup`**, and the setup ran on its MAIN PATH. Invisible on hardware
+  (firmware starts a physical TPM); against a software TPM the agent hung before its ticker loop — no
+  heartbeat, no telemetry, no log line, because every message came after the call that blocked. Enabling
+  attestation silently disabled everything else.
+- **The integration harness leaked its own build directory and Postgres container on every run.** Its
+  `TestMain` sat in `harness.go`, a non-`_test.go` file, where `go test` never calls it. 33 containers and
+  25GB accumulated until the root filesystem filled and the gate failed to LINK. No test could have caught
+  it: a cleanup path's absence produces no failing assertion by construction.
+
+### What to hunt next
+
+The pattern is now three for three: **a protocol with a server and no client**, **a file format with a
+reader and no writer**, and **a gated test whose gate is never satisfied**. Each is greppable. The third
+is the cheapest — `go test ./... -v | grep SKIP` — and was the most expensive to have missed.

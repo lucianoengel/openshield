@@ -486,7 +486,11 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers
   (D179). **ZT-1 full hardware attestation chain (D183–191):** AK quote → EK→AK credential activation →
   measured-boot PCR policy → posture wiring → NATS transport → file + network self-enrollment →
-  continuous re-attestation, swtpm-proven end-to-end; EK-cert-chain anchor (D218) + pre-auth enroll token;
+  continuous re-attestation, swtpm-proven end-to-end — a claim that was NOT TRUE until D314, because the
+  nineteen swtpm tests SKIPPED everywhere (swtpm was installed on no build host, and a skip is invisible in
+  a green log), and because `posture.Enroll` — the client half of network self-enrollment — had no caller
+  in any shipped binary, so the gateway served a protocol nothing spoke; EK-cert-chain anchor (D218) +
+  pre-auth enroll token;
   attestation verdict TTL; HTTPS-only JWKS; DPoP sender-constrained tokens + clock-skew leeway.
 - **DLP:** case/incident workflow; compliance packs compose (not replace) under a most-restrictive-wins
   lattice (DLP-5b, D171, ADR-5); detector breadth (CPF/card/SSN/phone/EIN/NPI/routing/SIN/NHS/passport/DL/Aadhaar/

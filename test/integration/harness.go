@@ -88,7 +88,7 @@ func uniqueName(t *testing.T, role string) string {
 	if len(safe) > 40 {
 		safe = safe[:40]
 	}
-	return fmt.Sprintf("osint-%s-%s-%d", role, strings.ToLower(safe), time.Now().UnixNano()%1e6)
+	return fmt.Sprintf(containerPrefix+"%s-%s-%d", role, strings.ToLower(safe), time.Now().UnixNano()%1e6)
 }
 
 // hostPort discovers the kernel-assigned host port for a container's exposed port.
@@ -135,7 +135,7 @@ var (
 func sharedPostgres(t *testing.T) string {
 	t.Helper()
 	pgOnce.Do(func() {
-		name := fmt.Sprintf("osint-shared-pg-%d", time.Now().UnixNano()%1e9)
+		name := fmt.Sprintf(containerPrefix+"shared-pg-%d", time.Now().UnixNano()%1e9)
 		out, err := exec.Command("podman", "run", "-d", "--rm", "--name", name,
 			"-e", "POSTGRES_USER="+pgUser, "-e", "POSTGRES_PASSWORD="+pgPassword,
 			"-e", "POSTGRES_DB="+pgDatabase,
@@ -199,17 +199,6 @@ func StartStack(t *testing.T) *Stack {
 	return s
 }
 
-// TestMain removes the shared Postgres after the last scenario. A t.Cleanup would tear it down after
-// the FIRST one, and every later scenario would start its own — silently restoring the churn this
-// exists to remove, while still passing.
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if sharedPGName != "" {
-		_ = exec.Command("podman", "rm", "-f", sharedPGName).Run()
-	}
-	os.Exit(code)
-}
-
 func waitTCP(t *testing.T, addr string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -253,6 +242,16 @@ var (
 // where the privileged paths can actually be exercised.
 const BinDirEnv = "OPENSHIELD_INTEGRATION_BIN_DIR"
 
+// containerPrefix marks every container this suite starts, so the cleanup guard can tell one of ours from
+// an operator's own — removing a container we did not start would be a test that damages its host, which
+// is the thing this whole area is about.
+const containerPrefix = "osint-"
+
+// buildDirPrefix names the per-run build directory. A CONSTANT because the cleanup guard has to recognise
+// one, and a prefix duplicated as a literal in two places is one rename away from a guard that silently
+// stops matching anything.
+const buildDirPrefix = "openshield-integration-bin"
+
 // Binary builds the named command if needed and returns its path.
 func Binary(t *testing.T, name string) string {
 	t.Helper()
@@ -264,7 +263,7 @@ func Binary(t *testing.T, name string) string {
 		return p
 	}
 	buildOnce.Do(func() {
-		binDir, buildErr = os.MkdirTemp("", "openshield-integration-bin")
+		binDir, buildErr = os.MkdirTemp("", buildDirPrefix)
 		if buildErr != nil {
 			return
 		}

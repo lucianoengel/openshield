@@ -45,6 +45,18 @@ usage:
   openshield-provision posture-keygen --out DIR
       write posture-pub (to gateways) + posture-priv (to agents) — HON-4
 
+  openshield-provision attest-capture --subject PSEUDONYM --pcrs 0,7 [--tpm ADDR] --out FILE
+      read the LOCAL TPM's AK public key + PCR baseline into the gateway's
+      enrollments file (OPENSHIELD_ATTEST_ENROLLMENTS). The offline alternative to
+      network self-enrollment, for operators who want no device self-assertion.
+      Merges — capturing one device never unenrolls the others.
+
+  openshield-provision usb-authorize [--block] [--sysfs DIR]
+      clear the USB posture latch a BLOCK decision set — newly attached devices are
+      permitted again. --block re-applies it by hand. Needs root; the enforcer never
+      clears it itself, because a machine-wide switch must not be released by the
+      next permitted keyboard.
+
   openshield-provision recover --in BLOB --out FILE --key KEYFILE
   openshield-provision recover --in BLOB --out FILE --escrow-pub PUB --escrow-priv PRIV
       reverse ENCRYPT_LOCAL. The blob's header selects the key; recovery never
@@ -73,6 +85,10 @@ func run(args []string) int {
 		return postureKeygen(flags(args[1:]))
 	case "recover":
 		return recoverFile(flags(args[1:]))
+	case "usb-authorize":
+		return usbAuthorize(flags(args[1:]))
+	case "attest-capture":
+		return attestCapture(flags(args[1:]))
 	default:
 		fmt.Fprintf(os.Stderr, "openshield-provision: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -261,4 +277,11 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 func fail(format string, a ...any) int {
 	fmt.Fprintf(os.Stderr, "openshield-provision: "+format+"\n", a...)
 	return 1
+}
+
+// has reports whether a boolean flag was given. Presence IS the value: `--block` means block, and
+// `--block=false` is not a form this parser accepts, so a flag that appears is never read as off.
+func has(f map[string][]string, k string) bool {
+	_, ok := f[k]
+	return ok
 }

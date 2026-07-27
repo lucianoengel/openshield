@@ -44,8 +44,21 @@ func New(a USBAuthorizer) *Enforcer { return &Enforcer{Auth: a} }
 
 // Capabilities reports the postures this enforcer can set. The policy engine asks
 // only "can you carry out this Decision" — never how it was reached (D14).
+//
+// BLOCK ONLY, AND ALLOW WAS REMOVED (D313) — a correction found by running the pipeline, not by reading
+// the code. This enforcer advertised ALLOW and enacted it as SetDefaultAuthorized(true), which is
+// coherent for ONE decision and incoherent for a stream of them: the kernel switch is a MACHINE-WIDE
+// latch, while decisions arrive PER DEVICE. Attach a banned stick and a permitted keyboard, and the
+// keyboard'"'"'s ALLOW re-authorises the controller microseconds after the stick'"'"'s BLOCK closed it. The
+// posture ended up reflecting whichever device was polled last, so the enforcer that shipped as proof
+// of the Enforcer contract could not hold a block at all.
+//
+// It was the ONLY enforcer in the tree advertising ALLOW, and that is the tell: ALLOW is the absence of
+// containment, so "enforcing" it means undoing whatever containment is in place. A latch is set by the
+// event that justifies it and cleared DELIBERATELY — `openshield-provision usb-authorize`, which exists
+// because an action the product cannot undo is one an operator is right to refuse to enable (D293).
 func (e *Enforcer) Capabilities() []corev1.Action {
-	return []corev1.Action{corev1.Action_ACTION_ALLOW, corev1.Action_ACTION_BLOCK}
+	return []corev1.Action{corev1.Action_ACTION_BLOCK}
 }
 
 // Enforce enacts a Decision. An action this enforcer does not advertise is an
@@ -55,8 +68,6 @@ func (e *Enforcer) Enforce(_ context.Context, d *corev1.Decision) error {
 	switch d.GetAction() {
 	case corev1.Action_ACTION_BLOCK:
 		return e.Auth.SetDefaultAuthorized(false)
-	case corev1.Action_ACTION_ALLOW:
-		return e.Auth.SetDefaultAuthorized(true)
 	default:
 		return fmt.Errorf("usb enforcer: cannot carry out action %v (advertises ALLOW, BLOCK only)", d.GetAction())
 	}
