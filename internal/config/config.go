@@ -37,6 +37,11 @@ const (
 	KindInt      Kind = "int"
 	KindDuration Kind = "duration"
 	KindBool     Kind = "bool"
+	// KindUnitInterval is a probability-like value in [0,1). It exists because a THRESHOLD compared
+	// against a squashed score is silently unreachable when set at or above the ceiling: the detector
+	// runs, scores every subject, and can never alert. That is the "a typo quietly disables a feature"
+	// failure PLAT-5 was built to refuse, and a range is the only thing that catches it.
+	KindUnitInterval Kind = "unit_interval"
 	// KindSecret is a CREDENTIAL. It is a kind rather than a naming convention so redaction is a property
 	// of the field, not of whether someone remembered to call the variable *_TOKEN.
 	KindSecret Kind = "secret"
@@ -337,6 +342,15 @@ func parseFor(f Field, raw string) error {
 	case KindBool:
 		if _, err := strconv.ParseBool(raw); err != nil {
 			return fmt.Errorf("not a boolean")
+		}
+	case KindUnitInterval:
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return fmt.Errorf("not a number")
+		}
+		if v < 0 || v >= 1 {
+			return fmt.Errorf("must be in [0,1) — the score it is compared against is squashed to that "+
+				"range, so %v can never be reached and the detector would run without ever alerting", v)
 		}
 	case KindPath:
 		if _, err := os.Stat(raw); err != nil {

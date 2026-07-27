@@ -179,3 +179,33 @@ func TestTheScopeGuardMatchesCallsNotProse(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnreachableThresholdIsRefused covers the range check added in D303.
+//
+// The peer-UEBA risk score is a z-score SQUASHED to [0,1) — `1 - exp(-z)` never reaches 1. So a
+// threshold of 1 or more silently disables the detector: it runs, scores every subject, and can never
+// alert, while the process logs "peer-UEBA enabled" with the operator's number in it. That is the exact
+// failure PLAT-5 exists to refuse, and it cost a debugging round here — the integration scenario was
+// written against a threshold of 1.2 and simply never fired.
+func TestAnUnreachableThresholdIsRefused(t *testing.T) {
+	var f Field
+	for _, c := range ServerFields {
+		if c.Key == "OPENSHIELD_PEER_UEBA_THRESHOLD" {
+			f = c
+		}
+	}
+	if f.Key == "" {
+		t.Fatal("OPENSHIELD_PEER_UEBA_THRESHOLD is not declared")
+	}
+	for _, ok := range []string{"0", "0.5", "0.9", "0.999"} {
+		if err := f.Check(ok); err != nil {
+			t.Errorf("a reachable threshold %q was refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"1", "1.2", "2", "-0.1", "high"} {
+		if err := f.Check(bad); err == nil {
+			t.Errorf("%q was accepted — a threshold at or above the score ceiling runs the detector and "+
+				"can never alert, which reads exactly like a quiet fleet", bad)
+		}
+	}
+}

@@ -49,7 +49,7 @@ func main() {
 		case "fleet-control":
 			os.Exit(fleetControl(dsn, os.Args[2:]))
 		case "config":
-			os.Exit(showConfig())
+			os.Exit(showConfig(dsn))
 		}
 	}
 	// PLAT-5: validate EVERY declared field before doing anything. A malformed value now fails the boot
@@ -831,9 +831,36 @@ func serverConfig() *config.Resolver {
 
 // showConfig prints the schema and what this process would actually honour, with SECRETS REDACTED — the
 // operator-visible half of PLAT-5 now, and the same data a UI will render later.
-func showConfig() int {
+// showConfig prints what this deployment is ACTUALLY running with.
+//
+// It reads the STORED settings, and that was missing (D303). Without it the command built a resolver
+// with no database source, so every dynamic setting printed as `[default]` no matter what an operator
+// had saved — in the one command whose entire purpose is answering "what is this deployment running
+// with". An operator debugging a setting that will not apply runs this, sees the default, and concludes
+// their save failed; an operator checking a deployment sees defaults and believes it is at them.
+//
+// D285's test for this command asserted bootstrap values and secret redaction, which is why the gap
+// survived: both of those are correct, and neither touches the database.
+//
+// A DATABASE THAT CANNOT BE READ IS REPORTED, NOT PAPERED OVER. Falling back to defaults silently would
+// reproduce the exact defect — the output would be indistinguishable from a deployment genuinely at its
+// defaults.
+func showConfig(dsn string) int {
 	r := serverConfig()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stored := "stored settings included"
+	if pool, err := pgxpool.New(ctx, dsn); err != nil {
+		stored = "WARNING: could not connect to the database — DYNAMIC VALUES BELOW ARE DEFAULTS, NOT WHAT " +
+			"THIS DEPLOYMENT RUNS WITH: " + err.Error()
+	} else {
+		defer pool.Close()
+		db := config.NewDBSource()
+		controlplane.New(pool).LoadSettings(ctx, db)
+		r.DB = db
+	}
 	fmt.Fprintln(os.Stdout, "# effective configuration (secrets shown as set/unset, never by value)")
+	fmt.Fprintln(os.Stdout, "# "+stored)
 	r.WriteEffective(os.Stdout)
 	if err := r.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "\n%v\n", err)

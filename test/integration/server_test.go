@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -156,4 +157,37 @@ func TestTheConfigSubcommandReportsOriginsAndHidesSecrets(t *testing.T) {
 		t.Errorf("the effective value or its origin is missing — 'what is this process running with' must "+
 			"be answerable:\n%s", out)
 	}
+}
+
+// TestTheConfigSubcommandReportsSTOREDValues is the half the original assertion missed (D303).
+//
+// TestTheConfigSubcommandReportsOriginsAndHidesSecrets asserted bootstrap values and secret redaction —
+// both correct, and neither touching the database. So the command reported `[default]` for every DYNAMIC
+// setting no matter what was saved, in the one command whose purpose is answering "what is this
+// deployment running with". An operator debugging a setting that will not apply reads this, sees the
+// default, and concludes their save failed.
+func TestTheConfigSubcommandReportsSTOREDValues(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	setDynamic(t, stack, "OPENSHIELD_FLEET_RETENTION", "720h")
+
+	out, err := runCapture(t, "openshield-server", []string{"OPENSHIELD_DSN=" + stack.DSN}, "config")
+	if err != nil {
+		t.Fatalf("config subcommand failed: %v\n%s", err, out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "OPENSHIELD_FLEET_RETENTION") {
+			continue
+		}
+		if !strings.Contains(line, "720h") {
+			t.Errorf("the stored value is not reported: %q", line)
+		}
+		if strings.Contains(line, "[default]") {
+			t.Errorf("a STORED setting is reported as [default]: %q\n"+
+				"    An operator reading this cannot tell a deployment at its defaults from one whose "+
+				"saved configuration the command simply did not read.", line)
+		}
+		return
+	}
+	t.Errorf("OPENSHIELD_FLEET_RETENTION is absent from the output:\n%s", out)
 }
