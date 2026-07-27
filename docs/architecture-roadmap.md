@@ -409,7 +409,10 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   what each buys an attacker: compromised server, compromised gateway, compromised agent, compromised
   admin, offline endpoint, replay, malicious insider, supply chain. Tie every boundary to the guard that
   holds it (ledger forward-secrecy, closed action set D14, signed intents ADR-12, four-eyes SOAR-3).
-- **`INVARIANTS.md` — lightweight proofs** — S. On-brand with the project's ethos and backed by the
+- **`INVARIANTS.md` — lightweight proofs** — ✅ **DONE (D298).** Five invariants, each naming the test
+  that fails when it regresses, each MUTATION-VERIFIED (the enforcement removed and the failure observed),
+  each with its honest limit stated. A doccheck guard fails the build if a named test stops existing.
+  Original scope note: On-brand with the project's ethos and backed by the
   existing mutation harness. State and argue the load-bearing invariants, each with the test that catches a
   regression: (1) *a compromised server can never cause arbitrary endpoint code execution* (closed action
   set D14 + closed intent vocabulary ADR-12); (2) *no policy evaluation runs in privileged code* (the
