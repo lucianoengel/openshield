@@ -481,3 +481,28 @@ func TestEveryBinaryIsCovered(t *testing.T) {
 		}
 	}
 }
+
+// TestAnOutputPathIsNotRequiredToExistYet is D318's fix, and the defect is worth stating because the
+// configuration layer and the code disagreed about who creates the directory.
+//
+// OPENSHIELD_QUEUE_DIR was declared KindPath, so startup refused to boot without a spool directory that
+// `queue.Open` would have created itself with MkdirAll. Every FIRST BOOT with offline queueing enabled
+// failed, and the message ("path is not readable") pointed at the operator rather than at the mismatch.
+func TestAnOutputPathIsNotRequiredToExistYet(t *testing.T) {
+	parent := t.TempDir()
+	fields := []config.Field{{Key: "OPENSHIELD_SPOOL", Scope: config.ScopeBootstrap,
+		Kind: config.KindOutputPath, Default: ""}}
+
+	t.Setenv("OPENSHIELD_SPOOL", filepath.Join(parent, "spool"))
+	if err := config.New(fields, config.EnvSource{}).Validate(); err != nil {
+		t.Fatalf("a not-yet-created output path was refused: %v", err)
+	}
+
+	// But a path whose PARENT does not exist is still refused: that is a typo, not a first boot, and
+	// accepting it would spool into a directory tree nobody meant to create.
+	t.Setenv("OPENSHIELD_SPOOL", filepath.Join(parent, "no", "such", "tree", "spool"))
+	if err := config.New(fields, config.EnvSource{}).Validate(); err == nil {
+		t.Error("an output path whose parent does not exist was accepted — a typo would then be " +
+			"indistinguishable from a first boot, and the spool would land somewhere nobody chose")
+	}
+}

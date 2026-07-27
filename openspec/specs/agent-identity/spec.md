@@ -104,3 +104,26 @@ fresh enrollment token.
 #### Scenario: A fresh token cannot hijack or un-revoke an agent
 - **WHEN** a token is used to enroll an agent id that already exists or is revoked
 - **THEN** enrollment is refused, the existing key still verifies, and a revoked agent stays revoked
+
+### Requirement: An agent survives a restart without re-provisioning
+The agent SHALL be able to persist its signing key and reuse it across restarts, enrolling only when the
+identity is new.
+
+Before D318 a restart was FATAL. Three behaviours, each correct alone, combined into it: the agent
+generated a fresh keypair on every boot, enrollment tokens are single-use, and SEC-2 deliberately refuses
+to replace an enrolled agent's public key so that a fresh token cannot overwrite an agent's key or
+un-revoke a revoked one. A restarted agent therefore received `enroll status 401` and exited — a reboot,
+an upgrade or a crash removed the endpoint from the fleet, and from the console it simply stopped
+reporting.
+
+The resolution is not to weaken SEC-2 but for the agent to KEEP the key it enrolled, exactly as it
+already keeps its telemetry sequence: state that identifies this agent to the control plane must outlive
+the process. The key is written 0600, and one readable by others is REFUSED — a per-agent key others can
+read is a shared fleet secret with extra steps, which is the fleet-wide risk per-agent keys exist to
+avoid. The honest limit is unchanged: host root can read the key and sign anything the agent could.
+
+#### Scenario: A restarted agent needs no token
+- **WHEN** an enrolled agent with a persisted identity is stopped and started again WITH NO TOKEN
+- **THEN** it reuses its identity, announces that it did, and its telemetry continues to be VERIFIED
+- **AND** the assertion is on verified rows GROWING, because coming up is not enough: the point of
+  keeping the key is that the control plane still recognises the signature

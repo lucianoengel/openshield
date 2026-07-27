@@ -92,14 +92,26 @@ func main() {
 		fmt.Fprintf(os.Stderr, "fleet-agent %s: mutual TLS enabled\n", agentID)
 	}
 
-	id, err := identity.Generate(agentID)
+	// THE IDENTITY IS PERSISTED WHEN CONFIGURED, and enrollment is SKIPPED for one that already exists
+	// (D318). Before this, the agent could not survive a restart: it generated a new keypair each boot,
+	// tokens are single-use, and SEC-2 rightly refuses to replace an enrolled agent's key — so a reboot
+	// produced `enroll status 401` and the process exited, taking the endpoint out of the fleet until an
+	// operator revoked and re-issued. Each of those three behaviours is correct alone.
+	id, created, err := identity.LoadOrCreate(os.Getenv("OPENSHIELD_IDENTITY_FILE"), agentID)
 	if err != nil {
 		fatal("identity: %v", err)
 	}
-	if err := enrollpkg.Enroll(ctx, httpClient, enrollURL, agentID, token, id); err != nil {
-		fatal("enroll: %v", err)
+	if created {
+		if err := enrollpkg.Enroll(ctx, httpClient, enrollURL, agentID, token, id); err != nil {
+			fatal("enroll: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "fleet-agent %s enrolled\n", agentID)
+	} else {
+		// Announced, because "did not enrol" is otherwise indistinguishable from "silently skipped the
+		// trust bootstrap" — and that distinction is the whole of D283.
+		fmt.Fprintf(os.Stderr, "fleet-agent %s enrolled (reusing its persisted identity; no token "+
+			"needed)\n", agentID)
 	}
-	fmt.Fprintf(os.Stderr, "fleet-agent %s enrolled\n", agentID)
 
 	conn, err := nats.Connect(natsURL, natsOpts...)
 	if err != nil {

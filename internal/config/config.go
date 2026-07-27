@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +49,15 @@ const (
 	// KindPath is a filesystem path — rendered as a file picker, and never redacted (a path is not a
 	// credential, and hiding it makes misconfiguration undiagnosable).
 	KindPath Kind = "path"
+	// KindOutputPath is a path the PRODUCT CREATES rather than one the operator supplies — a spool
+	// directory, a state file. Validated on its PARENT being usable, never on its own existence.
+	//
+	// The distinction is not pedantry (D318). OPENSHIELD_QUEUE_DIR was declared KindPath, so startup
+	// demanded that the spool directory already exist while `queue.Open` did MkdirAll on it two hundred
+	// lines later: the configuration layer refused to boot without something the code would have created
+	// itself. Every other KindPath field is a key, a policy or a baseline the operator PROVIDES, where
+	// requiring existence is exactly right — which is why the wrong kind here went unnoticed.
+	KindOutputPath Kind = "output_path"
 )
 
 // Field is ONE declaration, used for both reading and describing. There is deliberately no second list.
@@ -347,7 +357,7 @@ func (r *Resolver) Validate() error {
 // also a snapshot: a path readable at boot can stop being readable an hour later, so the check must not
 // be mistaken for a guarantee. The reader gives the real error at the point of use.
 func parseForOrigin(f Field, raw, origin string) error {
-	if f.Kind == KindPath && origin == "default" {
+	if (f.Kind == KindPath || f.Kind == KindOutputPath) && origin == "default" {
 		return nil
 	}
 	return parseFor(f, raw)
@@ -381,6 +391,18 @@ func parseFor(f Field, raw string) error {
 	case KindPath:
 		if _, err := os.Stat(raw); err != nil {
 			return fmt.Errorf("path is not readable")
+		}
+	case KindOutputPath:
+		// The PARENT must exist and be a directory. Checking the path itself would refuse a spool
+		// directory that has simply not been created yet — which is every first boot — while checking
+		// nothing at all would accept a typo that silently spools into an unwritable place.
+		parent := filepath.Dir(raw)
+		info, err := os.Stat(parent)
+		if err != nil {
+			return fmt.Errorf("the parent directory %s does not exist", parent)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("the parent path %s is not a directory", parent)
 		}
 	}
 	return nil

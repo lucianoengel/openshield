@@ -65,3 +65,31 @@ check against, TRUNCATION is undetectable, and truncation is the most likely way
 - **THEN** it sets `-euo pipefail` and runs verification AFTER the restore
 - **AND** without those, a failed restore is followed by a verification of whatever was already in the
   database, which can pass — a green drill over a restore that never happened
+
+### Requirement: ENCRYPT_LOCAL is reversible end to end
+A file encrypted by the running engine SHALL be recoverable by the shipped recovery command, in both
+symmetric and escrow modes, and recovery SHALL never overwrite an existing file.
+
+D293 found the encrypting half shipped with nothing able to decrypt — a containment action that, to the
+person whose file it was, is indistinguishable from destroying it. The recovery command fixed that, and
+then NEITHER HALF was exercised against a running engine: what was proven was that a package can encrypt
+and a command can decrypt, not that the file the engine produces is the file the tool accepts. That gap
+is where a format or mode mismatch lives, and it would surface for the first time on the day an operator
+actually needed the data.
+
+#### Scenario: A symmetrically encrypted file round-trips
+- **WHEN** the engine encrypts a flagged file and the operator recovers it with the endpoint's key
+- **THEN** the plaintext is reproduced exactly and the ciphertext is left untouched
+
+#### Scenario: An escrow blob cannot be opened by the endpoint
+- **WHEN** an escrow-encrypted file is offered the endpoint's own public key
+- **THEN** recovery refuses and NAMES escrow as what is needed, rather than failing as a generic
+  decryption error that reads identically to "your key is wrong"
+- **AND** the off-endpoint keypair DOES recover it, or the scenario would pass against a build that
+  cannot decrypt escrow blobs at all — which is the state D293 found
+
+#### Scenario: Recovery refuses to overwrite
+- **WHEN** recovery is pointed at an output path that already exists
+- **THEN** it refuses before decrypting, naming the clobber, and the existing file is untouched
+- **AND** the scenario uses a GENUINELY RECOVERABLE blob: with a corrupt one, removing the guard still
+  fails at decryption and writes nothing, so the test would pass against the mutation

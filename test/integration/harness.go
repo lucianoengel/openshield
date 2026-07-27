@@ -52,8 +52,11 @@ const (
 
 // Stack is a running set of infrastructure for one test.
 type Stack struct {
-	DSN     string
-	NATSURL string
+	// natsName is the broker container, so a scenario can take the BROKER away rather than the control
+	// plane — the only outage an endpoint actually experiences.
+	natsName string
+	DSN      string
+	NATSURL  string
 	// hostPort is the Postgres address, kept so an additional database can be addressed on the same
 	// container without re-parsing the DSN.
 	hostPort string
@@ -194,9 +197,23 @@ func StartStack(t *testing.T) *Stack {
 	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", natsName).Run() })
 	natsPort := hostPort(t, natsName, "4222/tcp")
 	s.NATSURL = "nats://127.0.0.1:" + natsPort
+	s.natsName = natsName
 
 	waitTCP(t, "127.0.0.1:"+natsPort, 60*time.Second)
 	return s
+}
+
+// StopBroker takes the message broker away, for scenarios about what an endpoint does during an OUTAGE.
+//
+// STOPPING THE CONTROL PLANE IS NOT AN OUTAGE, and assuming it was cost a round of confused failures: the
+// agent publishes to the BROKER, so a server that has gone away changes nothing an agent can observe. Its
+// spool stayed empty and the scenario concluded, wrongly, that spooling was broken.
+func (s *Stack) StopBroker(t *testing.T) {
+	t.Helper()
+	if s.natsName == "" {
+		t.Fatal("this stack has no broker to stop")
+	}
+	run(t, "podman", "stop", "-t", "1", s.natsName)
 }
 
 func waitTCP(t *testing.T, addr string, timeout time.Duration) {

@@ -338,3 +338,56 @@ Six rounds, five greppable shapes:
 And three ways a green test can mean nothing: it never ran (skips), everything was refused for an
 unrelated reason (vacuous negatives), or the window was too short for the thing to have happened
 (timing).
+
+
+## Round 7 (D318): three correct behaviours that combined into a fatal one
+
+### The agent could not survive a reboot
+
+Not an unwired feature — an EMERGENT defect, and the first of its kind found here. Three behaviours, each
+right in isolation:
+
+1. The fleet agent generated a fresh keypair on every start.
+2. Enrollment tokens are single-use.
+3. SEC-2 deliberately refuses to replace an enrolled agent's public key, so a fresh token cannot
+   overwrite an agent's key or un-revoke a revoked one.
+
+Together: a restarted agent got `enroll status 401` **and exited**. A reboot, an upgrade or a crash took
+the endpoint out of the fleet permanently, until an operator revoked the identity and minted a new token
+— and from the console it simply stopped reporting, which is indistinguishable from a quiet machine.
+
+No package test could have found it: each component behaved exactly as specified. It took starting an
+agent, stopping it, and starting it again — which nothing did until a test about the SEQUENCE store
+happened to restart a process.
+
+The fix is not to weaken SEC-2 but to persist the key, exactly as the telemetry sequence already is.
+
+### The configuration layer refused what the code creates
+
+`OPENSHIELD_QUEUE_DIR` was declared `KindPath`, which validates existence — while `queue.Open` does
+`MkdirAll` on it. Every first boot with offline queueing enabled failed, and the message ("path is not
+readable") pointed at the operator rather than at the mismatch. Every OTHER `KindPath` field is a key, a
+policy or a baseline the operator PROVIDES, where requiring existence is exactly right, which is why the
+wrong kind here went unnoticed. New `KindOutputPath` validates the PARENT.
+
+### A wrong mental model in my own test
+
+The spooling scenarios stopped the CONTROL PLANE to simulate an outage. The agent publishes to the
+BROKER, so nothing it could observe changed, its spool stayed empty, and the test concluded that spooling
+was broken. The harness now has `StopBroker`, and the distinction is written down where the next person
+will look.
+
+### The running score
+
+Seven rounds. Five greppable shapes, plus one that is not greppable at all:
+
+1. A protocol with a server and no client.
+2. A file format with a reader and no writer (×3).
+3. A gated test whose gate is never satisfied (×3).
+4. A procedure with no runner.
+5. A guard with an enforcer and no way to satisfy it.
+6. **Correct components that combine into a broken behaviour** — findable only by running the thing.
+
+And four ways a green test can mean nothing: it never ran; everything was refused for an unrelated
+reason; the window was too short; or the fixture could not have exercised the guard (a corrupt blob
+fails before the overwrite check it was meant to prove).
