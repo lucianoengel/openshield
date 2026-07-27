@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package integration runs OpenShield's components as REAL PROCESSES against REAL infrastructure.
 //
 // Everything else in this repository tests a package. That leaves a specific and dangerous gap: the wiring

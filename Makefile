@@ -1,7 +1,7 @@
 GO ?= go
 PROTOC ?= protoc
 
-.PHONY: all build test vet check cross-compile proto proto-check tidy release verify-release
+.PHONY: all build test integration vet check cross-compile proto proto-check tidy release verify-release
 
 all: vet test check build cross-compile
 
@@ -20,6 +20,16 @@ vet:
 
 test:
 	$(GO) test -race ./...
+
+# The integration suite runs the REAL binaries against containerised infrastructure, so it is a separate
+# target rather than part of `test`.
+#
+# Not because it is optional — it covers the cmd/ wiring nothing else reaches — but because running it
+# CONCURRENTLY with the whole unit suite saturates the machine: every scenario starts two containers, and
+# under `go test ./...` the control plane was still not listening after sixty seconds. That is contention,
+# not a product failure, and inflating timeouts would only have made the failures slower to arrive.
+integration:
+	$(GO) test -tags integration -count=1 ./test/integration/...
 
 # Architectural boundaries that the compiler cannot express on its own.
 check:

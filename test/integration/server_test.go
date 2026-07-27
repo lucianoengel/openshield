@@ -1,3 +1,5 @@
+//go:build integration
+
 package integration
 
 import (
@@ -34,32 +36,47 @@ func TestServerMigratesAndRunsAgainstARealStack(t *testing.T) {
 		"OPENSHIELD_DSN=" + stack.DSN,
 		"OPENSHIELD_NATS_URL=" + stack.NATSURL,
 	})
-	// The binary announces nothing on a bare boot, so wait on the OBSERVABLE EFFECT rather than a log
-	// line: the schema exists.
+	// The binary announces nothing on a bare boot, so wait on the OBSERVABLE EFFECT rather than a log line.
+	//
+	// WAIT FOR WHAT THE TEST ACTUALLY NEEDS — the tables — not for a migration COUNT. Two earlier versions
+	// of this got it wrong in the same way: `count > 0` is satisfied by the first migration, and `count >=
+	// 30` by the thirtieth of thirty-eight, so both raced migrations still in flight. Each passed alone
+	// and failed under `-race`, which is precisely the flakiness this harness's own documentation warns
+	// about: waiting on the wrong signal is indistinguishable from waiting long enough, until the machine
+	// is loaded. A hardcoded count is also stale the moment a migration is added.
+	required := []string{"audit_entries", "fleet_telemetry", "incidents", "unified_alerts",
+		"config_settings", "approvals", "playbook_runs"}
 	pool := openPool(t, stack.DSN)
-	Eventually(t, 90*time.Second, "the server to migrate a fresh database", func() bool {
-		var n int
-		if err := pool.QueryRow(Ctx(t), `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
+	tableExists := func(name string) bool {
+		var exists bool
+		if err := pool.QueryRow(Ctx(t), `SELECT to_regclass($1) IS NOT NULL`, "public."+name).Scan(&exists); err != nil {
 			return false
 		}
-		return n > 0
+		return exists
+	}
+	Eventually(t, 120*time.Second, "the server to migrate a fresh database completely", func() bool {
+		for _, tbl := range required {
+			if !tableExists(tbl) {
+				return false
+			}
+		}
+		return true
 	})
+	for _, tbl := range required {
+		if !tableExists(tbl) {
+			t.Errorf("table %q missing after migration", tbl)
+		}
+	}
+	// A floor, not an exact count: the point is that the binary applied its whole embedded set, and an
+	// exact number would have to be edited by every future migration.
 	var applied int
 	if err := pool.QueryRow(Ctx(t), `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied < 30 {
-		t.Errorf("only %d migrations applied — the binary did not bring the schema fully up", applied)
+	if applied < len(required) {
+		t.Errorf("only %d migrations applied", applied)
 	}
-	// And the tables the rest of the product depends on are actually there.
-	for _, table := range []string{"audit_entries", "fleet_telemetry", "incidents", "unified_alerts",
-		"config_settings", "approvals", "playbook_runs"} {
-		var exists bool
-		if err := pool.QueryRow(Ctx(t),
-			`SELECT to_regclass($1) IS NOT NULL`, "public."+table).Scan(&exists); err != nil || !exists {
-			t.Errorf("table %q missing after migration (err %v)", table, err)
-		}
-	}
+
 	if srv.Cmd.ProcessState != nil {
 		t.Fatalf("the server exited during startup:\n%s", srv.Output())
 	}
