@@ -29,7 +29,7 @@ Pre-alpha. The walking skeleton runs; there is no packaged release yet.
 - Real fanotify observe connector (NOTIFY mode, unprivileged). (D52)
 - The `openshield-engine` **binary** runs the assembled observe path itself
   (watches `OPENSHIELD_WATCH_DIRS`, notify-mode fanotify → classifier → policy →
-  Decision → ledger → ALERT), proven at the binary level (`deploy/observe-e2e.sh`),
+  Decision → ledger → ALERT), proven at the binary level (the integration suite),
   not only via package tests. Inline blocking (the privileged permission-mode
   agent) remains deferred (D49). (D62)
 - Fail-open watchdog, parser-sandbox hardening, retention/purpose/exclusion

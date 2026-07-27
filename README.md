@@ -26,7 +26,7 @@ audit ledger where *every* decision is courtroom-grade evidence.
 > ### ⚠️ Project status
 > **OpenShield is pre-alpha.** The **observe path runs end-to-end as a binary** — a real file
 > dropped in a watched directory is classified in a sandboxed worker, evaluated against policy, and
-> lands an `ALERT` in the hash-chained ledger ([`deploy/observe-e2e.sh`](deploy/observe-e2e.sh)). A fleet control
+> lands an `ALERT` in the hash-chained ledger (the integration suite, `make integration`). A fleet control
 > plane, mutual-TLS transport, network gateway, HIPS process pipeline, and server-side correlation
 > are built and tested. **Inline blocking (the privileged permission-mode agent) is deferred**, and
 > the platform is **not yet production-hardened**: no packaged release, single-node durability. The
@@ -223,7 +223,7 @@ make build
 an `ALERT` in the forward-secure ledger:
 
 ```bash
-./deploy/observe-e2e.sh
+make integration
 ```
 
 Key configuration is via environment variables, e.g. `OPENSHIELD_WATCH_DIRS` (directories the engine

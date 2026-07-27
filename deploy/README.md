@@ -68,7 +68,7 @@ files themselves are checked with `systemd-analyze verify` in review.
 ## Real container end-to-end test
 
 ```
-bash deploy/e2e.sh
+make integration
 ```
 
 Brings up the compose stack (Postgres + NATS + the **openshield-server binary in a
@@ -83,7 +83,7 @@ image); run it on demand.
 ## Multi-agent fleet simulation
 
 ```
-bash deploy/fleet-e2e.sh
+make integration
 ```
 
 Brings up the control plane + Postgres + NATS and N **agent containers**, each
@@ -116,3 +116,19 @@ until then, mirror-only.
 
 The same applies to the syslog and SMTP connectors: they are capture endpoints fed a copy of the
 traffic (or a dedicated capture destination), not inline elements the fleet depends on for delivery.
+
+## The end-to-end scripts are gone (D296)
+
+`e2e.sh`, `fleet-e2e.sh`, `mtls-e2e.sh` and `observe-e2e.sh` were deleted, and their distinctive
+coverage lives in `test/integration/` — run by `make integration`, which is part of `make all`.
+
+They were not removed for being redundant. Each proved something nothing else did: the shipped engine
+detecting a real file, the anchor binary moving completeness to `anchored`, revocation making a trusted
+agent untrusted, the dead-man's-switch, and an agent without a client certificate being refused. They
+were removed because they sat outside every gate, and one of them had already stopped passing without
+anyone noticing — porting the observe script found that **the engine never stamped a purpose on the
+events its own connectors produce**, so every fanotify event failed validation and the observe path was
+broken at the binary level while every package test passed.
+
+`install.sh` stays. It is a product artifact, not a test, and `internal/packaging` parses it to assert
+the privilege boundaries it sets up.

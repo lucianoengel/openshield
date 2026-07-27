@@ -3,7 +3,7 @@ PROTOC ?= protoc
 
 .PHONY: all build test integration vet check cross-compile proto proto-check tidy release verify-release
 
-all: vet test check build cross-compile
+all: vet test check build cross-compile integration
 
 build:
 	$(GO) build ./...
@@ -21,13 +21,16 @@ vet:
 test:
 	$(GO) test -race ./...
 
-# The integration suite runs the REAL binaries against containerised infrastructure, so it is a separate
-# target rather than part of `test`.
+# The integration suite runs the REAL binaries against containerised infrastructure.
 #
-# Not because it is optional — it covers the cmd/ wiring nothing else reaches — but because running it
-# CONCURRENTLY with the whole unit suite saturates the machine: every scenario starts two containers, and
-# under `go test ./...` the control plane was still not listening after sixty seconds. That is contention,
-# not a product failure, and inflating timeouts would only have made the failures slower to arrive.
+# It is a separate TARGET but part of `all`, and the distinction matters: it must not run CONCURRENTLY
+# with the unit suite — every scenario starts two containers, and under `go test ./...` the control plane
+# was still not listening after sixty seconds (contention, not a product failure; inflating timeouts would
+# only have made the failures slower to arrive). Sequencing it after `test` in `all` gives it the machine
+# to itself while keeping it in the gate.
+#
+# It IS the gate for the cmd/ wiring, which nothing else reaches: D285, D287, D292, D294 and D296 were all
+# found by it and none by a package test. It skips cleanly without podman.
 integration:
 	$(GO) test -tags integration -count=1 ./test/integration/...
 

@@ -259,6 +259,18 @@ func (e *Engine) attribute(ev *corev1.Event) error {
 	if ev.GetObservedAt() == nil {
 		ev.ObservedAt = timestamppb.New(e.now().UTC())
 	}
+	// PURPOSE, stamped here for the same reason the subject is: the connectors produce a TARGET, and the
+	// provenance fields are the engine's to supply.
+	//
+	// This was missing, and the observe path was BROKEN AT THE BINARY LEVEL because of it — every
+	// fanotify event failed validation with "missing provenance field: purpose" and never reached the
+	// classifier. No package test caught it, because every engine test hand-builds an event with a
+	// purpose already set: the tests verified the pipeline against events the connectors do not produce.
+	// That is this project's own named failure — verifying against its own assumptions — and it took
+	// running the shipped binary to see it (D296).
+	if ev.GetPurpose() == corev1.Purpose_PURPOSE_UNSPECIFIED {
+		ev.Purpose = corev1.Purpose_PURPOSE_DLP
+	}
 	return core.ValidateEvent(ev)
 }
 
