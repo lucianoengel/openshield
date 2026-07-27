@@ -135,6 +135,9 @@ func (c classifyStage) classify(ctx context.Context, s *core.State, req *corev1.
 
 // Engine runs the assembled pipeline for one event.
 type Engine struct {
+	// onIntent is announced for each verified coordinated-response intent applied. nil = silent.
+	onIntent func(*corev1.ResponseIntent)
+
 	// KillSwitch, when set, stops this component ENFORCING without stopping it detecting (PLAT-9). Nil
 	// means none was installed and enforcement behaves exactly as before: a component never given a
 	// switch must enforce normally rather than silently do nothing.

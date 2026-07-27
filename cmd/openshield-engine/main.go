@@ -45,6 +45,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/retain"
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 	"github.com/nats-io/nats.go"
 )
 
@@ -160,7 +161,7 @@ func main() {
 		if err := enrollpkg.Enroll(ctx, http.DefaultClient, enrollURL, agentID, os.Getenv("OPENSHIELD_ENROLL_TOKEN"), id); err != nil {
 			fatal(log, "enroll", err)
 		}
-		conn, err := nats.Connect(natsURL)
+		conn, err := nats.Connect(natsURL, natsOptions(log)...)
 		if err != nil {
 			fatal(log, "nats", err)
 		}
@@ -705,14 +706,46 @@ func installKillSwitch(ctx context.Context, eng *engine.Engine, log *slog.Logger
 	if err != nil {
 		fatal(log, "control-plane key", err)
 	}
-	conn, err := nats.Connect(natsURL)
+	conn, err := nats.Connect(natsURL, natsOptions(log)...)
 	if err != nil {
 		fatal(log, "fleet-control nats", err)
 	}
 	if _, err := eng.SubscribeFleetControl(conn, key); err != nil {
 		fatal(log, "fleet-control subscribe", err)
 	}
+	// XDR-6: consume coordinated-response intents, so a CONTAINed subject's next exec is refused INLINE
+	// by the local policy rather than after the fact.
+	eng.SetIntentObserver(func(in *corev1.ResponseIntent) {
+		log.Warn("coordinated-response intent APPLIED", slog.String("verb", in.GetVerb().String()),
+			slog.String("subject", in.GetSubject()), slog.String("intent_id", in.GetIntentId()))
+	})
+	if _, err := eng.SubscribeIntents(conn, key); err != nil {
+		fatal(log, "intent subscribe", err)
+	}
+	log.Info("engine: coordinated-response intents ACTIVE (XDR-6) — verified against the control-plane " +
+		"key; the local policy decides what a verb means")
 	go func() { <-ctx.Done(); conn.Close() }()
 	log.Info("engine: fleet-wide enforcement control ACTIVE (PLAT-9) — signed, replay-bounded and " +
 		"expiring; a refused control leaves enforcement ON")
+}
+
+// natsOptions builds the broker connection options from this process's TLS configuration.
+//
+// D294 FOUND THAT NONE OF THIS BINARY'S BROKER CONNECTIONS PRESENTED A CLIENT CERTIFICATE. D55 makes
+// mutual TLS a property of the agent-facing channels, the control plane enforces it on its side, and
+// this end connected in plaintext — so against a mutually-authenticated broker every channel failed, and
+// because the fleet-control connection is fatal, the process would not start at all. A deployment could
+// have mTLS or a kill switch, not both.
+//
+// Loaded per call rather than threaded through, because it is read a handful of times at startup and a
+// parameter would have to reach four call sites in two files to fix a bug that is about all of them.
+func natsOptions(log *slog.Logger) []nats.Option {
+	cfg, err := tlsconf.LoadFromEnv()
+	if err != nil {
+		fatal(log, "TLS configuration", err)
+	}
+	if cfg == nil {
+		return nil
+	}
+	return []nats.Option{nats.Secure(cfg.ClientConfig())}
 }

@@ -27,13 +27,21 @@ import (
 //   - It looks only at pointer, func and behaviour-interface fields. Value fields, counters and
 //     decode targets are data rather than seams, and including them produced a hundred and eighty
 //     false positives on the first attempt — enough noise to make the result useless.
+//   - It covers exported AND unexported fields. Restricting it to exported ones is what let
+//     `Gateway.intents` through.
 //
 // What it does catch is the exact thing that went wrong, and it costs nothing to run.
 
 // seamField matches a field declaration whose type is a pointer, a func, or one of the behaviour
 // interfaces this codebase plugs in. Matched on the DECLARATION, with comments stripped first.
+//
+// UNEXPORTED FIELDS COUNT TOO, which the first version got wrong and D294 paid for. `Gateway.intents` was
+// read on every request and assigned by nothing — and being unexported meant there was not even a SETTER,
+// so the branch that consumes a coordinated-response intent was unreachable in every deployment. An
+// unexported seam is if anything MORE likely to rot: a missing exported setter is visible to a caller,
+// a missing internal assignment is visible to nobody.
 var seamField = regexp.MustCompile(
-	`^\s+([A-Z]\w*)\s+(\*[\w\.]+|func\(|[\w\.]*(?:Notifier|Ledger|Sink|Switch|Store|Applier|Enforcer|Classifier))\s*$`)
+	`^\s+([A-Za-z]\w*)\s+(\*[\w\.]+|func\(|[\w\.]*(?:Notifier|Ledger|Sink|Switch|Store|Applier|Enforcer|Classifier))\s*$`)
 
 var exportedStruct = regexp.MustCompile(`(?s)type ([A-Z]\w+) struct \{(.*?)\n\}`)
 

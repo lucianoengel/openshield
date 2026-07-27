@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -36,8 +37,9 @@ import (
 // subject and how it is encoded is exactly the thing under test — a test that minted its own would be
 // asserting against its own idea of the format.
 type pki struct {
-	dir, caPEM string
-	tls        TLSMaterial // the server material, kept so a test can join the same mutually-authenticated broker
+	dir, caPEM  string
+	signingPriv string      // the control plane's ed25519 signing key, for deriving the public half
+	tls         TLSMaterial // the server material, kept so a test can join the same mutually-authenticated broker
 }
 
 func newPKI(t *testing.T) *pki {
@@ -133,6 +135,7 @@ func mtlsServerSigned(t *testing.T, p *pki) (*Stack, *Process, string) {
 	stack := StartStackTLS(t, m)
 	migrateStack(t, stack)
 	priv, _ := signingKeypair(t)
+	p.signingPriv = priv
 	addr := "127.0.0.1:" + freePort(t)
 	srv := Start(t, "openshield-server", append([]string{
 		"OPENSHIELD_DSN=" + stack.DSN,
@@ -144,6 +147,25 @@ func mtlsServerSigned(t *testing.T, p *pki) (*Stack, *Process, string) {
 	srv.WaitForOutput("signed risk, intent and fleet-control publishing", 60*time.Second)
 	p.tls = m
 	return stack, srv, "https://" + addr
+}
+
+// controlPlanePub writes the PUBLIC half of the signing key a consumer verifies intents and fleet
+// controls against, and returns its path.
+//
+// Derived from the private key the server was given rather than generated separately, because a consumer
+// holding an unrelated key rejects every message — which from outside is indistinguishable from a quiet
+// channel, and would make this scenario pass while proving nothing.
+func (p *pki) controlPlanePub(t *testing.T) string {
+	t.Helper()
+	priv, err := os.ReadFile(p.signingPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(p.dir, "control-plane.pub")
+	if err := os.WriteFile(out, ed25519.PrivateKey(priv).Public().(ed25519.PublicKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // do performs a request and returns the status and body.

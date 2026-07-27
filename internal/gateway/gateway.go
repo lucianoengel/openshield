@@ -85,6 +85,8 @@ type Gateway struct {
 
 	// intents holds the coordinated-response intents this gateway consults (XDR-6). nil = not consulted.
 	intents *intent.IntentStore
+	// onIntent is announced for each verified intent applied. nil = silent.
+	onIntent func(*corev1.ResponseIntent)
 	// telemetry projects a boundary-safe view of decisions to the control plane.
 	// nil = no projection (the default); the local ledger is the system of record
 	// (D30). Set via SetTelemetry.

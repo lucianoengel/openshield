@@ -42,6 +42,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/casb"
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/core"
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/dnsredirect"
 	"github.com/lucianoengel/openshield/internal/dnssink"
 	"github.com/lucianoengel/openshield/internal/gateway"
@@ -52,6 +53,7 @@ import (
 
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
+	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 	"github.com/lucianoengel/openshield/internal/xdr"
 	"github.com/nats-io/nats.go"
 )
@@ -211,7 +213,7 @@ func main() {
 		if err := enrollpkg.Enroll(ctx, http.DefaultClient, enrollURL, agentID, os.Getenv("OPENSHIELD_ENROLL_TOKEN"), id); err != nil {
 			fatal(log, "enroll", err)
 		}
-		conn, err := nats.Connect(natsURL)
+		conn, err := nats.Connect(natsURL, natsOptions(log)...)
 		if err != nil {
 			fatal(log, "nats", err)
 		}
@@ -295,13 +297,25 @@ func installKillSwitch(ctx context.Context, gw *gateway.Gateway, log *slog.Logge
 	if err != nil {
 		fatal(log, "control-plane key", err)
 	}
-	conn, err := nats.Connect(natsURL)
+	conn, err := nats.Connect(natsURL, natsOptions(log)...)
 	if err != nil {
 		fatal(log, "fleet-control nats", err)
 	}
 	if _, err := gw.SubscribeFleetControl(conn, key); err != nil {
 		fatal(log, "fleet-control subscribe", err)
 	}
+	// XDR-6: consume coordinated-response intents on the SAME connection and the SAME key. One approved
+	// CONTAIN is meant to be enacted by the gateway on flows and by the endpoint on execs; until D294
+	// neither consumed one, so a signed, four-eyes-gated containment reached nothing that enforces.
+	gw.SetIntentObserver(func(in *corev1.ResponseIntent) {
+		log.Warn("coordinated-response intent APPLIED", slog.String("verb", in.GetVerb().String()),
+			slog.String("subject", in.GetSubject()), slog.String("intent_id", in.GetIntentId()))
+	})
+	if _, err := gw.SubscribeIntents(conn, key); err != nil {
+		fatal(log, "intent subscribe", err)
+	}
+	log.Info("gateway: coordinated-response intents ACTIVE (XDR-6) — verified against the control-plane " +
+		"key; the local policy decides what a verb means, this is context and not a command")
 	go func() { <-ctx.Done(); conn.Close() }()
 	log.Info("gateway: fleet-wide enforcement control ACTIVE (PLAT-9) — signed, replay-bounded and " +
 		"expiring; a refused control leaves enforcement ON")
@@ -424,7 +438,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	// subject. Without NATS both stores stay empty: a risk-gating policy allows on absent
 	// risk (D89), a posture-requiring policy DENIES on absent posture (D85 tamper-lockout).
 	if natsURL := os.Getenv("OPENSHIELD_NATS_URL"); natsURL != "" {
-		conn, err := nats.Connect(natsURL)
+		conn, err := nats.Connect(natsURL, natsOptions(log)...)
 		if err != nil {
 			fatal(log, "risk nats", err)
 		}
@@ -875,4 +889,25 @@ func envDuration(k string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// natsOptions builds the broker connection options from this process's TLS configuration.
+//
+// D294 FOUND THAT NONE OF THIS BINARY'S BROKER CONNECTIONS PRESENTED A CLIENT CERTIFICATE. D55 makes
+// mutual TLS a property of the agent-facing channels, the control plane enforces it on its side, and
+// this end connected in plaintext — so against a mutually-authenticated broker every channel failed, and
+// because the fleet-control connection is fatal, the process would not start at all. A deployment could
+// have mTLS or a kill switch, not both.
+//
+// Loaded per call rather than threaded through, because it is read a handful of times at startup and a
+// parameter would have to reach four call sites in two files to fix a bug that is about all of them.
+func natsOptions(log *slog.Logger) []nats.Option {
+	cfg, err := tlsconf.LoadFromEnv()
+	if err != nil {
+		fatal(log, "TLS configuration", err)
+	}
+	if cfg == nil {
+		return nil
+	}
+	return []nats.Option{nats.Secure(cfg.ClientConfig())}
 }

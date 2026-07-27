@@ -26,7 +26,7 @@ another unreachable function still counts as called here.
 
 ## Action paths with no caller — 46
 
-_13 of these are now wired: cases and approvals (D290), the response-intent producer (D291), the configuration write surface (D292) and ENCRYPT_LOCAL recovery (D293). Marked inline._
+_14 of these are now wired (plus XDR-6's unexported consumer seam): cases and approvals (D290), the response-intent producer (D291), the configuration write surface (D292) ENCRYPT_LOCAL recovery (D293) and coordinated-response consumption (D294). Marked inline._
 
 The real debt. Reviewed in priority order.
 
@@ -68,7 +68,7 @@ The real debt. Reviewed in priority order.
 | `ValidateDecision` | `internal/core/validate.go:148` | Decision validation. |
 | `Decrypt` | `internal/enforcers/encryptlocal/encryptlocal.go:65` | **WIRED (D293).** encryptlocal can encrypt a file. Nothing can decrypt it. |
 | `NewDenyEnforcer` | `internal/enforcers/process/process.go:136` | The process DENY enforcer (HIPS-3). |
-| `SetIntentResolver` | `internal/engine/engine.go:205` | The endpoint's intent resolver seam (XDR-6). |
+| `SetIntentResolver` | `internal/engine/engine.go:205` | **WIRED (D294).** The endpoint's intent resolver seam (XDR-6). |
 | `EnforceAuditDropped` | `internal/engine/engine.go:353` |  |
 | `SignUpdate` | `internal/gateway/signedupdate.go:15` |  |
 | `LoadSignedFeed` | `internal/nips/signed.go:183` | Signed NIPS feed loading. |
