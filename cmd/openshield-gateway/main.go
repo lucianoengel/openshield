@@ -141,6 +141,7 @@ func main() {
 	// The pool satisfies gateway.New's classifier interface (same Classify method as
 	// a single worker), so concurrent flows classify in parallel (D76).
 	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
+	installKillSwitch(ctx, gw, log)
 	applyThreatFeed(ctx, gw, log)
 	applyCasbCatalog(ctx, log)
 	applyTProxy(ctx, gw, log)
@@ -260,6 +261,52 @@ func main() {
 // env service catalog, and a RiskStore. Config is fail-fast and LOUD — a ZT gate must
 // never boot misconfigured and permissive; the failure mode is "does not start",
 // never "starts and admits everyone".
+// installKillSwitch gives this gateway the EMERGENCY DISABLE (PLAT-9), local and fleet-wide.
+//
+// ONE FUNCTION, CALLED BY BOTH MODES. The egress proxy and the access proxy are different roles on
+// different ports, and a switch honoured by one and forgotten by the other is the exact failure
+// core.KillSwitch's first stated property warns about — with the two halves of the same binary standing
+// in for the two components.
+//
+// The fleet subscription takes its OWN broker connection rather than reusing the telemetry one, because
+// that one is only opened when the gateway also has an enrollment URL. Being able to be DISABLED must not
+// depend on being enrolled: the deployment that cannot publish telemetry is not the one that should be
+// impossible to stop.
+func installKillSwitch(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
+	gw.KillSwitch = core.Install(ctx.Done(), env("OPENSHIELD_BREAK_GLASS", core.BreakGlassFile),
+		envDuration("OPENSHIELD_BREAK_GLASS_POLL", 10*time.Second),
+		func(engaged bool, reason, source string) {
+			if engaged {
+				log.Warn("ENFORCEMENT DISABLED — detection and audit continue, nothing is being blocked",
+					slog.String("reason", reason), slog.String("source", source))
+				return
+			}
+			log.Warn("enforcement RESTORED", slog.String("source", source))
+		})
+
+	natsURL, keyPath := os.Getenv("OPENSHIELD_NATS_URL"), os.Getenv("OPENSHIELD_CONTROL_PLANE_KEY")
+	if natsURL == "" || keyPath == "" {
+		log.Warn("gateway: no fleet-wide enforcement control (needs OPENSHIELD_NATS_URL and " +
+			"OPENSHIELD_CONTROL_PLANE_KEY) — the only way to stop this host enforcing is its local " +
+			"break-glass file")
+		return
+	}
+	key, err := core.LoadPublicKey(keyPath)
+	if err != nil {
+		fatal(log, "control-plane key", err)
+	}
+	conn, err := nats.Connect(natsURL)
+	if err != nil {
+		fatal(log, "fleet-control nats", err)
+	}
+	if _, err := gw.SubscribeFleetControl(conn, key); err != nil {
+		fatal(log, "fleet-control subscribe", err)
+	}
+	go func() { <-ctx.Done(); conn.Close() }()
+	log.Info("gateway: fleet-wide enforcement control ACTIVE (PLAT-9) — signed, replay-bounded and " +
+		"expiring; a refused control leaves enforcement ON")
+}
+
 func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, ledger core.Ledger) {
 	listen := env("OPENSHIELD_ACCESS_LISTEN", "127.0.0.1:8443")
 	clientCA := os.Getenv("OPENSHIELD_ACCESS_CLIENT_CA")
@@ -305,6 +352,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	}
 
 	gw := gateway.New(cls, accessPol, ledger, log, 30*time.Second)
+	installKillSwitch(ctx, gw, log)
 	applyThreatFeed(ctx, gw, log)
 	applyCasbCatalog(ctx, log)
 	ap := gateway.NewAccessProxy(gw, catalog, gateway.DefaultMaxBody, log)
@@ -818,16 +866,7 @@ func fatal(log *slog.Logger, msg string, err error) {
 // loadEd25519Pub reads a raw 32-byte Ed25519 public key from a file — the trusted
 // risk/posture publisher key the gateway verifies signed updates against (SEC-1). Same
 // format as the witness key (openshieldctl), so provisioning can emit it the same way.
-func loadEd25519Pub(path string) (ed25519.PublicKey, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading public key %s: %w", path, err)
-	}
-	if len(b) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("public key %s is %d bytes, want %d", path, len(b), ed25519.PublicKeySize)
-	}
-	return ed25519.PublicKey(b), nil
-}
+func loadEd25519Pub(path string) (ed25519.PublicKey, error) { return core.LoadPublicKey(path) }
 
 func envDuration(k string, def time.Duration) time.Duration {
 	if v := os.Getenv(k); v != "" {

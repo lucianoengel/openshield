@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -72,6 +74,22 @@ func (s *Server) NextFleetSequence(ctx context.Context) (uint64, error) {
 // wire even briefly, because a consumer that received it would already have acted.
 func (s *Server) PublishFleetControl(ctx context.Context, verb corev1.FleetVerb, reason string,
 	ttl time.Duration) (string, error) {
+	seq, err := s.NextFleetSequence(ctx)
+	if err != nil {
+		return "", err
+	}
+	return s.PublishFleetControlSeq(ctx, verb, reason, ttl, seq)
+}
+
+// PublishFleetControlSeq publishes a control at an ALREADY-ALLOCATED sequence.
+//
+// It exists because the four-eyes gate is keyed by the control id, and the id is derived from the
+// sequence: an operator cannot get approval for an id that does not exist yet, and a function that
+// allocates its own sequence on every call can therefore never satisfy its own gate — each attempt asks
+// for approval of an id the previous attempt burned. Splitting allocation from publication is what makes
+// the approved id and the sent id the same one, which is the property the gate is for.
+func (s *Server) PublishFleetControlSeq(ctx context.Context, verb corev1.FleetVerb, reason string,
+	ttl time.Duration, seq uint64) (string, error) {
 	if _, ok := corev1.FleetVerb_name[int32(verb)]; !ok || verb == corev1.FleetVerb_FLEET_VERB_UNSPECIFIED {
 		return "", fmt.Errorf("%w: %v", ErrFleetVerb, verb)
 	}
@@ -80,10 +98,6 @@ func (s *Server) PublishFleetControl(ctx context.Context, verb corev1.FleetVerb,
 	s.mu.Unlock()
 	if len(signer) == 0 {
 		return "", ErrFleetUnsigned
-	}
-	seq, err := s.NextFleetSequence(ctx)
-	if err != nil {
-		return "", err
 	}
 	id := FleetControlID(verb, seq)
 
@@ -117,4 +131,24 @@ func (s *Server) PublishFleetControl(ctx context.Context, verb corev1.FleetVerb,
 		return "", err
 	}
 	return id, nil
+}
+
+// ParseFleetControlID recovers the verb and sequence from a control id.
+//
+// The id is the operator's handle — it is what an approval is bound to and what the audit trail names —
+// so the operator surface takes an ID rather than a verb-and-number they would have to keep together.
+func ParseFleetControlID(id string) (corev1.FleetVerb, uint64, error) {
+	parts := strings.Split(id, ":")
+	if len(parts) != 3 || parts[0] != "fleet" {
+		return corev1.FleetVerb_FLEET_VERB_UNSPECIFIED, 0, fmt.Errorf("controlplane: %q is not a fleet-control id", id)
+	}
+	v, ok := corev1.FleetVerb_value[parts[1]]
+	if !ok || corev1.FleetVerb(v) == corev1.FleetVerb_FLEET_VERB_UNSPECIFIED {
+		return corev1.FleetVerb_FLEET_VERB_UNSPECIFIED, 0, fmt.Errorf("%w: %q", ErrFleetVerb, parts[1])
+	}
+	seq, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil {
+		return corev1.FleetVerb_FLEET_VERB_UNSPECIFIED, 0, fmt.Errorf("controlplane: bad sequence in %q", id)
+	}
+	return corev1.FleetVerb(v), seq, nil
 }

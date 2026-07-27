@@ -46,6 +46,8 @@ func main() {
 			os.Exit(runMigrate(dsn))
 		case "ingest-feed":
 			os.Exit(ingestFeed(dsn, os.Args[2:]))
+		case "fleet-control":
+			os.Exit(fleetControl(dsn, os.Args[2:]))
 		case "config":
 			os.Exit(showConfig())
 		}
@@ -120,7 +122,14 @@ func main() {
 			fatal("risk signing key is %d bytes, want %d (raw ed25519 private key)", len(key), ed25519.PrivateKeySize)
 		}
 		srv.SetRiskSigner(ed25519.PrivateKey(key))
-		fmt.Fprintf(os.Stderr, "openshield-server: signed risk publishing enabled (SEC-1)\n")
+		// The SAME key signs RESPONSE INTENTS and FLEET CONTROLS, which is what this field has always
+		// said it does ("signs risk and intent publications"). Until now only SetRiskSigner was called, so
+		// PublishIntents and PublishFleetControl refused unconditionally — the IdP responder was listening
+		// for a message nothing in the product could produce, and the emergency disable could not be sent
+		// at all. A verifier with no possible signer is not a security control; it is an inert one.
+		srv.SetIntentSigner(ed25519.PrivateKey(key))
+		fmt.Fprintf(os.Stderr, "openshield-server: signed risk, intent and fleet-control publishing "+
+			"enabled (SEC-1)\n")
 	}
 
 	// PLAT-2b/ADR-3: run the singleton work (telemetry consumer, peer analytics, maintenance loops)

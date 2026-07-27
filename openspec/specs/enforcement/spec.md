@@ -37,3 +37,38 @@ remains the overdue mechanism's responsibility.
 #### Scenario: The summary does not infer state for unseen agents
 - **WHEN** an agent has never reported
 - **THEN** it contributes nothing to the summary rather than a default state
+
+### Requirement: The emergency disable is reachable from the shipped binaries
+
+Every component that ENFORCES SHALL install the kill switch, watch its local break-glass file, and — when
+given a control-plane key and a broker — accept signed fleet-wide control. The control plane SHALL provide
+an operator-local means of issuing one.
+
+This is a requirement about WIRING, and it is stated separately because the mechanism existing is not the
+same as the mechanism being reachable: a kill switch that no command installs, a channel no command
+subscribes to, and a control nothing can sign together look, from outside, exactly like a feature that was
+never built — while its unit tests report that it works.
+
+Accepting fleet control SHALL NOT depend on enrollment. A component that cannot publish telemetry is not
+the one that should be impossible to stop.
+
+#### Scenario: An issued fleet disable stops a running component enforcing
+- **WHEN** an approved, signed fleet disable is published
+- **THEN** every running component subscribed to the channel stops enforcing, keeps detecting and
+  auditing, and continues running
+
+#### Scenario: Both enforcement call sites honour the same control
+- **WHEN** a fleet disable is published
+- **THEN** the network component and the endpoint component both apply it
+
+#### Scenario: The local break-glass path works without a control plane
+- **WHEN** the break-glass file appears on a host with no broker and no control-plane key
+- **THEN** that host stops enforcing, and names the reason the file gave
+
+#### Scenario: Absence of the break-glass file is never engagement
+- **WHEN** no break-glass file exists
+- **THEN** enforcement continues
+
+#### Scenario: An unapproved fleet disable is never published
+- **WHEN** a disable is issued without an approved four-eyes approval bound to its control id
+- **THEN** nothing is signed or sent

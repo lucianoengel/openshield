@@ -414,6 +414,24 @@ func (s *Server) subscribeCounted(conn *nats.Conn, subject string, cb nats.MsgHa
 	return sub, nil
 }
 
+// Connect attaches a broker connection WITHOUT subscribing to anything.
+//
+// For the operator-local subcommands, which need to PUBLISH one message and exit. Run() would subscribe
+// this short-lived process to every telemetry subject and start consuming the fleet's stream, which is
+// both wasteful and wrong: a CLI invocation must not become a competing consumer.
+func (s *Server) Connect(natsURL string) error {
+	opts := append([]nats.Option{}, s.natsOpts...)
+	opts = append(opts, nats.ErrorHandler(s.natsErrorHandler))
+	conn, err := nats.Connect(natsURL, opts...)
+	if err != nil {
+		return fmt.Errorf("controlplane: connecting to NATS: %w", err)
+	}
+	s.mu.Lock()
+	s.conn = conn
+	s.mu.Unlock()
+	return nil
+}
+
 // Run connects to NATS and subscribes to the telemetry subjects until the
 // context is cancelled.
 func (s *Server) Run(ctx context.Context, natsURL string) error {

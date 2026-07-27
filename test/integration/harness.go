@@ -52,7 +52,10 @@ const (
 type Stack struct {
 	DSN     string
 	NATSURL string
-	t       *testing.T
+	// hostPort is the Postgres address, kept so an additional database can be addressed on the same
+	// container without re-parsing the DSN.
+	hostPort string
+	t        *testing.T
 }
 
 // requirePodman skips unless containers are available.
@@ -117,7 +120,8 @@ func StartStack(t *testing.T) *Stack {
 		"-p", "127.0.0.1::5432", postgresImage)
 	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", pgName).Run() })
 	pgPort := hostPort(t, pgName, "5432/tcp")
-	s.DSN = fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable", pgUser, pgPassword, pgPort, pgDatabase)
+	s.hostPort = "127.0.0.1:" + pgPort
+	s.DSN = fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, pgDatabase)
 
 	natsName := uniqueName(t, "nats")
 	// -js because durable ingest is the DEFAULT (PLAT-2): a producer started against a JetStream-less
@@ -356,4 +360,25 @@ func scanRow(t *testing.T, pool *pgxpool.Pool, sql string, args []any, dest ...a
 		t.Fatalf("querying %q: %v — this is a broken query, not a condition that has not happened yet", sql, err)
 		return false
 	}
+}
+
+// DSNFor creates an additional database in the stack's Postgres and returns a DSN for it.
+//
+// Needed because the forward-secure ledger's hash chain is bound to the signer that started it: two
+// components sharing one database means the second one opens a chain whose keys it does not hold, and
+// refuses to start — correctly, since continuing would either fork the chain or forge it. In a real
+// deployment they are separate hosts; here they need separate databases to be separate hosts.
+func (s *Stack) DSNFor(t *testing.T, name string) string {
+	t.Helper()
+	pool, err := pgxpool.New(Ctx(t), s.DSN)
+	if err != nil {
+		t.Fatalf("connecting to create %s: %v", name, err)
+	}
+	defer pool.Close()
+	// The name is a test-supplied constant, never external input; quoted anyway because an identifier
+	// cannot be a bind parameter and "it is a constant today" is how that stops being true.
+	if _, err := pool.Exec(Ctx(t), `CREATE DATABASE "`+strings.ReplaceAll(name, `"`, "")+`"`); err != nil {
+		t.Fatalf("creating database %s: %v", name, err)
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, name)
 }

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/ed25519"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -186,4 +188,45 @@ func trimReason(b []byte) string {
 		s = s[:200]
 	}
 	return s
+}
+
+// Install builds a KillSwitch, starts watching the local break-glass file, and returns it ready to be
+// handed to an enforcement path.
+//
+// ONE FUNCTION, CALLED BY EVERY COMPONENT THAT ENFORCES, for the same reason there is one KillSwitch
+// type: this file's first stated property is that a switch honoured by the gateway and forgotten by the
+// endpoint is worse than none, and two hand-written wirings are how that divergence arrives. The fleet
+// channel is subscribed by the caller, because only the caller knows whether it has a broker connection
+// and a control-plane key.
+//
+// An empty path skips the local watcher — the switch still works, it just has no local source. That is a
+// deliberate configuration, and the caller says so; it is not this function's place to decide that a host
+// must have a break-glass file.
+func Install(stop <-chan struct{}, breakGlassPath string, poll time.Duration,
+	onChange func(engaged bool, reason, source string)) *KillSwitch {
+	k := NewKillSwitch(onChange)
+	if breakGlassPath != "" {
+		if poll <= 0 {
+			poll = 10 * time.Second
+		}
+		go k.WatchBreakGlass(stop, breakGlassPath, poll)
+	}
+	return k
+}
+
+// LoadPublicKey reads a raw ed25519 public key from a file.
+//
+// Here rather than in each command because the fleet-control key is loaded by every component that can be
+// disabled, and a length check spelled per binary is a length check with a different answer per binary.
+// The size check is the point: a truncated or wrong-format key file would otherwise become a subscriber
+// that verifies nothing and refuses everything, which looks identical to a quiet channel.
+func LoadPublicKey(path string) (ed25519.PublicKey, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading public key %s: %w", path, err)
+	}
+	if len(b) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("public key %s is %d bytes, want %d", path, len(b), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(b), nil
 }

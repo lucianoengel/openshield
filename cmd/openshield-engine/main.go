@@ -126,6 +126,12 @@ func main() {
 	defer worker.Close()
 
 	eng := engine.NewFromWorker(worker, pol, ledger, log, 30*time.Second)
+	// PLAT-9: install the EMERGENCY DISABLE. The switch sits between the decision and the enforcer, so
+	// classification, the policy and the ledger all still run and only the enforcement call is skipped:
+	// STOP ACTING, KEEP SEEING. Implemented earlier it would destroy the record of what happened while
+	// enforcement was off — exactly the period an operator will need to reconstruct. It fails toward
+	// ENFORCING: absence of the break-glass file is never engagement.
+	installKillSwitch(ctx, eng, log)
 
 	// XDR-3: attribute endpoint events to this device by its canonical pseudonym, so
 	// fanotify/execaudit events (which the connectors produce target-only) carry the
@@ -663,4 +669,50 @@ func envDuration(k string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// installKillSwitch gives this endpoint the EMERGENCY DISABLE (PLAT-9), local and fleet-wide.
+//
+// The switch sits between the decision and the enforcer, so classification, the policy and the ledger all
+// still run and only the enforcement call is skipped: STOP ACTING, KEEP SEEING. Implemented any earlier it
+// would destroy the record of what happened while enforcement was off — exactly the period an operator
+// will need to reconstruct. It fails toward ENFORCING: absence of the break-glass file is never
+// engagement, or a permissions change silently turns the product off across a fleet.
+//
+// The fleet subscription is INDEPENDENT OF ENROLLMENT, and deliberately not folded into the telemetry
+// connection above it. Being able to be DISABLED must not depend on being able to PUBLISH: an endpoint
+// that failed to enrol is not the one that should be impossible to stop.
+func installKillSwitch(ctx context.Context, eng *engine.Engine, log *slog.Logger) {
+	eng.KillSwitch = core.Install(ctx.Done(), env("OPENSHIELD_BREAK_GLASS", core.BreakGlassFile),
+		envDuration("OPENSHIELD_BREAK_GLASS_POLL", 10*time.Second),
+		func(engaged bool, reason, source string) {
+			if engaged {
+				log.Warn("ENFORCEMENT DISABLED — detection and audit continue, nothing is being enforced",
+					slog.String("reason", reason), slog.String("source", source))
+				return
+			}
+			log.Warn("enforcement RESTORED", slog.String("source", source))
+		})
+
+	natsURL, keyPath := os.Getenv("OPENSHIELD_NATS_URL"), os.Getenv("OPENSHIELD_CONTROL_PLANE_KEY")
+	if natsURL == "" || keyPath == "" {
+		log.Warn("engine: no fleet-wide enforcement control (needs OPENSHIELD_NATS_URL and " +
+			"OPENSHIELD_CONTROL_PLANE_KEY) — the only way to stop this endpoint enforcing is its local " +
+			"break-glass file")
+		return
+	}
+	key, err := core.LoadPublicKey(keyPath)
+	if err != nil {
+		fatal(log, "control-plane key", err)
+	}
+	conn, err := nats.Connect(natsURL)
+	if err != nil {
+		fatal(log, "fleet-control nats", err)
+	}
+	if _, err := eng.SubscribeFleetControl(conn, key); err != nil {
+		fatal(log, "fleet-control subscribe", err)
+	}
+	go func() { <-ctx.Done(); conn.Close() }()
+	log.Info("engine: fleet-wide enforcement control ACTIVE (PLAT-9) — signed, replay-bounded and " +
+		"expiring; a refused control leaves enforcement ON")
 }
