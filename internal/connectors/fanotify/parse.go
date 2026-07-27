@@ -48,16 +48,21 @@ func ParseEvent(watchDir string, raw []byte) (ev *corev1.Event, consumed int, ok
 	mask := binary.LittleEndian.Uint64(raw[8:16])
 	name := parseDFIDName(raw[metaLen:eventLen])
 
+	// A NAMELESS RECORD IS NOT AN EVENT. Without the DFID_NAME there is no path, so there is nothing to
+	// classify and nothing to identify it by — the pipeline would reject it for having no target, after
+	// carrying it through two stages. Reporting it as consumed-but-not-an-event is both cheaper and
+	// honest, and it keeps every event this connector emits provenance-complete (D307).
+	if name == "" {
+		return nil, eventLen, false
+	}
 	e := &corev1.Event{
+		EventId:     "fan-" + name,
 		ConnectorId: "fanotify",
 		Kind:        kindFromMask(mask),
-	}
-	if name != "" {
-		e.EventId = "fan-" + name
-		e.Target = &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
+		Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
 			Identity: &corev1.FilesystemSubject_ResolvedPath{
 				ResolvedPath: filepath.Join(watchDir, name),
-			}}}
+			}}},
 	}
 	return e, eventLen, true
 }

@@ -54,6 +54,23 @@ alert if { behavioral_alert }
 
 alert if { threat_match }
 
+# HIPS-4 (D307): the ransomware canary fired — a threshold of planted decoy files changed within the
+# window, which is the mass-change signature of encryption in progress.
+#
+# WITHOUT THIS RULE THE DETECTOR WAS INERT. It planted canaries, watched them, logged
+# "SUSPECTED RANSOMWARE — mass canary change", emitted a high-severity event — and the default policy
+# had no rule for the kind, so the decision was ALLOW and nothing reached the ledger. The detection
+# existed only in stderr, which is not evidence.
+#
+# It ALERTS rather than acting, like everything else here (D1). Encryption in progress is exactly when
+# an automatic response is most tempting and most dangerous: the mass-change signature also matches a
+# legitimate bulk re-encrypt or a backup restore, and killing those mid-run is its own incident.
+ransomware_suspected if {
+	input.event.kind == "EVENT_KIND_RANSOMWARE_SUSPECTED"
+}
+
+alert if { ransomware_suspected }
+
 reason := "checksum-backed PII detected above the alert threshold" if { alerting_hit }
 
 reason := "suspicious process behavior" if {
@@ -65,6 +82,11 @@ reason := "destination matched an operator threat-intel indicator" if {
 	threat_match
 	not alerting_hit
 	not behavioral_alert
+	not ransomware_suspected
+}
+
+reason := "ransomware canaries changed en masse (HIPS-4)" if {
+	ransomware_suspected
 }
 
 decision := d if {

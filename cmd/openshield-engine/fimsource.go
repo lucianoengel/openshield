@@ -56,8 +56,9 @@ func fimEvent(d fim.Drift) *corev1.Event {
 		kind = corev1.EventKind_EVENT_KIND_FILE_MODIFIED
 	}
 	return &corev1.Event{
-		Kind:    kind,
-		EventId: "fim-" + string(d.Change) + "-" + d.Path,
+		Kind:        kind,
+		EventId:     "fim-" + string(d.Change) + "-" + d.Path,
+		ConnectorId: "fim",
 		Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
 			Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: d.Path},
 		}},

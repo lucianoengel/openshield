@@ -22,9 +22,10 @@ func clipboardEvent(byteCount int, display string) *corev1.Event {
 	return &corev1.Event{
 		// A random id per copy: two identical copies minutes apart are two events, and the id must not be
 		// derived from the content (a content-derived id would leak a fingerprint of what was copied).
-		EventId: "clip-" + hex.EncodeToString(b[:]),
-		Kind:    corev1.EventKind_EVENT_KIND_CLIPBOARD_COPY,
-		Purpose: corev1.Purpose_PURPOSE_DLP,
+		EventId:     "clip-" + hex.EncodeToString(b[:]),
+		ConnectorId: "clipboard",
+		Kind:        corev1.EventKind_EVENT_KIND_CLIPBOARD_COPY,
+		Purpose:     corev1.Purpose_PURPOSE_DLP,
 		Target: &corev1.Event_Clipboard{Clipboard: &corev1.ClipboardSubject{
 			ByteCount:     uint32(byteCount),
 			DisplayServer: display,

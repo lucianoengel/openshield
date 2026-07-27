@@ -14,8 +14,9 @@ import (
 // process's memory contents. The engine classifies it metadata-only.
 func memInjectEvent(pid int, exe string) *corev1.Event {
 	return &corev1.Event{
-		Kind:    corev1.EventKind_EVENT_KIND_MEMORY_INJECTION_SUSPECTED,
-		EventId: "meminject-" + exe + "-" + strconv.Itoa(pid),
+		Kind:        corev1.EventKind_EVENT_KIND_MEMORY_INJECTION_SUSPECTED,
+		EventId:     "meminject-" + exe + "-" + strconv.Itoa(pid),
+		ConnectorId: "memscan",
 		Target: &corev1.Event_Process{Process: &corev1.ProcessSubject{
 			Pid:      int32(pid),
 			ExecPath: exe,

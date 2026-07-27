@@ -41,8 +41,9 @@ func canaryCheck(m *fim.Manifest, paths []string, det *canary.Detector, at time.
 func canaryEvent(dir string, confidence float64) *corev1.Event {
 	_ = confidence // confidence is carried on the Decision by the policy; the event stays content-free
 	return &corev1.Event{
-		Kind:    corev1.EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED,
-		EventId: "ransomware-" + dir,
+		Kind:        corev1.EventKind_EVENT_KIND_RANSOMWARE_SUSPECTED,
+		EventId:     "ransomware-" + dir,
+		ConnectorId: "canary",
 		Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
 			Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: dir},
 		}},

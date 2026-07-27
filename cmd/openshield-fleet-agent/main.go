@@ -204,7 +204,7 @@ func main() {
 				}
 			}
 			for i := 0; i < burst; i++ {
-				_ = pub.PublishEvent(ctx, &corev1.Event{EventId: agentID + "-ev", AgentId: agentID,
+				_ = pub.PublishEvent(ctx, &corev1.Event{EventId: agentID + "-ev", AgentId: agentID, ConnectorId: "fleet-sim",
 					Kind:    corev1.EventKind_EVENT_KIND_FILE_MODIFIED,
 					Subject: &corev1.Subject{PseudonymousId: subject}})
 			}
