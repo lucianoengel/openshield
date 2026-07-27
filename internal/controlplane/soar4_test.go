@@ -581,7 +581,8 @@ func TestPlaybookLoopStopsWithLeadershipAndSurvivesAFailingTick(t *testing.T) {
 	bad.Name = "bad-trigger"
 	bad.Trigger.MinSeverity = "not-a-severity"
 	loopCtx, cancel := context.WithCancel(ctx)
-	go srv.RunPlaybookLoop(loopCtx, 20*time.Millisecond, []controlplane.Playbook{bad}, nil)
+	go srv.RunPlaybookLoop(loopCtx, func() time.Duration { return 20 * time.Millisecond },
+		func() []controlplane.Playbook { return []controlplane.Playbook{bad} }, nil)
 	waitFor(t, func() bool { return controlplane.PlaybookFailures.Load() > before })
 	failed := controlplane.PlaybookFailures.Load()
 	waitFor(t, func() bool { return controlplane.PlaybookFailures.Load() > failed })
@@ -590,7 +591,8 @@ func TestPlaybookLoopStopsWithLeadershipAndSurvivesAFailingTick(t *testing.T) {
 	// Losing leadership stops execution: a good playbook under a cancelled context runs nothing.
 	dead, deadCancel := context.WithCancel(ctx)
 	deadCancel()
-	go srv.RunPlaybookLoop(dead, 20*time.Millisecond, []controlplane.Playbook{pb}, nil)
+	go srv.RunPlaybookLoop(dead, func() time.Duration { return 20 * time.Millisecond },
+		func() []controlplane.Playbook { return []controlplane.Playbook{pb} }, nil)
 	time.Sleep(200 * time.Millisecond)
 	if n := countRows(t, pool, `SELECT count(*) FROM playbook_runs WHERE incident_id=$1`, incID); n != 0 {
 		t.Errorf("a demoted instance started %d run(s) — playbook execution must be leader-only", n)
@@ -599,7 +601,8 @@ func TestPlaybookLoopStopsWithLeadershipAndSurvivesAFailingTick(t *testing.T) {
 	// And under a live context the same playbook does run, so the assertion above is not vacuous.
 	liveCtx, liveCancel := context.WithCancel(ctx)
 	defer liveCancel()
-	go srv.RunPlaybookLoop(liveCtx, 20*time.Millisecond, []controlplane.Playbook{pb}, nil)
+	go srv.RunPlaybookLoop(liveCtx, func() time.Duration { return 20 * time.Millisecond },
+		func() []controlplane.Playbook { return []controlplane.Playbook{pb} }, nil)
 	waitFor(t, func() bool {
 		return countRows(t, pool, `SELECT count(*) FROM playbook_runs WHERE incident_id=$1`, incID) == 1
 	})

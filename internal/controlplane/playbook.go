@@ -236,8 +236,23 @@ var PlaybookFailures atomic.Int64
 // The caller runs this inside the LEADER's context (ADR-3/PLAT-2b), like RunCorrelationLoop: every replica
 // running playbooks would multiply notifications, cases and legal holds. A failing tick is counted and
 // logged, never fatal.
-func (s *Server) RunPlaybookLoop(ctx context.Context, interval time.Duration, pbs []Playbook, log *slog.Logger) {
-	retain.Loop(ctx, interval, func(c context.Context) {
+//
+// BOTH THE INTERVAL AND THE PLAYBOOKS ARE READ PER TICK, and that changed in D292 for a reason worth
+// stating: they used to be captured once, at leader startup. So `OPENSHIELD_PLAYBOOKS` was a dynamic
+// setting — stored in the database, changeable in the console, reported as applied — that in fact
+// required a restart, and an operator enabling orchestration would have watched their saved change do
+// nothing. Half the settings applying live and half needing a restart, with nothing distinguishing them,
+// is worse than a system where none do.
+//
+// The loop ALWAYS runs. No playbooks configured means it does no work, rather than not existing — so
+// turning orchestration on no longer requires a restart either.
+func (s *Server) RunPlaybookLoop(ctx context.Context, interval func() time.Duration,
+	playbooks func() []Playbook, log *slog.Logger) {
+	retain.DynamicLoop(ctx, interval, func(c context.Context) {
+		pbs := playbooks()
+		if len(pbs) == 0 {
+			return
+		}
 		if err := s.RunPlaybooksOnce(c, pbs); err != nil {
 			PlaybookFailures.Add(1)
 			if log != nil {

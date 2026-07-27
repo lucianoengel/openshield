@@ -112,3 +112,25 @@ does not; each command SHALL be evaluated against its own declared field set.
 #### Scenario: A new command cannot be exempt by omission
 - **WHEN** a command exists that is not classified against a declared field set
 - **THEN** the check fails rather than skipping it
+
+### Requirement: An operator can change configuration through the product
+
+The dynamic configuration store SHALL be writable through the product's own authenticated surface. A store
+that is authoritative for a process's behaviour and can only be written with hand-issued SQL is not a
+configuration system.
+
+The surface SHALL report the effective values with their origins, expose the schema derived from the field
+declarations, list the revision history with what each change replaced, and restore a prior revision.
+
+#### Scenario: A change applies to a running process
+- **WHEN** an operator saves a dynamic setting
+- **THEN** it is recorded as a revision attributed to that operator, and the running process honours it
+  without a restart
+
+#### Scenario: A dynamic setting applies live or is not dynamic
+- **WHEN** a setting is declared dynamic
+- **THEN** changing it takes effect without a restart
+
+#### Scenario: A rollback lengthens the history
+- **WHEN** a prior revision is restored
+- **THEN** the restoration is itself a new revision and no earlier revision is removed

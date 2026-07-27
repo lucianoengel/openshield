@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/lucianoengel/openshield/internal/analytics/peerueba"
+	"github.com/lucianoengel/openshield/internal/config"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/notify"
 	"github.com/lucianoengel/openshield/internal/runner"
@@ -121,6 +122,10 @@ type Server struct {
 	// intentSigner signs published Response-Intents (SOAR-7). Without it PublishIntents refuses: an
 	// unsigned containment signal is a forgery target, not a convenience.
 	intentSigner ed25519.PrivateKey
+
+	// configResolver is the PROCESS's resolver, installed by the command. The configuration surface
+	// validates and reports against it, so what an operator reads is what this binary is honouring.
+	configResolver *config.Resolver
 	// intentBlastRadius caps how many subjects one publication run may target; 0 = no ceiling.
 	intentBlastRadius int
 

@@ -100,6 +100,10 @@ func main() {
 	// must not race the watcher's initial load.
 	srv.LoadSettings(ctx, settings)
 	go srv.WatchSettings(ctx, settings, envDuration("OPENSHIELD_CONFIG_POLL", 15*time.Second))
+	// D292: the configuration surface reports and validates against THIS process's resolver, so what an
+	// operator reads is what this binary is honouring — not a fresh one built inside a handler, which
+	// would describe a process that does not exist.
+	srv.SetConfigResolver(cfg)
 	// A dynamic field set in the environment does NOT take effect — and is never silent about it, because
 	// the operator who set one believes it is doing something.
 	if ignored := cfg.IgnoredOverrides(); len(ignored) > 0 {
@@ -201,25 +205,43 @@ func main() {
 		// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
 		// is — every replica running playbooks would multiply notifications, cases and legal holds.
 		//
-		// Off unless a config file is named. A parse or validation failure is FATAL to the feature, not
-		// to the process: a playbook naming an unknown step must never partially load (the registry is
-		// closed at load, and a half-accepted playbook would make that meaningless), but orchestration
-		// being misconfigured must not take detection down with it.
-		if path := cfg.String("OPENSHIELD_PLAYBOOKS"); path != "" {
-			pbs, err := loadPlaybookFile(path)
-			switch {
-			case err != nil:
-				fmt.Fprintf(os.Stderr, "openshield-server: playbooks NOT loaded from %s: %v — "+
-					"orchestration is OFF (detection and paging are unaffected)\n", path, err)
-			case len(pbs) == 0:
-				fmt.Fprintf(os.Stderr, "openshield-server: %s defines no playbooks — orchestration is OFF\n", path)
-			default:
-				pi := cfg.Duration("OPENSHIELD_PLAYBOOK_INTERVAL")
-				go srv.RunPlaybookLoop(leaderCtx, pi, pbs, nil)
-				fmt.Fprintf(os.Stderr, "openshield-server: playbook orchestration ACTIVE every %s — "+
-					"%d playbook(s) from %s, Tier-1 only (no actuation) (leader only)\n", pi, len(pbs), path)
+		// The file is re-read PER TICK (D292). It used to be loaded once at leader startup, which made
+		// OPENSHIELD_PLAYBOOKS a dynamic setting that silently required a restart — an operator enabling
+		// orchestration in the console would have watched their saved change do nothing.
+		//
+		// A parse or validation failure is FATAL TO THE FEATURE, not to the process: a playbook naming an
+		// unknown step must never partially load, but orchestration being misconfigured must not take
+		// detection down with it. The failure is announced ONCE PER DISTINCT ERROR rather than every
+		// tick, because a loop that logs the same failure every second is one whose output gets muted.
+		var lastPlaybookNote string
+		notePlaybooks := func(format string, args ...any) {
+			msg := fmt.Sprintf(format, args...)
+			if msg != lastPlaybookNote {
+				lastPlaybookNote = msg
+				fmt.Fprint(os.Stderr, msg)
 			}
 		}
+		go srv.RunPlaybookLoop(leaderCtx,
+			func() time.Duration { return cfg.Duration("OPENSHIELD_PLAYBOOK_INTERVAL") },
+			func() []controlplane.Playbook {
+				path := cfg.String("OPENSHIELD_PLAYBOOKS")
+				if path == "" {
+					return nil
+				}
+				pbs, err := loadPlaybookFile(path)
+				switch {
+				case err != nil:
+					notePlaybooks("openshield-server: playbooks NOT loaded from %s: %v — orchestration is "+
+						"OFF (detection and paging are unaffected)\n", path, err)
+					return nil
+				case len(pbs) == 0:
+					notePlaybooks("openshield-server: %s defines no playbooks — orchestration is OFF\n", path)
+					return nil
+				}
+				notePlaybooks("openshield-server: playbook orchestration ACTIVE — %d playbook(s) from %s, "+
+					"Tier-1 only (no actuation) (leader only)\n", len(pbs), path)
+				return pbs
+			}, nil)
 
 		// SOAR-5: keep the IOC store fresh without a human. LEADER-ONLY — every replica re-ingesting
 		// the same snapshot would be redundant writes, not a correctness problem, but the leader lease

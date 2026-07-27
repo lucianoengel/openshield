@@ -32,11 +32,14 @@ func writePlaybookFile(t *testing.T) string {
 	return path
 }
 
-// setDynamic writes a dynamic setting the way the console does: a revision, then the effective value.
+// setDynamic writes a dynamic setting directly, for scenarios that must configure a deployment BEFORE
+// the server process exists.
 //
-// Written as SQL rather than through an API because the point is what the SERVER PROCESS reads, not how
-// the value got there — and going through the API would make a failure ambiguous between "the write did
-// not land" and "the process did not read it".
+// SQL rather than the API is correct HERE and only here: these scenarios set a value that must be in
+// place at boot, so there is no running control plane to POST to. Everywhere an operator would actually
+// be involved, the scenario uses the real surface (`config_api_test.go`) — because for four rounds this
+// helper was the ONLY way to write a setting, and a helper that works around a missing surface makes the
+// surface look present. That is how D292's gap survived as long as it did.
 func setDynamic(t *testing.T, stack *Stack, key, value string) {
 	t.Helper()
 	pool := openPool(t, stack.DSN)

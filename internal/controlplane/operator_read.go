@@ -227,6 +227,9 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	// D291: response intents (SOAR-7 Tier-2). The IdP responder was already wired and verifying; until
 	// this there was nothing that could publish an intent for it to verify.
 	s.intentHandlers(mux)
+	// D292: the configuration surface. Until this, the database was authoritative for every dynamic
+	// setting and nothing in the product could write one.
+	s.configHandlers(mux)
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

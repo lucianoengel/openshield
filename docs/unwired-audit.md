@@ -26,7 +26,7 @@ another unreachable function still counts as called here.
 
 ## Action paths with no caller — 46
 
-_10 of these are now wired: the case and approval group (D290) and the response-intent producer (D291). Marked inline._
+_12 of these are now wired: cases and approvals (D290), the response-intent producer (D291) and the configuration write surface (D292). Marked inline._
 
 The real debt. Reviewed in priority order.
 
@@ -63,7 +63,7 @@ The real debt. Reviewed in priority order.
 | `SetIntentBlastRadius` | `internal/controlplane/intent.go:64` | **WIRED (D291).** The blast-radius ceiling on intents. Never set, so never enforced. |
 | `PublishIntents` | `internal/controlplane/intent.go:79` | **WIRED (D291).** SOAR-7's ENTIRE response-intent producer. The IdP responder IS wired and verifying — it listens for a message nothing in the product can send. |
 | `RequestIntentApproval` | `internal/controlplane/intent.go:141` | **WIRED (D291).** The four-eyes request for an intent. Unreachable with its publisher. |
-| `RollbackTo` | `internal/controlplane/settings.go:195` | Configuration rollback (D263). Revisions are recorded and cannot be rewound. |
+| `RollbackTo` | `internal/controlplane/settings.go:195` | **WIRED (D292).** Configuration rollback (D263). Revisions are recorded and cannot be rewound. |
 | `CheckPurpose` | `internal/core/validate.go:117` | Purpose validation (D20). |
 | `ValidateDecision` | `internal/core/validate.go:148` | Decision validation. |
 | `Decrypt` | `internal/enforcers/encryptlocal/encryptlocal.go:65` | encryptlocal can encrypt a file. Nothing can decrypt it. |
@@ -98,7 +98,7 @@ Expected: PLAT-1 (the UI) is the last MVP item, and these are what it will call.
 | `PlaybookRunFor` | `internal/controlplane/playbook.go:562` |  |
 | `IncidentAnnotations` | `internal/controlplane/playbook_steps.go:223` |  |
 | `EnactmentsForIntent` | `internal/controlplane/runner.go:151` |  |
-| `Revisions` | `internal/controlplane/settings.go:147` |  |
+| `Revisions` | `internal/controlplane/settings.go:147` | **WIRED (D292).**  |
 | `IngestedFeeds` | `internal/controlplane/threatintel.go:110` |  |
 | `AlertsForEntity` | `internal/controlplane/unified_alerts.go:110` |  |
 | `Views` | `internal/controlplane/views.go:192` |  |
@@ -116,7 +116,7 @@ Options and setters with a default that is currently always taken. Low concern; 
 | Symbol | Location | Note |
 |---|---|---|
 | `WithHalfLife` | `internal/analytics/peerueba/peerueba.go:66` |  |
-| `Describe` | `internal/config/config.go:360` |  |
+| `Describe` | `internal/config/config.go:360` | **WIRED (D292).**  |
 | `WithInterval` | `internal/connectors/filewatch/filewatch.go:127` |  |
 | `WithCap` | `internal/connectors/filewatch/filewatch.go:130` |  |
 | `SetClock` | `internal/connectors/limiter/limiter.go:35` |  |

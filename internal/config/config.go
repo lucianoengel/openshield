@@ -428,6 +428,15 @@ func (r *Resolver) WriteEffective(w io.Writer) {
 
 // Field returns a declaration, so the write path can validate a proposed value against the SAME
 // declaration the reader uses — there is no second copy of a field's contract.
+// DBRevision is the stored-configuration revision this resolver has loaded — the answer to "has this
+// host caught up with my change", which is a different question from "what is the latest revision".
+func (r *Resolver) DBRevision() int64 {
+	if r.DB == nil {
+		return 0
+	}
+	return r.DB.Revision()
+}
+
 func (r *Resolver) Field(key string) (Field, bool) {
 	f, ok := r.fields[key]
 	return f, ok

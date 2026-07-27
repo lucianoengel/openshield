@@ -123,6 +123,14 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// the control that separates them from the low-impact verb, not the route tier.
 		mux.Handle("/intents/prepare", requireTier(RoleResponder, opRead))
 		mux.Handle("/intents/publish", requireTier(RoleResponder, opRead))
+		// D292: configuration. ADMIN for every route, including the reads: the effective view names every
+		// host-level setting this deployment runs with, and the schema tells a reader exactly which knobs
+		// exist to be turned. Changing configuration can disable detection, so it sits at the same tier
+		// as the full investigation view rather than with the responder's actions.
+		mux.Handle("/config", requireTier(RoleAdmin, opRead))
+		mux.Handle("/config/schema", requireTier(RoleAdmin, opRead))
+		mux.Handle("/config/revisions", requireTier(RoleAdmin, opRead))
+		mux.Handle("/config/rollback", requireTier(RoleAdmin, opRead))
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}
