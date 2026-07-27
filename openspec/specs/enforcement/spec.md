@@ -72,3 +72,23 @@ the one that should be impossible to stop.
 #### Scenario: An unapproved fleet disable is never published
 - **WHEN** a disable is issued without an approved four-eyes approval bound to its control id
 - **THEN** nothing is signed or sent
+
+### Requirement: An enforcement action that transforms data is reversible
+
+Where enforcement makes a subject's data unreadable, the product SHALL ship the means to reverse it. An
+irreversible containment is indistinguishable, to the person whose data it was, from destruction.
+
+Reversal SHALL NOT destroy the transformed data, and SHALL identify which key a given artifact requires
+rather than failing as a decryption error.
+
+#### Scenario: An encrypted file is recovered
+- **WHEN** an operator holding the appropriate key recovers an encrypted file
+- **THEN** the original content is restored to a new location and the encrypted form is left intact
+
+#### Scenario: Recovery never overwrites
+- **WHEN** the destination already exists
+- **THEN** recovery refuses before decrypting anything
+
+#### Scenario: The artifact names the key it needs
+- **WHEN** the wrong kind of key is supplied
+- **THEN** the refusal names the kind required

@@ -26,7 +26,7 @@ another unreachable function still counts as called here.
 
 ## Action paths with no caller — 46
 
-_12 of these are now wired: cases and approvals (D290), the response-intent producer (D291) and the configuration write surface (D292). Marked inline._
+_13 of these are now wired: cases and approvals (D290), the response-intent producer (D291), the configuration write surface (D292) and ENCRYPT_LOCAL recovery (D293). Marked inline._
 
 The real debt. Reviewed in priority order.
 
@@ -66,7 +66,7 @@ The real debt. Reviewed in priority order.
 | `RollbackTo` | `internal/controlplane/settings.go:195` | **WIRED (D292).** Configuration rollback (D263). Revisions are recorded and cannot be rewound. |
 | `CheckPurpose` | `internal/core/validate.go:117` | Purpose validation (D20). |
 | `ValidateDecision` | `internal/core/validate.go:148` | Decision validation. |
-| `Decrypt` | `internal/enforcers/encryptlocal/encryptlocal.go:65` | encryptlocal can encrypt a file. Nothing can decrypt it. |
+| `Decrypt` | `internal/enforcers/encryptlocal/encryptlocal.go:65` | **WIRED (D293).** encryptlocal can encrypt a file. Nothing can decrypt it. |
 | `NewDenyEnforcer` | `internal/enforcers/process/process.go:136` | The process DENY enforcer (HIPS-3). |
 | `SetIntentResolver` | `internal/engine/engine.go:205` | The endpoint's intent resolver seam (XDR-6). |
 | `EnforceAuditDropped` | `internal/engine/engine.go:353` |  |

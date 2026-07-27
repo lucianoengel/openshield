@@ -38,6 +38,11 @@ usage:
 
   openshield-provision posture-keygen --out DIR
       write posture-pub (to gateways) + posture-priv (to agents) — HON-4
+
+  openshield-provision recover --in BLOB --out FILE --key KEYFILE
+  openshield-provision recover --in BLOB --out FILE --escrow-pub PUB --escrow-priv PRIV
+      reverse ENCRYPT_LOCAL. The blob's header selects the key; recovery never
+      overwrites, because the ciphertext may be the only copy of the data.
 `
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -60,6 +65,8 @@ func run(args []string) int {
 		return riskKeygen(flags(args[1:]))
 	case "posture-keygen":
 		return postureKeygen(flags(args[1:]))
+	case "recover":
+		return recoverFile(flags(args[1:]))
 	default:
 		fmt.Fprintf(os.Stderr, "openshield-provision: unknown command %q\n\n%s", args[0], usage)
 		return 2
