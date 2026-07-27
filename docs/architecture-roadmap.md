@@ -418,7 +418,11 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   set D14 + closed intent vocabulary ADR-12); (2) *no policy evaluation runs in privileged code* (the
   privilege-split worker; the exec-gate IPC decider preserves this even for HIPS-3 inc 2); (3) *evidence
   cannot be rewritten below an anchor* (forward-secure hash chain + external anchoring).
-- **Performance/latency budget in CI** — S. The fanotify and exec permission-window budgets are a
+- **Performance/latency budget in CI** — ✅ **DONE (D301).** `TestTheExecDecisionFitsInThePermissionWindow`
+  measures the real path (real worker subprocess, real policy) and fails the build when p99 exceeds the
+  IPC client's timeout — the deadline that actually decides whether a verdict is delivered. Writing it
+  found that the engine-backed exec gate produced events with NO provenance, so every decision failed
+  validation and fail-opened. Original scope note: The fanotify and exec permission-window budgets are a
   *correctness* property (an over-budget verdict trips the HIPS-3 inc 2 / fail-open path), so a regression
   benchmark that fails CI when the window is blown gates the same way the invariants do — it is not a
   nice-to-have. (Fuzz / property / golden-trace tests below are separate and parallel.)
