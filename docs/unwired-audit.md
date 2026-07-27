@@ -26,6 +26,8 @@ another unreachable function still counts as called here.
 
 ## Action paths with no caller — 46
 
+_7 of these are now wired (D290): the case and approval group. Marked inline._
+
 The real debt. Reviewed in priority order.
 
 | Symbol | Location | Note |
@@ -49,13 +51,13 @@ The real debt. Reviewed in priority order.
 | `StopMediating` | `internal/clipboard/x11/x11.go:202` | X11 clipboard mediation teardown. |
 | `NewProducer` | `internal/connectors/usb/usb.go:45` | USB event producer (D1's 'one trivial USB enforcer'). |
 | `Produce` | `internal/connectors/usb/usb.go:88` |  |
-| `ExpirePendingApprovals` | `internal/controlplane/approvals.go:183` | Approvals never expire in a running deployment. 'A request left open for a week is not consent' — but nothing closes it. |
-| `ReleaseLegalHold` | `internal/controlplane/cases.go:116` | Holds can be placed and never released. |
-| `OpenCase` | `internal/controlplane/cases.go:132` | Operator case opening. Playbooks reach OpenCaseForIncident; a human cannot open a case. |
-| `AssignCase` | `internal/controlplane/cases.go:160` | Case assignment. |
-| `AddNote` | `internal/controlplane/cases.go:173` | Case notes. |
-| `RequestClose` | `internal/controlplane/cases.go:189` | Case-close request — the first half of the four-eyes case closure. |
-| `ApproveClose` | `internal/controlplane/cases.go:210` | Case-close approval — the second half. The whole four-eyes closure is unreachable. |
+| `ExpirePendingApprovals` | `internal/controlplane/approvals.go:183` | **WIRED (D290).** Approvals never expire in a running deployment. 'A request left open for a week is not consent' — but nothing closes it. |
+| `ReleaseLegalHold` | `internal/controlplane/cases.go:116` | **WIRED (D290).** Holds can be placed and never released. |
+| `OpenCase` | `internal/controlplane/cases.go:132` | **WIRED (D290).** Operator case opening. Playbooks reach OpenCaseForIncident; a human cannot open a case. |
+| `AssignCase` | `internal/controlplane/cases.go:160` | **WIRED (D290).** Case assignment. |
+| `AddNote` | `internal/controlplane/cases.go:173` | **WIRED (D290).** Case notes. |
+| `RequestClose` | `internal/controlplane/cases.go:189` | **WIRED (D290).** Case-close request — the first half of the four-eyes case closure. |
+| `ApproveClose` | `internal/controlplane/cases.go:210` | **WIRED (D290).** Case-close approval — the second half. The whole four-eyes closure is unreachable. |
 | `PublishFleetControl` | `internal/controlplane/fleetcontrol.go:75` | Superseded by PublishFleetControlSeq (D287); the wrapper is now unused. |
 | `VerifySigned` | `internal/controlplane/identity.go:141` |  |
 | `SetIntentBlastRadius` | `internal/controlplane/intent.go:64` | The blast-radius ceiling on intents. Never set, so never enforced. |
@@ -87,8 +89,8 @@ Expected: PLAT-1 (the UI) is the last MVP item, and these are what it will call.
 | `TunnelScore` | `internal/connectors/dns/dns.go:109` |  |
 | `Overflow` | `internal/connectors/filewatch/filewatch.go:202` |  |
 | `Refused` | `internal/connectors/smtp/listen.go:74` |  |
-| `CaseNotes` | `internal/controlplane/cases.go:74` |  |
-| `GetCase` | `internal/controlplane/cases.go:249` |  |
+| `CaseNotes` | `internal/controlplane/cases.go:74` | **WIRED (D290).**  |
+| `GetCase` | `internal/controlplane/cases.go:249` | **WIRED (D290).**  |
 | `CurrentContextVersion` | `internal/controlplane/controlplane.go:313` |  |
 | `Telemetry` | `internal/controlplane/controlplane.go:596` |  |
 | `CEFListenAddr` | `internal/controlplane/external_logs.go:250` |  |

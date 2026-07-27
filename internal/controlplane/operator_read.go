@@ -220,6 +220,10 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	mux.HandleFunc("/incidents/transition", s.incidentTransitionHandler) // SOAR-2: advance the lifecycle
 	mux.HandleFunc("/incidents/timeline", s.incidentTimelineHandler)     // XDR-5: an incident's contributing alerts + evidence refs
 	mux.HandleFunc("/report/response", s.responseReportHandler)          // SOAR-6: MTTA/MTTR + detection latency
+	// D290: the case and approval WRITE surface. Until this, every one of these operations existed,
+	// was tested, and had no caller — a playbook could open a case and a human could not, and the
+	// four-eyes case closure could not be exercised at all.
+	s.caseWriteHandlers(mux)
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

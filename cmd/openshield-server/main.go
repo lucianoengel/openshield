@@ -184,6 +184,11 @@ func main() {
 			"0 = idle). Most beacons on a real network are legitimate — it raises MEDIUM alerts with "+
 			"their evidence and enforces nothing.\n")
 
+		// SOAR-3/D290: relabel timed-out four-eyes requests so the approval queue shows what can still
+		// be actioned. LEADER-ONLY like the other maintenance loops.
+		go srv.RunApprovalExpiryLoop(leaderCtx,
+			func() time.Duration { return cfg.Duration("OPENSHIELD_APPROVAL_EXPIRY_INTERVAL") })
+
 		// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
 		// is — every replica running playbooks would multiply notifications, cases and legal holds.
 		//

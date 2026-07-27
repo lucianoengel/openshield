@@ -137,6 +137,7 @@ func StartStack(t *testing.T) *Stack {
 	// A listening socket is not a ready database: Postgres accepts connections briefly before it will
 	// serve queries, and a harness that raced that would fail in a way that looks like a product bug.
 	waitPostgresReady(t, pgName, 60*time.Second)
+	waitPostgresQueryable(t, s.DSN)
 	return s
 }
 
@@ -381,4 +382,98 @@ func (s *Stack) DSNFor(t *testing.T, name string) string {
 		t.Fatalf("creating database %s: %v", name, err)
 	}
 	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, name)
+}
+
+// TLSMaterial is a CA plus one leaf certificate, as file paths.
+type TLSMaterial struct{ CA, Cert, Key string }
+
+// StartStackTLS brings up the stack with a MUTUAL-TLS NATS broker.
+//
+// Needed because D55 makes TLS a property of the PROCESS, not of one channel: configuring
+// OPENSHIELD_TLS_* to get a mutually-authenticated HTTP surface also requires the broker connection to
+// be mutually authenticated, and the control plane exits rather than silently falling back to plaintext.
+// That is the right behaviour — a partial TLS configuration that half-applied would be worse than either
+// extreme — but it means a scenario about operator certificates cannot use a plaintext broker.
+//
+// The certificate is the CALLER'S, deliberately: the broker and the control plane must be verifiable
+// against the same CA the operators are, or the test would be proving something about a second trust
+// root that no deployment has.
+func StartStackTLS(t *testing.T, m TLSMaterial) *Stack {
+	t.Helper()
+	requirePodman(t)
+	s := &Stack{t: t}
+
+	pgName := uniqueName(t, "pg")
+	run(t, "podman", "run", "-d", "--rm", "--name", pgName,
+		"-e", "POSTGRES_USER="+pgUser, "-e", "POSTGRES_PASSWORD="+pgPassword,
+		"-e", "POSTGRES_DB="+pgDatabase,
+		"-p", "127.0.0.1::5432", postgresImage)
+	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", pgName).Run() })
+	pgPort := hostPort(t, pgName, "5432/tcp")
+	s.hostPort = "127.0.0.1:" + pgPort
+	s.DSN = fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, pgDatabase)
+
+	// The broker reads its material from a directory mounted read-only. Copied rather than mounted from
+	// the caller's temp dir so the container sees world-readable files regardless of how the test's
+	// TempDir is permissioned — a rootless podman mount inherits the host mode, and a 0600 key the
+	// container user cannot read fails as an unhelpful handshake error much later.
+	tlsDir := t.TempDir()
+	for name, src := range map[string]string{"ca.pem": m.CA, "cert.pem": m.Cert, "key.pem": m.Key} {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatalf("reading %s: %v", src, err)
+		}
+		if err := os.WriteFile(filepath.Join(tlsDir, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(tlsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	natsName := uniqueName(t, "nats")
+	run(t, "podman", "run", "-d", "--rm", "--name", natsName,
+		"-v", tlsDir+":/tls:ro,Z",
+		"-p", "127.0.0.1::4222", natsImage,
+		"-js", "--tls", "--tlscert", "/tls/cert.pem", "--tlskey", "/tls/key.pem", "--tlscacert", "/tls/ca.pem")
+	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", natsName).Run() })
+	natsPort := hostPort(t, natsName, "4222/tcp")
+	s.NATSURL = "nats://127.0.0.1:" + natsPort
+
+	waitTCP(t, s.hostPort, 60*time.Second)
+	waitTCP(t, "127.0.0.1:"+natsPort, 60*time.Second)
+	waitPostgresReady(t, pgName, 60*time.Second)
+	waitPostgresQueryable(t, s.DSN)
+	return s
+}
+
+// waitPostgresQueryable connects OVER TCP and runs a query, retrying until it succeeds.
+//
+// pg_isready is not sufficient, and the reason is the same one D284 recorded about waiting on the
+// wrong signal. The official Postgres image starts the server, runs initialisation, shuts it down and
+// starts it again; `pg_isready` inside the container can answer YES during that first phase, and a
+// client that connects then gets its connection RESET when the server restarts. The only signal that
+// means "this database will serve my next query" is a query, from where the caller sits.
+func waitPostgresQueryable(t *testing.T, dsn string) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err := pgxpool.New(ctx, dsn)
+		if err == nil {
+			var one int
+			last = pool.QueryRow(ctx, `SELECT 1`).Scan(&one)
+			pool.Close()
+			if last == nil && one == 1 {
+				cancel()
+				return
+			}
+		} else {
+			last = err
+		}
+		cancel()
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("postgres never became queryable at %s: %v", dsn, last)
 }

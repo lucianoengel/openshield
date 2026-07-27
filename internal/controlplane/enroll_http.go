@@ -105,6 +105,19 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/incidents/timeline", requireTier(RoleAnalyst, opRead))
 		mux.Handle("/overdue", requireTier(RoleAnalyst, opRead))
 		mux.Handle("/subject", requireTier(RoleAnalyst, opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
+		// D290: cases and approvals. Reading an investigation is the ANALYST tier and records the view
+		// (D20); acting on one is RESPONDER. Releasing a legal hold is ADMIN — it is the only operation
+		// here that makes evidence purgeable again, so it sits with the other destructive-adjacent act
+		// rather than with case management.
+		mux.Handle("/cases", requireTier(RoleAnalyst, opRead))
+		mux.Handle("/cases/open", requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/assign", requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/note", requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/close/request", requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/close/approve", requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/hold/release", requireTier(RoleAdmin, opRead))
+		mux.Handle("/approvals", requireTier(RoleAnalyst, opRead))
+		mux.Handle("/approvals/resolve", requireTier(RoleResponder, opRead))
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}

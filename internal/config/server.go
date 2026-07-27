@@ -59,6 +59,8 @@ var ServerFields = []Field{
 		Description: "Alerts within the window needed to raise a burst incident."},
 	{Key: "OPENSHIELD_CORRELATE_MIN_DOMAINS", Scope: ScopeDynamic, Kind: KindInt, Default: "2",
 		Description: "Distinct domains needed to raise a cross-domain incident (XDR-4)."},
+	{Key: "OPENSHIELD_APPROVAL_EXPIRY_INTERVAL", Scope: ScopeDynamic, Kind: KindDuration, Default: "5m",
+		Description: "How often timed-out four-eyes requests are relabelled. Cosmetic — expiry is already enforced when a request is resolved — but a queue showing dead requests as live is a queue people stop reading. Zero disables the sweep."},
 	{Key: "OPENSHIELD_PLAYBOOKS", Scope: ScopeDynamic, Kind: KindPath, Default: "",
 		Description: "Playbook configuration file (SOAR-4). Unset means orchestration is off."},
 	{Key: "OPENSHIELD_PLAYBOOK_INTERVAL", Scope: ScopeDynamic, Kind: KindDuration, Default: "1m",
