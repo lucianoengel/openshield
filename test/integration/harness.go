@@ -310,3 +310,20 @@ func runCapture(t *testing.T, name string, env []string, args ...string) (string
 
 // contains is a readability helper; the assertions read better than strings.Contains inline.
 func contains(haystack, needle string) bool { return strings.Contains(haystack, needle) }
+
+// freePort asks the kernel for an unused port and releases it. There is an inherent race between
+// releasing and the process binding, but it is far smaller than the collision rate of fixed ports — which
+// is the failure mode that took the shell e2e scripts out of service.
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("finding a free port: %v", err)
+	}
+	defer l.Close()
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		t.Fatalf("parsing the assigned address: %v", err)
+	}
+	return port
+}
