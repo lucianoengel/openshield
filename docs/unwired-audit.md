@@ -28,29 +28,48 @@ another unreachable function still counts as called here.
 
 _14 of these are now wired (plus XDR-6's unexported consumer seam): cases and approvals (D290), the response-intent producer (D291), the configuration write surface (D292) ENCRYPT_LOCAL recovery (D293) and coordinated-response consumption (D294). Marked inline._
 
-The real debt. Reviewed in priority order.
+Classified 2026-07-27 (D295) — each entry checked against whether the CAPABILITY is reachable by
+another path, not merely whether this symbol is called. **The classification changed the picture: most
+of these are not gaps.**
+
+| Verdict | Count | Meaning |
+|---|---|---|
+| **WIRED** | 14 | fixed in D290–D294 |
+| **SUPERSEDED / UNUSED SIBLING** | 16 | the capability ships through another call; this symbol is unused API |
+| **NOT BUILT / PARTIAL** | 12 | the feature was never finished — debt, but not a regression |
+| **DUPLICATE** | 4 | a second implementation of a property something else already enforces |
+| **DEAD** | 1 | no caller and no test |
+| **TOOLING GAP** | 1 | the product verifies an artifact it gives no way to produce |
+
+**I nearly wired something already wired.** `NewWithEDM` and its siblings looked like exact-data matching
+being unreachable; the worker in fact loads all three index kinds through `AddEDM`/`AddRecordEDM`/`AddIDM`,
+driven by settings that are read. Checking before building is the whole point of this pass.
+
+The two entries that still deserve action are stated plainly: **`SignRuleBundle`** (the worker verifies
+signed rule bundles and nothing in the product signs one, so the feature is verify-only) and
+**`LoadSignedFeed`** (no caller, no test, no reachable capability — delete).
 
 | Symbol | Location | Note |
 |---|---|---|
-| `NewDecider` | `internal/agent/prefilter/decider.go:48` | The prefilter decider. |
-| `NewDecompressGuard` | `internal/agent/sandbox/decompress.go:40` | Decompression-bomb guard (T-012). |
-| `NewDepthTracker` | `internal/agent/sandbox/decompress.go:73` | Archive nesting-depth tracker. |
-| `EnterArchive` | `internal/agent/sandbox/decompress.go:77` |  |
-| `LeaveArchive` | `internal/agent/sandbox/decompress.go:86` |  |
-| `CreateEK` | `internal/attest/ek.go:22` | TPM endorsement key. |
-| `FlushEK` | `internal/attest/ek.go:38` | TPM handle cleanup. |
-| `MarshalEnrollments` | `internal/attest/enrollment.go:52` | Attestation enrollment marshalling. |
-| `ExtendPCR` | `internal/attest/pcr.go:44` | PCR extension. |
-| `DumpArgs` | `internal/backup/backup.go:34` | Backup dump arguments (PLAT-9). |
-| `Script` | `internal/backup/backup.go:81` | Backup script generation. |
-| `NewWithEDM` | `internal/classify/classify.go:62` | Exact-data matching classifier variant — DLP-4. |
-| `BuildEDMIndex` | `internal/classify/edm.go:137` | Builds the EDM index the above consume. |
-| `NewWithRecordEDM` | `internal/classify/edm_record.go:154` | Record-level EDM classifier variant. |
-| `NewWithIDM` | `internal/classify/idm.go:158` | Indexed-document matching classifier variant. |
-| `SignRuleBundle` | `internal/classify/rules.go:79` | Signs a classifier rule bundle. |
-| `StopMediating` | `internal/clipboard/x11/x11.go:202` | X11 clipboard mediation teardown. |
-| `NewProducer` | `internal/connectors/usb/usb.go:45` | USB event producer (D1's 'one trivial USB enforcer'). |
-| `Produce` | `internal/connectors/usb/usb.go:88` |  |
+| `NewDecider` | `internal/agent/prefilter/decider.go:48` | **SUPERSEDED** — the prefilter is constructed by the agent through another path. The prefilter decider. |
+| `NewDecompressGuard` | `internal/agent/sandbox/decompress.go:40` | **DUPLICATE** — `internal/classify/documents.go` implements its OWN expansion and depth bounds. TWO implementations of one safety property is its own risk — worth collapsing, not wiring. Decompression-bomb guard (T-012). |
+| `NewDepthTracker` | `internal/agent/sandbox/decompress.go:73` | **DUPLICATE** — same. Archive nesting-depth tracker. |
+| `EnterArchive` | `internal/agent/sandbox/decompress.go:77` | **DUPLICATE** — same.  |
+| `LeaveArchive` | `internal/agent/sandbox/decompress.go:86` | **DUPLICATE** — same.  |
+| `CreateEK` | `internal/attest/ek.go:22` | **PARTIAL** — TPM attestation: the fleet agent opens a TPM and the gateway loads EK roots, but EK creation/PCR extension are not driven by either. TPM endorsement key. |
+| `FlushEK` | `internal/attest/ek.go:38` | **PARTIAL** — same. TPM handle cleanup. |
+| `MarshalEnrollments` | `internal/attest/enrollment.go:52` | **PARTIAL** — same. Attestation enrollment marshalling. |
+| `ExtendPCR` | `internal/attest/pcr.go:44` | **PARTIAL** — same. PCR extension. |
+| `DumpArgs` | `internal/backup/backup.go:34` | **NOT BUILT** — backup is designed, not driven by any command. Backup dump arguments (PLAT-9). |
+| `Script` | `internal/backup/backup.go:81` | **NOT BUILT** — same. Backup script generation. |
+| `NewWithEDM` | `internal/classify/classify.go:62` | **SUPERSEDED** — the worker layers indexes with `AddEDM`; the capability IS reachable. Exact-data matching classifier variant — DLP-4. |
+| `BuildEDMIndex` | `internal/classify/edm.go:137` | **SUPERSEDED** — `openshield-dlp-index` builds indexes through its own path. Builds the EDM index the above consume. |
+| `NewWithRecordEDM` | `internal/classify/edm_record.go:154` | **SUPERSEDED** — worker uses `AddRecordEDM`. Record-level EDM classifier variant. |
+| `NewWithIDM` | `internal/classify/idm.go:158` | **SUPERSEDED** — worker uses `AddIDM`. Indexed-document matching classifier variant. |
+| `SignRuleBundle` | `internal/classify/rules.go:79` | **TOOLING GAP** — the worker VERIFIES signed rule bundles; nothing in the product SIGNS one. An operator cannot produce the bundle the worker is built to load. Signs a classifier rule bundle. |
+| `StopMediating` | `internal/clipboard/x11/x11.go:202` | **PARTIAL** — clipboard mediation has no teardown caller; a leak at shutdown, not a missing capability. X11 clipboard mediation teardown. |
+| `NewProducer` | `internal/connectors/usb/usb.go:45` | **NOT BUILT** — no production `DeviceSource` exists — only a test fake. The producer cannot read a real device. USB event producer (D1's 'one trivial USB enforcer'). |
+| `Produce` | `internal/connectors/usb/usb.go:88` | **NOT BUILT** — same.  |
 | `ExpirePendingApprovals` | `internal/controlplane/approvals.go:183` | **WIRED (D290).** Approvals never expire in a running deployment. 'A request left open for a week is not consent' — but nothing closes it. |
 | `ReleaseLegalHold` | `internal/controlplane/cases.go:116` | **WIRED (D290).** Holds can be placed and never released. |
 | `OpenCase` | `internal/controlplane/cases.go:132` | **WIRED (D290).** Operator case opening. Playbooks reach OpenCaseForIncident; a human cannot open a case. |
@@ -58,26 +77,26 @@ The real debt. Reviewed in priority order.
 | `AddNote` | `internal/controlplane/cases.go:173` | **WIRED (D290).** Case notes. |
 | `RequestClose` | `internal/controlplane/cases.go:189` | **WIRED (D290).** Case-close request — the first half of the four-eyes case closure. |
 | `ApproveClose` | `internal/controlplane/cases.go:210` | **WIRED (D290).** Case-close approval — the second half. The whole four-eyes closure is unreachable. |
-| `PublishFleetControl` | `internal/controlplane/fleetcontrol.go:75` | Superseded by PublishFleetControlSeq (D287); the wrapper is now unused. |
-| `VerifySigned` | `internal/controlplane/identity.go:141` |  |
+| `PublishFleetControl` | `internal/controlplane/fleetcontrol.go:75` | **SUPERSEDED** — by `PublishFleetControlSeq` (D287); the wrapper is now sugar. Superseded by PublishFleetControlSeq (D287); the wrapper is now unused. |
+| `VerifySigned` | `internal/controlplane/identity.go:141` | **UNUSED SIBLING** — telemetry verification runs through a different entry point.  |
 | `SetIntentBlastRadius` | `internal/controlplane/intent.go:64` | **WIRED (D291).** The blast-radius ceiling on intents. Never set, so never enforced. |
 | `PublishIntents` | `internal/controlplane/intent.go:79` | **WIRED (D291).** SOAR-7's ENTIRE response-intent producer. The IdP responder IS wired and verifying — it listens for a message nothing in the product can send. |
 | `RequestIntentApproval` | `internal/controlplane/intent.go:141` | **WIRED (D291).** The four-eyes request for an intent. Unreachable with its publisher. |
 | `RollbackTo` | `internal/controlplane/settings.go:195` | **WIRED (D292).** Configuration rollback (D263). Revisions are recorded and cannot be rewound. |
-| `CheckPurpose` | `internal/core/validate.go:117` | Purpose validation (D20). |
-| `ValidateDecision` | `internal/core/validate.go:148` | Decision validation. |
+| `CheckPurpose` | `internal/core/validate.go:117` | **UNUSED SIBLING** — same. Purpose validation (D20). |
+| `ValidateDecision` | `internal/core/validate.go:148` | **UNUSED SIBLING** — `core.ValidateEvent` is called; this one is not. Decision validation. |
 | `Decrypt` | `internal/enforcers/encryptlocal/encryptlocal.go:65` | **WIRED (D293).** encryptlocal can encrypt a file. Nothing can decrypt it. |
-| `NewDenyEnforcer` | `internal/enforcers/process/process.go:136` | The process DENY enforcer (HIPS-3). |
+| `NewDenyEnforcer` | `internal/enforcers/process/process.go:136` | **SUPERSEDED** — DENY_EXEC is enforced by the privileged agent's exec gate (`execipc`/`execmon`), not by an engine enforcer. A second implementation for a path that moved. The process DENY enforcer (HIPS-3). |
 | `SetIntentResolver` | `internal/engine/engine.go:205` | **WIRED (D294).** The endpoint's intent resolver seam (XDR-6). |
-| `EnforceAuditDropped` | `internal/engine/engine.go:353` |  |
-| `SignUpdate` | `internal/gateway/signedupdate.go:15` |  |
-| `LoadSignedFeed` | `internal/nips/signed.go:183` | Signed NIPS feed loading. |
-| `VerifySignature` | `internal/notify/sign.go:42` |  |
-| `NewPack` | `internal/policy/embed.go:45` |  |
-| `BuildEnrollment` | `internal/posture/enroll.go:17` | Posture enrollment. |
-| `IssueClientCert` | `internal/provision/provision.go:113` | Client-certificate issuance for the access proxy. |
-| `InterceptionCA` | `internal/provision/provision.go:163` | The interception CA. |
-| `Wrap` | `internal/transport/queue/transport.go:34` |  |
+| `EnforceAuditDropped` | `internal/engine/engine.go:353` | **UNUSED SIBLING** — a counter accessor with no reader.  |
+| `SignUpdate` | `internal/gateway/signedupdate.go:15` | **SUPERSEDED** — publishers sign inline.  |
+| `LoadSignedFeed` | `internal/nips/signed.go:183` | **DEAD** — no caller AND NO TEST — the only symbol in the audit with neither. Signed NIPS feed loading. |
+| `VerifySignature` | `internal/notify/sign.go:42` | **UNUSED SIBLING** — notify signing is verified by the receiver, not here.  |
+| `NewPack` | `internal/policy/embed.go:45` | **SUPERSEDED** — policy packs load via `SelectFromEnv`.  |
+| `BuildEnrollment` | `internal/posture/enroll.go:17` | **PARTIAL** — posture enrollment is designed; the roster path is what ships. Posture enrollment. |
+| `IssueClientCert` | `internal/provision/provision.go:113` | **NOT BUILT** — `openshield-provision cert` issues leaf certs by a different path. Client-certificate issuance for the access proxy. |
+| `InterceptionCA` | `internal/provision/provision.go:163` | **NOT BUILT** — TLS interception is not enabled by any command. The interception CA. |
+| `Wrap` | `internal/transport/queue/transport.go:34` | **SUPERSEDED** — queue wrapping happens at construction.  |
 
 
 ## Read paths awaiting the console — 21

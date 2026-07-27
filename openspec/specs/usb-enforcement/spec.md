@@ -1,7 +1,20 @@
 # usb-enforcement Specification
 
 ## Purpose
-The first real (non-stub) enforcer: a USB producer emitting pseudonymised-serial events and a USB enforcer that enacts a Decision via the kernel authorized_default posture, proving the Enforcer contract (D14) end to end with an actual enforcement point (D1).
+A USB producer emitting pseudonymised-serial events and a USB enforcer that enacts a Decision via the
+kernel `authorized_default` posture, exercising the Enforcer contract (D14) against a real enforcement
+point (D1).
+
+> **NOT REACHABLE IN A DEPLOYMENT (recorded D295).** Both halves are implemented and tested, and no
+> shipped binary imports either. The producer's `DeviceSource` has only a test fake — there is no
+> implementation that reads real devices from sysfs or udev — so nothing in the product can observe a USB
+> attachment, and the enforcer has no events to act on.
+>
+> This section previously called it "the first real (non-stub) enforcer", which claimed a working
+> capability the product does not have. The requirements below describe the intended behaviour and are
+> honoured by the packages' own tests; they are NOT evidence that a deployment does any of this.
+>
+> Finishing it needs a sysfs/udev device source and registration in `openshield-engine`.
 ## Requirements
 ### Requirement: USB events carry a pseudonymised serial
 The USB producer MUST emit `USB_INSERTED` events whose serial is pseudonymised before the event is
