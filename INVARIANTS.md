@@ -129,10 +129,22 @@ and the ledger all still run; only the enforcement call is skipped. It is reacha
 break-glass file for when the control plane is unreachable, and a signed, four-eyes-gated, replay-bounded
 and expiring fleet control — and it fails toward ENFORCING: absence is never engagement.
 
-**Tests:** `TestAFleetWideDisableReachesAGatewayAndStopsEnforcement`,
-`TestTheLocalBreakGlassFileStopsEnforcement` (`test/integration`).
+**Tests:** `TestTheKillSwitchSuppressesEnforcementAndKeepsDetecting` (`test/integration`) is the one that
+proves the invariant: a file is quarantined with the switch off, NOT quarantined with it engaged —
+and still audited — and quarantined again once it is released.
+`TestAFleetWideDisableReachesAGatewayAndStopsEnforcement` and `TestTheLocalBreakGlassFileStopsEnforcement`
+prove the two ways to REACH the switch.
 
-**Mutation:** each install site removed, the watcher removed, and absence-means-engaged — all five FAIL.
+**Mutation:** consulting the switch but never acting on it → the file is quarantined while engaged, FAILS.
+Suppressing EARLIER — dropping the event instead of skipping the enforcer → nothing is audited during the
+window, FAILS. Each install site removed, the watcher removed, and absence-means-engaged — all FAIL.
+
+**This row was corrected one commit after it was written (D299).** The original cited only the two
+reachability tests, which prove the switch CHANGES STATE — a build that flipped the flag and enforced
+anyway would have passed, and so would one that stopped classifying entirely. The claim was stronger than
+its demonstration, in the document whose whole rule is that it must not be. It is exactly the mistake
+D294 caught in the intent scenario — asserting on an announcement rather than the behaviour it announces
+— repeated by me while writing down the lesson.
 
 **This invariant was FALSE until D287.** Every mechanism above existed and was tested; no shipped binary
 installed any of it. It is listed here with that history because an invariant's value is in being
