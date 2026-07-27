@@ -19,9 +19,10 @@ func printJobEvent(req printguard.Request) *corev1.Event {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return &corev1.Event{
-		EventId: "print-" + hex.EncodeToString(b[:]),
-		Kind:    corev1.EventKind_EVENT_KIND_PRINT_JOB,
-		Purpose: corev1.Purpose_PURPOSE_DLP,
+		EventId:     "print-" + hex.EncodeToString(b[:]),
+		ConnectorId: "print",
+		Kind:        corev1.EventKind_EVENT_KIND_PRINT_JOB,
+		Purpose:     corev1.Purpose_PURPOSE_DLP,
 		Target: &corev1.Event_Print{Print: &corev1.PrintSubject{
 			Printer:         req.Printer,
 			JobUser:         req.User,
