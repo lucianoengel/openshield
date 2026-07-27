@@ -538,3 +538,25 @@ plane. On context cancel the loop MUST exit and MUST NOT re-arm.
 #### Scenario: Shutdown stops the supervision loop
 - **WHEN** the context is cancelled
 - **THEN** the supervision loop exits and does not re-arm
+
+### Requirement: The TLS interception CA is minted separately from the fleet CA
+The system SHALL provide a command that mints the interception CA, and that CA MUST be distinguishable
+from the fleet CA and not signed by it.
+
+`provision.InterceptionCA` carried a long comment on why the two must be separate — an interception CA
+can sign a trusted certificate for ANY host, so its holder can impersonate the whole internet to every
+endpoint that trusts it, a far larger authority than fleet identity, which only authorises agents and
+operators — and it had no caller. Enabling HTTPS inspection therefore meant minting a CA by hand, at
+which point the separation the comment argues for is whatever the operator happened to do.
+
+#### Scenario: The two CAs are distinguishable and independent
+- **WHEN** the fleet CA and the interception CA are both minted
+- **THEN** their subjects differ, the interception CA names itself as one, it is not signed by the fleet
+  CA, and its private key is not world-readable
+- **AND** the test asserts the SUBJECT rather than the key bytes: an earlier version compared two freshly
+  generated private keys, which differ for any two keygen calls, and the mutation that minted the
+  interception CA with the fleet CA constructor passed it
+
+#### Scenario: The minted CA is accepted by the gateway
+- **WHEN** the gateway starts with the minted interception CA configured
+- **THEN** it enables interception, so the command produces what the binary actually consumes

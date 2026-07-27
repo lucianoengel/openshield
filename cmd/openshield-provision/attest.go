@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lucianoengel/openshield/internal/attest"
+	"github.com/lucianoengel/openshield/internal/posture"
 )
 
 // CAPTURING A DEVICE'S ATTESTATION ANCHORS OFFLINE (D314).
@@ -60,16 +61,13 @@ func attestCapture(f map[string][]string) int {
 	if err != nil {
 		return fail("creating the attestation key: %v", err)
 	}
-	golden, err := tpm.ReadPCRs(pcrs)
+	// posture.BuildEnrollment, NOT a second copy of it. It reads the PCRs, assembles the record and
+	// VALIDATES it with the same check the gateway applies on load — and it too had no caller, which is
+	// why writing this command nearly produced a duplicate of it. A file the gateway will refuse is worth
+	// refusing HERE, where the operator is present and the device is in front of them, rather than at
+	// gateway startup, which is a different person on a different day.
+	record, err := posture.BuildEnrollment(tpm, ak, subject, pcrs)
 	if err != nil {
-		return fail("reading PCRs %v: %v", pcrs, err)
-	}
-
-	record := attest.AttestationEnrollment{Subject: subject, AKPublic: ak.PublicKeyBytes(), Golden: golden}
-	// Validated BEFORE writing, with the SAME check the gateway applies on load. A file that the gateway
-	// will refuse is worth refusing here, where the operator is present and the device is in front of
-	// them — rather than at gateway startup, which is a different person on a different day.
-	if err := record.Validate(); err != nil {
 		return fail("%v", err)
 	}
 	blob, err := attest.MarshalEnrollments(mergeEnrollments(out, record))

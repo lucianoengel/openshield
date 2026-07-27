@@ -347,3 +347,24 @@ attestation is a one-time gate wearing continuous clothing.
 #### Scenario: A device that stops attesting loses access
 - **WHEN** an attested device's agent stops and the TTL elapses
 - **THEN** a policy requiring attestation refuses it, without any revocation step
+
+### Requirement: An operator can build the posture roster
+The system SHALL provide a command that generates one agent's posture signing key and adds its public
+key to the gateway's roster, appending rather than replacing.
+
+SEC-12 replaced a single shared posture key with a per-agent roster, because one shared key let any
+endpoint forge any other's `Compliant=true` — worthless precisely when it matters. The gateway has read
+that roster ever since and NOTHING COULD WRITE ONE; worse, `posture-keygen` still produced the superseded
+single-key shape and told operators to install it as a variable the gateway no longer reads, so following
+the tool's own instructions produced an inert posture channel with one startup warning.
+
+#### Scenario: Enrolling a second agent keeps the first
+- **WHEN** two agents are enrolled in turn into the same roster
+- **THEN** both appear, each with its own key, and each agent receives only its own private key
+- **AND** the gateway loads the roster and reports a signed posture subscription
+
+#### Scenario: A malformed roster is refused, not rewritten
+- **WHEN** enrolling into a roster containing a line the gateway would refuse
+- **THEN** the command fails and the file is left byte-for-byte unchanged
+- **AND** rewriting around the bad line would produce a file that loads, having dropped agents nobody
+  chose to unenrol — and unenrolled posture is never applied

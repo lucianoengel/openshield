@@ -42,8 +42,16 @@ usage:
   openshield-provision risk-keygen --out DIR
       write risk-pub (to gateways) + risk-priv (to the control-plane server) — SEC-1
 
-  openshield-provision posture-keygen --out DIR
-      write posture-pub (to gateways) + posture-priv (to agents) — HON-4
+  openshield-provision posture-enroll --agent AGENT_ID --roster FILE --out DIR
+      generate ONE AGENT's posture signing key and add it to the gateway's roster
+      (OPENSHIELD_POSTURE_ROSTER). Per-agent keys are what stop one endpoint
+      forging another's posture (SEC-12). Appends; re-enrolling replaces.
+
+  openshield-provision intercept-ca --out DIR
+      mint the TLS INTERCEPTION CA (OPENSHIELD_INTERCEPT_CA_CERT/KEY). SEPARATE
+      from the fleet CA on purpose: whoever holds this can impersonate any host
+      to every endpoint trusting it. Deploy the cert only where interception is
+      authorised, and guard the key like the fleet CA's.
 
   openshield-provision attest-capture --subject PSEUDONYM --pcrs 0,7 [--tpm ADDR] --out FILE
       read the LOCAL TPM's AK public key + PCR baseline into the gateway's
@@ -89,6 +97,10 @@ func run(args []string) int {
 		return usbAuthorize(flags(args[1:]))
 	case "attest-capture":
 		return attestCapture(flags(args[1:]))
+	case "posture-enroll":
+		return postureEnroll(flags(args[1:]))
+	case "intercept-ca":
+		return interceptCA(flags(args[1:]))
 	default:
 		fmt.Fprintf(os.Stderr, "openshield-provision: unknown command %q\n\n%s", args[0], usage)
 		return 2
@@ -222,7 +234,16 @@ func riskKeygen(f map[string][]string) int {
 // postureKeygen generates the device-posture signing keypair (HON-4/SEC-1): posture-priv to
 // the reporting agents (OPENSHIELD_POSTURE_SIGNING_KEY), posture-pub to every gateway
 // (OPENSHIELD_POSTURE_PUBKEY) so it can verify published posture.
+// postureKeygen is the SUPERSEDED shared-key form, kept so an existing deployment's scripts do not break
+// — but it now says so (D315). It produced one keypair for a whole fleet, which SEC-12 replaced precisely
+// because any holder could forge any other agent's posture, and it told operators to install the public
+// half as OPENSHIELD_POSTURE_PUBKEY, which the gateway no longer reads. Following it produced a
+// deployment whose posture channel was inert.
 func postureKeygen(f map[string][]string) int {
+	fmt.Fprintln(os.Stderr, "openshield-provision: WARNING — posture-keygen makes ONE key for the whole "+
+		"fleet, which lets any agent holding it forge any other agent's posture. The gateway verifies "+
+		"against a per-agent ROSTER (SEC-12) and does not read OPENSHIELD_POSTURE_PUBKEY. Use "+
+		"`posture-enroll --agent ... --roster ...` instead.")
 	out := one(f, "out")
 	if out == "" {
 		return fail("posture-keygen requires --out DIR")
@@ -237,7 +258,44 @@ func postureKeygen(f map[string][]string) int {
 	if err := writeFile(filepath.Join(out, "posture-priv"), priv, 0o600); err != nil {
 		return fail("%v", err)
 	}
-	fmt.Fprintf(os.Stderr, "wrote %s/posture-pub (to gateways, OPENSHIELD_POSTURE_PUBKEY) and %s/posture-priv (to agents, OPENSHIELD_POSTURE_SIGNING_KEY — HON-4)\n", out, out)
+	fmt.Fprintf(os.Stderr, "wrote %s/posture-pub and %s/posture-priv\n", out, out)
+	return 0
+}
+
+// interceptCA mints the TLS interception CA (D315).
+//
+// `provision.InterceptionCA` was written with a long comment explaining why it must be SEPARATE from the
+// fleet CA — an interception CA can sign a trusted certificate for any host, so its holder can impersonate
+// the whole internet to every endpoint that trusts it — and it had no caller. The gateway read
+// OPENSHIELD_INTERCEPT_CA_CERT/KEY and nothing could produce them, so the only way to enable HTTPS
+// inspection was to mint a CA with openssl by hand, at which point the separation the comment argues for
+// is whatever the operator happened to do.
+func interceptCA(f map[string][]string) int {
+	out := one(f, "out")
+	if out == "" {
+		return fail("intercept-ca requires --out DIR")
+	}
+	cert, key, err := provision.InterceptionCA()
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := writeFile(filepath.Join(out, "intercept-ca.pem"), cert, 0o644); err != nil {
+		return fail("%v", err)
+	}
+	if err := writeFile(filepath.Join(out, "intercept-ca-key.pem"), key, 0o600); err != nil {
+		return fail("%v", err)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s/intercept-ca.pem and %s/intercept-ca-key.pem\n", out, out)
+	// Said plainly because the consequence is not obvious from the file names, and because an operator
+	// deciding where to install this is making a bigger decision than "turn on HTTPS inspection".
+	fmt.Fprintln(os.Stderr, "openshield-provision: installing intercept-ca.pem as a trusted root lets "+
+		"the holder of intercept-ca-key.pem impersonate ANY HOST to that machine — banks, the update "+
+		"server, everything. It is a far larger authority than the fleet CA, which only authorises "+
+		"agents and operators. Install it ONLY where interception is authorised, and give it the same "+
+		"custody as the fleet CA key or better.")
+	fmt.Fprintln(os.Stderr, "openshield-provision: OPENSHIELD_NO_INTERCEPT exists for the hosts that "+
+		"must NOT be intercepted — certificate-pinned apps that will break, and traffic an employer has "+
+		"no business reading (banking, health). Set it before turning interception on, not after.")
 	return 0
 }
 

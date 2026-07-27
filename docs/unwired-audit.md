@@ -206,3 +206,41 @@ only appeared once real processes were connected:
 The pattern is now three for three: **a protocol with a server and no client**, **a file format with a
 reader and no writer**, and **a gated test whose gate is never satisfied**. Each is greppable. The third
 is the cheapest — `go test ./... -v | grep SKIP` — and was the most expensive to have missed.
+
+
+## Round 4 (D315): the same shape, three more times
+
+**A READER WITH NO WRITER.** A shipped binary reads a file at startup; no tool in the project can produce
+one. From inside the code it looks finished — the format is defined, parsed, validated, unit-tested — and
+from outside it is unusable.
+
+| File | Read by | Written by (before D315) |
+|---|---|---|
+| posture roster (`OPENSHIELD_POSTURE_ROSTER`) | gateway, access mode | nothing — and `posture-keygen` confidently produced the SUPERSEDED single-key shape, telling operators to install it as a variable the gateway no longer reads |
+| interception CA (`OPENSHIELD_INTERCEPT_CA_CERT/KEY`) | gateway | nothing — `provision.InterceptionCA` had a long comment on why it must be separate from the fleet CA, and no caller |
+| enrollments (`OPENSHIELD_ATTEST_ENROLLMENTS`) | gateway | nothing (fixed D314) |
+
+The posture roster is the worst of the three, because the tool did not merely fail to exist — it existed
+and produced the wrong artefact. An operator following `posture-keygen`'s own instructions ended up with
+an inert posture channel and a single startup warning.
+
+`internal/backup` was a fourth variant: not a reader with no writer but a **procedure with no runner**.
+`DumpArgs`, `Script` and `DrillSteps` had no caller, so the thing protecting the SYSTEM OF RECORD — the
+ledger every tamper-evidence claim rests on — was a package nobody could execute.
+
+### A vacuous test I wrote and the mutation caught
+
+The first version of the interception-CA separation test compared the two CAs' private keys and required
+them to differ. The mutation that minted the interception CA with `provision.InitCA` — literally the
+fleet CA constructor, the exact fusion the test exists to forbid — **passed**. Comparing two fresh
+keygen outputs asserts that the random number generator works. The test now asserts the SUBJECT differs,
+that the interception CA says what it is, and that it is not signed by the fleet CA.
+
+### The running score
+
+Four rounds, four greppable shapes:
+
+1. A protocol with a server and no client (`posture.Enroll`).
+2. A file format with a reader and no writer (three instances).
+3. A gated test whose gate is never satisfied (`swtpm`, `xvfb`, `pg_dump`).
+4. A procedure with no runner (`internal/backup`).

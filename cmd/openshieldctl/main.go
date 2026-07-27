@@ -26,6 +26,10 @@ usage:
   openshieldctl timeline [--subject S] [--event E] [--since RFC3339] [--until RFC3339] [--anchor FILE]
   openshieldctl verify   [--anchor FILE] [--witness FILE]
   openshieldctl anchor export                        (reads the stored anchor, writes PEM)
+  openshieldctl backup dump  --file DUMP
+  openshieldctl backup drill --file DUMP --witness FILE [--anchor FILE] [--print]
+      back up and REHEARSE the restore. The drill is not passed until the ledger
+      re-verifies: bytes coming back is not evidence coming back.
 
 connection:
   --dsn  or  OPENSHIELD_DSN   (default: postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable)
@@ -51,6 +55,8 @@ func run(args []string) int {
 		return releaseManifest(args[1:])
 	case "verify-release":
 		return verifyRelease(args[1:])
+	case "backup":
+		return backupCmd(args[1:])
 	}
 	fs := newFlags()
 	sub := parseSubject(cmd, args[1:])

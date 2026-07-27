@@ -59,6 +59,8 @@ Most of the suite needs only Go. These unlock the tests that would otherwise ski
 |---|---|---|
 | `podman` | the whole integration suite (Postgres + NATS) | rootless |
 | `swtpm` + `swtpm-tools` | TPM attestation: quotes, EK→AK credential activation, PCR drift, network self-enrollment | **no root, no physical TPM** — a software TPM on a TCP port |
+| `xvfb` + `xclip` | X11 clipboard DLP: real selection ownership, per-destination paste mediation | no root; a virtual X server |
+| `postgresql-client` (`pg_dump`/`pg_restore`) | the backup and restore drill | no root |
 | root on a throwaway machine | fanotify exec-permission, TPROXY, DNS redirect, the real USB `authorized_default` write | never run these on a machine you care about; they change kernel state |
 
 Run `go test ./... -v 2>&1 | grep -c SKIP` occasionally. A number that grows is a suite quietly
