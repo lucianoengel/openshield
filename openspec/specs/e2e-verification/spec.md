@@ -46,3 +46,24 @@ the ordinary gate unusable, or it will be removed from it.
 #### Scenario: No container runtime available
 - **WHEN** podman is not present
 - **THEN** the scenarios skip and the gate stays green
+
+### Requirement: The correlation-to-response chain is verified end to end
+
+The path from detection alerts through correlation, incident materialization, playbook execution and its
+recorded effects SHALL be verified by running the real components against real infrastructure, driven only
+by inputs a deployment actually has — stored detections and stored configuration. No stage may be invoked
+directly by the verification, because a chain whose stages are called individually is not a chain.
+
+#### Scenario: A burst of alerts reaches a case without an operator
+- **WHEN** alerts for one subject exceed the configured correlation threshold and a playbook is configured
+- **THEN** an incident is raised, a playbook run completes, and each step's effect is recorded — with
+  automated work attributed to the playbook rather than to any person
+
+#### Scenario: Repeated correlation does not multiply response
+- **WHEN** the correlation loop runs many times over the same underlying detections
+- **THEN** exactly one incident, one run, one case and one of each step's effect exist
+
+#### Scenario: A broken query is not mistaken for a pending condition
+- **WHEN** a verification polls for a condition using a query that cannot succeed
+- **THEN** it fails immediately naming the query, rather than waiting out its timeout and reporting the
+  system under test as broken

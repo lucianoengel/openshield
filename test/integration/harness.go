@@ -25,6 +25,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -34,6 +35,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -328,4 +332,28 @@ func freePort(t *testing.T) string {
 		t.Fatalf("parsing the assigned address: %v", err)
 	}
 	return port
+}
+
+// scanRow runs a single-row query, returning whether the row was there.
+//
+// A "no rows" result is false — the row has not appeared YET, which is what a poll loop wants. ANY OTHER
+// error fails the test immediately, and that distinction is the whole point of the helper.
+//
+// It exists because of a bug it would have caught: a scenario polled `SELECT id, severity FROM incidents`
+// inside Eventually, and `incidents` has no severity column — severity is DERIVED. Every poll errored
+// identically to "not there yet", so the test waited the full ninety seconds and reported the chain as
+// broken. A condition that can never be true is indistinguishable from one that has not happened, unless
+// something looks at the error.
+func scanRow(t *testing.T, pool *pgxpool.Pool, sql string, args []any, dest ...any) bool {
+	t.Helper()
+	err := pool.QueryRow(Ctx(t), sql, args...).Scan(dest...)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, pgx.ErrNoRows):
+		return false
+	default:
+		t.Fatalf("querying %q: %v — this is a broken query, not a condition that has not happened yet", sql, err)
+		return false
+	}
 }
