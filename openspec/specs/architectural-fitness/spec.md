@@ -73,3 +73,21 @@ proving the pipeline is genuinely data-plane-agnostic (the D26 claim).
 - **AND** a test demonstrates this with no change to the dispatcher, State, Stage, Registry, enforcer
   interface, outcome sink, or ledger
 
+
+### Requirement: A pluggable seam has a production installer
+
+A field that production code reads to decide behaviour SHALL be assigned by production code. A seam that
+nothing installs is a feature no deployment can turn on: its unit tests pass, and every shipped binary
+behaves as though it does not exist.
+
+An exemption SHALL carry the reason it is set elsewhere. A numeric threshold is not an exemption — it
+admits the next occurrence silently.
+
+#### Scenario: An uninstalled seam fails the check
+- **WHEN** a pointer, func or behaviour-interface field on an exported struct is read but never assigned
+  outside tests
+- **THEN** the check fails, naming the struct and field
+
+#### Scenario: The check states what it does not cover
+- **WHEN** a seam is assigned somewhere in the codebase but never reached from a command
+- **THEN** the check passes, and its stated scope makes clear that reachability is not verified
