@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,9 @@ const (
 )
 
 type Watchdog struct {
+	done     chan struct{}
+	doneOnce sync.Once
+
 	Port     int           // the resolver's UDP port (redirect target + default probe target)
 	Mark     int           // the loop-break firewall mark (LOCAL scope only)
 	Scope    Scope         // which redirect(s) to manage; zero value = ScopeLocal (back-compatible)
@@ -96,7 +100,22 @@ func (w *Watchdog) probe() bool {
 
 // Run installs the redirect, then probes the resolver on the interval — bypassing (removing) it after a
 // run of failures and restoring it on recovery — until ctx is done, when it removes the redirect.
+// Done is closed after the watchdog has removed the redirect and returned.
+//
+// It exists because process exit RACED the removal: the gateway's main returned as soon as its HTTP
+// server stopped, and this goroutine's doRemove() ran — or did not — in whatever time remained. A
+// gateway that exits with the rule still installed redirects the host's ENTIRE :53 traffic to a dead
+// port, which is precisely the "a wedged resolver wedges name resolution" failure this watchdog exists
+// to prevent, reintroduced at shutdown (D310).
+func (w *Watchdog) Done() <-chan struct{} {
+	w.doneOnce.Do(func() { w.done = make(chan struct{}) })
+	return w.done
+}
+
 func (w *Watchdog) Run(ctx context.Context) {
+	w.doneOnce.Do(func() { w.done = make(chan struct{}) })
+	defer close(w.done)
+
 	if err := w.doInstall(); err != nil {
 		if w.Log != nil {
 			w.Log.Error("dnsredirect: watchdog could not install the redirect — starting bypassed (resolver "+

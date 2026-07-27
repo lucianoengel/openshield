@@ -255,6 +255,16 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(log, "serving", err)
 	}
+	// The transparent DNS redirect is host state: it must be gone before this process is.
+	if dnsRedirectDone != nil {
+		select {
+		case <-dnsRedirectDone:
+		case <-time.After(10 * time.Second):
+			log.Error("gateway: the transparent DNS redirect was NOT confirmed removed before exit — " +
+				"host :53 traffic may still be redirected to a port nothing is listening on; remove it " +
+				"with `nft delete table openshield_dnsredirect` or the iptables equivalent")
+		}
+	}
 	log.Info("gateway shut down")
 }
 
@@ -806,6 +816,10 @@ func envPorts(k string, def []int) []int {
 // query whose domain is on the CURRENT IOC feed. Fail-open (an unparseable/unmatched query is forwarded)
 // and fail-to-wire (a bind failure logs and the gateway keeps running) — a DNS resolver must never
 // blackhole the fleet's name resolution. Binding :53 needs privilege (CAP_NET_BIND_SERVICE).
+// dnsRedirectDone is closed once the redirect watchdog has removed its rules. Package-level because the
+// installer and the shutdown path are in different functions and the state is genuinely process-wide.
+var dnsRedirectDone <-chan struct{}
+
 func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	addr := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_SINK_LISTEN"))
 	upstream := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_UPSTREAM"))
@@ -848,6 +862,11 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 			// (NIPS-8 inc-3). Scope selects local/forwarded/both (NIPS-8 forwarded/gateway redirect).
 			wd := &dnsredirect.Watchdog{Port: port, Mark: mark, Scope: scope, Log: log}
 			go wd.Run(ctx)
+			// WAIT FOR THE REMOVAL AT SHUTDOWN. Without this, main returns as soon as the HTTP server
+			// stops and the watchdog's removal races process exit — leaving a nat rule that sends the
+			// host's ENTIRE :53 traffic to a dead port. That is the exact failure this watchdog exists to
+			// prevent, reintroduced at the one moment nobody is watching for it (D310).
+			dnsRedirectDone = wd.Done()
 		}
 	}
 }

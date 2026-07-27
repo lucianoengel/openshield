@@ -34,6 +34,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -299,10 +300,11 @@ func repoRoot() (string, error) {
 
 // Process is a running OpenShield binary under test.
 type Process struct {
-	Cmd    *exec.Cmd
-	Name   string
-	output *syncBuffer
-	t      *testing.T
+	Cmd      *exec.Cmd
+	Name     string
+	output   *syncBuffer
+	t        *testing.T
+	stopOnce sync.Once
 }
 
 // syncBuffer collects a process's output safely from the reader goroutine.
@@ -340,13 +342,39 @@ func Start(t *testing.T, name string, env []string, args ...string) *Process {
 	}
 	p := &Process{Cmd: cmd, Name: name, output: out, t: t}
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		// SIGTERM FIRST, and the reason is not politeness. A process killed with SIGKILL never runs its
+		// shutdown path — and shutdown is where this product removes the firewall rules it installed,
+		// persists baselines and closes ledgers. A suite that only ever SIGKILLs leaves host state behind
+		// (the DNS-redirect scenario left a nat rule pointing at a dead port, which then broke the NEXT
+		// run) and never exercises teardown at all, which is a real code path with real failure modes.
+		p.Stop()
 		if t.Failed() {
 			t.Logf("---- %s output ----\n%s", name, out.String())
 		}
 	})
 	return p
+}
+
+// Stop terminates the process GRACEFULLY and waits for it, so a scenario can assert on what teardown
+// did. Idempotent.
+//
+// It exists because `t.Cleanup` runs LIFO: a cleanup registered after Start's runs BEFORE it, so a
+// scenario that checked host state in a cleanup was checking it while the process was still running.
+// Teardown is a real code path — this product removes firewall rules in it — and asserting on it needs
+// the stop to be an explicit step, not a side effect of the test ending.
+func (p *Process) Stop() {
+	p.t.Helper()
+	p.stopOnce.Do(func() {
+		_ = p.Cmd.Process.Signal(syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { _, _ = p.Cmd.Process.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			_ = p.Cmd.Process.Kill()
+			<-done
+		}
+	})
 }
 
 // Output is everything the process has written so far.
