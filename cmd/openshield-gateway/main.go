@@ -657,9 +657,34 @@ func applyThreatFeed(ctx context.Context, gw *gateway.Gateway, log *slog.Logger)
 		log.Warn("gateway: OPENSHIELD_IOC_FEED[_URL] unset — NIPS-2 threat-intel engine inert (DLP inspection only)")
 		return
 	}
-	feed, err := nips.LoadFeed(path)
-	if err != nil {
-		fatal(log, "loading IOC feed", err) // fail-fast on a broken INITIAL feed
+	// SIGNED, when a key is configured (D297). The signed loader existed and had no caller: the control
+	// plane verifies the threat-intel feed it ingests (SOAR-5) and the gateway — the component that
+	// actually BLOCKS on those indicators — read its own feed unverified. Anything able to write that
+	// file could decide what this gateway blocks, and could equally decide what it does NOT: dropping
+	// the indicators that would have caught you is the quieter and better attack.
+	//
+	// VERIFY BEFORE PARSE. The parser is the untrusted-input surface, so a feed whose signature does not
+	// check out never reaches it, and a bad signature refuses the WHOLE feed rather than loading part of
+	// one.
+	var feed *nips.Feed
+	var err error
+	if keyPath := os.Getenv("OPENSHIELD_IOC_FEED_KEY"); keyPath != "" {
+		key, kerr := core.LoadPublicKey(keyPath)
+		if kerr != nil {
+			fatal(log, "IOC feed key", kerr)
+		}
+		feed, _, err = nips.LoadSignedFeed(path, path+".sig", key, nips.FormatNative)
+		if err != nil {
+			fatal(log, "loading SIGNED IOC feed", err)
+		}
+		log.Info("gateway: NIPS-2 IOC feed VERIFIED against the operator key", slog.String("sig", path+".sig"))
+	} else {
+		feed, err = nips.LoadFeed(path)
+		if err != nil {
+			fatal(log, "loading IOC feed", err) // fail-fast on a broken INITIAL feed
+		}
+		log.Warn("gateway: OPENSHIELD_IOC_FEED_KEY unset — the IOC feed is loaded UNVERIFIED; whatever " +
+			"can write that file decides what this gateway blocks, and what it lets through")
 	}
 	gw.SetThreatFeed(feed)
 	log.Info("gateway: NIPS-2 threat-intel engine active", slog.Int("indicators", feed.Size()))

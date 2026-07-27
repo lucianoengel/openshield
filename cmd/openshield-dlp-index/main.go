@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"flag"
@@ -28,6 +29,8 @@ func main() {
 	switch os.Args[1] {
 	case "keygen":
 		keygen(os.Args[2:])
+	case "rules":
+		rules(os.Args[2:])
 	case "build":
 		build(os.Args[2:])
 	default:
@@ -47,6 +50,12 @@ func usage() {
       edm    : --in is a file, one sensitive value per line. [--target-fp 0.001]
       record : --in is a file, one record per line, cells --delim-separated. [--delim '\t'] [--threshold 2]
       idm    : --in is a directory, each file one sensitive document. [--fraction 0.3]
+
+  rules --in rules.json --key operator.key --out rules.bundle
+      Sign a custom detector rule bundle (HON-1). Rules are COMPILED before the
+      bundle is written, so a bad pattern fails here rather than silently falling
+      back to built-ins in the worker. Give the bundle to the worker as
+      OPENSHIELD_RULES_BUNDLE and operator.pub as OPENSHIELD_RULES_PUBKEY.
 `)
 }
 
@@ -206,3 +215,6 @@ func fatal(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "openshield-dlp-index: "+format+"\n", a...)
 	os.Exit(1)
 }
+
+// newBytesReader keeps the JSON decoder's construction in one place.
+func newBytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }

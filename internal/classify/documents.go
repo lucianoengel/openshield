@@ -19,6 +19,19 @@ import (
 // (8 MiB), and this caps the EXPANDED output and the entry count — a 4 KB zip that expands
 // to gigabytes hits maxExtractBytes and stops, rather than exhausting memory.
 
+// THESE ARE THE ONLY DECOMPRESSION BOUNDS IN THE PRODUCT (D297).
+//
+// `internal/agent/sandbox` carried a second implementation — a ratio-limited reader and a depth tracker,
+// with its own defaults of 512 MiB expanded, 200:1 and 8 levels. It had no caller, and it was the WEAKER
+// of the two: the bounds below are a 16 MiB shared budget over the whole recursion, 4 levels, 4096
+// entries and 8 MiB per member. Two implementations of one safety property is a hazard in itself —
+// someone wires the wrong one believing it is the protection, and gets thirty-two times the budget and
+// twice the depth — so the unused one was deleted rather than left as a plausible-looking alternative.
+//
+// The deleted guard's RATIO bound has no work to do here: the worker caps raw input at 8 MiB and this
+// caps expanded output at 16 MiB, so the effective ceiling is ~2:1 — far tighter than 200:1 could be.
+// An absolute budget that small makes a ratio check redundant, which is why nothing is carried over.
+
 const (
 	// maxExtractBytes caps total extracted text. The raw input is already bounded by the
 	// worker; this bounds the expansion so a zip bomb cannot blow past it.

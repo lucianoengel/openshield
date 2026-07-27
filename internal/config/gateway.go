@@ -111,6 +111,8 @@ var GatewayFields = []Field{
 		Description: "Replay-cache size for DPoP proofs."},
 	{Key: "OPENSHIELD_IOC_FEED", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Local IOC feed (NIPS-2). Unset, with no URL either, leaves the threat-intel engine inert."},
+	{Key: "OPENSHIELD_IOC_FEED_KEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "File holding the ed25519 PUBLIC key the local IOC feed is verified against, with its detached signature at <feed>.sig. Unset loads the feed UNVERIFIED — anything that can write that file then decides what this gateway blocks."},
 	{Key: "OPENSHIELD_IOC_FEED_RELOAD", Scope: ScopeBootstrap, Kind: KindDuration, Default: "0s",
 		Description: "How often the local IOC feed is re-read. 0 disables reloading."},
 	{Key: "OPENSHIELD_IOC_FEED_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "",

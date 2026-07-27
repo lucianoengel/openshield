@@ -45,17 +45,17 @@ of these are not gaps.**
 being unreachable; the worker in fact loads all three index kinds through `AddEDM`/`AddRecordEDM`/`AddIDM`,
 driven by settings that are read. Checking before building is the whole point of this pass.
 
-The two entries that still deserve action are stated plainly: **`SignRuleBundle`** (the worker verifies
+All three follow-ups are done (D297). They were: **`SignRuleBundle`** (the worker verifies
 signed rule bundles and nothing in the product signs one, so the feature is verify-only) and
 **`LoadSignedFeed`** (no caller, no test, no reachable capability — delete).
 
 | Symbol | Location | Note |
 |---|---|---|
 | `NewDecider` | `internal/agent/prefilter/decider.go:48` | **SUPERSEDED** — the prefilter is constructed by the agent through another path. The prefilter decider. |
-| `NewDecompressGuard` | `internal/agent/sandbox/decompress.go:40` | **DUPLICATE** — `internal/classify/documents.go` implements its OWN expansion and depth bounds. TWO implementations of one safety property is its own risk — worth collapsing, not wiring. Decompression-bomb guard (T-012). |
-| `NewDepthTracker` | `internal/agent/sandbox/decompress.go:73` | **DUPLICATE** — same. Archive nesting-depth tracker. |
-| `EnterArchive` | `internal/agent/sandbox/decompress.go:77` | **DUPLICATE** — same.  |
-| `LeaveArchive` | `internal/agent/sandbox/decompress.go:86` | **DUPLICATE** — same.  |
+| `NewDecompressGuard` | `internal/agent/sandbox/decompress.go:40` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — `internal/classify/documents.go` implements its OWN expansion and depth bounds. TWO implementations of one safety property is its own risk — worth collapsing, not wiring. Decompression-bomb guard (T-012). |
+| `NewDepthTracker` | `internal/agent/sandbox/decompress.go:73` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — same. Archive nesting-depth tracker. |
+| `EnterArchive` | `internal/agent/sandbox/decompress.go:77` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — same.  |
+| `LeaveArchive` | `internal/agent/sandbox/decompress.go:86` | **DELETED (D297)** as the weaker of two implementations. **DUPLICATE** — same.  |
 | `CreateEK` | `internal/attest/ek.go:22` | **PARTIAL** — TPM attestation: the fleet agent opens a TPM and the gateway loads EK roots, but EK creation/PCR extension are not driven by either. TPM endorsement key. |
 | `FlushEK` | `internal/attest/ek.go:38` | **PARTIAL** — same. TPM handle cleanup. |
 | `MarshalEnrollments` | `internal/attest/enrollment.go:52` | **PARTIAL** — same. Attestation enrollment marshalling. |
@@ -66,7 +66,7 @@ signed rule bundles and nothing in the product signs one, so the feature is veri
 | `BuildEDMIndex` | `internal/classify/edm.go:137` | **SUPERSEDED** — `openshield-dlp-index` builds indexes through its own path. Builds the EDM index the above consume. |
 | `NewWithRecordEDM` | `internal/classify/edm_record.go:154` | **SUPERSEDED** — worker uses `AddRecordEDM`. Record-level EDM classifier variant. |
 | `NewWithIDM` | `internal/classify/idm.go:158` | **SUPERSEDED** — worker uses `AddIDM`. Indexed-document matching classifier variant. |
-| `SignRuleBundle` | `internal/classify/rules.go:79` | **TOOLING GAP** — the worker VERIFIES signed rule bundles; nothing in the product SIGNS one. An operator cannot produce the bundle the worker is built to load. Signs a classifier rule bundle. |
+| `SignRuleBundle` | `internal/classify/rules.go:79` | **BUILT (D297).** **TOOLING GAP** — the worker VERIFIES signed rule bundles; nothing in the product SIGNS one. An operator cannot produce the bundle the worker is built to load. Signs a classifier rule bundle. |
 | `StopMediating` | `internal/clipboard/x11/x11.go:202` | **PARTIAL** — clipboard mediation has no teardown caller; a leak at shutdown, not a missing capability. X11 clipboard mediation teardown. |
 | `NewProducer` | `internal/connectors/usb/usb.go:45` | **NOT BUILT** — no production `DeviceSource` exists — only a test fake. The producer cannot read a real device. USB event producer (D1's 'one trivial USB enforcer'). |
 | `Produce` | `internal/connectors/usb/usb.go:88` | **NOT BUILT** — same.  |
@@ -90,7 +90,7 @@ signed rule bundles and nothing in the product signs one, so the feature is veri
 | `SetIntentResolver` | `internal/engine/engine.go:205` | **WIRED (D294).** The endpoint's intent resolver seam (XDR-6). |
 | `EnforceAuditDropped` | `internal/engine/engine.go:353` | **UNUSED SIBLING** — a counter accessor with no reader.  |
 | `SignUpdate` | `internal/gateway/signedupdate.go:15` | **SUPERSEDED** — publishers sign inline.  |
-| `LoadSignedFeed` | `internal/nips/signed.go:183` | **DEAD** — no caller AND NO TEST — the only symbol in the audit with neither. Signed NIPS feed loading. |
+| `LoadSignedFeed` | `internal/nips/signed.go:183` | **MISCLASSIFIED — was not dead; WIRED (D297).** **DEAD** — no caller AND NO TEST — the only symbol in the audit with neither. Signed NIPS feed loading. |
 | `VerifySignature` | `internal/notify/sign.go:42` | **UNUSED SIBLING** — notify signing is verified by the receiver, not here.  |
 | `NewPack` | `internal/policy/embed.go:45` | **SUPERSEDED** — policy packs load via `SelectFromEnv`.  |
 | `BuildEnrollment` | `internal/posture/enroll.go:17` | **PARTIAL** — posture enrollment is designed; the roster path is what ships. Posture enrollment. |
