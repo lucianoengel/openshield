@@ -184,6 +184,15 @@ func main() {
 			"0 = idle). Most beacons on a real network are legitimate — it raises MEDIUM alerts with "+
 			"their evidence and enforces nothing.\n")
 
+		// SOAR-7/D291: the intent BLAST-RADIUS ceiling. Never set before, so never enforced — the
+		// check existed and the value it compared against was always zero, which the code reads as "no
+		// ceiling". Applied per tick from the live resolver so it can be tightened without a restart,
+		// which is the direction an operator is likely to want it in a hurry.
+		go retain.Loop(ctx, 15*time.Second, func(context.Context) {
+			srv.SetIntentBlastRadius(cfg.Int("OPENSHIELD_INTENT_BLAST_RADIUS"))
+		})
+		srv.SetIntentBlastRadius(cfg.Int("OPENSHIELD_INTENT_BLAST_RADIUS"))
+
 		// SOAR-3/D290: relabel timed-out four-eyes requests so the approval queue shows what can still
 		// be actioned. LEADER-ONLY like the other maintenance loops.
 		go srv.RunApprovalExpiryLoop(leaderCtx,

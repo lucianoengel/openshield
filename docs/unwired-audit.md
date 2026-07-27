@@ -26,7 +26,7 @@ another unreachable function still counts as called here.
 
 ## Action paths with no caller — 46
 
-_7 of these are now wired (D290): the case and approval group. Marked inline._
+_10 of these are now wired: the case and approval group (D290) and the response-intent producer (D291). Marked inline._
 
 The real debt. Reviewed in priority order.
 
@@ -60,9 +60,9 @@ The real debt. Reviewed in priority order.
 | `ApproveClose` | `internal/controlplane/cases.go:210` | **WIRED (D290).** Case-close approval — the second half. The whole four-eyes closure is unreachable. |
 | `PublishFleetControl` | `internal/controlplane/fleetcontrol.go:75` | Superseded by PublishFleetControlSeq (D287); the wrapper is now unused. |
 | `VerifySigned` | `internal/controlplane/identity.go:141` |  |
-| `SetIntentBlastRadius` | `internal/controlplane/intent.go:64` | The blast-radius ceiling on intents. Never set, so never enforced. |
-| `PublishIntents` | `internal/controlplane/intent.go:79` | SOAR-7's ENTIRE response-intent producer. The IdP responder IS wired and verifying — it listens for a message nothing in the product can send. |
-| `RequestIntentApproval` | `internal/controlplane/intent.go:141` | The four-eyes request for an intent. Unreachable with its publisher. |
+| `SetIntentBlastRadius` | `internal/controlplane/intent.go:64` | **WIRED (D291).** The blast-radius ceiling on intents. Never set, so never enforced. |
+| `PublishIntents` | `internal/controlplane/intent.go:79` | **WIRED (D291).** SOAR-7's ENTIRE response-intent producer. The IdP responder IS wired and verifying — it listens for a message nothing in the product can send. |
+| `RequestIntentApproval` | `internal/controlplane/intent.go:141` | **WIRED (D291).** The four-eyes request for an intent. Unreachable with its publisher. |
 | `RollbackTo` | `internal/controlplane/settings.go:195` | Configuration rollback (D263). Revisions are recorded and cannot be rewound. |
 | `CheckPurpose` | `internal/core/validate.go:117` | Purpose validation (D20). |
 | `ValidateDecision` | `internal/core/validate.go:148` | Decision validation. |

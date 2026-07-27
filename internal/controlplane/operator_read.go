@@ -224,6 +224,9 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	// was tested, and had no caller — a playbook could open a case and a human could not, and the
 	// four-eyes case closure could not be exercised at all.
 	s.caseWriteHandlers(mux)
+	// D291: response intents (SOAR-7 Tier-2). The IdP responder was already wired and verifying; until
+	// this there was nothing that could publish an intent for it to verify.
+	s.intentHandlers(mux)
 
 	mux.HandleFunc("/overdue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

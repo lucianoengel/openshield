@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -78,6 +79,23 @@ func HighImpactVerb(v corev1.IntentVerb) bool {
 // an over-broad request is refused as a whole rather than partially enacted across the first N subjects.
 func (s *Server) PublishIntents(ctx context.Context, verb corev1.IntentVerb, subjects []string,
 	reason string, ttl time.Duration) ([]string, error) {
+	return s.PublishIntentsAt(ctx, verb, subjects, reason, ttl, s.now())
+}
+
+// PublishIntentsAt publishes at a PINNED issuing time, which fixes the intent ids.
+//
+// It exists for the same reason PublishFleetControlSeq does (D287), and the defect is the same one: the
+// four-eyes approval is bound to an id derived from the MINUTE the intent is issued in, so an approval
+// requested at 10:00:59 and granted at 10:01:05 binds to an id the next publication will not compute.
+// The high-impact path — CONTAIN and REVOKE_TRUST, the two verbs that actually do something to a person's
+// access — was therefore a coin flip on where the request happened to fall in the minute, and would have
+// failed with "requires an approved four-eyes approval" while an approval sat there approved.
+//
+// The minute granularity is still doing its job: it stops a stale approval authorizing a much later
+// publication. Pinning the time lets an operator publish EXACTLY the intent that was approved, rather
+// than one computed afresh and hoping the clock agrees.
+func (s *Server) PublishIntentsAt(ctx context.Context, verb corev1.IntentVerb, subjects []string,
+	reason string, ttl time.Duration, at time.Time) ([]string, error) {
 	if verb == corev1.IntentVerb_INTENT_VERB_UNSPECIFIED {
 		return nil, fmt.Errorf("%w: %v", ErrIntentVerb, verb)
 	}
@@ -98,7 +116,7 @@ func (s *Server) PublishIntents(ctx context.Context, verb corev1.IntentVerb, sub
 		ttl = DefaultIntentTTL
 	}
 
-	now := s.now()
+	now := at
 	var published []string
 	for _, subject := range subjects {
 		id := intentID(subject, verb, now)
@@ -154,4 +172,36 @@ func intentID(subject string, verb corev1.IntentVerb, at time.Time) string {
 
 func intentIDFor(subject string, verb corev1.IntentVerb, at time.Time) string {
 	return verb.String() + ":" + subject + ":" + strconv.FormatInt(at.UTC().Unix()/60, 10)
+}
+
+// ParseIntentID recovers the verb, subject and issuing minute from an intent id.
+//
+// The id is the operator's handle between requesting approval and publishing — the same role the fleet
+// control id plays — so the surface takes an ID rather than asking an operator to keep a verb, a subject
+// and a wall-clock minute together and reassemble them correctly under time pressure.
+func ParseIntentID(id string) (corev1.IntentVerb, string, time.Time, error) {
+	i := strings.Index(id, ":")
+	j := strings.LastIndex(id, ":")
+	if i <= 0 || j <= i {
+		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, "", time.Time{},
+			fmt.Errorf("controlplane: %q is not a response-intent id", id)
+	}
+	v, ok := corev1.IntentVerb_value[id[:i]]
+	if !ok || corev1.IntentVerb(v) == corev1.IntentVerb_INTENT_VERB_UNSPECIFIED {
+		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, "", time.Time{},
+			fmt.Errorf("%w: %q", ErrIntentVerb, id[:i])
+	}
+	// The SUBJECT may itself contain colons, so it is everything between the first and the last — taking
+	// the second field would truncate any subject with a colon in it, silently containing the wrong one.
+	subject := id[i+1 : j]
+	if subject == "" {
+		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, "", time.Time{},
+			fmt.Errorf("controlplane: intent id %q names no subject", id)
+	}
+	min, err := strconv.ParseInt(id[j+1:], 10, 64)
+	if err != nil {
+		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, "", time.Time{},
+			fmt.Errorf("controlplane: bad minute in intent id %q", id)
+	}
+	return corev1.IntentVerb(v), subject, time.Unix(min*60, 0).UTC(), nil
 }

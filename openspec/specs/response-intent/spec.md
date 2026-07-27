@@ -45,3 +45,27 @@ others leaves an asset in a state no operator asked for.
 - **WHEN** a containment intent's expiry passes
 - **THEN** the network domain allows the entity's flows again and the endpoint domain allows its executions
 - **AND** the test FAILS if expiry is ignored on read
+
+### Requirement: An operator can publish a response intent
+
+The response-intent producer SHALL be reachable by an authenticated operator. A consumer that verifies
+intents while nothing can publish one provides no capability.
+
+Publication SHALL send exactly the intent that was prepared and, for a high-impact verb, exactly the one
+that was approved. An approval SHALL NOT be invalidated by the passage of time between the approval and
+the publication it authorizes.
+
+The publication surface SHALL accept multiple subjects in one request, so that the blast-radius ceiling
+is reachable. A ceiling that can never bind is not a control.
+
+#### Scenario: A high-impact intent needs a second operator
+- **WHEN** an operator prepares a high-impact intent and attempts to publish it unapproved
+- **THEN** nothing is published
+
+#### Scenario: The approved intent is the published intent
+- **WHEN** an approved intent is published after the issuing minute has elapsed
+- **THEN** it publishes, carrying the approved id
+
+#### Scenario: An over-broad publication is refused as a whole
+- **WHEN** a publication targets more subjects than the ceiling
+- **THEN** it is refused and no intent reaches the broker

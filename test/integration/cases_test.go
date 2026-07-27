@@ -35,7 +35,10 @@ import (
 // The real tool rather than a hand-rolled certificate, because the ROLE lives in the certificate's
 // subject and how it is encoded is exactly the thing under test — a test that minted its own would be
 // asserting against its own idea of the format.
-type pki struct{ dir, caPEM string }
+type pki struct {
+	dir, caPEM string
+	tls        TLSMaterial // the server material, kept so a test can join the same mutually-authenticated broker
+}
 
 func newPKI(t *testing.T) *pki {
 	t.Helper()
@@ -119,6 +122,27 @@ func mtlsServer(t *testing.T, p *pki) (*Stack, *Process, string) {
 		"OPENSHIELD_HTTP_ADDR=" + addr,
 	}, tlsEnv(m)...))
 	waitTCP(t, addr, 90*time.Second)
+	return stack, srv, "https://" + addr
+}
+
+// mtlsServerSigned is mtlsServer plus the ed25519 key the control plane signs risk, intents and fleet
+// controls with — the one key OPENSHIELD_RISK_SIGNING_KEY has always been documented as covering.
+func mtlsServerSigned(t *testing.T, p *pki) (*Stack, *Process, string) {
+	t.Helper()
+	m := p.serverMaterial(t)
+	stack := StartStackTLS(t, m)
+	migrateStack(t, stack)
+	priv, _ := signingKeypair(t)
+	addr := "127.0.0.1:" + freePort(t)
+	srv := Start(t, "openshield-server", append([]string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_NATS_URL=" + stack.NATSURL,
+		"OPENSHIELD_HTTP_ADDR=" + addr,
+		"OPENSHIELD_RISK_SIGNING_KEY=" + priv,
+	}, tlsEnv(m)...))
+	waitTCP(t, addr, 90*time.Second)
+	srv.WaitForOutput("signed risk, intent and fleet-control publishing", 60*time.Second)
+	p.tls = m
 	return stack, srv, "https://" + addr
 }
 

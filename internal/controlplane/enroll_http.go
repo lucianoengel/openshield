@@ -118,6 +118,11 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/cases/hold/release", requireTier(RoleAdmin, opRead))
 		mux.Handle("/approvals", requireTier(RoleAnalyst, opRead))
 		mux.Handle("/approvals/resolve", requireTier(RoleResponder, opRead))
+		// D291: response intents. RESPONDER for both steps — preparing one opens a four-eyes request in
+		// someone's queue, which is an act, not a read. The four-eyes gate on CONTAIN and REVOKE_TRUST is
+		// the control that separates them from the low-impact verb, not the route tier.
+		mux.Handle("/intents/prepare", requireTier(RoleResponder, opRead))
+		mux.Handle("/intents/publish", requireTier(RoleResponder, opRead))
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}
