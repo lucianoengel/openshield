@@ -359,6 +359,18 @@ func main() {
 	// Memory-injection detection (HIPS-4): poll running processes for writable+executable memory (the
 	// W^X-violation injection signature) and emit a high-severity event per new suspect. A fleet-wide
 	// scan needs root; unprivileged it covers the engine's own processes.
+	// D1/T-020: observe USB attachments. Off unless an interval is configured — a poll on every endpoint
+	// is a cost an operator opts into.
+	if iv := envDuration("OPENSHIELD_USB_INTERVAL", 0); iv > 0 {
+		key := usbPseudonymKey(log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			usbSource(ctx, env("OPENSHIELD_AGENT_ID", "engine"), key, iv, events, log)
+		}()
+		log.Info("engine: USB observation ENABLED", slog.Duration("interval", iv))
+	}
+
 	if iv := envDuration("OPENSHIELD_MEMSCAN_INTERVAL", 0); iv > 0 {
 		wg.Add(1)
 		go func() {

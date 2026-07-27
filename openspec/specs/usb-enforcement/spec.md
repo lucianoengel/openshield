@@ -5,16 +5,20 @@ A USB producer emitting pseudonymised-serial events and a USB enforcer that enac
 kernel `authorized_default` posture, exercising the Enforcer contract (D14) against a real enforcement
 point (D1).
 
-> **NOT REACHABLE IN A DEPLOYMENT (recorded D295).** Both halves are implemented and tested, and no
-> shipped binary imports either. The producer's `DeviceSource` has only a test fake — there is no
-> implementation that reads real devices from sysfs or udev — so nothing in the product can observe a USB
-> attachment, and the enforcer has no events to act on.
+> **OBSERVATION IS NOW REACHABLE (D312); ENFORCEMENT IS NOT YET WIRED.** The producer reads real devices
+> from `/sys/bus/usb/devices` and `openshield-engine` polls it when `OPENSHIELD_USB_INTERVAL` is set, so
+> an attachment becomes an event, is pseudonymised at the source, decided by policy and recorded. The
+> default policy ALERTS on it and deliberately does not block: the same event fires for a keyboard, a
+> webcam and a hub.
 >
-> This section previously called it "the first real (non-stub) enforcer", which claimed a working
-> capability the product does not have. The requirements below describe the intended behaviour and are
-> honoured by the packages' own tests; they are NOT evidence that a deployment does any of this.
+> **What is still absent:** no binary registers the USB ENFORCER, so a BLOCK decision has nothing to
+> carry it out — setting `authorized_default` needs root, and which hosts should run a privileged USB
+> posture is a deployment decision this project has not made. The requirement below describing enforcement
+> is therefore intent, not shipped behaviour.
 >
-> Finishing it needs a sysfs/udev device source and registration in `openshield-engine`.
+> Between D295 and D312 this section claimed "the first real (non-stub) enforcer ... proving the Enforcer
+> contract end to end", while nothing in the product could observe a USB attachment at all. Half of that
+> is now true; the sentence stays corrected rather than restored.
 ## Requirements
 ### Requirement: USB events carry a pseudonymised serial
 The USB producer MUST emit `USB_INSERTED` events whose serial is pseudonymised before the event is

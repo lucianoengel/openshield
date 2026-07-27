@@ -103,3 +103,17 @@ decision := d if {
 		"reason": "no alert condition met",
 	}
 }
+
+# T-020/D312: a USB attachment is RECORDED but does NOT alert, and that is a deliberate choice reversed
+# from a first attempt.
+#
+# Adding `alert if { usb_attached }` seemed obviously right — USB is the canonical careless-insider
+# channel and this product's design centre. It is wrong: the event fires on ATTACHMENT, not on a copy,
+# and most attachments are a keyboard, a webcam or a dock's hub. A laptop docking in the morning would
+# raise a handful of alerts before anyone opened a file, which is precisely the "a detector whose output
+# is mostly known-good gets muted" failure the beaconing package warns about — and a muted detector is
+# worse than none.
+#
+# The attachment is still fully OBSERVED: the event flows the whole pipeline and its decision is recorded
+# in the ledger, so "what was plugged into this machine" is answerable. An operator who wants USB to
+# alert or to block writes that rule; the closed action set exists so that is their deliberate choice.
