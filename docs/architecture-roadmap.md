@@ -404,7 +404,10 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
 
 **Gate the "call it shippable" line — do before or alongside the MVP:**
 
-- **`THREAT_MODEL.md` — first-class, consolidated** — S. The trust boundaries are today *inferable* from
+- **`THREAT_MODEL.md` — first-class, consolidated** — ✅ **DONE (D302).** Extended the EXISTING
+  `docs/threat-model.md` rather than adding a competing root-level file: the endpoint half was already
+  there and honest, and the gap was the PLATFORM half. Eight boundaries, each naming the guard and the
+  test that proves it, each stating its limit. Guarded by doccheck. Original scope note: The trust boundaries are today *inferable* from
   D14, the ADRs, and `intake.md`, but never stated in one place. Write who is trusted vs not and exactly
   what each buys an attacker: compromised server, compromised gateway, compromised agent, compromised
   admin, offline endpoint, replay, malicious insider, supply chain. Tie every boundary to the guard that

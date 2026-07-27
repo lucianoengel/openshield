@@ -20,17 +20,24 @@ import (
 // for, and they are a human discipline, not an automated one.
 var invariantTest = regexp.MustCompile("`(Test[A-Za-z0-9_]+)`")
 
+// claimSurfaces are the documents that back a security claim with a named test. Both make the same kind
+// of promise, so both get the same guard: THREAT_MODEL's "proven by" rows are worth exactly as much as
+// INVARIANTS' are, and a stale name in either turns a demonstration into a sentence.
+var claimSurfaces = []string{"../../INVARIANTS.md", "../../docs/threat-model.md"}
+
 func TestEveryTestNamedInInvariantsExists(t *testing.T) {
-	body, err := os.ReadFile("../../INVARIANTS.md")
-	if err != nil {
-		t.Fatalf("reading INVARIANTS.md: %v", err)
-	}
 	named := map[string]bool{}
-	for _, m := range invariantTest.FindAllStringSubmatch(string(body), -1) {
-		named[m[1]] = true
+	for _, path := range claimSurfaces {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for _, m := range invariantTest.FindAllStringSubmatch(string(body), -1) {
+			named[m[1]] = true
+		}
 	}
 	if len(named) < 5 {
-		t.Fatalf("INVARIANTS.md names only %d tests — too few for the document to be doing its job, and "+
+		t.Fatalf("the claim surfaces name only %d tests — too few for the document to be doing its job, and "+
 			"a sign the extraction is broken rather than the document being short", len(named))
 	}
 
@@ -56,7 +63,7 @@ func TestEveryTestNamedInInvariantsExists(t *testing.T) {
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
-		t.Errorf("INVARIANTS.md names %d test(s) that do not exist: %s\n"+
+		t.Errorf("the claim surfaces name %d test(s) that do not exist: %s\n"+
 			"    The document's claim is that every invariant is backed by a test that FAILS when the "+
 			"property regresses. A name that resolves to nothing turns a demonstrated claim into a "+
 			"sentence. Rename the reference, or restore the test.", len(missing), strings.Join(missing, ", "))
