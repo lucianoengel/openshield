@@ -255,7 +255,16 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(log, "serving", err)
 	}
-	// The transparent DNS redirect is host state: it must be gone before this process is.
+	// The transparent data paths install HOST state — firewall and routing rules — and both must be gone
+	// before this process is. A rule that outlives its listener silently reroutes traffic into nothing.
+	if tproxyDone != nil {
+		select {
+		case <-tproxyDone:
+		case <-time.After(10 * time.Second):
+			log.Error("gateway: the TPROXY rules were NOT confirmed removed before exit — forwarded " +
+				"traffic on those ports may still be redirected to a socket that no longer exists")
+		}
+	}
 	if dnsRedirectDone != nil {
 		select {
 		case <-dnsRedirectDone:
@@ -771,7 +780,17 @@ func applyTProxy(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 		table := envMark("OPENSHIELD_TPROXY_TABLE", 100)
 		retry := envDuration("OPENSHIELD_TPROXY_RETRY", 5*time.Second)
 		newServer := func() *gateway.TProxyServer { return gateway.NewTProxyServer(gw, log) }
-		go gateway.SuperviseTProxy(ctx, addr, dports, mark, table, retry, newServer, log)
+		// WAIT FOR THE RULES TO BE REMOVED AT SHUTDOWN, for the reason D310 fixed in the DNS redirect:
+		// removal is correctly bound to the server's lifetime, and then `main` returns as soon as the
+		// HTTP server stops and races it. The rules outliving the process leave forwarded traffic
+		// redirected into a dead socket — the exact invariant `RunTProxyWithRules` exists to hold,
+		// broken at exit.
+		done := make(chan struct{})
+		tproxyDone = done
+		go func() {
+			defer close(done)
+			gateway.SuperviseTProxy(ctx, addr, dports, mark, table, retry, newServer, log)
+		}()
 		return
 	}
 
@@ -819,6 +838,10 @@ func envPorts(k string, def []int) []int {
 // dnsRedirectDone is closed once the redirect watchdog has removed its rules. Package-level because the
 // installer and the shutdown path are in different functions and the state is genuinely process-wide.
 var dnsRedirectDone <-chan struct{}
+
+// tproxyDone is closed once the TPROXY supervisor has removed its rules. Same reasoning as
+// dnsRedirectDone: host routing state must not outlive the process that installed it.
+var tproxyDone <-chan struct{}
 
 func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	addr := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_SINK_LISTEN"))

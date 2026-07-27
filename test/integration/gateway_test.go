@@ -32,6 +32,26 @@ type upstream struct {
 	body atomic.Value // last body as string
 }
 
+// startUpstreamAt listens on a GIVEN address and returns just its hit counter.
+//
+// The address is explicit for the TPROXY scenario: an origin on loopback can never receive a FORWARDED
+// flow, and TPROXY only diverts in PREROUTING on a non-loopback interface.
+func startUpstreamAt(t *testing.T, addr string) *atomic.Int64 {
+	t.Helper()
+	var hits atomic.Int64
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listening on %s: %v", addr, err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte("origin-ok"))
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return &hits
+}
+
 // startUpstream listens on loopback so the gateway subprocess can reach it.
 func startUpstream(t *testing.T) *upstream {
 	t.Helper()

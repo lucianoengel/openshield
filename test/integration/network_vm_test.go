@@ -269,3 +269,204 @@ func redirectRuleInstalled() bool {
 	}
 	return false
 }
+
+// TestTheTransparentInlinePlaneDropsABlockedFlow covers NIPS-1 (D311).
+//
+// TPROXY is the inline data plane: a redirected TCP flow is decided through the pipeline and either
+// SPLICED to its destination or DROPPED at L4. It is the only path in the product that can stop traffic
+// a client never chose to send through a proxy.
+//
+// IT REQUIRES A GENUINELY FORWARDED FLOW, and that dictates the whole setup. The rule is
+// `mangle PREROUTING ! -i lo`: xt_TPROXY only diverts in the PREROUTING hook, and loopback is excluded
+// deliberately. My first version connected to 127.0.0.1 from the same host and the flow sailed through —
+// which was the TEST being wrong, not the product. So this builds a network namespace with a veth pair,
+// puts the client inside it, and routes its traffic through the host, which is what an inline gateway
+// actually is.
+func TestTheTransparentInlinePlaneDropsABlockedFlow(t *testing.T) {
+	requireNetAdmin(t)
+	for _, bin := range []string{"ip", "python3"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is needed to build the forwarding topology", bin)
+		}
+	}
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+
+	// TWO NAMESPACES, and that is forced by how TPROXY works rather than chosen for realism.
+	//
+	//   client(10.77.0.2) ─veth─ host(10.77.0.1 | 10.77.1.1) ─veth─ origin(10.77.1.2)
+	//
+	// xt_TPROXY diverts in PREROUTING, and only for traffic the host is FORWARDING. My first two
+	// attempts put the origin on the host itself — first on loopback (excluded by the rule's `! -i lo`),
+	// then on the host's own veth address — and in both the packet was destined to a LOCAL address, so
+	// the kernel delivered it straight to the real socket and the flow sailed through. That was the test
+	// pointing at a topology the feature does not apply to, twice, reported as a product failure.
+	const ns1, ns2 = "osint-tp-c", "osint-tp-o"
+	const hostA, client = "10.77.0.1", "10.77.0.2"
+	const hostB, origin = "10.77.1.1", "10.77.1.2"
+	sh := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	quiet := func(args ...string) { _ = exec.Command(args[0], args[1:]...).Run() }
+	// Cleanup removes the HOST-side interfaces too, not just the namespaces. A leftover veth still owns
+	// its address, so the next run's `ip addr add` lands on a conflicting interface and the topology
+	// silently does not route — which cost a full debugging round here, presenting as "the origin is
+	// unreachable" rather than as the address clash it was.
+	cleanup := func() {
+		quiet("ip", "netns", "del", ns1)
+		quiet("ip", "netns", "del", ns2)
+		for _, l := range []string{"tp-hc", "tp-ho"} {
+			quiet("ip", "link", "del", l)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+	sh("ip", "netns", "add", ns1)
+	sh("ip", "netns", "add", ns2)
+	for _, v := range []struct{ host, peer, ns, hostAddr, nsAddr string }{
+		{"tp-hc", "tp-c", ns1, hostA, client},
+		{"tp-ho", "tp-o", ns2, hostB, origin},
+	} {
+		sh("ip", "link", "add", v.host, "type", "veth", "peer", "name", v.peer)
+		sh("ip", "link", "set", v.peer, "netns", v.ns)
+		sh("ip", "addr", "add", v.hostAddr+"/24", "dev", v.host)
+		sh("ip", "link", "set", v.host, "up")
+		sh("ip", "netns", "exec", v.ns, "ip", "addr", "add", v.nsAddr+"/24", "dev", v.peer)
+		sh("ip", "netns", "exec", v.ns, "ip", "link", "set", v.peer, "up")
+		sh("ip", "netns", "exec", v.ns, "ip", "link", "set", "lo", "up")
+		sh("ip", "netns", "exec", v.ns, "ip", "route", "add", "default", "via", v.hostAddr)
+	}
+	quiet("sysctl", "-w", "net.ipv4.ip_forward=1")
+
+	// The origin lives in the far namespace and records each connection to a file the host can read.
+	originPort := freePort(t)
+	hitFile := filepath.Join(work, "hits")
+	originCmd := exec.Command("ip", "netns", "exec", ns2, "python3", "-c", `
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        open(sys.argv[2], "a").write("hit\n")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"origin-ok")
+    def log_message(self, *a): pass
+http.server.HTTPServer(("`+origin+`", int(sys.argv[1])), H).serve_forever()
+`, originPort, hitFile)
+	// Capture the origin's own stderr. Without it a startup failure inside the namespace surfaces only
+	// as "unreachable", which reads as a topology problem and sent me looking in the wrong place.
+	originErr := &syncBuffer{}
+	originCmd.Stderr = originErr
+	originCmd.Stdout = originErr
+	if err := originCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = originCmd.Process.Kill() })
+	hits := func() int {
+		b, err := os.ReadFile(hitFile)
+		if err != nil {
+			return 0
+		}
+		return strings.Count(string(b), "hit")
+	}
+	// The origin must be REACHABLE before the gateway arms, or "the flow was dropped" is
+	// indistinguishable from "there was nothing to reach".
+	Eventually(t, 30*time.Second, "the origin in the far namespace to answer", func() bool {
+		out, _ := exec.Command("ip", "netns", "exec", ns1, "timeout", "3", "bash", "-c",
+			"exec 3<>/dev/tcp/"+origin+"/"+originPort+" && printf 'GET / HTTP/1.0\r\n\r\n' >&3 && cat <&3").CombinedOutput()
+		if strings.Contains(string(out), "origin-ok") {
+			return true
+		}
+		if e := originErr.String(); e != "" {
+			t.Logf("origin stderr: %s", e)
+		}
+		return false
+	})
+	baseline := hits()
+
+	policy := filepath.Join(work, "block.rego")
+	// BLOCKS UNCONDITIONALLY. An earlier version keyed on `input.event.kind == "EVENT_KIND_NETWORK_FLOW"`
+	// and the flow was ALLOWED — the TPROXY rule had matched seven packets, so diversion was working and
+	// the pipeline simply did not agree with the test about the kind. A scenario proving "the inline
+	// plane drops what the policy blocks" must not also be testing which kind label the path uses.
+	if err := os.WriteFile(policy, []byte(`package openshield
+import rego.v1
+decision := {"action":"BLOCK","reason":"inline test"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tproxyPort := freePort(t)
+	gw := Start(t, "openshield-gateway", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_LISTEN=127.0.0.1:" + freePort(t),
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_POLICY_CUSTOM=" + policy,
+		"OPENSHIELD_ENFORCE=1",
+		"OPENSHIELD_TPROXY_LISTEN=0.0.0.0:" + tproxyPort,
+		"OPENSHIELD_TPROXY_INSTALL_RULES=1",
+		"OPENSHIELD_TPROXY_DPORTS=" + originPort,
+	})
+	gw.WaitForOutput("NIPS-1 transparent inline plane ACTIVE", 90*time.Second)
+	Eventually(t, 60*time.Second, "the TPROXY rules to be installed", tproxyRuleInstalled)
+	// AND the listener must be accepting. Waiting only for the rules is waiting on the wrong signal:
+	// they are installed before the transparent listener serves, and a client arriving in between is
+	// redirected at a socket that is not yet accepting.
+	waitTCP(t, "127.0.0.1:"+tproxyPort, 60*time.Second)
+
+	// The client — in its namespace, knowing nothing about any gateway — tries to reach the origin.
+	//
+	// It reads the WHOLE response. Reading the first nine bytes returns "HTTP/1.0 " — the status line,
+	// never the body — so a check for the body string could never match: the reachability probe above
+	// looped until it timed out against a perfectly reachable origin, and THIS assertion could never
+	// fire, which made it vacuous in exactly the direction that hides a broken control.
+	out, _ := exec.Command("ip", "netns", "exec", ns1, "timeout", "5", "bash", "-c",
+		"exec 3<>/dev/tcp/"+origin+"/"+originPort+" && printf 'GET / HTTP/1.0\r\n\r\n' >&3 && cat <&3").CombinedOutput()
+	if strings.Contains(string(out), "origin-ok") {
+		t.Errorf("a BLOCKED flow was SERVED (%q) — the inline plane decides at L4 and must drop, or "+
+			"transparent prevention prevents nothing\n%s", out, gw.Output())
+	}
+	if after := hits(); after != baseline {
+		t.Errorf("the blocked flow REACHED its destination (%d → %d) — a drop that happens after the "+
+			"origin has seen the request is not a drop", baseline, after)
+	}
+
+	// AND THE RULES ARE REMOVED. Same property as the DNS redirect (D310): routing state that outlives
+	// its process silently reroutes traffic into a socket that no longer exists.
+	gw.Stop()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && tproxyRuleInstalled() {
+		time.Sleep(500 * time.Millisecond)
+	}
+	if tproxyRuleInstalled() {
+		t.Errorf("the TPROXY rules SURVIVED the gateway's shutdown — the host still redirects those " +
+			"ports to a listener that no longer exists")
+	}
+}
+
+// tproxyRuleInstalled reports whether the product's TPROXY plumbing is present.
+//
+// It matches the RULES THEMSELVES rather than a chain name, because there is no named chain to look for:
+// xt_TPROXY only diverts in the PREROUTING hook and delivery is unreliable from a user-defined
+// sub-chain, so the target sits directly in `mangle PREROUTING`. The first version of this helper
+// grepped for "OPENSHIELD_TPROXY" and found nothing while the rules were installed and working — a
+// detector looking for a name the product deliberately does not use.
+func tproxyRuleInstalled() bool {
+	if out, err := exec.Command("iptables", "-t", "mangle", "-S", "PREROUTING").CombinedOutput(); err == nil {
+		if strings.Contains(string(out), "-j TPROXY") {
+			return true
+		}
+	}
+	if out, err := exec.Command("nft", "list", "table", "ip", "openshield_tproxy").CombinedOutput(); err == nil {
+		if strings.Contains(string(out), "tproxy") {
+			return true
+		}
+	}
+	// The policy-routing half: a fwmark rule pointing at the product's dedicated table.
+	if out, err := exec.Command("ip", "rule", "list").CombinedOutput(); err == nil {
+		if strings.Contains(string(out), "lookup 100") {
+			return true
+		}
+	}
+	return false
+}
