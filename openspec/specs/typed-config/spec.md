@@ -84,3 +84,31 @@ the current value rather than one captured when it started.
 #### Scenario: A running loop picks up a new value
 - **WHEN** a revision changes a setting a running loop uses
 - **THEN** the loop uses the new value on a subsequent execution, with no restart
+
+### Requirement: A command reads every dynamic setting through the resolver
+
+A command SHALL obtain the value of a dynamic setting from the configuration resolver, and SHALL NOT read
+it from its process environment. The database-authoritative scope is a property of the WIRING, not of the
+resolver alone: a resolver that correctly ignores an environment value is defeated entirely by a `main()`
+that reads the environment directly, and a process that both announces it is ignoring a setting and then
+obeys it misleads the operator reading its log more than silence would.
+
+Scope is per binary. A key MAY be dynamic for a process that has a database and bootstrap for one that
+does not; each command SHALL be evaluated against its own declared field set.
+
+#### Scenario: A setting saved in the console reaches a running process
+- **WHEN** a dynamic setting is saved and a process is started
+- **THEN** the process behaves according to the saved value
+
+#### Scenario: A dynamic setting in the environment does not take effect
+- **WHEN** a dynamic setting is present only in a process's environment
+- **THEN** the process does not act on that value, consistent with the notice it prints
+
+#### Scenario: Configuration is loaded before it is used
+- **WHEN** a process starts
+- **THEN** the stored settings are loaded before the process decides what to start, so a saved setting
+  does not depend on winning a race against a background refresh
+
+#### Scenario: A new command cannot be exempt by omission
+- **WHEN** a command exists that is not classified against a declared field set
+- **THEN** the check fails rather than skipping it

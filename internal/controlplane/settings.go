@@ -218,24 +218,32 @@ func (s *Server) RollbackTo(ctx context.Context, r *config.Resolver, revision in
 	return s.ApplySettings(ctx, r, author, fmt.Sprintf("rollback to revision %d", revision), restore)
 }
 
+// LoadSettings loads the current snapshot ONCE, synchronously.
+//
+// Separate from WatchSettings because a process must read its configuration BEFORE it decides what to
+// start. Loading inside the watcher's goroutine leaves the startup path racing the first load: whether
+// an operator's saved setting takes effect would then depend on which goroutine won, which is the kind of
+// bug that passes every test on an idle machine and misconfigures a busy one.
+func (s *Server) LoadSettings(ctx context.Context, db *config.DBSource) {
+	rev, err := s.CurrentRevision(ctx)
+	if err != nil || rev == db.Revision() {
+		return
+	}
+	snap, err := s.SettingsSnapshot(ctx)
+	if err != nil {
+		return
+	}
+	db.Set(snap)
+}
+
 // WatchSettings keeps a DBSource current: it polls the revision and swaps an immutable snapshot when it
 // changes. THIS IS WHAT MAKES A SAVED SETTING TAKE EFFECT — without it the store is a config file with
 // extra steps.
 //
 // The swap is atomic and the snapshot immutable, so a reader never observes a half-applied revision.
 func (s *Server) WatchSettings(ctx context.Context, db *config.DBSource, interval time.Duration) {
-	apply := func(c context.Context) {
-		rev, err := s.CurrentRevision(c)
-		if err != nil || rev == db.Revision() {
-			return
-		}
-		snap, err := s.SettingsSnapshot(c)
-		if err != nil {
-			return
-		}
-		db.Set(snap)
-	}
-	apply(ctx) // load before the first tick, so a restart is current immediately
+	apply := s.LoadSettings
+	apply(ctx, db) // load before the first tick, so a restart is current immediately
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -243,7 +251,7 @@ func (s *Server) WatchSettings(ctx context.Context, db *config.DBSource, interva
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			apply(ctx)
+			apply(ctx, db)
 		}
 	}
 }

@@ -94,6 +94,9 @@ func main() {
 	settings := config.NewDBSource()
 	cfg := serverConfig()
 	cfg.DB = settings
+	// SYNCHRONOUSLY first: everything below decides what to START from these values, so the first read
+	// must not race the watcher's initial load.
+	srv.LoadSettings(ctx, settings)
 	go srv.WatchSettings(ctx, settings, envDuration("OPENSHIELD_CONFIG_POLL", 15*time.Second))
 	// A dynamic field set in the environment does NOT take effect — and is never silent about it, because
 	// the operator who set one believes it is doing something.
@@ -179,7 +182,7 @@ func main() {
 		// to the process: a playbook naming an unknown step must never partially load (the registry is
 		// closed at load, and a half-accepted playbook would make that meaningless), but orchestration
 		// being misconfigured must not take detection down with it.
-		if path := os.Getenv("OPENSHIELD_PLAYBOOKS"); path != "" {
+		if path := cfg.String("OPENSHIELD_PLAYBOOKS"); path != "" {
 			pbs, err := loadPlaybookFile(path)
 			switch {
 			case err != nil:
@@ -188,7 +191,7 @@ func main() {
 			case len(pbs) == 0:
 				fmt.Fprintf(os.Stderr, "openshield-server: %s defines no playbooks — orchestration is OFF\n", path)
 			default:
-				pi := envDuration("OPENSHIELD_PLAYBOOK_INTERVAL", time.Minute)
+				pi := cfg.Duration("OPENSHIELD_PLAYBOOK_INTERVAL")
 				go srv.RunPlaybookLoop(leaderCtx, pi, pbs, nil)
 				fmt.Fprintf(os.Stderr, "openshield-server: playbook orchestration ACTIVE every %s — "+
 					"%d playbook(s) from %s, Tier-1 only (no actuation) (leader only)\n", pi, len(pbs), path)
@@ -201,9 +204,9 @@ func main() {
 		//
 		// A failure here is LOUD and never fatal: the previously ingested snapshot stays in place, which
 		// is the right degradation — stale threat intel beats none, and beats a control plane that exits.
-		if fp := os.Getenv("OPENSHIELD_TI_FEED"); fp != "" {
-			ti := envDuration("OPENSHIELD_TI_FEED_INTERVAL", time.Hour)
-			feedName := env("OPENSHIELD_TI_FEED_NAME", "operator")
+		if fp := cfg.String("OPENSHIELD_TI_FEED"); fp != "" {
+			ti := cfg.Duration("OPENSHIELD_TI_FEED_INTERVAL")
+			feedName := cfg.String("OPENSHIELD_TI_FEED_NAME")
 			go retain.Loop(leaderCtx, ti, func(ctx context.Context) {
 				pub, err := feedVerificationKey()
 				if err != nil {
@@ -223,7 +226,7 @@ func main() {
 					}
 				}
 				n, err := srv.IngestFeed(ctx, feedName, data, sig, pub,
-					nips.Format(env("OPENSHIELD_TI_FEED_FORMAT", string(nips.FormatNative))))
+					nips.Format(cfg.String("OPENSHIELD_TI_FEED_FORMAT")))
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "openshield-server: TI feed REFUSED (previous snapshot kept): %v\n", err)
 					return
@@ -240,7 +243,7 @@ func main() {
 		// unverifiable intent must never disable an account. The startup notice states plainly that these
 		// actions are NOT undone by intent expiry — every other enactment in this platform is (D253/D254
 		// both prove TTL restoration), so an operator's reasonable generalisation is wrong here.
-		if ep := os.Getenv("OPENSHIELD_IDP_ENDPOINT"); ep != "" {
+		if ep := cfg.String("OPENSHIELD_IDP_ENDPOINT"); ep != "" {
 			key, kerr := intentVerificationKey()
 			switch {
 			case kerr != nil:
@@ -250,7 +253,7 @@ func main() {
 					"is unset, and an unverifiable intent must never disable an account")
 			default:
 				srv.SetIntentResponder(key, &runner.Connector{
-					Name:     env("OPENSHIELD_IDP_NAME", "idp"),
+					Name:     cfg.String("OPENSHIELD_IDP_NAME"),
 					Endpoint: ep,
 					Token:    os.Getenv("OPENSHIELD_IDP_TOKEN"),
 					Actions: map[corev1.IntentVerb][]runner.Action{
@@ -258,7 +261,7 @@ func main() {
 							runner.ActionDisableUser, runner.ActionRevokeSessions,
 						},
 					},
-					Timeout: envDuration("OPENSHIELD_IDP_TIMEOUT", 10*time.Second),
+					Timeout: cfg.Duration("OPENSHIELD_IDP_TIMEOUT"),
 				})
 			}
 		}
@@ -267,17 +270,17 @@ func main() {
 		// tickets in someone else's system. POLLING, not a webhook: a webhook needs an authenticated
 		// inbound route a third-party SaaS can reach, which is a new trust boundary; the cost here is that
 		// sync-back lags by up to one interval.
-		if ep := os.Getenv("OPENSHIELD_ITSM_ENDPOINT"); ep != "" {
-			statuses := strings.Split(env("OPENSHIELD_ITSM_CLOSED_STATUSES", "closed,resolved,done"), ",")
+		if ep := cfg.String("OPENSHIELD_ITSM_ENDPOINT"); ep != "" {
+			statuses := strings.Split(cfg.String("OPENSHIELD_ITSM_CLOSED_STATUSES"), ",")
 			itsm := &runner.ITSMConnector{
-				Name:           env("OPENSHIELD_ITSM_NAME", "tickets"),
+				Name:           cfg.String("OPENSHIELD_ITSM_NAME"),
 				Endpoint:       ep,
 				Token:          os.Getenv("OPENSHIELD_ITSM_TOKEN"),
 				ClosedStatuses: statuses,
-				MinSeverity:    env("OPENSHIELD_ITSM_MIN_SEVERITY", controlplane.SeverityHigh),
-				Timeout:        envDuration("OPENSHIELD_ITSM_TIMEOUT", 10*time.Second),
+				MinSeverity:    cfg.String("OPENSHIELD_ITSM_MIN_SEVERITY"),
+				Timeout:        cfg.Duration("OPENSHIELD_ITSM_TIMEOUT"),
 			}
-			si := envDuration("OPENSHIELD_ITSM_INTERVAL", 5*time.Minute)
+			si := cfg.Duration("OPENSHIELD_ITSM_INTERVAL")
 			go srv.RunITSMLoop(leaderCtx, si, itsm, nil)
 			fmt.Fprintf(os.Stderr, "openshield-server: ITSM sync ACTIVE every %s against %s — a ticket "+
 				"reaching %v closes its incident; any OTHER status is ignored, never assumed closed "+
@@ -288,8 +291,8 @@ func main() {
 		// and derived peer alerts older than the window, on a timer. The aggregate is a
 		// derived view, so this is a hard delete (the evidentiary ledger tombstones
 		// instead). Without it, personal-adjacent telemetry accrues forever (D20).
-		retInterval := envDuration("OPENSHIELD_RETENTION_INTERVAL", 24*time.Hour)
-		fleetRetention := envDuration("OPENSHIELD_FLEET_RETENTION", 90*24*time.Hour)
+		retInterval := cfg.Duration("OPENSHIELD_RETENTION_INTERVAL")
+		fleetRetention := cfg.Duration("OPENSHIELD_FLEET_RETENTION")
 		fleetPolicy := fmt.Sprintf("OPENSHIELD_FLEET_RETENTION=%s", fleetRetention)
 		go retain.Loop(leaderCtx, retInterval, func(ctx context.Context) {
 			fleetCutoff := time.Now().Add(-fleetRetention)
@@ -319,7 +322,7 @@ func main() {
 		// persist each parsed event as a searchable external log — OpenShield ingesting third-party
 		// security logs, not only its own telemetry. Runs on the LEADER only (leaderCtx), so a standby
 		// does not double-store; a listen error is logged, never fatal (an external feed is best-effort).
-		if cefAddr := os.Getenv("OPENSHIELD_CEF_SYSLOG_LISTEN"); cefAddr != "" {
+		if cefAddr := cfg.String("OPENSHIELD_CEF_SYSLOG_LISTEN"); cefAddr != "" {
 			go func() {
 				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 CEF-over-syslog listener on %s\n", cefAddr)
 				if err := srv.RunCEFSyslog(leaderCtx, cefAddr); err != nil && leaderCtx.Err() == nil {
@@ -331,7 +334,7 @@ func main() {
 		// SIEM-4: when OPENSHIELD_CLOUDTRAIL_DIR is set, ingest AWS CloudTrail deliveries dropped into
 		// that directory (the S3-synced pattern) into the external-log store. Leader-only, so failover
 		// does not double-ingest; a scan error is logged, never fatal.
-		if ctDir := os.Getenv("OPENSHIELD_CLOUDTRAIL_DIR"); ctDir != "" {
+		if ctDir := cfg.String("OPENSHIELD_CLOUDTRAIL_DIR"); ctDir != "" {
 			go func() {
 				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 CloudTrail ingest watching %s\n", ctDir)
 				if err := srv.RunCloudTrailIngest(leaderCtx, ctDir); err != nil && leaderCtx.Err() == nil {
@@ -342,7 +345,7 @@ func main() {
 
 		// SIEM-4: when OPENSHIELD_WEF_DIR is set, ingest Windows Event Forwarding XML files (a WEC export)
 		// into the external-log store. Leader-only; a scan error is logged, never fatal.
-		if wefDir := os.Getenv("OPENSHIELD_WEF_DIR"); wefDir != "" {
+		if wefDir := cfg.String("OPENSHIELD_WEF_DIR"); wefDir != "" {
 			go func() {
 				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 WEF ingest watching %s\n", wefDir)
 				if err := srv.RunWEFIngest(leaderCtx, wefDir); err != nil && leaderCtx.Err() == nil {
@@ -355,14 +358,14 @@ func main() {
 		// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
 		// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
 		// deduplicated (once per silence) and run on a timer.
-		if hook := os.Getenv("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
+		if hook := cfg.String("OPENSHIELD_ALERT_WEBHOOK"); hook != "" {
 			// SIEM-8: wrap EACH webhook in bounded retry so a transient blip (a 5xx, a timeout during
 			// a deploy) does not silently drop the page (a 4xx is not retried, see notify.Permanent),
 			// then fan out to all of them via Multi — the retry is INNER so a retry re-attempts only the
 			// failed sink, never re-paging a sink that already succeeded. OPENSHIELD_ALERT_WEBHOOK may be
 			// a comma-separated list; OPENSHIELD_ALERT_WEBHOOK_SECRET (optional) HMAC-signs each body so a
 			// receiver can verify the alert came from this control plane (unset = unsigned, unchanged).
-			attempts := envInt("OPENSHIELD_ALERT_RETRIES", 3)
+			attempts := cfg.Int("OPENSHIELD_ALERT_RETRIES")
 			secret := []byte(os.Getenv("OPENSHIELD_ALERT_WEBHOOK_SECRET"))
 			//
 			// SOAR-9: an entry may be `name=url` so a routing table can select it. A BARE URL still
@@ -394,7 +397,7 @@ func main() {
 			// A table that fails to load leaves the fanout in place rather than taking notification down
 			// — a misconfigured route must not become "nobody is paged".
 			installed := false
-			if rp := os.Getenv("OPENSHIELD_ALERT_ROUTES"); rp != "" {
+			if rp := cfg.String("OPENSHIELD_ALERT_ROUTES"); rp != "" {
 				if routes, err := loadRoutesFile(rp, order); err != nil {
 					fmt.Fprintf(os.Stderr, "openshield-server: alert routes NOT loaded from %s: %v — "+
 						"falling back to fan-out-to-ALL sinks (over-notifying, never silent)\n", rp, err)
@@ -409,8 +412,8 @@ func main() {
 			if !installed {
 				srv.SetNotifier(notify.NewMulti(sinks...))
 			}
-			overdueThreshold := envDuration("OPENSHIELD_OVERDUE_THRESHOLD", 15*time.Minute)
-			overdueInterval := envDuration("OPENSHIELD_OVERDUE_INTERVAL", 5*time.Minute)
+			overdueThreshold := cfg.Duration("OPENSHIELD_OVERDUE_THRESHOLD")
+			overdueInterval := cfg.Duration("OPENSHIELD_OVERDUE_INTERVAL")
 			go retain.Loop(leaderCtx, overdueInterval, func(ctx context.Context) {
 				if n, err := srv.NotifyOverdue(ctx, overdueThreshold); err != nil {
 					fmt.Fprintf(os.Stderr, "openshield-server: overdue check failed: %v\n", err)
@@ -425,17 +428,12 @@ func main() {
 		// it is the operator's D23 consent/DPIA decision, never a default. It observes
 		// the verified fleet stream and records peer alerts; it does not control agents.
 		peerUEBAEnabled := false
-		if v := os.Getenv("OPENSHIELD_PEER_UEBA_THRESHOLD"); v != "" {
+		if v := cfg.String("OPENSHIELD_PEER_UEBA_THRESHOLD"); v != "" {
 			threshold, err := strconv.ParseFloat(v, 64)
 			if err != nil {
 				fatal("OPENSHIELD_PEER_UEBA_THRESHOLD=%q: %v", v, err)
 			}
-			cooldown := 1 * time.Hour
-			if c := os.Getenv("OPENSHIELD_PEER_UEBA_COOLDOWN"); c != "" {
-				if d, err := time.ParseDuration(c); err == nil {
-					cooldown = d
-				}
-			}
+			cooldown := cfg.Duration("OPENSHIELD_PEER_UEBA_COOLDOWN")
 			srv.EnablePeerUEBA(threshold, cooldown)
 			peerUEBAEnabled = true
 			fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA enabled (threshold %.2f, cooldown %s)\n", threshold, cooldown)
@@ -443,7 +441,7 @@ func main() {
 			// SIEM-5: persist the baseline periodically so a restart resumes it (EnablePeerUEBA
 			// reloads it). Best-effort — a failed persist only shortens the next restart's warm
 			// window, never breaks ingest. A final persist on shutdown runs after Run returns.
-			persistInterval := envDuration("OPENSHIELD_UEBA_PERSIST_INTERVAL", 5*time.Minute)
+			persistInterval := cfg.Duration("OPENSHIELD_UEBA_PERSIST_INTERVAL")
 			go retain.Loop(leaderCtx, persistInterval, func(ctx context.Context) {
 				if err := srv.PersistBaselines(ctx); err != nil {
 					fmt.Fprintf(os.Stderr, "openshield-server: peer-UEBA baseline persist failed: %v\n", err)
@@ -707,7 +705,14 @@ func ingestFeed(dsn string, args []string) int {
 	}
 	defer pool.Close()
 	srv := controlplane.New(pool)
-	n, err := srv.IngestFeed(ctx, name, data, sig, pub, nips.Format(env("OPENSHIELD_TI_FEED_FORMAT", string(nips.FormatNative))))
+	// The FORMAT is a dynamic setting, so it comes from the database here too. A subcommand reading it
+	// from its own environment would parse a feed differently from the loop that re-ingests the same file
+	// an hour later — the two paths must agree, and the console is what they agree with.
+	fcfg := serverConfig()
+	fdb := config.NewDBSource()
+	fcfg.DB = fdb
+	srv.LoadSettings(ctx, fdb)
+	n, err := srv.IngestFeed(ctx, name, data, sig, pub, nips.Format(fcfg.String("OPENSHIELD_TI_FEED_FORMAT")))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openshield-server: %v\n", err)
 		return 1
