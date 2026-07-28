@@ -57,15 +57,11 @@ func TestTheEngineBinaryDetectsAndAuditsARealFile(t *testing.T) {
 
 	// And the entry carries NO CONTENT. The classification is type + confidence + count (D10); a ledger
 	// row containing the CPF that triggered it would make the evidence store the leak.
-	var body string
-	if err := pool.QueryRow(Ctx(t),
-		`SELECT coalesce(payload::text,'') FROM audit_entries WHERE action = 2 LIMIT 1`).Scan(&body); err == nil {
-		if contains(body, "111.444.777-35") || contains(body, "11144477735") {
-			t.Errorf("the audit entry CONTAINS the CPF that triggered it — the ledger is the most copied "+
-				"and longest-retained artefact in the system, and putting the sensitive value in it makes "+
-				"the evidence trail the disclosure:\n%s", body)
-		}
-	}
+	// THE SAME DEAD ASSERTION D338 FOUND IN gateway_test.go LIVED HERE TOO: a query naming a `payload`
+	// column that audit_entries does not have, wrapped in `if err == nil`, so it errored on every run and
+	// the check never executed. The ledger is the most copied and longest-retained artefact in the system,
+	// and putting the triggering value in it makes the evidence trail the disclosure (D10/D29).
+	assertLedgerCarriesNone(t, stack, "111.444.777-35", "11144477735")
 }
 
 // TestTheAnchorBinaryMovesCompletenessToAnchored covers D64's operational loop.

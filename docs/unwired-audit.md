@@ -1193,3 +1193,55 @@ limitation is much harder to forget than an assumed one — but it is worth keep
 limit is closed. It is now the *unpinned half* of the pinning test, where it still asserts something
 true and sits next to the pinned half that refuses the same directory. The difference between the two
 runs is one flag and nothing else, which is what makes it about the key rather than about the release.
+
+
+## Round 25 (D340): the backup nobody had restored
+
+`openshieldctl backup dump`, `backup drill` and `restore-verify` had never been invoked by the suite.
+`internal/backup` was written with care — it owns the pg_dump arguments so they are not retyped from a
+wiki, and it owns the ORDER so a restore is not called finished until the ledger re-verifies — and
+until D315 it had no caller at all. Even after it got one, no scenario had ever taken a dump and
+restored it. The ledger is tamper-evident, forward-secure and anchored, and all of that is worth
+nothing against a disk failure if the recovery procedure is a package in a repository.
+
+The drill now runs for real: engine writes entries, the anchor witnesses the head, `backup dump`
+produces a file, `backup drill` restores it into a **separate database** on the same server and runs
+the verification step, which reports the restore confirmed. The separate database matters — a drill
+that restored over its source would destroy the thing it is proving recoverable, and would let a
+restore that did nothing at all pass, because the data was already there.
+
+### Three ways this test tried to lie
+
+**The append-only guard refused the truncation.** Constructing a truncated ledger by `DELETE` fails:
+migration 010's trigger forbids it. That is the product working, so it is now asserted on the way past
+rather than worked around silently — a restore that quietly dropped the guard would be a real defect.
+The truncation is then constructed the way real loss produces it, by disabling the trigger as the
+table owner, which is the credential a recovery operator actually holds and stands in for rows that
+never arrived.
+
+**`contains(out, "consistent")` also matches `consistent=false`.** The premise assertion — that a
+truncated chain still hashes perfectly — passed against a ledger reported as INCONSISTENT. It now
+requires `consistent=true` in full. This is the sixth failure mode with a new face: an assertion that
+is individually reasonable and matches its own negation.
+
+**A surviving mutation was the honest signal.** Removing the completeness requirement from
+`restore-verify` did not fail anything, which read as vacuity. It was not: truncation past an anchor
+is caught TWICE, once by `checkAnchors` setting `Consistent=false` and once by the completeness
+branch. Breaking either leaves the other. Only breaking BOTH makes the DAMAGED assertion fail — which
+is the corollary this audit already knew and had to apply again: with defence in depth, a surviving
+mutation means "try harder", not "the test is fake".
+
+### And the mechanism was described wrongly
+
+The first version claimed only completeness could catch truncation. What actually holds is sharper:
+verification WITHOUT the witness key reports a perfectly consistent chain and `completeness=unverified`;
+the same command WITH the witness key refuses. One extra input inverts the verdict, because the anchor
+was written when the head was further along. The test now asserts both halves, so it is about the
+anchor rather than about `restore-verify` in particular.
+
+### One more instance of D338's dead assertion
+
+`observe_test.go` carried the same `SELECT ... payload::text` query against a column that does not
+exist, wrapped in the same `if err == nil`. It had never executed either. Both are now
+`assertLedgerCarriesNone`. Worth recording that the pattern appeared twice: a query guarded by
+`err == nil` is not a check, and grepping for that shape is cheaper than finding them one at a time.
