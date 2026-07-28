@@ -597,9 +597,27 @@ func main() {
 	// reasonably want exec prevention without file-open prevention, whose availability cost is far
 	// higher.
 	if sock := strings.TrimSpace(os.Getenv("OPENSHIELD_OPEN_IPC_SOCKET")); sock != "" {
+		// THE ACTION→VERDICT MAPPING LIVES HERE, in the process where corev1 already is. Putting it in
+		// the IPC package would drag protobuf into the PRIVILEGED agent, which imports that package for
+		// its client — the D13 boundary the build's agent-dependency check enforces.
+		//
+		// Only an action that MEANS refuse becomes a deny, listed explicitly rather than "anything that
+		// is not ALLOW", so a new action added to the closed set does not silently become a reason to
+		// block an open.
+		od := prefilter.NewDecider(worker, pol, 0, 120*time.Millisecond, log)
 		openSrv := &openipc.Server{
-			Decide: prefilter.NewDecider(worker, pol, 0, 120*time.Millisecond, log),
-			Logger: log,
+			Decide: func(ctx context.Context, path string, prefix []byte) (openipc.Verdict, error) {
+				dec, derr := od.DecideBytes(ctx, path, prefix)
+				if derr != nil {
+					return openipc.VerdictAllow, derr
+				}
+				switch dec.GetAction() {
+				case corev1.Action_ACTION_BLOCK, corev1.Action_ACTION_QUARANTINE_LOCAL:
+					return openipc.VerdictDeny, nil
+				}
+				return openipc.VerdictAllow, nil
+			},
+			Logf: func(format string, a ...any) { log.Warn(fmt.Sprintf(format, a...)) },
 		}
 		wg.Add(1)
 		go func() {

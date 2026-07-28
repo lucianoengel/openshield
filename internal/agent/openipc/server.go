@@ -3,23 +3,25 @@ package openipc
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
-
-	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
-// Decider produces a Decision from a path and a content prefix the caller already holds.
+// Decide produces the verdict for one file-open question.
 //
-// Satisfied by prefilter.Decider.DecideBytes — the same classify-in-the-worker and evaluate-the-policy
-// machinery the async engine runs, on a bounded prefix and without an audit write.
-type Decider interface {
-	DecideBytes(ctx context.Context, path string, prefix []byte) (*corev1.Decision, error)
-}
+// A FUNC RETURNING A VERDICT, not an interface returning a Decision, and the reason is the process
+// boundary rather than taste. This package is imported by the PRIVILEGED agent for its Client, so
+// anything it references is linked into a binary holding CAP_SYS_ADMIN. A `*corev1.Decision` in this
+// signature drags protobuf in with it — a wire-format decoder in the privileged process, which is
+// exactly what splitting the binaries exists to prevent (D13), and what the build's agent-dependency
+// check refuses.
+//
+// The engine supplies a closure that runs the real pipeline and maps its Decision onto a verdict, in
+// the process where corev1 already lives. execipc reached the same shape for the same reason.
+type Decide func(ctx context.Context, path string, prefix []byte) (Verdict, error)
 
 // Server is the UNPRIVILEGED side: it answers file-open questions from the privileged gate.
 //
@@ -27,8 +29,12 @@ type Decider interface {
 // only this server's fixed-width response frame, so a compromised engine cannot hand the agent a
 // length to allocate on (see the package doc).
 type Server struct {
-	Decide  Decider
-	Logger  *slog.Logger
+	Decide Decide
+	// Logf, not a *slog.Logger, and for the same reason Decide is a func returning a Verdict: this
+	// package is imported by the PRIVILEGED agent, and log/slog pulls in encoding/json — a parser in a
+	// process holding CAP_SYS_ADMIN, which the build's agent-dependency check refuses (D13). execipc
+	// reached this shape first; the reason was not obvious until the check said so.
+	Logf    func(format string, a ...any)
 	Timeout time.Duration
 
 	mu sync.Mutex
@@ -83,7 +89,7 @@ func (s *Server) Listen(ctx context.Context, path string) error {
 			}
 			// One failed accept must not stop the gate: the agent would then fail open on every
 			// subsequent event, silently, for the life of the process.
-			s.log().Warn("openipc: accept failed", slog.String("err", aerr.Error()))
+			s.logf("openipc: accept failed: %v", aerr)
 			continue
 		}
 		go s.handle(ctx, conn)
@@ -110,22 +116,14 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		}
 
 		dctx, cancel := context.WithTimeout(ctx, timeout)
-		dec, derr := s.Decide.DecideBytes(dctx, req.Path, req.Prefix)
+		verdict, derr := s.Decide(dctx, req.Path, req.Prefix)
 		cancel()
 
-		verdict := VerdictAllow
-		switch {
-		case derr != nil:
+		if derr != nil {
 			// ALLOW on error, and say so. The client would fail open anyway on a missing answer; an
 			// explicit allow is faster and leaves the reason here, where it can be read.
-			s.log().Warn("openipc: deciding failed — allowing", slog.String("path", req.Path),
-				slog.String("err", derr.Error()))
-		case dec.GetAction() == corev1.Action_ACTION_BLOCK,
-			dec.GetAction() == corev1.Action_ACTION_QUARANTINE_LOCAL:
-			// Only an action that MEANS refuse becomes a deny. The mapping is explicit rather than
-			// "anything that is not ALLOW", so a new action added to the closed set does not silently
-			// become a reason to block an open.
-			verdict = VerdictDeny
+			verdict = VerdictAllow
+			s.logf("openipc: deciding failed for %s — allowing: %v", req.Path, derr)
 		}
 		if werr := WriteResponse(conn, Response{ID: req.ID, Verdict: verdict}); werr != nil {
 			return
@@ -133,9 +131,8 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	}
 }
 
-func (s *Server) log() *slog.Logger {
-	if s.Logger != nil {
-		return s.Logger
+func (s *Server) logf(format string, a ...any) {
+	if s.Logf != nil {
+		s.Logf(format, a...)
 	}
-	return slog.Default()
 }

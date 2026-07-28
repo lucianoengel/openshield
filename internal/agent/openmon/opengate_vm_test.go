@@ -14,7 +14,6 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/openipc"
 	"github.com/lucianoengel/openshield/internal/agent/openmon"
 	"github.com/lucianoengel/openshield/internal/agent/watchdog"
-	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
 // THE B2 FILE-OPEN GATE ON A LIVE KERNEL.
@@ -43,26 +42,26 @@ func requireRootLinux(t *testing.T) {
 
 // stubDecider answers every request the same way, recording the prefix it was given.
 type stubDecider struct {
-	action corev1.Action
-	seen   chan string
+	verdict openipc.Verdict
+	seen    chan string
 }
 
-func (d *stubDecider) DecideBytes(_ context.Context, _ string, prefix []byte) (*corev1.Decision, error) {
+func (d *stubDecider) decide(_ context.Context, _ string, prefix []byte) (openipc.Verdict, error) {
 	select {
 	case d.seen <- string(prefix):
 	default:
 	}
-	return &corev1.Decision{Action: d.action}, nil
+	return d.verdict, nil
 }
 
 // startGate brings up the producer, the verdict server and the watchdog over dir, and returns a cancel.
-func startGate(t *testing.T, dir string, action corev1.Action) (*stubDecider, func()) {
+func startGate(t *testing.T, dir string, verdict openipc.Verdict) (*stubDecider, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sock := socketPath(t, "open.sock")
-	dec := &stubDecider{action: action, seen: make(chan string, 4)}
-	srv := &openipc.Server{Decide: dec, Timeout: 2 * time.Second}
+	dec := &stubDecider{verdict: verdict, seen: make(chan string, 4)}
+	srv := &openipc.Server{Decide: dec.decide, Timeout: 2 * time.Second}
 	go func() { _ = srv.Listen(ctx, sock) }()
 
 	// Wait for the socket, so the first open is not decided by a fail-open that would make an ALLOW
@@ -114,7 +113,7 @@ func TestTheOpenGateAllowsAndSeesTheContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dec, stop := startGate(t, dir, corev1.Action_ACTION_ALLOW)
+	dec, stop := startGate(t, dir, openipc.VerdictAllow)
 	defer stop()
 
 	if err := openFromAnotherProcess(t, path); err != nil {
@@ -146,7 +145,7 @@ func TestTheOpenGateDeniesAndTheOpenerSeesEPERM(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, stop := startGate(t, dir, corev1.Action_ACTION_BLOCK)
+	_, stop := startGate(t, dir, openipc.VerdictDeny)
 	defer stop()
 
 	err := openFromAnotherProcess(t, path)

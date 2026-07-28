@@ -5,34 +5,33 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
 // stubDecider answers with a fixed action or error.
 type stubDecider struct {
-	action corev1.Action
-	err    error
-	seen   chan string
+	verdict Verdict
+	err     error
+	seen    chan string
 }
 
-func (d *stubDecider) DecideBytes(_ context.Context, path string, prefix []byte) (*corev1.Decision, error) {
+// decide returns the stub's answer, recording the prefix it was handed.
+func (d *stubDecider) decide(_ context.Context, _ string, prefix []byte) (Verdict, error) {
 	if d.seen != nil {
 		d.seen <- string(prefix)
 	}
 	if d.err != nil {
-		return nil, d.err
+		return VerdictAllow, d.err
 	}
-	return &corev1.Decision{Action: d.action}, nil
+	return d.verdict, nil
 }
 
 // serve starts a server on a temp socket and returns its path.
-func serve(t *testing.T, d Decider) string {
+func serve(t *testing.T, d *stubDecider) string {
 	t.Helper()
 	sock := socketPath(t, "open.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	srv := &Server{Decide: d, Timeout: time.Second}
+	srv := &Server{Decide: d.decide, Timeout: time.Second}
 	go func() { _ = srv.Listen(ctx, sock) }()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -63,7 +62,7 @@ func TestTheServerRefusesWithoutADecider(t *testing.T) {
 // ignoring content entirely.
 func TestABlockingDecisionBecomesADeny(t *testing.T) {
 	seen := make(chan string, 1)
-	sock := serve(t, &stubDecider{action: corev1.Action_ACTION_BLOCK, seen: seen})
+	sock := serve(t, &stubDecider{verdict: VerdictDeny, seen: seen})
 
 	c := &Client{SocketPath: sock, Timeout: time.Second}
 	defer c.Close()
@@ -87,12 +86,8 @@ func TestABlockingDecisionBecomesADeny(t *testing.T) {
 // TestANonBlockingActionAllows: the mapping is explicit, so a new action added to the closed set does
 // not silently become a reason to refuse an open.
 func TestANonBlockingActionAllows(t *testing.T) {
-	for _, a := range []corev1.Action{
-		corev1.Action_ACTION_ALLOW,
-		corev1.Action_ACTION_ALERT,
-		corev1.Action_ACTION_UNSPECIFIED,
-	} {
-		sock := serve(t, &stubDecider{action: a})
+	for _, a := range []Verdict{VerdictAllow} {
+		sock := serve(t, &stubDecider{verdict: a})
 		c := &Client{SocketPath: sock, Timeout: time.Second}
 		resp, err := c.roundTrip(context.Background(), Request{ID: 1, Path: "/x"})
 		c.Close()
@@ -125,10 +120,10 @@ func TestADecidingErrorAllows(t *testing.T) {
 // and refusing there would leave the gate down after every unclean shutdown — with the agent failing
 // open on every event, which is the state this exists to avoid.
 func TestAStaleSocketIsReplaced(t *testing.T) {
-	sock := serve(t, &stubDecider{action: corev1.Action_ACTION_ALLOW})
+	sock := serve(t, &stubDecider{verdict: VerdictAllow})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv := &Server{Decide: &stubDecider{action: corev1.Action_ACTION_BLOCK}, Timeout: time.Second}
+	srv := &Server{Decide: (&stubDecider{verdict: VerdictDeny}).decide, Timeout: time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Listen(ctx, sock) }()
 	select {

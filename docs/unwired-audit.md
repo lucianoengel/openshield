@@ -1873,3 +1873,57 @@ wherever anyone actually wanted it. Nothing about that was visible from the code
 The measurement is a build gate, like the exec gate's, and for the same reason: an over-budget verdict
 does not make the product slow, it makes the gate stop happening while every log line still reports it
 as active.
+
+
+## Round 38 (D354): two guards refused B2, and the second one was right about something I had reasoned past
+
+CI failed four B2 commits on two separate guards, both written earlier for defects that had already
+happened once.
+
+### The macOS socket-address guard caught its own author
+
+Six unix socket paths in the new tests were built from `t.TempDir()`, which embeds the TEST NAME.
+`sockaddr_un.sun_path` is 104 bytes on macOS and the kernel refuses rather than truncates, reported as
+"bind: invalid argument" — a message naming neither the length nor the cause.
+
+That guard exists because this exact bug cost over a day of red CI: a descriptive test name breaks the
+bind and a short one hides it, so the constraint was enforced only by a platform nobody here develops
+on. It caught the person who wrote it writing the same bug again, which is the best argument for
+writing it.
+
+### The D13 boundary check caught a real design error
+
+`FAIL: the privileged agent depends on parsers it must never hold.`
+
+The `openipc` package is imported by the PRIVILEGED agent for its Client — so everything it references
+is linked into a binary holding CAP_SYS_ADMIN. Its Server used `*corev1.Decision`, dragging protobuf
+in; and once that was removed, `log/slog` dragged in `encoding/json`. A wire-format decoder in the
+privileged process is precisely what splitting the binaries exists to prevent.
+
+**This is worth recording because I had reasoned carefully about D13 and still got it wrong.** The
+design notes argue at length that the agent may HOLD attacker bytes without PARSING them, and that
+argument is correct — reading a bounded prefix into a buffer interprets nothing. But D13's protection
+is not only about what the code does; it is about what is LINKED IN, because a parser in the address
+space is exploitable whether or not this code calls it. The reasoning was sound and aimed at the wrong
+property.
+
+`execipc` had already reached the shapes that avoid this — an `Evaluate func` returning a Verdict
+rather than an interface returning a Decision, and a `Logf func` rather than a `*slog.Logger` — and
+those looked like style choices until the check explained them. They are the boundary, expressed in a
+signature.
+
+So the action→verdict mapping moved to the engine, where corev1 already lives, and the server logs
+through a func. The mapping is still explicit — only BLOCK and QUARANTINE_LOCAL deny, never "anything
+that is not ALLOW" — it just lives in the right process now.
+
+### And it still works
+
+All four VM scenarios re-run and pass on kernel 6.8 after the refactor. A boundary fix that quietly
+broke the thing it was protecting would have been the worse outcome, and the only way to know is to
+run it again on the hardware.
+
+### What this says about the local loop
+
+`make quick` and targeted package tests pass on Linux for all of it. The macOS limit is invisible here
+by construction, and the agent-dependency check is not in the fast loop. CI is the tree-wide check
+precisely because it runs what the local loop cannot.
