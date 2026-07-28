@@ -506,3 +506,55 @@ Ten rounds, and the ways a green test can mean nothing now number six:
 5. the negative was built against an intuition rather than the detector's actual metric;
 6. **the assertions are individually correct and their ORDER makes them vacuous** — the reload case,
    where "still blocked" after a bad edit is also satisfied by an emptied catalog.
+
+
+## Round 11 (D322): the source of truth had lost most of itself
+
+The spec store had lost **170 of the 526 requirements** this project wrote, reviewed and shipped.
+`openspec/specs/control-plane/spec.md` was one requirement long — the body of a single delta — with
+thirty-six other changes' work gone. `audit-ledger` kept 5 of 24, and the missing ones included *"Every
+entry commits to its predecessor"*, which is the ledger's central claim.
+
+**Two failures produced it, and both report success.** One is the archive step's "archive without
+syncing", taken repeatedly. The other is worse: when sync DID run it REPLACED the capability file with
+the delta being merged into it. The surviving requirement in `control-plane` is not even the last delta
+chronologically — it is whichever one was synced last.
+
+### Why nobody noticed: the alarm was broken by the same event
+
+A delta file is a list of `## ADDED Requirements` sections; a capability file is `## Purpose` then
+`## Requirements`. Overwriting the second with the first destroyed the document STRUCTURE too, and
+`openspec validate` had been failing on **37 of 75 capabilities**. A validator that is already red
+reports nothing when it goes redder. This is the general shape worth remembering: *a check that has been
+failing for unrelated reasons is not a check.*
+
+### The harm is not that the specs were wrong
+
+They were INCOMPLETE, and that is worse in one specific way: **an absent requirement is indistinguishable
+from a capability nobody ever asked for.** The next person to open the ledger's spec finds no mention of
+hash chaining and reasonably concludes the design is theirs to make. It also compounds, because every new
+delta is written and validated against whatever the file currently says.
+
+### Restoring unreconciled, and what that surfaced
+
+The replay is ADDITIVE — 28 requirements exist in capability files with no archived source, authored
+directly, and regenerating from the archive would have deleted them. A repair that loses requirements
+while fixing lost requirements is not a repair.
+
+Restoring text without reconciling it to the code immediately surfaced two live contradictions:
+`enforcement` still requires that *"inline blocking within the permission window is not provided"* (HIPS-3
+and NIPS-1 both do it now), and `decision-contract` still requires that the pipeline *"SHALL NOT invoke
+any enforcer"*. Both were invisible while they were missing. That is the argument for restoring them as
+written: a contradiction you can see is a decision waiting to be made, and one you cannot see is a spec
+that quietly means nothing.
+
+### The seventh defect shape
+
+1. A protocol with a server and no client.
+2. A file format with a reader and no writer (×3).
+3. A gated test whose gate is never satisfied (×3).
+4. A procedure with no runner.
+5. A guard with an enforcer and no way to satisfy it.
+6. Correct components that combine into a broken behaviour.
+7. **A source of truth that loses its history through the tool meant to maintain it** — and a validator
+   already failing loudly enough that the loss made no sound.

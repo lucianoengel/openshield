@@ -13,6 +13,7 @@ package doccheck
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -122,4 +123,85 @@ func CheckDecisionRegister(text string) error {
 		return fmt.Errorf("decision register has duplicate D-numbers: %s", strings.Join(dups, ", "))
 	}
 	return nil
+}
+
+// requirementHeading matches a capability requirement heading in a spec or a change delta.
+var requirementHeading = regexp.MustCompile(`(?m)^### Requirement: (.+)$`)
+
+// deltaSection matches a delta's operation heading. Only ADDED and MODIFIED occur in this archive; an
+// unrecognized one is an ERROR rather than a skip, because skipping a section is precisely how the
+// requirements were lost.
+var deltaSection = regexp.MustCompile(`(?m)^## (\w+) Requirements`)
+
+// SpecGap is one requirement an archived change introduced that its capability spec no longer holds.
+type SpecGap struct {
+	Capability  string
+	Requirement string
+	Change      string // the archived change that introduced it
+}
+
+func (g SpecGap) String() string {
+	return fmt.Sprintf("%s: %q — introduced by %s, absent from openspec/specs/%s/spec.md",
+		g.Capability, g.Requirement, g.Change, g.Capability)
+}
+
+// CheckSpecStore reports requirements that an archived change introduced and that its capability spec
+// no longer contains.
+//
+// The spec store lost 170 of 526 requirements before this existed, through two failures that both
+// report success: archiving a change without syncing its delta, and a sync that OVERWROTE the
+// capability file with the delta being merged into it. `openspec/specs/control-plane/spec.md` was
+// reduced to a single requirement — the body of one delta — while thirty-six other changes' work
+// simply vanished. Nobody noticed, because nothing failed.
+//
+// The check is deliberately narrow: it compares HEADINGS only. Comparing bodies would fail on
+// requirements a capability file has legitimately reworded, and a guard that must be suppressed is a
+// guard that gets deleted. It also does not care about requirements a capability holds with no
+// archived source — authoring a requirement directly is allowed.
+//
+// deltas maps an archived change name to that change's delta files, keyed by capability; specs maps a
+// capability to its merged spec text. Reading the tree is the caller's job so this stays testable
+// against fixtures.
+func CheckSpecStore(deltas map[string]map[string]string, specs map[string]string) ([]SpecGap, error) {
+	changes := make([]string, 0, len(deltas))
+	for change := range deltas {
+		changes = append(changes, change)
+	}
+	// Chronological: archive directories are date-prefixed, so lexical order is date order. It matters
+	// only for WHICH change a gap is attributed to — the last one to introduce the requirement.
+	sort.Strings(changes)
+
+	attributed := map[[2]string]string{} // (capability, requirement) -> latest change introducing it
+	order := make([][2]string, 0)
+	for _, change := range changes {
+		for capability, text := range deltas[change] {
+			if m := deltaSection.FindStringSubmatch(text); m != nil {
+				for _, s := range deltaSection.FindAllStringSubmatch(text, -1) {
+					if s[1] != "ADDED" && s[1] != "MODIFIED" {
+						return nil, fmt.Errorf("%s/%s: unrecognized delta section %q — refusing to "+
+							"ignore it, because ignoring a section is how requirements were lost",
+							change, capability, s[1])
+					}
+				}
+			}
+			for _, m := range requirementHeading.FindAllStringSubmatch(text, -1) {
+				key := [2]string{capability, strings.TrimSpace(m[1])}
+				if _, seen := attributed[key]; !seen {
+					order = append(order, key)
+				}
+				attributed[key] = change
+			}
+		}
+	}
+
+	var gaps []SpecGap
+	for _, key := range order {
+		capability, requirement := key[0], key[1]
+		spec, ok := specs[capability]
+		if ok && strings.Contains(spec, "### Requirement: "+requirement) {
+			continue
+		}
+		gaps = append(gaps, SpecGap{Capability: capability, Requirement: requirement, Change: attributed[key]})
+	}
+	return gaps, nil
 }

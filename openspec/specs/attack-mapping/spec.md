@@ -7,6 +7,7 @@ adversary vocabulary. The mapping is centralized (one curated table) and content
 + name, no matched content). SIEM reporting groups by technique and the XDR correlation lane reuses the
 same mapping as its sequence vocabulary. A curated starter set over today's signals — not the full matrix.
 
+## Requirements
 
 ### Requirement: Detection signals map to MITRE ATT&CK techniques
 

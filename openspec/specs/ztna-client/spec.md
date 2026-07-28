@@ -9,6 +9,8 @@ never falls back to an unauthenticated or direct connection when the broker refu
 It brokers access; it does not by itself prevent an application from bypassing it — enforcing the path with
 routing and firewall rules is separate work.
 
+## Requirements
+
 ### Requirement: The endpoint brokers access with the device's own identity
 
 The client SHALL accept application traffic locally and forward it to the access broker over a

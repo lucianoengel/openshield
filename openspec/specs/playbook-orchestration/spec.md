@@ -7,6 +7,7 @@ incident into the first-response sequence an analyst would otherwise repeat by h
 and notifies — it does not actuate, because actuation belongs behind SOAR-7's four-eyes-and-blast-radius
 gating and SOAR-8's per-connector verb sets.
 
+## Requirements
 
 ### Requirement: Declarative playbooks over a closed step registry
 

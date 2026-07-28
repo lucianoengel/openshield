@@ -8,6 +8,7 @@ the untrusted-bytes surface is isolated and tested in Go; a malformed line is re
 record. Decodes faithfully (escaping honored), does not interpret. A live listener + search-path
 persistence, and WEF/cloud-JSON parsers, are follow-ons reusing this pattern.
 
+## Requirements
 
 ### Requirement: CEF message parsing
 

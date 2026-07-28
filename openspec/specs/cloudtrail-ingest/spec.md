@@ -6,6 +6,7 @@ Parsing AWS CloudTrail JSON deliveries and persisting each event as a searchable
 decoder over CloudTrail's fixed schema, reusing the external-log store; cloud events are UNVERIFIED
 third-party records, stored apart from verified agent telemetry.
 
+## Requirements
 
 ### Requirement: CloudTrail delivery parsing
 

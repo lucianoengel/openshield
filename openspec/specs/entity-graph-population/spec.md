@@ -7,6 +7,7 @@ verified telemetry ingest resolve the device entity server-side; the gateway's d
 links device⋈user. Every write is a DERIVED-INDEX side effect (D38): best-effort, counted on failure,
 never blocking or rolling back the primary action (enrollment, ingest, or an auth decision).
 
+## Requirements
 
 ### Requirement: Enrollment populates the device entity
 

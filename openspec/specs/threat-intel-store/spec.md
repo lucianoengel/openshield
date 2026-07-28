@@ -6,12 +6,13 @@ stored with feed provenance under snapshot semantics, and materialized back into
 inline network engine blocks with — so what gets blocked and what gets reported can never drift apart.
 Ingest is an operator-local operation, never a network route.
 
+## Requirements
 
 ### Requirement: A feed's signature is verified before it is parsed
 
-An IOC feed MAY carry a detached ed25519 signature over its exact bytes. When a verification key is
-configured, ingest SHALL verify the signature **before** the feed is parsed, and SHALL refuse the feed
-**as a whole** if verification fails. No indicator from an unverified feed may be stored, and no part of
+When a verification key is configured, ingest SHALL verify a feed's detached ed25519 signature over its
+exact bytes **before** the feed is parsed, and SHALL refuse the feed **as a whole** if verification
+fails. A feed MAY carry no signature, in which case no key is configured for it. No indicator from an unverified feed may be stored, and no part of
 an unverified feed may be applied — a partially applied feed is an attacker's best outcome, because it
 lets them drop the indicators that would catch them and keep the rest.
 

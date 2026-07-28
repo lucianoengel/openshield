@@ -6,6 +6,7 @@ first-match-wins so exclusivity is expressible, and a counted fail-open so a tab
 over-notifies visibly rather than going silent. Routing decides on a closed vocabulary and never on a
 subject.
 
+## Requirements
 
 ### Requirement: Notifications are routed to named sinks by kind and severity
 

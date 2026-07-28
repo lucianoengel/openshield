@@ -7,6 +7,7 @@ foundation the XDR correlation lane sits on. An entity is an abstract asset; ent
 names (a device's canonical pseudonym, a user's identity). Resolution is atomic under concurrency and
 linking a device and a user merges their entities. Postgres is the system of record.
 
+## Requirements
 
 ### Requirement: Alias resolution to a stable entity
 

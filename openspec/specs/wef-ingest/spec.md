@@ -7,6 +7,7 @@ telemetry. A faithful decoder over the fixed Windows Event schema, reusing the e
 the shared directory-ingest helper; Windows events are UNVERIFIED third-party records, stored apart
 from verified agent telemetry.
 
+## Requirements
 
 ### Requirement: Windows Event XML parsing
 

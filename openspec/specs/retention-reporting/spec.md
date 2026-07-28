@@ -6,6 +6,7 @@ compliance evidence for the retention guarantee (D81/D20). Recording is best-eff
 (a purge cannot be un-done); the report shows what was successfully recorded, and a gap is observable
 via a failure counter.
 
+## Requirements
 
 ### Requirement: Retention purges are recorded as compliance events
 

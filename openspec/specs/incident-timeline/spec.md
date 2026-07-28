@@ -10,6 +10,8 @@ fleet aggregate, and a timeline that blurred them would make its strongest-looki
 misleading. Reading a timeline is itself recorded: it hands out evidence references, so it must leave a
 trace.
 
+## Requirements
+
 ### Requirement: An incident's timeline lists its contributing alerts, time-ordered across domains
 
 The system SHALL return, for a cross-domain incident, every alert recorded as contributing to it, ordered

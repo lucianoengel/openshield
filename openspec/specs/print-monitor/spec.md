@@ -7,6 +7,8 @@ driver or injection. The filter parses nothing: the document is classified in th
 event carries metadata only (not even the title, which is often the sensitive fact itself), and an
 unavailable engine prints the job loudly rather than stopping an office from working.
 
+## Requirements
+
 ### Requirement: A print job is intercepted in the spooler chain and decided before it prints
 
 The system SHALL intercept a print job inside the spooler's filter chain, obtain a policy decision for it,

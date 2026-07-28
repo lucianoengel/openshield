@@ -9,6 +9,7 @@ index but cannot FORGE the signature, so it cannot inject or poison the detectio
 matches against (T2/D14). The signature is domain-separated and binds the index KIND, so it can never
 be a valid rules signature or an index of another kind.
 
+## Requirements
 
 ### Requirement: Signed index authoring and verification
 

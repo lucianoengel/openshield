@@ -5,6 +5,7 @@ Incident response-time measurement (SOAR-6), derived from the timestamps SOAR-2'
 was constrained to preserve. Platform lag and analyst time are measured separately, every average is
 reported alongside the population it excludes, and nothing is aggregated per named analyst.
 
+## Requirements
 
 ### Requirement: Platform lag and analyst response are measured separately
 
@@ -25,8 +26,8 @@ correlation interval they did not control.
 
 ### Requirement: The excluded population is reported alongside every average
 
-Time-to-acknowledge is computable only for acknowledged incidents and time-to-resolve only for closed
-ones. Every report SHALL state how many incidents are EXCLUDED from each measurement. An average over a
+Every report SHALL state how many incidents are EXCLUDED from each measurement: time-to-acknowledge is
+computable only for acknowledged incidents and time-to-resolve only for closed ones. An average over a
 small, self-selected subset that is presented without its denominator reads as fleet performance and is
 not.
 

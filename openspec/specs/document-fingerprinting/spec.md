@@ -8,6 +8,7 @@ file is caught. The index stores only shingle hashes (k-anonymized), so it ships
 worker without the document leaving the operator. A match fires on a threshold FRACTION of a document's
 shingles; winnowing (for very large corpora) and OCR are follow-ups.
 
+## Requirements
 
 ### Requirement: Document fingerprint index
 

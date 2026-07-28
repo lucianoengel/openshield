@@ -8,6 +8,7 @@ worker without the sensitive dataset leaving the operator (ADR-9, D10/D11). This
 matches single values with a bounded, measured false-positive rate and skips low-entropy tokens;
 multi-cell record correlation, IDM, OCR, and index signing are follow-ups.
 
+## Requirements
 
 ### Requirement: Exact-data-match index is k-anonymized
 

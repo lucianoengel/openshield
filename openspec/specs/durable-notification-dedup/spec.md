@@ -5,6 +5,7 @@ Persisting delivered notification ids so the SIEM-12 'page exactly once' idempot
 restart/failover, fail-open on a database outage. Distinct from the alert-correlation dedup_key: this
 is a delivery-idempotency ledger keyed by the notification id.
 
+## Requirements
 
 ### Requirement: Notification idempotency survives a restart
 
