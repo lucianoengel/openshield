@@ -389,3 +389,120 @@ func TestAnEDMIndexSignedByTheWrongKeyIsRefused(t *testing.T) {
 		t.Errorf("the refusal does not name the signature check:\n%s", out)
 	}
 }
+
+// TestTheEdmBuilderSkipsLowEntropyValues.
+//
+// The `exact-data-matching` spec requires it — "the builder indexes the distinctive values and skips
+// the low-entropy ones" — and `classify.BuildEDMIndex` implemented it with NO CALLER, while
+// `openshield-dlp-index edm` added every value unfiltered. The requirement was satisfied by a function
+// nobody ran and violated by the tool operators run.
+//
+// IT MATTERS MORE THAN A DETECTION GAP. Indexing a `city` or `status` column does not weaken detection,
+// it MANUFACTURES FALSE POSITIVES: every document containing "active" or "Smith" matches as carrying
+// protected customer data. Observe-only that is noise; with enforcement on it is blocked legitimate
+// traffic from a control behaving exactly as configured — which is how a DLP deployment gets switched
+// off, and a worse outcome than the detection this feature exists to provide.
+func TestTheEdmBuilderSkipsLowEntropyValues(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+	watch := t.TempDir()
+
+	if out, err := runCapture(t, "openshield-dlp-index", nil, "keygen",
+		"--out-key", filepath.Join(work, "op.key"), "--out-pub", filepath.Join(work, "op.pub")); err != nil {
+		t.Fatalf("keygen: %v\n%s", err, out)
+	}
+
+	// A realistic mixed column: one distinctive identifier, and short/common words of the kind a
+	// `city` or `status` column is full of.
+	values := filepath.Join(work, "values.txt")
+	if err := os.WriteFile(values, []byte("ZX-8842-QQ\nactive\nSmith\nlondon\nopen\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(work, "edm.index")
+	out, err := runCapture(t, "openshield-dlp-index", nil, "build",
+		"--type", "edm", "--in", values, "--key", filepath.Join(work, "op.key"), "--out", index)
+	if err != nil {
+		t.Fatalf("building the index: %v\n%s", err, out)
+	}
+	// THE SKIPPED COUNT IS REPORTED. A column where almost nothing is distinctive builds successfully
+	// and protects almost nothing; this count is the only signal an operator gets that it happened.
+	if !contains(out, "skipped") {
+		t.Errorf("the builder did not report how many values it skipped, so an operator cannot tell "+
+			"that most of their column was discarded:\n%s", out)
+	}
+
+	policy := filepath.Join(work, "edm.rego")
+	if err := os.WriteFile(policy, []byte(edmPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eng := Start(t, "openshield-engine", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_WATCH_DIRS=" + watch,
+		"OPENSHIELD_POLICY_CUSTOM=" + policy,
+		"OPENSHIELD_EDM_INDEX=" + index,
+		"OPENSHIELD_DLP_INDEX_PUBKEY=" + filepath.Join(work, "op.pub"),
+	})
+	eng.WaitForOutput("engine observing", 90*time.Second)
+
+	pool := openPool(t, stack.DSN)
+	alerts := func() int {
+		var n int
+		_ = pool.QueryRow(Ctx(t), `SELECT count(*) FROM audit_entries WHERE action = 2`).Scan(&n)
+		return n
+	}
+
+	// 1. THE DISTINCTIVE VALUE STILL MATCHES. Without this half, "the common word did not match" is
+	// satisfied by an index that matches nothing at all — which the filter could easily produce and
+	// which would be a silently disabled detector rather than a fix.
+	if err := os.WriteFile(filepath.Join(watch, "seeded.txt"),
+		[]byte("customer ref ZX-8842-QQ\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	Eventually(t, 90*time.Second, "the distinctive value to be detected", func() bool { return alerts() > 0 })
+	baseline := alerts()
+
+	// 2. AND AN ORDINARY DOCUMENT CONTAINING ONLY COMMON WORDS DOES NOT. This is the false positive the
+	// unfiltered builder would create, in a document no reasonable person would call sensitive.
+	if err := os.WriteFile(filepath.Join(watch, "ordinary.txt"),
+		[]byte("the ticket is active and assigned to Smith in london; status open\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(6 * time.Second)
+	if n := alerts(); n != baseline {
+		t.Errorf("an ordinary sentence containing only COMMON WORDS from the source column alerted "+
+			"(%d -> %d). Those words were indexed as if they were customer identifiers, so every "+
+			"document mentioning them is now 'sensitive' — in an enforcing deployment that blocks "+
+			"legitimate traffic\n%s", baseline, n, eng.Output())
+	}
+}
+
+// TestAnEdmIndexWithNothingDistinctiveIsRefused.
+//
+// An index over zero values MATCHES NOTHING: the worker loads it cleanly, reports the EDM detector as
+// configured, and can never produce a hit. That is the inert-control failure this project keeps
+// finding, and build time — in front of the operator who chose the column — is the one moment it is
+// cheaply detectable.
+func TestAnEdmIndexWithNothingDistinctiveIsRefused(t *testing.T) {
+	work := t.TempDir()
+	if out, err := runCapture(t, "openshield-dlp-index", nil, "keygen",
+		"--out-key", filepath.Join(work, "op.key"), "--out-pub", filepath.Join(work, "op.pub")); err != nil {
+		t.Fatalf("keygen: %v\n%s", err, out)
+	}
+	values := filepath.Join(work, "values.txt")
+	if err := os.WriteFile(values, []byte("open\nnew\nactive\ndone\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCapture(t, "openshield-dlp-index", nil, "build",
+		"--type", "edm", "--in", values, "--key", filepath.Join(work, "op.key"),
+		"--out", filepath.Join(work, "edm.index"))
+	if err == nil {
+		t.Fatalf("an index in which NO value was distinctive was written successfully. It would load "+
+			"cleanly and never match, which reads exactly like a quiet deployment:\n%s", out)
+	}
+	if !contains(out, "distinctive") {
+		t.Errorf("the refusal does not explain that nothing was distinctive enough to index:\n%s", out)
+	}
+}

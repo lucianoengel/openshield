@@ -129,9 +129,29 @@ func buildEDM(path string, targetFP float64) []byte {
 	if len(values) == 0 {
 		fatal("edm: no values in %s", path)
 	}
-	idx := classify.NewEDMIndex(targetFP, len(values))
-	for _, v := range values {
-		idx.Add(v)
+	// BuildEDMIndex, not a loop here. This tool used to add EVERY value, skipping the distinctiveness
+	// filter the exact-data-matching spec requires ("the builder indexes the distinctive values and
+	// skips the low-entropy ones") — so the requirement was satisfied by a library function with no
+	// caller and violated by the tool operators actually run.
+	//
+	// It matters more than a detection gap. Indexing a `city` or `status` column does not weaken
+	// detection, it MANUFACTURES FALSE POSITIVES: every document containing "active" or "Smith" then
+	// matches as carrying protected customer data. Observe-only that is noise; with enforcement on it
+	// is blocked legitimate traffic from a control behaving exactly as configured, which is how a DLP
+	// deployment gets switched off.
+	idx, skipped := classify.BuildEDMIndex(values, targetFP)
+	if skipped == len(values) {
+		// REFUSED, like buildRecord. An index over zero values matches nothing, so the worker would
+		// load it, report the EDM detector as configured, and never be able to produce a hit.
+		fatal("edm: no values were distinctive enough to index (%d skipped of %d) — an index that "+
+			"matches nothing would load cleanly and never fire", skipped, len(values))
+	}
+	if skipped > 0 {
+		// REPORTED even on success: a column where 3 of 5000 values are distinctive builds fine and
+		// protects almost nothing, and this count is the only signal that happened.
+		fmt.Fprintf(os.Stderr, "openshield-dlp-index: indexed %d value(s), skipped %d as not "+
+			"distinctive enough (too short, or a short alphabetic token that reads as a dictionary "+
+			"word)\n", len(values)-skipped, skipped)
 	}
 	return idx.Marshal()
 }

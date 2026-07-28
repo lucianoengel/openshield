@@ -1414,3 +1414,54 @@ vacuous test, and the division is deliberate: the unit tests pin field-level com
 integration scenario pins the end-to-end wiring against a decision the engine really wrote. Recording
 it because a surviving mutation always deserves an explanation, and "it is covered elsewhere" is only
 acceptable when the elsewhere is named.
+
+
+## Round 29 (D345): the dead function was the correct one
+
+The sweep that found the SMTP connector returned a handful of other symbols with no non-test caller,
+and the plan was a cleanup: delete what is superseded, keep what is not. Four of them were what they
+looked like — `core.Replay` (now superseded by `cli.Replay`, which dispatches, compares AND reports),
+`gateway.SignUpdate` (byte-identical to `controlplane.signRiskUpdate`), `classify.NewWithEDM` and
+`NewWithIDM` (convenience constructors for `New()` + `AddEDM()`), and `enforcers/process.DenyEnforcer`
+(a second implementation of `DENY_EXEC`, which `execguard` really enforces at the kernel).
+
+`classify.BuildEDMIndex` was not. **It was the correct implementation, and the live path was the
+broken one.**
+
+### The requirement was satisfied by a function nobody called
+
+`exact-data-matching` requires, in as many words:
+
+> **WHEN** a dataset contains short/common tokens alongside distinctive values
+> **THEN** the builder indexes the distinctive values and skips the low-entropy ones
+
+`BuildEDMIndex` applies `distinctiveEDM`, skips values that are too short or read as dictionary
+words, and returns a skipped count. Unit-tested. No caller.
+
+`openshield-dlp-index edm` — the tool an operator actually runs — built the index itself with
+`NewEDMIndex` and an unfiltered `for … idx.Add(v)`. The `record` builder immediately below it uses
+`BuildRecordIndex` and even fatals when nothing distinctive survives, which is what makes the EDM
+path's omission read as an oversight rather than a decision.
+
+### Why this was worse than a detection gap
+
+Indexing non-distinctive values does not weaken detection — it **manufactures false positives**. A
+`city` column, a `status` column, a column of first names, and every document containing "active" or
+"Smith" matches as carrying protected customer data. Observe-only that is noise; with enforcement on
+it is blocked legitimate traffic from a control behaving exactly as configured. That is how a DLP
+deployment gets switched off, which is a worse outcome than the detection the feature exists to
+provide.
+
+The mutation shows it rather than argues it: restore the unfiltered loop and the sentence *"the
+ticket is active and assigned to Smith in london; status open"* raises a DLP alert.
+
+### The lesson that generalises
+
+A test at the library level can satisfy a requirement while the shipped path violates it. The
+unit test for `BuildEDMIndex` passed on every run, and it was testing a function that no binary
+called. **Coverage of a requirement is not coverage of the path that ships** — which is the eighth
+way a green test can mean nothing, and the first one this audit has found where the correct code
+existed all along.
+
+It also inverts the assumption the sweep started from. "No caller" was being read as "dead, delete
+it". Here it meant "the shipped path is doing something else, find out what".
