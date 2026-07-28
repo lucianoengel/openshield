@@ -3,7 +3,6 @@ package openipc
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -30,7 +29,7 @@ func (d *stubDecider) DecideBytes(_ context.Context, path string, prefix []byte)
 // serve starts a server on a temp socket and returns its path.
 func serve(t *testing.T, d Decider) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "open.sock")
+	sock := socketPath(t, "open.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	srv := &Server{Decide: d, Timeout: time.Second}
@@ -53,7 +52,7 @@ func serve(t *testing.T, d Decider) string {
 // A server that answered without deciding would be a gate reporting itself active while allowing
 // everything — the failure shape this project treats as the most dangerous.
 func TestTheServerRefusesWithoutADecider(t *testing.T) {
-	err := (&Server{}).Listen(context.Background(), filepath.Join(t.TempDir(), "x.sock"))
+	err := (&Server{}).Listen(context.Background(), socketPath(t, "x.sock"))
 	if err == nil {
 		t.Fatal("a server with no decider started")
 	}

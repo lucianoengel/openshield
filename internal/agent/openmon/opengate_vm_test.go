@@ -60,7 +60,7 @@ func startGate(t *testing.T, dir string, action corev1.Action) (*stubDecider, fu
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sock := filepath.Join(t.TempDir(), "open.sock")
+	sock := socketPath(t, "open.sock")
 	dec := &stubDecider{action: action, seen: make(chan string, 4)}
 	srv := &openipc.Server{Decide: dec, Timeout: 2 * time.Second}
 	go func() { _ = srv.Listen(ctx, sock) }()
@@ -176,7 +176,7 @@ func TestAnUnreachableEngineAllowsTheOpen(t *testing.T) {
 
 	// A socket that does not exist: every event fails open.
 	client := &openipc.Client{
-		SocketPath: filepath.Join(t.TempDir(), "absent.sock"),
+		SocketPath: socketPath(t, "absent.sock"),
 		Timeout:    200 * time.Millisecond,
 	}
 	defer client.Close()

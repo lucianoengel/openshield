@@ -35,7 +35,7 @@ func tempFileFD(t *testing.T, body string) int32 {
 
 // TestAnUnreachableEngineAllows.
 func TestAnUnreachableEngineAllows(t *testing.T) {
-	c := &Client{SocketPath: filepath.Join(t.TempDir(), "absent.sock"), Timeout: 50 * time.Millisecond}
+	c := &Client{SocketPath: socketPath(t, "absent.sock"), Timeout: 50 * time.Millisecond}
 	v, err := c.Evaluate(context.Background(), watchdog.PermissionEvent{PID: 1, FD: tempFileFD(t, "data")})
 	if v != watchdog.VerdictAllow {
 		t.Errorf("an unreachable engine produced %v — a file-open gate that fails closed hangs every "+
@@ -49,7 +49,7 @@ func TestAnUnreachableEngineAllows(t *testing.T) {
 // serveOnce answers one request with the given verdict byte, or with raw bytes when supplied.
 func serveOnce(t *testing.T, verdict Verdict, raw []byte) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "gate.sock")
+	sock := socketPath(t, "gate.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
