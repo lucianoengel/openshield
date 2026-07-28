@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"github.com/lucianoengel/openshield/internal/connectors/syslog"
 	"net/http"
 	"time"
 )
@@ -51,7 +52,52 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_runner_refusals_total", "Intents the runner declined (unapproved, expired, undeclared verb, already enacted) — a responder that silently does nothing looks identical to one that works, without this.", s.RunnerRefusals.Load()},
 			{"openshield_notify_unrouted_total", "Notifications that matched NO routing rule and were therefore delivered to every sink (SOAR-9) — a non-zero value means the routing table has a hole.", s.NotifyUnrouted()},
 			{"openshield_unprojected_decisions_total", "Verified alertable decisions not projected into the unified stream — a domain not reaching correlation (XDR-2).", s.UnprojectedDecisions.Load()},
+
+			// EXTERNAL-LOG INGEST (SIEM-4/9). These were incremented from the day they were written and
+			// rendered by nothing — while a comment beside them claimed they were already on /metrics and
+			// that dashboards depended on them. A counter that is not exposed gives the appearance of the
+			// "never silent" property and none of its substance, and the failure is invisible precisely
+			// because the counter looks present in the code.
+			{"openshield_cef_ingested_total", "External syslog logs (CEF or RFC 5424) persisted.", s.CEFIngested.Load()},
+			{"openshield_cef_dropped_total", "External syslog datagrams NEITHER parser accepted, or whose persistence failed — a non-zero value means a log source is sending something this deployment cannot read, and its events are absent from every hunt.", s.CEFDropped.Load()},
+			{"openshield_cloudtrail_ingested_total", "CloudTrail records persisted.", s.CloudTrailIngested.Load()},
+			{"openshield_cloudtrail_dropped_total", "CloudTrail records skipped — a non-zero value means part of the cloud audit trail is not searchable here.", s.CloudTrailDropped.Load()},
+			{"openshield_wef_ingested_total", "Windows Event Forwarding records persisted.", s.WEFIngested.Load()},
+			{"openshield_wef_dropped_total", "Windows Event Forwarding records skipped — a non-zero value means Windows endpoints are reporting events this deployment is discarding.", s.WEFDropped.Load()},
+
+			{"openshield_entity_resolve_failures_total", "Entity-graph writes that failed — a non-zero value means some device or user is NOT in the graph, so cross-domain correlation cannot join on it and an attack spanning that entity surfaces as separate incidents (XDR-1).", s.EntityResolveFailures.Load()},
+			{"openshield_retention_record_failures_total", "Retention/purge outcomes that could not be recorded — the purge may have run, but the compliance evidence that it ran is missing (T-013).", s.RetentionRecordFailures.Load()},
 		}
+		// LISTENER REFUSALS, appended only when a listener is actually running. These count what was
+		// turned away BEFORE it became a countable event, so they cannot be derived from the ingest
+		// counters above: an admission-limited datagram never reaches CEFDropped.
+		if l, ok := s.cefDatagram.Load().(*syslog.Listener); ok && l != nil {
+			metrics = append(metrics,
+				struct {
+					name, help string
+					val        int64
+				}{"openshield_syslog_rate_limited_total", "Syslog datagrams refused by the admission rate limit (NIPS-7) — a non-zero value means a sender is outrunning this listener and its events are NOT in the store.", l.RateLimited()},
+				struct {
+					name, help string
+					val        int64
+				}{"openshield_syslog_unparsed_total", "Syslog datagrams no parser accepted — a device is sending a dialect this deployment cannot read.", l.Dropped()})
+		}
+		if l, ok := s.cefStream.Load().(*syslog.StreamListener); ok && l != nil {
+			metrics = append(metrics,
+				struct {
+					name, help string
+					val        int64
+				}{"openshield_syslog_stream_rate_limited_total", "Stream syslog messages refused by the admission rate limit.", l.RateLimited()},
+				struct {
+					name, help string
+					val        int64
+				}{"openshield_syslog_stream_oversize_total", "Stream syslog messages REFUSED for exceeding the line bound — actionable as 'sender X sent 9KB against an 8KB bound', unlike a parse failure.", l.Oversize()},
+				struct {
+					name, help string
+					val        int64
+				}{"openshield_syslog_stream_unparsed_total", "Stream syslog messages no parser accepted.", l.Dropped()})
+		}
+
 		for _, m := range metrics {
 			fmt.Fprintf(w, "# HELP %s %s\n", m.name, m.help)
 			fmt.Fprintf(w, "# TYPE %s counter\n", m.name)

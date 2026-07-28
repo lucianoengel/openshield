@@ -142,6 +142,11 @@ type Server struct {
 	// kept because they are exposed on /metrics and renaming them would break every dashboard built on
 	// them; the meaning is documented here and in the metric help text instead.
 	//
+	// THAT SENTENCE WAS FALSE WHEN IT WAS WRITTEN (D348): these counters were incremented and rendered
+	// by NOTHING, so no dashboard could have been built on them. It is true now — they are exposed, and
+	// a guard test fails the build if any declared counter stops being. The comment is left standing
+	// rather than rewritten because the reason it gave for keeping the names is still the right reason.
+	//
 	// A pre-existing test caught this widening: its "non-CEF" fixture was a valid RFC 5424 line, so it
 	// became ingested rather than dropped. That was the change working, and the fixture — not the
 	// assertion — was what needed updating.
@@ -151,6 +156,13 @@ type Server struct {
 	CEFIngested   atomic.Int64
 	CEFDropped    atomic.Int64
 	cefListenAddr atomic.Value // string: the bound listener address, once RunCEFSyslog binds
+	// cefDatagram / cefStream hold the running syslog listeners so /metrics can read the counters
+	// they keep for what they REFUSED — rate-limited, over-bound, unparseable. Published atomically
+	// because a metrics scrape can race startup, and absent (not zero) when no listener runs: a
+	// listener that is not configured and one that is refusing nothing are different claims, and a
+	// dashboard cannot tell zero from absent.
+	cefDatagram atomic.Value // *syslog.Listener
+	cefStream   atomic.Value // *syslog.StreamListener
 
 	// CloudTrailIngested / CloudTrailDropped count CloudTrail records persisted vs. skipped (a record
 	// with no event identity, a poison file, or a persist failure) — the drop is counted, never silent.

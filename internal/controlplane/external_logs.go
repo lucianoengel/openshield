@@ -213,6 +213,10 @@ func (s *Server) RunCEFSyslog(ctx context.Context, addr string) error {
 		return err
 	}
 	s.cefListenAddr.Store(l.Addr().String())
+	// PUBLISHED SO ITS DISCARD COUNTERS ARE READABLE. The listener counts what it refused before the
+	// message ever became a countable event — an admission-limited datagram never reaches CEFDropped,
+	// so without this a flood is indistinguishable from silence (D348).
+	s.cefDatagram.Store(l)
 	return l.Serve(ctx)
 }
 
@@ -227,6 +231,7 @@ func (s *Server) RunCEFSyslogStream(ctx context.Context, addr string, tlsConf *t
 	if err != nil {
 		return err
 	}
+	s.cefStream.Store(l)
 	return l.Serve(ctx)
 }
 

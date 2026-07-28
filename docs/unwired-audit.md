@@ -1558,3 +1558,59 @@ The first mutant removed the follower and left its import unused, so the build f
 "failed" for the wrong reason — which is indistinguishable from a successful mutation unless you check
 `go build` first. Same trap as D338, caught the same way. The compiling mutant, which keeps the import
 live and simply does not install the follower, times out waiting for the appended execution.
+
+
+## Round 32 (D348): twenty counters, eight of them unreadable
+
+`internal/connectors/limiter` measured at zero integration coverage. Chasing it found something
+larger than the limiter: **every listener counts what it discarded, and almost nothing reads those
+counters.**
+
+`RateLimited()` — zero non-test readers, across the DNS listener, the syslog datagram listener and the
+syslog stream listener. `Oversize()` — zero. `Refused()` — zero. `Dropped()` — exactly one.
+
+Then the control plane: 20 declared `atomic.Int64` counters, **8 never rendered on `/metrics`** — the
+entire external-log ingest path (CEF, CloudTrail, WEF), entity-graph resolve failures, and retention
+record failures. Every one written with a comment explaining that it exists so a discard is not
+silent. `CEFDropped`'s says the drop is "COUNTED … never silent". `EntityResolveFailures` says a
+non-zero value is "observable rather than silent".
+
+None of them were observable.
+
+### A comment that asserted the opposite of the truth
+
+Beside the CEF counters:
+
+> The names are kept because they are exposed on /metrics and renaming them would break every
+> dashboard built on them
+
+They were not exposed. No dashboard could have been built on them. A maintainer reading that would
+decline a rename to protect users who could not exist. The comment is now corrected in place rather
+than rewritten — the *reason* it gave for keeping the names is still right, and the record of it
+having been false is worth more than a tidy sentence.
+
+### The guard is the fix; the eight are the symptom
+
+They did not go missing at once. They accumulated one at a time, each added by someone who reasonably
+assumed the metrics surface already covered them — and the next one would too. So a test reflects over
+the `Server` struct, finds every exported `atomic.Int64`, and fails the build when one is not rendered.
+
+Reflection rather than a hand-maintained list, deliberately: a list is a second thing to forget, and
+forgetting it looks exactly like the bug being fixed. Mutation-verified by deleting one metric line —
+the guard fails and names `WEFDropped`.
+
+### Absent is not zero
+
+A listener's counters are published only while it runs. Reporting `rate_limited=0` for a listener that
+does not exist is a *different claim* from not running one, and a dashboard alerting on `== 0` cannot
+tell them apart. The integration scenario asserts both directions, because the absence assertion alone
+is satisfied by a counter that is never emitted under any condition.
+
+### The engine reports rather than exposes, and only on movement
+
+The engine has no HTTP surface, and giving it one is a decision about opening a port on every endpoint
+— not a side effect of adding a counter. So it logs, and only when a counter has increased: a
+periodic line that fires unconditionally becomes noise, gets filtered, and turns a signal into a
+silence with extra steps. A healthy listener is silent; one that starts discarding says so every
+interval until it stops. The asymmetry is deliberate — a missed report is an unnoticed visibility gap,
+a repeated one is a duplicated line.

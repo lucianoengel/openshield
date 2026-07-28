@@ -244,6 +244,15 @@ func main() {
 				log.Error("dns serve", slog.String("err", err.Error()))
 			}
 		}()
+		// Its refusals are otherwise invisible: a rate-limited query never becomes an event, so it
+		// cannot be missing from anything an operator would think to look at.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reportDiscards(ctx, log, "dns", time.Minute,
+				discardCounter{"rate_limited", dl.RateLimited},
+				discardCounter{"unparsed", dl.Dropped})
+		}()
 		log.Info("engine: DNS connector ENABLED — live resolution enters the pipeline (NIPS-3)",
 			slog.String("listen", dl.Addr().String()),
 			slog.Float64("tunnel_threshold", dns.TunnelThreshold()))
@@ -281,6 +290,13 @@ func main() {
 		// EVERY LIMIT NAMED AT STARTUP. Each is a way an operator can be wrong about what they just
 		// enabled, and each surfaces late and badly otherwise: undelivered mail if this is mistaken for
 		// an MTA, or a channel that silently inspects nothing if the clients negotiate TLS.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reportDiscards(ctx, log, "smtp", time.Minute,
+				discardCounter{"unparsed_sessions", sl.Dropped},
+				discardCounter{"refused_connections", sl.Refused})
+		}()
 		log.Warn("engine: SMTP capture connector ENABLED — a message body is classified in the sandboxed "+
 			"worker. This is a CAPTURE listener, NOT an MTA: point a journaling/archive flow or a tap at "+
 			"it, never production mail delivery. It does NOT handle STARTTLS or implicit TLS, so a "+
