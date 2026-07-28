@@ -1614,3 +1614,47 @@ periodic line that fires unconditionally becomes noise, gets filtered, and turns
 silence with extra steps. A healthy listener is silent; one that starts discarding says so every
 interval until it stops. The asymmetry is deliberate — a missed report is an unnoticed visibility gap,
 a repeated one is a duplicated line.
+
+
+## Round 33 (D349): the provisioning tool's keys had never been given to a consumer
+
+`openshield-provision risk-keygen` had never been invoked by the suite. Every scenario touching the
+SEC-1 risk path minted its keypair in Go, so the bytes the shipped tool actually writes had never been
+handed to either consumer — the server that signs risk, or the gateway that verifies it.
+
+That is the D339 shape: producer and consumer agree in tests that construct their own material, and
+nobody checks the artefact an operator is told to create. Here the failure would be quiet in the worst
+way: the gateway's degraded mode for absent risk is to apply none, so continuous verification (D89)
+would evaluate every subject as unremarkable, forever, with the access proxy behaving exactly as
+designed.
+
+The scenario provisions with the real tool, points the gateway at `risk-pub`, publishes a signed
+update with `risk-priv`, and asserts on an **access decision**: the same request succeeds, then is
+refused. Nothing about the request changes but the risk the gateway holds.
+
+`posture-keygen` was the other uncovered subcommand and is left alone deliberately — it is the
+superseded shared-key form, kept so existing scripts do not break, and it says so loudly on every run.
+Covering it would be testing a deprecation notice.
+
+### Three wrong turns, each one informative
+
+**The catalog resolves by HOST.** Addressing the proxy directly with the service in the path returns
+404. A client behind DNS names the service and the dial goes to the proxy, and the test has to have
+that shape or it is not exercising the catalog at all.
+
+**Reading the subject from the ledger did not work**, and the reason is worth keeping: access
+decisions were not landing in `audit_entries` with a subject within the window the test waited. Rather
+than widen the wait until it passed — which would have made the test slow and its premise unexamined —
+the subject now comes from `pseudonym.Of`, the same canonicaliser the gateway uses.
+
+**That is using a shared contract, not reimplementing one.** The distinction matters: a test that
+re-derived the mapping would agree with itself whatever the gateway did. Calling the same function
+means this scenario tests the RISK path and explicitly not the identity mapping, which has its own
+tests. Said in the test rather than left for a reader to work out.
+
+### The mutation is the one that matters
+
+Verified risk that is stored and never reaches the policy input: the update is signed correctly,
+accepted, recorded — and the access decision does not change. The request returns 200 and the test
+fails naming the subject. That is precisely the silent degrade this scenario exists to catch, and it
+is indistinguishable from a healthy deployment from every angle except an access decision.
