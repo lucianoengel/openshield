@@ -1013,3 +1013,51 @@ content IS read.
 This is not an unwired feature — every piece works as designed and the design is defensible. It is a
 CLAIM SURFACE that outran the mechanism: a description written for the capability's best case, in a
 product whose default is the worst one. The test that found it is the first that ever ran the feature.
+
+
+## Round 21 (D336): measuring coverage by what runs, not by what is configured
+
+Settings coverage was a PROXY, and proxies drift from the thing they stand for. Two better measurements
+replaced it, and both immediately found what the proxy could not.
+
+### Every test in the suite now provably executes
+
+The full suite, run as root on the VM (which has podman, a real X toolchain and a permission-capable
+kernel): **136 pass, 0 fail, 0 never-run.** The last holdout was the backup/restore drill, skipping
+everywhere for want of `pg_dump`; installing the postgres client on the VM ran it for the first time.
+`TestRealX11ClipboardRoundTrip` likewise ran for the first time since it was written.
+
+That closes the "run the skips" hunt (D316): a test that skips on every machine it can reach is not a
+test, and this suite no longer has one.
+
+### Real coverage of the product, measured
+
+Binaries built with `-cover -coverpkg=./...`, the suite run against them with `GOCOVERDIR` set:
+**77 packages, mean 51.2% of statements**, with **13 packages the suite never reached at all**.
+
+Four of the thirteen are covered only when the suite runs on the VM (`agent/watchdog`, `clipboard/x11`,
+`dnsredirect`, `dnssink`) — which is an argument for running it there routinely, not a gap. The rest were
+genuinely untouched everywhere, and they cluster:
+
+    connectors/syslog, connectors/rfc5424, connectors/cef   the SIEM-4 log-ingest family
+    connectors/dns, connectors/execaudit, connectors/limiter  producers and the rate limiter
+    internal/signature                                       NIPS content signatures
+    internal/release                                         release manifest + verification
+
+### What the proxy could not see
+
+Nine subcommands are never invoked by the suite, including `openshieldctl timeline` — which is T-010's
+entire deliverable. Phase 1 CUT the React investigation UI and put the timeline in its place, making it
+the only way an operator reconstructs an incident. A settings audit cannot see it, because subcommands
+take FLAGS: a binary's executable paths are not enumerable from its configuration.
+
+Also invisible: `openshield-server restore`, `openshieldctl verify-release`/`release-manifest`/`anchor`,
+`openshield-provision attest-capture`/`risk-keygen`.
+
+### And the first test of a listener found its protocol
+
+The CEF-over-syslog listener binds **UDP**, not TCP — the first scenario dialled TCP and waited a minute
+for a port that was never going to open. Worth recording beyond the fix: syslog over UDP has no delivery
+guarantee and no backpressure, so a burst that outpaces the reader is dropped by the kernel with no error
+at either end. The tests resend while waiting and assert on the STORE rather than the send, for the same
+reason a real estate loses events.
