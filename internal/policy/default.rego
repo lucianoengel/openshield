@@ -31,6 +31,25 @@ behavioral_alert if {
 	input.event.behavioral.score >= 0.5
 }
 
+# NIPS-3: a DNS query whose name looks like a covert channel — long, high-entropy subdomain labels
+# carrying encoded data rather than a name anyone typed.
+#
+# THE DETECTOR EXISTED AND HAD NEVER RUN. dns.TunnelScore was written, documented and unit-tested with no
+# caller: the connector minted DNS events and nothing scored the name, while the engine's DNS source said
+# in its own comment that tunnelling detection was live. This rule is the point where the signal becomes a
+# decision, which is the part that was missing — the same gap D300 found for input.threat.
+#
+# It ALERTS, never blocks, and here the reason is sharper than elsewhere: this is a heuristic over a
+# SINGLE query with no session context, and a rule that denied would deny NAME RESOLUTION. That presents
+# to a user as "the internet is down" and to an operator as nothing in particular. An operator raises it
+# to BLOCK deliberately (T1, the closed action set).
+#
+# The threshold arrives in the input rather than being written here, so an operator can change it without
+# editing a policy — and can still see, in this rule, exactly what it is compared against.
+dns_tunnel_alert if {
+	input.event.dns.tunnel_score >= input.event.dns.tunnel_threshold
+}
+
 # NIPS-2 (D300): a threat-intel match on the flow's destination. The engine matched an operator-supplied
 # indicator — a domain, an IP, a CIDR or a URI substring — against this flow.
 #
@@ -71,6 +90,8 @@ ransomware_suspected if {
 
 alert if { ransomware_suspected }
 
+alert if { dns_tunnel_alert }
+
 reason := "checksum-backed PII detected above the alert threshold" if { alerting_hit }
 
 reason := "suspicious process behavior" if {
@@ -87,6 +108,16 @@ reason := "destination matched an operator threat-intel indicator" if {
 
 reason := "ransomware canaries changed en masse (HIPS-4)" if {
 	ransomware_suspected
+}
+
+# The reason names the SIGNAL, not the name — a reason string carrying the queried name would put the
+# tunnelled payload into the ledger, which is the disclosure this rule exists to detect (D10/D29).
+reason := "DNS query name scores as a covert channel (NIPS-3)" if {
+	dns_tunnel_alert
+	not alerting_hit
+	not behavioral_alert
+	not threat_match
+	not ransomware_suspected
 }
 
 decision := d if {

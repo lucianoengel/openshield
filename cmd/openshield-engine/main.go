@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/lucianoengel/openshield/internal/config"
+	"github.com/lucianoengel/openshield/internal/connectors/dns"
 	"log/slog"
 	"net/http"
 	"os"
@@ -218,6 +219,18 @@ func main() {
 	// DEPLOY: this listener NEVER answers a query — feed it a MIRROR/TAP of DNS traffic (SPAN/eBPF),
 	// never an inline :53 redirect, which would blackhole the fleet's DNS (see deploy/README.md).
 	if dnsAddr := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_LISTEN")); dnsAddr != "" {
+		// The tunnelling threshold, REPORTED on the startup line below rather than only stored. A
+		// threshold is the kind of setting whose typo disables a detector silently, so an operator has
+		// to be able to read back the number the process is actually using.
+		if v := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_TUNNEL_THRESHOLD")); v != "" {
+			f, perr := strconv.ParseFloat(v, 64)
+			if perr != nil || f < 0 || f >= 1 {
+				fatal(log, "OPENSHIELD_DNS_TUNNEL_THRESHOLD", fmt.Errorf(
+					"%q is not a value in [0,1) — a threshold the score cannot reach runs the detector "+
+						"on every query and never alerts, while this line says it is enabled", v))
+			}
+			dns.SetTunnelThreshold(f)
+		}
 		dl, err := dnsListener(ctx, dnsAddr, events, log)
 		if err != nil {
 			fatal(log, "dns listen", err)
@@ -230,7 +243,8 @@ func main() {
 			}
 		}()
 		log.Info("engine: DNS connector ENABLED — live resolution enters the pipeline (NIPS-3)",
-			slog.String("listen", dl.Addr().String()))
+			slog.String("listen", dl.Addr().String()),
+			slog.Float64("tunnel_threshold", dns.TunnelThreshold()))
 	}
 
 	// Optional exec-event source: the auditd exec connector (HIPS-5c). When OPENSHIELD_EXEC_AUDIT_LOG

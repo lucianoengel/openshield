@@ -21,6 +21,13 @@ import (
 // gateway does per request), and the datagram's source IP is carried into the Event — a
 // network decision that could not say who asked is not actionable. A send races the context:
 // on shutdown the send is abandoned rather than blocking the receive loop.
+//
+// THE TUNNELLING SCORE IS NOT COMPUTED HERE, and this comment used to claim otherwise — it said
+// dns.TunnelScore "become[s] live rather than parser-only" while the function had no caller at all, so a
+// covert-channel detector had never scored a query. The score is derived in the policy input mapping
+// (internal/policy/mapping.go) alongside the CASB and behavioral derivations, because that is where typed
+// policy inputs are built; computing it here would put it on the wire and let the connector decide how
+// suspicious something is. What THIS file makes live is the event.
 func dnsListener(ctx context.Context, addr string, events chan<- *corev1.Event, log *slog.Logger) (*dns.Listener, error) {
 	var flowSeq atomic.Uint64
 	return dns.Listen(addr, func(srcIP string, q dns.Query) {

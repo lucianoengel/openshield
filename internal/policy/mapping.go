@@ -11,6 +11,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/attack"
 	"github.com/lucianoengel/openshield/internal/behavioral"
 	"github.com/lucianoengel/openshield/internal/casb"
+	"github.com/lucianoengel/openshield/internal/connectors/dns"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/exfil"
@@ -116,6 +117,33 @@ func buildInput(st *core.State) map[string]interface{} {
 				"category":   m.Category,
 				"sanctioned": m.Sanctioned,
 				"upload":     m.Upload,
+			}
+		}
+		// DNS TUNNELLING (NIPS-3). `dns.TunnelScore` was written, unit-tested and had NO CALLER: the
+		// connector minted a DNS event and nothing ever scored the name, so a covert-channel detector
+		// had never run on a live query while the engine's DNS source claimed in its own doc comment
+		// that it was live. Third instance of the shape D300 and D301 found — a signal that never
+		// becomes a decision.
+		//
+		// COMPUTED HERE, not in the connector. This is the layer whose job is deriving typed policy
+		// inputs (casb.Classify above, behavioral.Analyze below); scoring in ToEvent would put the
+		// number on the wire (a proto change) and would let the CONNECTOR decide how suspicious
+		// something is. The name is metadata the parser already produced, so scoring its length and
+		// entropy is arithmetic and needs no sandboxed worker (D29 is about parsing attacker bytes).
+		//
+		// UNDER ITS OWN KEY, not `behavioral`. That one is a PROCESS verdict whose siblings — lolbin,
+		// lineage, encoded command — do not apply to a query, so reusing it would emit `lolbin: false`:
+		// false rather than absent, which reads as "checked and clean". It would also start firing every
+		// operator policy written against behavioral.score on DNS traffic without anyone editing a
+		// policy. Absent for every event that is not a DNS query, exactly as `cloud` is.
+		if st.Event.GetKind() == corev1.EventKind_EVENT_KIND_DNS_QUERY {
+			// THE THRESHOLD TRAVELS WITH THE SCORE so the comparison lives in the POLICY, where an
+			// operator reading default.rego can see it, rather than buried in Go where they cannot.
+			// The detector's job is to produce a number; deciding what counts as suspicious enough to
+			// act on is the policy's.
+			event["dns"] = map[string]interface{}{
+				"tunnel_score":     dns.TunnelScore(ns.GetSniHost()),
+				"tunnel_threshold": dns.TunnelThreshold(),
 			}
 		}
 	}

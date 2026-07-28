@@ -2,7 +2,8 @@
 // query off the wire into a NetworkSubject Event so DNS resolution enters the SAME
 // pipeline as file and HTTP events — enabling egress policy on resolved names and
 // detection of DNS tunneling / exfiltration (a long, high-entropy query name is the
-// classic covert channel).
+// classic covert channel). TunnelScore below produces the signal; the POLICY decides on it,
+// and the score is derived in internal/policy/mapping.go rather than here — see ToEvent.
 //
 // It is a pure parser + Event producer: no sockets here, so the wire-format handling
 // (the untrusted-bytes surface) is tested in ordinary Go, exactly as the fanotify and
@@ -15,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
@@ -153,4 +155,30 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// THE ALERTING THRESHOLD (NIPS-3).
+//
+// A process-wide knob set at startup, the same shape as casb.SetCatalog: the policy input layer needs a
+// number and has no configuration of its own, and threading one through every call site would put a
+// detector parameter into the signature of everything that maps an event.
+//
+// It is exposed to the POLICY rather than applied here. The detector's job is to produce a score; what
+// counts as suspicious enough to act on is a policy decision, and burying the comparison in Go would put
+// it where no operator reading default.rego could see it.
+var tunnelThreshold atomic.Value // float64
+
+// DefaultTunnelThreshold matches the behavioral rule's, so the two suspicion signals in the shipped
+// policy agree on what "suspicious enough to alert" means.
+const DefaultTunnelThreshold = 0.5
+
+// SetTunnelThreshold installs the alerting threshold.
+func SetTunnelThreshold(f float64) { tunnelThreshold.Store(f) }
+
+// TunnelThreshold reports the configured threshold, or the default when startup never set one.
+func TunnelThreshold() float64 {
+	if v, ok := tunnelThreshold.Load().(float64); ok {
+		return v
+	}
+	return DefaultTunnelThreshold
 }

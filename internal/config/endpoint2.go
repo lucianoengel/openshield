@@ -56,6 +56,13 @@ var EngineFields = []Field{
 		Description: "Public key for local encryption enforcement."},
 	{Key: "OPENSHIELD_DNS_LISTEN", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Address for the DNS query connector (NIPS-3). Empty disables it."},
+	// A UNIT INTERVAL rather than a float, for the reason KindUnitInterval exists: a threshold a score
+	// cannot reach runs the detector, scores every query and never alerts, while the startup line says
+	// the detector is on. Note that the score is the PRODUCT of two clamped signals, so values near the
+	// top of the range are reachable only by a maximum-length label at maximum entropy — validation can
+	// refuse an out-of-range threshold, it cannot refuse an unwise one.
+	{Key: "OPENSHIELD_DNS_TUNNEL_THRESHOLD", Scope: ScopeBootstrap, Kind: KindUnitInterval, Default: "0.5",
+		Description: "Tunnelling score at which a DNS query ALERTS (NIPS-3). The score combines label length and entropy; it never blocks by default."},
 	{Key: "OPENSHIELD_EXEC_AUDIT_LOG", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "auditd log the exec connector reads (HIPS-5c). Additive and observe-only unless a KILL policy and OPENSHIELD_ENFORCE are both set."},
 	{Key: "OPENSHIELD_EXEC_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",

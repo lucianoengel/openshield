@@ -242,3 +242,40 @@ func TestASocketPathIsNeverRequiredToExist(t *testing.T) {
 		}
 	}
 }
+
+// TestTheDnsTunnelThresholdIsRangeChecked is the same D303 trap on the NIPS-3 detector, and it is more
+// exposed to it than peer-UEBA is.
+//
+// dns.TunnelScore is the PRODUCT of two clamped signals — longest-label length and its entropy — so the
+// top of the range needs a 63-character label at maximum entropy. Values close to 1 are in range and
+// unreachable in practice. Validation can refuse an out-of-range threshold; it cannot refuse an unwise
+// one, which is why the engine reports the threshold it is running with on its startup line.
+func TestTheDnsTunnelThresholdIsRangeChecked(t *testing.T) {
+	var f Field
+	for _, c := range EngineFields {
+		if c.Key == "OPENSHIELD_DNS_TUNNEL_THRESHOLD" {
+			f = c
+		}
+	}
+	if f.Key == "" {
+		t.Fatal("OPENSHIELD_DNS_TUNNEL_THRESHOLD is not declared")
+	}
+	if f.Default == "" {
+		t.Error("the tunnelling threshold has no default, so an operator who never sets it gets " +
+			"whatever the code happens to use rather than a value they can read back")
+	}
+	if err := f.Check(f.Default); err != nil {
+		t.Errorf("the declared default %q does not satisfy its own kind: %v", f.Default, err)
+	}
+	for _, ok := range []string{"0", "0.3", "0.5", "0.999"} {
+		if err := f.Check(ok); err != nil {
+			t.Errorf("a reachable threshold %q was refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"1", "1.5", "-0.2", "aggressive"} {
+		if err := f.Check(bad); err == nil {
+			t.Errorf("%q was accepted — a threshold the score cannot reach runs the detector on every "+
+				"query and never alerts, while the startup line says it is enabled", bad)
+		}
+	}
+}

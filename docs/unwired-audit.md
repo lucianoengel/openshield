@@ -1245,3 +1245,57 @@ anchor rather than about `restore-verify` in particular.
 exist, wrapped in the same `if err == nil`. It had never executed either. Both are now
 `assertLedgerCarriesNone`. Worth recording that the pattern appeared twice: a query guarded by
 `err == nil` is not a check, and grepping for that shape is cheaper than finding them one at a time.
+
+
+## Round 26 (D341): the third detector that never became a decision
+
+`internal/connectors/dns` measured at zero integration coverage. Driving it found that
+`dns.TunnelScore` — the covert-channel heuristic, written, documented and unit-tested — had **no
+caller outside its own package**. `ToEvent` never computed it, no policy read it, nothing downstream
+saw it. Meanwhile `cmd/openshield-engine/dnssource.go` stated in its own doc comment that
+"DNS-tunnelling detection (dns.TunnelScore) become live rather than parser-only".
+
+That is the third instance of one shape:
+
+- **D300** — no shipped policy read `input.threat`. NIPS-2 matched operator indicators, logged that
+  it was active, and handed the match to a decision layer that ignored it.
+- **D301** — the exec producer omitted a provenance field, so every engine-backed exec decision
+  errored and the watchdog fail-opened, while every log line said inline prevention was active.
+- **This** — the signal was computed nowhere, and the comment said it was live.
+
+Three is enough to name it: **the feature exists everywhere except at the point where a signal
+becomes a decision, and the logs report it working.** Detector, wiring, config and docs can all be
+present and correct, and the one missing line is the comparison that turns a number into an action.
+It survives review because every individual piece is right, and it survives testing because unit
+tests cover the detector and integration tests cover the connector, and neither covers the seam.
+
+The cheap check is a grep: an exported detector function with no non-test caller.
+
+### The design call worth recording
+
+The obvious wiring was to reuse `input.event.behavioral.score`, which the default policy already
+alerts on at 0.5. That was rejected for two reasons about meaning.
+
+`behavioral` is `{score, lolbin, suspicious_lineage, encoded_command}` — a PROCESS verdict. A DNS
+query has no LOLBin, so reusing the key emits `lolbin: false`: false rather than absent, which a
+policy author reads as "checked and clean". **Absence is information; a fabricated `false` destroys
+it.** And `default.rego` documents that network events have no `behavioral`, so populating it would
+start firing every existing operator policy on DNS traffic without anyone editing a policy — a
+behaviour change delivered through a vocabulary change, which is the hardest kind to notice.
+
+So DNS got its own key, following the CASB `cloud` precedent already in the mapping layer. The
+threshold travels in the input beside the score, so the comparison is visible in `default.rego`
+rather than buried in Go where no operator reading the policy could see it.
+
+### Alert, never block — sharper here than elsewhere
+
+A rule that blocked would deny NAME RESOLUTION on a heuristic over a single query with no session
+context. That presents to a user as "the internet is down" and to an operator as nothing in
+particular.
+
+### And the ledger assertion matters more here than anywhere
+
+In a DNS tunnel the exfiltrated data IS the query name. An audit trail that recorded it would
+republish the exfiltration it exists to detect, into the most copied and longest-retained store in
+the system. A detector whose evidence is the disclosure is worse than no detector, because it also
+creates the record. The decision reason names the signal and never the name.
