@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // THE FEED FORMAT IS NAMED, NEVER SNIFFED (SOAR-5, OPENSHIELD_TI_FEED_FORMAT).
@@ -139,5 +140,63 @@ func TestReIngestingAFeedReplacesItsIndicators(t *testing.T) {
 	}
 	if stale != 0 {
 		t.Errorf("the withdrawn indicator is still stored (%d rows)", stale)
+	}
+}
+
+// THE DEDUPE LEDGER IS PRUNED TO THE OPERATOR'S RETENTION (SIEM-12, D333).
+//
+// The prune always ran, on a cutoff hardcoded to 24 hours — and then recorded a compliance event whose
+// policy string was the literal `OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h`. So an operator who set that
+// variable got their value ignored AND a retention record naming their setting while asserting a value
+// they did not choose. A compliance record citing a knob nobody read is worse than one that omits it:
+// it is evidence of a policy that was never applied.
+func TestTheDedupeLedgerIsPrunedToTheConfiguredRetention(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	pool := openPool(t, stack.DSN)
+
+	// Two ids: one old enough to fall outside a short retention, one fresh.
+	if _, err := pool.Exec(Ctx(t),
+		`INSERT INTO notify_dedupe (id, emitted_at) VALUES ('stale-id', now() - interval '10 minutes'),
+		                                                  ('fresh-id', now())`); err != nil {
+		t.Fatal(err)
+	}
+
+	setDynamic(t, stack, "OPENSHIELD_NOTIFY_DEDUPE_RETENTION", "1m")
+	setDynamic(t, stack, "OPENSHIELD_RETENTION_INTERVAL", "1s")
+	srv := Start(t, "openshield-server", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_NATS_URL=" + stack.NATSURL,
+	})
+	srv.WaitForOutput("openshield-server", 90*time.Second)
+
+	remaining := func(id string) int {
+		var n int
+		if err := pool.QueryRow(Ctx(t), `SELECT count(*) FROM notify_dedupe WHERE id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	Eventually(t, 90*time.Second, "the stale dedupe id to be pruned at the CONFIGURED retention", func() bool {
+		return remaining("stale-id") == 0
+	})
+	// A 10-minute-old id survives a 24h cutoff and not a 1m one, so its removal is what proves the
+	// operator's value was used rather than the constant that used to be hardcoded here.
+	if n := remaining("fresh-id"); n != 1 {
+		t.Errorf("a dedupe id emitted just now was pruned under a 1m retention (%d rows) — pruning inside "+
+			"the dedupe window lets a duplicate page", n)
+	}
+
+	// AND THE COMPLIANCE RECORD SAYS WHAT ACTUALLY HAPPENED.
+	var policy string
+	if err := pool.QueryRow(Ctx(t),
+		`SELECT policy FROM retention_events WHERE target='notify_dedupe' ORDER BY id DESC LIMIT 1`).
+		Scan(&policy); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(policy, "1m") {
+		t.Errorf("the retention event records policy %q while the operator configured 1m. A compliance "+
+			"record that names a setting and asserts a value nobody applied is evidence of a policy that "+
+			"never ran", policy)
 	}
 }

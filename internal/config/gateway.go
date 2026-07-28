@@ -63,8 +63,6 @@ var GatewayFields = []Field{
 		Description: "Comma-separated hosts to tunnel WITHOUT interception - pinned or sensitive destinations."},
 	{Key: "OPENSHIELD_RISK_PUBKEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Control-plane public key risk updates are verified against (SEC-1). Unset leaves risk continuous-verification INERT; unsigned risk is never applied."},
-	{Key: "OPENSHIELD_POSTURE_PUBKEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
-		Description: "Posture-publisher public key (SEC-12)."},
 	{Key: "OPENSHIELD_POSTURE_ROSTER", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Enrolled posture publishers, one '<identity> <base64-pubkey>' per line. Unset leaves the posture channel inert."},
 	{Key: "OPENSHIELD_ATTEST", Scope: ScopeBootstrap, Kind: KindString, Default: "",

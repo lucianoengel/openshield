@@ -928,3 +928,49 @@ separates an optimisation from a bypass.
 **The residual race is stated, not hidden:** a binary created and executed before the watcher's mark
 lands escapes. The window is bounded by scheduler latency rather than by an operator noticing, which is
 the improvement — but it is not zero.
+
+
+## Round 19 (D333): two settings nothing read, and a correction
+
+The `config` package's doc says a DERIVED schema makes it "structurally impossible" for a surface to
+offer a field the binary never reads. Derivation delivers that for a field the code never had. It does
+not cover **a field whose reader was later deleted** — and that had happened twice, undetected, in 170
+declarations.
+
+### The existing guard declines this question, for a good reason
+
+`TestEveryEnvReadIsDeclared` checks that a read in a command's own code is declared, and says explicitly
+why it does not check the reverse: a binary's configuration surface includes what its LIBRARIES read
+(`OPENSHIELD_POLICY_PACK` in `internal/policy`, `OPENSHIELD_JETSTREAM` in `internal/transport/nats`), so
+a command-scoped reverse check would flag both as dead, and a module-scoped one "would mark every
+variable as read by every binary, which proves nothing".
+
+Right about the per-binary question, and it leaves a different one open: **is this key read AT ALL,
+anywhere?** Module-scoped, that has a definite answer, and it is exactly the dead-setting question.
+
+### The comment is the symptom, not an excuse
+
+`OPENSHIELD_POSTURE_PUBKEY` appears in the gateway's source — inside a comment explaining that the
+gateway no longer reads it. A naive text search therefore finds it and concludes it is alive. Prose
+documenting a retirement is the strongest available evidence a setting is dead, so the check strips
+comments; without that it passes on precisely the shape both findings had.
+
+### Two dead settings, two opposite fixes
+
+`OPENSHIELD_POSTURE_PUBKEY` names a mechanism SEC-12 deliberately replaced — one fleet-wide key any agent
+could use to forge another's posture — so the setting is wrong and removal is the fix. Wiring it would
+resurrect the vulnerability that motivated the replacement.
+
+`OPENSHIELD_NOTIFY_DEDUPE_RETENTION` names behaviour that is wanted and already implemented, so the
+setting is right and the READ was missing. **A correction belongs here: my first reading of this said the
+prune had no caller at all and the table grew forever. It does have a caller — a broken shell
+substitution found nothing and I believed it.** What is actually wrong is narrower and nastier: the loop
+pruned on a cutoff hardcoded to 24 hours, and then recorded a compliance event whose policy string was
+the literal `OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h`. An operator who set 7d had their value ignored AND
+got a retention record naming their knob while asserting a value they never chose.
+
+**A compliance record that cites a setting nobody read is worse than one that omits it — it is evidence
+of a policy that was never applied.**
+
+The check reports that a setting has no reader. It cannot tell you whether to add one or remove the
+setting; treating it as if it could would have produced exactly the wrong change in one of these two.

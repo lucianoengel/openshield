@@ -242,7 +242,8 @@ func riskKeygen(f map[string][]string) int {
 func postureKeygen(f map[string][]string) int {
 	fmt.Fprintln(os.Stderr, "openshield-provision: WARNING — posture-keygen makes ONE key for the whole "+
 		"fleet, which lets any agent holding it forge any other agent's posture. The gateway verifies "+
-		"against a per-agent ROSTER (SEC-12) and does not read OPENSHIELD_POSTURE_PUBKEY. Use "+
+		"against a per-agent ROSTER (SEC-12) — there is no gateway setting for a shared public key, and "+
+		"the one this command used to name has been removed (D333). Use "+
 		"`posture-enroll --agent ... --roster ...` instead.")
 	out := one(f, "out")
 	if out == "" {

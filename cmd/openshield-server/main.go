@@ -359,15 +359,24 @@ func main() {
 			// happened; a recording failure is counted, never undoes or blocks it).
 			srv.RecordRetentionEvent(ctx, "fleet_telemetry", n, fleetCutoff, fleetPolicy)
 			// SIEM-12/R34-13: prune the durable notify-dedupe ledger. An id only needs to outlive its
-			// dedup window; a day-old cutoff keeps the table tiny while safely past the 10-min window.
-			ddCutoff := time.Now().Add(-24 * time.Hour)
+			// dedup window, so the retention is several windows rather than one.
+			//
+			// THE CUTOFF COMES FROM THE SETTING, and the recorded policy is built from the value actually
+			// used (D333). It used to be a hardcoded 24h while the compliance event recorded the literal
+			// string "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h" — so an operator who set 7d had their value
+			// ignored AND got a retention record naming their knob while asserting someone else's value.
+			// A compliance record citing a setting nobody read is worse than one that omits it: it is
+			// evidence of a policy that was never applied.
+			ddRetention := cfg.Duration("OPENSHIELD_NOTIFY_DEDUPE_RETENTION")
+			ddCutoff := time.Now().Add(-ddRetention)
+			ddPolicy := fmt.Sprintf("OPENSHIELD_NOTIFY_DEDUPE_RETENTION=%s", ddRetention)
 			if d, derr := srv.PruneNotifyDedupe(ctx, ddCutoff); derr != nil {
 				fmt.Fprintf(os.Stderr, "openshield-server: notify-dedupe prune failed: %v\n", derr)
 			} else {
 				if d > 0 {
 					fmt.Fprintf(os.Stderr, "openshield-server: pruned %d durable notify-dedupe ids\n", d)
 				}
-				srv.RecordRetentionEvent(ctx, "notify_dedupe", d, ddCutoff, "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h")
+				srv.RecordRetentionEvent(ctx, "notify_dedupe", d, ddCutoff, ddPolicy)
 			}
 		})
 
