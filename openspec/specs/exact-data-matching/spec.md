@@ -73,3 +73,18 @@ cell fingerprints (no raw values), and MUST skip records with fewer distinctive 
 
 - **WHEN** a record index is built and serialized
 - **THEN** the serialized bytes contain none of the raw cell values, and reloading matches the same records
+
+### Requirement: A configured record index reaches the running worker
+
+The endpoint SHALL load a configured record index — verifying the operator signature when an index public
+key is configured — and add its detector to the classifier that runs inside the sandboxed worker, so the
+record semantics apply to files the deployed engine actually observes. A configured-but-unloadable index
+SHALL abort the worker rather than leave it classifying without the detector the operator configured.
+
+#### Scenario: A record's cells co-occurring in an observed file raise a decision
+- **WHEN** a signed record index is configured and an observed file contains the threshold number of distinct cells of one indexed record
+- **THEN** the pipeline records an exact-data decision for that file
+
+#### Scenario: Cells of different records in an observed file raise nothing
+- **WHEN** an observed file contains one cell each from two different indexed records
+- **THEN** no exact-data decision is recorded

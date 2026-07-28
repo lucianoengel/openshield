@@ -44,3 +44,17 @@ excerpting MUST NOT prevent a match, and unrelated content MUST NOT match.
 
 - **WHEN** content shares no shingles with any fingerprinted document
 - **THEN** the detector reports no document match
+
+### Requirement: A configured document index reaches the running worker
+
+The endpoint SHALL load a configured document index — verifying the operator signature when an index
+public key is configured — and add its detector to the classifier that runs inside the sandboxed worker.
+A configured-but-unloadable index SHALL abort the worker rather than leave it classifying without it.
+
+#### Scenario: A reformatted excerpt in an observed file raises a decision
+- **WHEN** a signed document index is configured and an observed file contains a reformatted excerpt covering at least the threshold fraction of an indexed document
+- **THEN** the pipeline records a document-match decision for that file
+
+#### Scenario: A short quotation in an observed file raises nothing
+- **WHEN** an observed file contains only a few shingles of an indexed document, below the threshold fraction
+- **THEN** no document-match decision is recorded

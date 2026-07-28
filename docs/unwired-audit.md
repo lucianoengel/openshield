@@ -421,3 +421,45 @@ with interruptions.
 
 The lesson generalises: a negative fixture has to be built against the metric the detector actually uses,
 not against an intuition about what "irregular" looks like.
+
+
+## Round 9 (D320): a capability the specs had forgotten
+
+### Three settings whose only test bypassed them
+
+`OPENSHIELD_CASB_CATALOG`, `OPENSHIELD_EDM_RECORD_INDEX` and `OPENSHIELD_IDM_INDEX` each name a
+capability with a thorough package test — and each of those tests reaches the capability by calling into
+the library directly (`casb.SetCatalog`, `classify.AddRecordEDM`). Nothing exercised the env read, the
+parse, the process-wide install, or the reload loop. Shape 5 again: a feature with a test and no proof
+that the configured file reaches the running binary.
+
+The mutation that makes the point: delete `casb.SetCatalog(cat)` from the gateway while KEEPING the
+`content-aware CASB active` log line. Every package test stays green, the operator sees the capability
+announce itself at startup, and every sensitive upload to an unsanctioned service is forwarded. Only an
+assertion on what the destination RECEIVED catches it.
+
+### The order of a three-step reload test is the test
+
+The hot-reload contract is a conjunction: an edit must take effect, AND a malformed edit must not. The
+obvious way to write it — start unsanctioned, confirm blocked, break the file, confirm still blocked —
+is vacuous in its most important step, because a reload that emptied the catalog on a parse error ALSO
+yields "not blocked". Starting from SANCTIONED and withdrawing sanction inverts every assertion into the
+direction an empty catalog cannot satisfy. Same three steps, same runtime, and now the mutation fails.
+
+That is a sixth way a green test can mean nothing, and it is the one hardest to see: the assertions are
+individually correct, and the ORDER is what makes them vacuous.
+
+### The specs had lost a shipped capability
+
+Writing the spec delta surfaced something bigger. The CASB requirements — written, reviewed and archived
+with the change that shipped them — are not in `openspec/specs/exfil-channel-awareness/spec.md`. A sweep
+comparing every archived change's requirement headers against its merged capability file finds the same
+across roughly thirty capabilities: `audit-ledger` keeps 5 of 24, and the ones it dropped include
+"Every entry commits to its predecessor" — the ledger's central claim.
+
+The specs are not wrong; they are INCOMPLETE, which is worse in one specific way. A missing requirement
+reads exactly like a capability that was never asked for, so the next person to work on the ledger will
+find a spec that does not mention hash chaining and conclude it is theirs to design. The cause is the
+archive step's "archive without syncing" option, taken repeatedly. Recorded here rather than fixed in
+passing: reconstructing thirty capability specs from their archived deltas is its own piece of work, and
+doing it silently inside a test change would bury it.
