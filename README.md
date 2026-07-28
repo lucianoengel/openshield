@@ -113,8 +113,8 @@ what lets a single codebase span seven security domains instead of fragmenting i
 
 **The full picture** — OpenShield runs detection-and-response at **three tiers that share one pipeline
 and one evidence ledger**: on the **host** (file DLP, HIPS process control, device posture, local
-enforcement), at the **network gateway** (inline DLP *as* NIPS across HTTP/DNS/SMTP, plus ZTNA access
-brokering), and in the **control plane** (SIEM correlation, XDR cross-domain incidents, SOAR response).
+enforcement, plus DNS-query and SMTP-message inspection), at the **network gateway** (inline DLP *as*
+NIPS over HTTP, the DNS sinkhole, plus ZTNA access brokering), and in the **control plane** (SIEM correlation, XDR cross-domain incidents, SOAR response).
 Users reach internal apps, file servers, and databases *through* the gateway — inspected and brokered.
 The **host agent's monitoring and the gateway's network detections stream as signed events** into the
 control plane, where SIEM/XDR correlate them (with external syslog as an additional feed); and the
@@ -129,7 +129,7 @@ flowchart TB
   end
 
   subgraph NETP["🌐 Network data plane — Gateway"]
-    GW["<b>Inline DLP + NIPS/NTPS</b> — HTTP · DNS · SMTP · TLS-intercept<br/><b>ZTNA access broker</b> — identity + device posture<br/>allow · block · redirect"]
+    GW["<b>Inline DLP + NIPS/NTPS</b> — HTTP · TLS-intercept · DNS sinkhole<br/><b>ZTNA access broker</b> — identity + device posture<br/>allow · block · redirect"]
   end
 
   subgraph INNER["🔒 Protected inner network"]
@@ -193,9 +193,9 @@ OpenShield ships as focused, single-responsibility binaries (all Go, `cmd/`):
 
 | Binary | Role |
 |---|---|
-| **`openshield-engine`** | The endpoint pipeline. Unprivileged, network-capable; watches directories via notify-mode fanotify, classifies via the worker, evaluates policy, decides, and appends to the ledger. |
+| **`openshield-engine`** | The endpoint pipeline. Unprivileged, network-capable; watches directories via notify-mode fanotify, ingests DNS queries and SMTP messages, classifies via the worker, evaluates policy, decides, and appends to the ledger. |
 | **`openshield-worker`** | The unprivileged, seccomp-hardened parser. Reads classify requests, opens files with its own credentials, classifies untrusted bytes — holds no network and no secrets. |
-| **`openshield-gateway`** | The network data plane. TLS-intercepting proxy (inline DLP), ZTNA access broker, and DNS/SMTP inspection — each request classified in the sandboxed worker. |
+| **`openshield-gateway`** | The network data plane. TLS-intercepting proxy (inline DLP), ZTNA access broker, and the DNS sinkhole — each request classified in the sandboxed worker. |
 | **`openshield-server`** | The fleet control plane. Ingests signed telemetry over NATS, persists the fleet aggregate, runs correlation/incidents and alert delivery. It coordinates and observes; it does not control. |
 | **`openshield-fleet-agent`** | The fleet-facing endpoint half: generates a per-agent identity, enrolls, and publishes signed telemetry, heartbeats, and device posture. |
 | **`openshield-agent`** | The privileged inline-enforcement agent (fanotify **permission** mode). Needs `CAP_SYS_ADMIN`. It refuses an **execution** inline — statically, or on a verdict from the engine's full pipeline. Inline blocking of a file **open** is designed and not wired. |

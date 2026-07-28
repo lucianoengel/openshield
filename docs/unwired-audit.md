@@ -1299,3 +1299,61 @@ In a DNS tunnel the exfiltrated data IS the query name. An audit trail that reco
 republish the exfiltration it exists to detect, into the most copied and longest-retained store in
 the system. A detector whose evidence is the disclosure is worse than no detector, because it also
 creates the record. The decision reason names the signal and never the name.
+
+
+## Round 27 (D342): an entire connector that no binary could start
+
+D341 ended by naming the cheap check for the shape it had just found for the third time: an exported
+detector with no non-test caller. This is that check's first run, against the code graph rather than
+grep, and it found something larger than a missing comparison.
+
+**`internal/connectors/smtp` was imported by nothing.** A session parser, a capture listener with
+per-session size ceilings, idle timeouts and a concurrency cap, an event producer, and unit tests
+covering all of it — and no binary imported the package, with **no configuration setting that could
+have turned it on**. It could not run in any deployment, however configured. Meanwhile the README
+described the product as performing live SMTP inspection, listed it as a gateway capability, and drew
+it as a pipeline source.
+
+Two other whole packages came back from the same query — `internal/ztna` and
+`internal/agent/prefilter` — and are recorded here rather than fixed, because each needs its own
+judgement about whether the right answer is to wire it or to stop claiming it.
+
+### The graph found what grep could not
+
+The check needs "exported symbol with no NON-TEST caller", which is a join across the call graph, not
+a text pattern. It also found the piece that made the fix correct: `engine.SetContentResolver`, and an
+existing `internal/engine/content_test.go` whose fixture is *already an SMTP event*. The mechanism for
+getting an email body to the sandboxed worker had been built and tested too — for the connector that
+was never started.
+
+The query has false negatives (it flagged `exfil.Classify`, which is called), so every hit was
+confirmed with grep before being believed. A graph that is wrong in the safe direction is still worth
+running; one whose output is taken on trust is not.
+
+### The body travels out of band, and the store must precede the send
+
+`smtp.ToEvent` carries the envelope only. The body goes into a content store the engine's resolver
+consults, so it reaches the worker and nothing else (D72) and never touches the Event or the bus
+(D10/D29).
+
+Two details that would each have been a silent defect:
+
+- **`store.Put` before the channel send.** The pipeline can begin classifying the instant the event is
+  received, so storing afterwards races the resolver — and a resolver that returns nothing yields an
+  empty classification, which downstream is indistinguishable from clean content. A scan that did not
+  happen would have looked exactly like a scan that found nothing.
+- **The resolver is CHAINED, not assigned.** It holds exactly one function, so an assignment would
+  silently disable clipboard or print classification for anyone who enabled both. The print socket
+  already chains over the clipboard store; this follows it.
+
+### The test proves classification, not parsing
+
+The alert requires a CHECKSUM-VALID CPF. Delivering a CPF-SHAPED value with wrong check digits raises
+no alert — so the passing case is a real detection and not a shape match, and the body demonstrably
+reached the worker. Withholding the body from the store fails the scenario the same way.
+
+### The README now says what runs where
+
+"DNS/SMTP inspection" was attributed to the gateway. DNS *sinkholing* is the gateway; DNS query and
+SMTP message inspection are the engine. The claim is now true and it names the right binary — which
+matters more than it looks, because an operator reading it configures the wrong process otherwise.

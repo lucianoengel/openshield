@@ -247,6 +247,45 @@ func main() {
 			slog.Float64("tunnel_threshold", dns.TunnelThreshold()))
 	}
 
+	// Optional email source: the SMTP capture connector (SMTP-1). The connector was complete and started
+	// by nothing — no import, no setting — while the product described itself as inspecting SMTP.
+	//
+	// CHAINED into the content resolver rather than installed over it, the way the print socket chains
+	// over the clipboard store: the resolver holds exactly ONE function, so an assignment here would
+	// silently disable clipboard or print classification for anyone who enables both.
+	if smtpAddr := strings.TrimSpace(os.Getenv("OPENSHIELD_SMTP_LISTEN")); smtpAddr != "" {
+		sstore := clipboard.NewContentStore(nil)
+		sprev := eng.ContentResolver()
+		eng.SetContentResolver(func(ev *corev1.Event) []byte {
+			if b := sstore.Resolve(ev.GetEventId()); len(b) > 0 {
+				return b
+			}
+			if sprev != nil {
+				return sprev(ev)
+			}
+			return nil
+		})
+		sl, err := smtpListener(ctx, smtpAddr, sstore, events, log)
+		if err != nil {
+			fatal(log, "smtp listen", err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := sl.Serve(ctx); err != nil {
+				log.Error("smtp serve", slog.String("err", err.Error()))
+			}
+		}()
+		// EVERY LIMIT NAMED AT STARTUP. Each is a way an operator can be wrong about what they just
+		// enabled, and each surfaces late and badly otherwise: undelivered mail if this is mistaken for
+		// an MTA, or a channel that silently inspects nothing if the clients negotiate TLS.
+		log.Warn("engine: SMTP capture connector ENABLED — a message body is classified in the sandboxed "+
+			"worker. This is a CAPTURE listener, NOT an MTA: point a journaling/archive flow or a tap at "+
+			"it, never production mail delivery. It does NOT handle STARTTLS or implicit TLS, so a "+
+			"session that negotiates TLS is not parsed. Observe-only (D1).",
+			slog.String("listen", sl.Addr().String()))
+	}
+
 	// Optional exec-event source: the auditd exec connector (HIPS-5c). When OPENSHIELD_EXEC_AUDIT_LOG
 	// names a readable stream (a tailed audit log, a fifo, or the audit socket), process executions
 	// enter the SAME pipeline — additive, observe-only (D1) unless a KILL policy + OPENSHIELD_ENFORCE

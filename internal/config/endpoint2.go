@@ -63,6 +63,11 @@ var EngineFields = []Field{
 	// refuse an out-of-range threshold, it cannot refuse an unwise one.
 	{Key: "OPENSHIELD_DNS_TUNNEL_THRESHOLD", Scope: ScopeBootstrap, Kind: KindUnitInterval, Default: "0.5",
 		Description: "Tunnelling score at which a DNS query ALERTS (NIPS-3). The score combines label length and entropy; it never blocks by default."},
+	// SMTP-1: the capture listener. It had no setting at all until now — the connector was complete,
+	// tested, and unreachable from every deployment, which is the strongest form of the "built but never
+	// wired" failure this audit keeps finding.
+	{Key: "OPENSHIELD_SMTP_LISTEN", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Address for the SMTP capture connector (SMTP-1). A CAPTURE listener, not an MTA, and it does not handle TLS-negotiated sessions. Empty disables it."},
 	{Key: "OPENSHIELD_EXEC_AUDIT_LOG", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "auditd log the exec connector reads (HIPS-5c). Additive and observe-only unless a KILL policy and OPENSHIELD_ENFORCE are both set."},
 	{Key: "OPENSHIELD_EXEC_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
