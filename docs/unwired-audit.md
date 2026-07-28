@@ -974,3 +974,42 @@ of a policy that was never applied.**
 
 The check reports that a setting has no reader. It cannot tell you whether to add one or remove the
 setting; treating it as if it could would have produced exactly the wrong change in one of these two.
+
+
+## Round 20 (D335): a setting that cannot do what its description promises
+
+`OPENSHIELD_CLIPBOARD_EXCLUDE` said: *"Applications whose copies are never read — password managers and
+the like. Exclusions are applied BEFORE the read."* The claim is a privacy one and stronger than "we do
+not alert on it": a DLP agent that reads a credential and then decides not to report it has still
+ingested it, into a security product's memory.
+
+Testing it needed a real X server — the source is identified from the SELECTION OWNER, window to pid to
+executable, and there is no way to fake that. The build host's hand-unpacked xclip cannot round-trip a
+selection and CI has no X at all, so it had never run. The VM has both.
+
+**It does not work in the default mode, and did not say so.** In polled-helper mode the engine reports
+`source-attribution=false` — the owner is not knowable, every copy is unattributable, and an
+unattributable source is deliberately NOT excluded (excluding them all would silently disable monitoring).
+So the exclusion has no effect, and the setting's description promised the opposite.
+
+**Under mediation it is better and still conditional.** The capability report says
+`source-attribution=true`, which is true of the MECHANISM rather than of every copy. Measured: a copier
+that forks and exits — which is what `xclip` does, and hardly exotic — is unnamed by the time `/proc` is
+read, so the copy has no attributable source and the exclusion does not fire.
+
+### What was actually wrong was the silence
+
+The code already logged that case, framed as *"the shape a deliberate evasion takes"* — accurate, and not
+what an operator needs first. It did not say the CONSEQUENCE: that a configured exclusion did not fire and
+the content was read. Nothing anywhere connected "attribution failed for this copy" to "your exclusion
+did not apply".
+
+Both messages now state it, and the setting's description states the dependency: exclusions need
+mediation AND an owner that can be named, and in polled mode, on Wayland, or for an unnameable copier the
+content IS read.
+
+### The shape
+
+This is not an unwired feature — every piece works as designed and the design is defensible. It is a
+CLAIM SURFACE that outran the mechanism: a description written for the capability's best case, in a
+product whose default is the worst one. The test that found it is the first that ever ran the feature.

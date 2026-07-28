@@ -296,11 +296,30 @@ func (m *Mediator) onOwnerChanged(e xfixes.SelectionNotifyEvent) {
 	if sourcePID > 0 {
 		sourceExe = exeOfPID(sourcePID)
 	}
+	if sourcePID <= 0 {
+		// THE OWNER ADVERTISES NO PID (_NET_WM_PID absent), so this copy has NO attributable source —
+		// and an unattributable source is deliberately NOT excluded (see Exclusions.Excluded), because
+		// excluding every unattributable copy would silently disable monitoring. The consequence is that
+		// OPENSHIELD_CLIPBOARD_EXCLUDE CANNOT APPLY to this copy, while the capability report says
+		// source attribution is available — it is available as a MECHANISM, per window, best-effort.
+		//
+		// Silence here was the gap (D335): the copy is read, the exclusion does not apply, and nothing
+		// said so. An operator relying on an exclusion needs to be able to see when it did not fire.
+		m.logf("clipboard/x11: the selection owner advertises no pid — this copy has NO attributable " +
+			"source, so source exclusions cannot apply to it")
+	}
 	if sourcePID > 0 && sourceExe == "" {
 		// The pid resolved but the executable did not: the copier exited between the X query and the
 		// /proc read. Worth logging plainly — it is the shape a deliberate evasion takes, and an operator
 		// seeing many of these is seeing something worth looking at.
-		m.logf("clipboard/x11: copier pid %d exited before it could be named (attribution by pid only)", sourcePID)
+		//
+		// AND SAY THE CONSEQUENCE (D335). Naming this as "the shape an evasion takes" is right and is not
+		// what an operator needs first: with no executable name, `Excluded` cannot match, so a configured
+		// source exclusion DID NOT FIRE for this copy and the content was read. Measured against a real X
+		// server, this is the common case rather than the exotic one — a copier that forks and exits (as
+		// xclip does) is unnamed by the time /proc is read.
+		m.logf("clipboard/x11: copier pid %d exited before it could be named — this copy has NO "+
+			"attributable source, so source exclusions cannot apply to it (attribution by pid only)", sourcePID)
 	}
 
 	// EXCLUSIONS FIRST — before any read. An excluded application's copy must never enter this process.

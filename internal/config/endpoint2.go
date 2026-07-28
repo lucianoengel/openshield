@@ -95,7 +95,7 @@ var EngineFields = []Field{
 	{Key: "OPENSHIELD_CLIPBOARD_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "0s",
 		Description: "How often to poll the clipboard. 0 disables clipboard DLP."},
 	{Key: "OPENSHIELD_CLIPBOARD_EXCLUDE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
-		Description: "Applications whose copies are never read \u2014 password managers and the like. Exclusions are applied BEFORE the read."},
+		Description: "Applications whose copies are never read \u2014 password managers and the like. Exclusions are applied BEFORE the read, but ONLY where the copy has an attributable source: they need X11 MEDIATION (OPENSHIELD_CLIPBOARD_MEDIATE) and an owner window that advertises its pid. In polled mode, on Wayland, or for a window with no pid, a copy is unattributable and IS read \u2014 the engine says so per copy."},
 	{Key: "OPENSHIELD_CLIPBOARD_MEDIATE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Set to MEDIATE the X11 clipboard rather than observe it: owning the selection gives per-destination enforcement."},
 	{Key: "OPENSHIELD_PRINT_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
