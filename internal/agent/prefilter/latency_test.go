@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/agent/prefilter"
 	"github.com/lucianoengel/openshield/internal/agent/privileged"
 	"github.com/lucianoengel/openshield/internal/core"
+	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/policy"
 )
 
@@ -151,5 +153,87 @@ func TestTheOpenDecisionFitsThePermissionWindow(t *testing.T) {
 		}
 		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
 		t.Logf("  prefix %5dKiB: p50=%-12s p99=%s", size>>10, s[len(s)/2], s[(len(s)*99)/100])
+	}
+}
+
+// TestConcurrentDecisionsAreLimitedByTheWorker measures what the gate's concurrency is actually worth.
+//
+// D356 gave the producer a bounded worker set and the IPC client a connection pool, and measured
+// 306ms → 53ms for twelve concurrent opens. That measurement used a SLEEPING STUB as the decider — it
+// proved the producer and the socket no longer serialise, and said nothing about the classification
+// behind them.
+//
+// `privileged.Worker.Classify` holds a mutex for the whole request. So if the engine serves the gate
+// from a single worker, every concurrent decision queues at that mutex and the gate's concurrency buys
+// nothing for real content. This measures both arrangements rather than assuming either.
+func TestConcurrentDecisionsAreLimitedByTheWorker(t *testing.T) {
+	if testing.Short() || raceDetectorOn {
+		t.Skip("latency measurement")
+	}
+	ctx := context.Background()
+	bin := filepath.Join(t.TempDir(), "openshield-worker")
+	if out, err := exec.Command("go", "build", "-o", bin, "../../../cmd/openshield-worker").CombinedOutput(); err != nil {
+		t.Fatalf("building the worker: %v\n%s", err, out)
+	}
+	pol, err := policy.NewDefault(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	line := []byte("2026-07-28T10:00:00Z name=alice dept=finance note=quarterly reconciliation\n")
+	prefix := make([]byte, 0, 16<<10)
+	for len(prefix) < 16<<10 {
+		prefix = append(prefix, line...)
+	}
+	prefix = prefix[:16<<10]
+
+	const concurrency = 8
+	measure := func(c interface {
+		Classify(context.Context, *corev1.ClassifyRequest) (*corev1.ClassifyResponse, error)
+	}) time.Duration {
+		d := prefilter.NewDecider(c, pol, uint64(len(prefix)), 5*time.Second, nil)
+		for i := 0; i < 3; i++ {
+			if _, err := d.DecideBytes(ctx, "/x", prefix); err != nil {
+				t.Fatal(err)
+			}
+		}
+		start := time.Now()
+		var wg sync.WaitGroup
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := d.DecideBytes(ctx, "/x", prefix); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		wg.Wait()
+		return time.Since(start)
+	}
+
+	single, err := privileged.StartWorker(ctx, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneWorker := measure(single)
+	single.Close()
+
+	pool, err := privileged.StartPool(ctx, bin, concurrency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolWorkers := measure(pool)
+	pool.Close()
+
+	t.Logf("%d concurrent decisions at a 16KiB prefix: one worker=%s, pool of %d=%s",
+		concurrency, oneWorker, concurrency, poolWorkers)
+
+	// The claim under test is only that a pool is MATERIALLY better — not a particular ratio, which
+	// depends on the core count of whatever runs this.
+	if poolWorkers >= oneWorker {
+		t.Errorf("a pool of %d workers (%s) was no faster than one (%s). Either the pool is not being "+
+			"used concurrently or the cost is not in the worker — and the gate's concurrency is buying "+
+			"nothing either way", concurrency, poolWorkers, oneWorker)
 	}
 }

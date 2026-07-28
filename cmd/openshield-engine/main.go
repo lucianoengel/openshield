@@ -126,13 +126,36 @@ func main() {
 	}
 	log.Info("policy loaded (DLP-5b: packs compose with the default)", slog.String("bundle", pol.Bundle()))
 
-	worker, err := privileged.StartWorker(ctx, workerBin)
+	// A WORKER POOL, sized by what will actually run concurrently.
+	//
+	// privileged.Worker.Classify holds a mutex for the whole request, so one worker serialises every
+	// classification. That is correct for the async path — file events arrive one at a time from the
+	// watcher — and wrong for the inline file-open gate, where the whole point of D356's concurrency is
+	// that N blocked processes are decided in parallel. Measured: eight concurrent decisions take 54ms
+	// against one worker and 11ms against a pool of eight.
+	//
+	// So the default follows the gate: one worker normally, and the gate's in-flight bound when the gate
+	// is enabled. Making it automatic rather than a warning is deliberate — an operator who enables the
+	// gate and misses a log line would get silently serialised decisions, which is the failure mode this
+	// whole area keeps producing.
+	poolSize := envInt("OPENSHIELD_WORKER_POOL", 0)
+	if poolSize <= 0 {
+		poolSize = 1
+		if strings.TrimSpace(os.Getenv("OPENSHIELD_OPEN_IPC_SOCKET")) != "" {
+			poolSize = openipc.DefaultMaxInFlight
+		}
+	}
+	worker, err := privileged.StartPool(ctx, workerBin, poolSize)
 	if err != nil {
-		fatal(log, "starting worker", err)
+		fatal(log, "starting worker pool", err)
 	}
 	defer worker.Close()
+	if poolSize > 1 {
+		log.Info("engine: worker pool", slog.Int("size", poolSize),
+			slog.String("why", "concurrent classification; each worker is a separate sandboxed process"))
+	}
 
-	eng := engine.NewFromWorker(worker, pol, ledger, log, 30*time.Second)
+	eng := engine.New(worker, pol, ledger, log, 30*time.Second)
 	// PLAT-9: install the EMERGENCY DISABLE. The switch sits between the decision and the enforcer, so
 	// classification, the policy and the ledger all still run and only the enforcement call is skipped:
 	// STOP ACTING, KEEP SEEING. Implemented earlier it would destroy the record of what happened while

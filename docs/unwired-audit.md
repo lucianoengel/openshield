@@ -1995,3 +1995,41 @@ budget as a fail-open — the correct answer for a gate that cannot keep up.
 A single-decision latency test on an idle machine says the decision fits the window. It cannot say the
 gate does, because it never asks two questions at once — and the thing that breaks is not the decision
 but the queue in front of it. The number was accurate and the conclusion drawn from it was wrong.
+
+
+## Round 41 (D357): the concurrency stopped at the worker's mutex
+
+D356's measurement — 306ms → 53ms for twelve concurrent opens — used a **sleeping stub** as the
+decider. It proved the producer and the socket no longer serialise. It said nothing about the
+classification behind them, and I reported the improvement without that caveat.
+
+`privileged.Worker.Classify` holds a mutex for the whole request. The engine ran a single worker. So
+every concurrent decision queued at that mutex, and the gate's concurrency bought nothing for real
+content.
+
+Measured rather than reasoned: **eight concurrent decisions take 54ms against one worker and 11ms
+against a pool of eight.**
+
+The gateway already used `privileged.Pool` for exactly this reason; the engine used `StartWorker`,
+which is correct for the async path — file events arrive one at a time from the watcher — and wrong
+the moment an inline gate is served from the same process.
+
+### The default chooses, rather than warning
+
+One worker normally; the gate's in-flight bound when the gate is enabled. `OPENSHIELD_WORKER_POOL`
+overrides it.
+
+Automatic rather than a warning, deliberately. An operator who enables the gate and misses a log line
+would get silently serialised decisions — which is the exact failure this area keeps producing, and a
+warning is a fix that only works on people who read warnings.
+
+### The pattern across three rounds
+
+D355: the single-decision number was fine and the default it implied was wrong.
+D356: the decision fitted the window and the queue in front of it did not.
+D357: the queue was fixed and the resource behind it was still serial.
+
+Each measurement was accurate and each conclusion drawn from it was too narrow — because a bound is
+only meaningful against the specific thing being measured, and the next bottleneck is always
+downstream of where you stopped looking. The stub that made D356's measurement clean is what hid
+D357's.
