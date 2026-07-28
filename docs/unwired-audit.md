@@ -766,3 +766,44 @@ the next, three seconds apart, with nothing changed but a second boundary.
 Deriving the forged value from the CAPTURED timestamp (`captured + 1`) makes it deterministic, and the
 test now refuses to run at all if the two ever coincide — because a scenario that cannot tell its own
 input apart is asserting nothing. Green three times running, and still killed by the mutation.
+
+
+## Round 16 (D328): three scenarios, three assertions delivered by the wrong layer
+
+The overdue/heartbeat batch produced the same failure three times in a row, in three different ways. It
+is the sharpest pattern this audit has found, and it is not about any of the features involved.
+
+**1. The assertion measured a different quantity than the mechanism.** The recovery step waited for the
+agent's TOTAL telemetry rows to grow, while liveness is computed from `max(received_at) WHERE verified`
+off the enrolled roster (SEC-3). The test would have called an agent recovered while the control plane
+still, correctly, considered it silent.
+
+**2. The premise was wrong, and the product was right.** The scenario asserted that an agent which
+recovers and fails again is reported AGAIN. It failed — because delivery buckets a notification's
+idempotency id into a 10-minute window, so a second page for the same agent inside one bucket is
+deliberately suppressed. The end-to-end contract is ONCE PER AGENT PER WINDOW. The stronger claim is real
+but needs a ten-minute wait to observe, so it is tested at the unit layer where the bucket is an argument
+rather than a clock. **The test was rewritten to assert what the system actually guarantees, rather than
+adjusted until it passed.**
+
+**3. A property defended three deep looks vacuous under a single mutation.** "Reported exactly once"
+survived mutating the rising edge, and survived disabling the in-memory dedupe, and survived both — which
+read exactly like a test that proves nothing. It is not: there is a THIRD layer, a durable Postgres
+dedupe (R34-13), and breaking all three makes the scenario see six pages instead of one.
+
+That last one refines the seventh shape rather than repeating it:
+
+> With defence in depth, a single mutation cannot falsify an assertion, and the test looks vacuous when it
+> is merely well-defended. The way to tell the difference is to break EVERY redundant path — if the
+> assertion still holds, it is vacuous; if it finally fails, it was load-bearing all along.
+
+The comment in the test now names all three layers and says plainly that the scenario does not pin down
+any one of them. A comment claiming it proved the rising edge would have been false, and would have been
+believed.
+
+### The estimate that was wrong by 4x
+
+Asked whether a targeted run was really 30 seconds, the honest answer was no — it is 1m49s. The first
+integration invocation builds the test binary AND the twelve product binaries into a temp dir, then each
+scenario starts its own NATS container and database. Guessing at it twice was worse than measuring it
+once.
