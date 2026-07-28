@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -389,6 +390,48 @@ func main() {
 				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 CEF-over-syslog listener on %s\n", cefAddr)
 				if err := srv.RunCEFSyslog(leaderCtx, cefAddr); err != nil && leaderCtx.Err() == nil {
 					fmt.Fprintf(os.Stderr, "openshield-server: CEF-syslog listener stopped: %v\n", err)
+				}
+			}()
+		}
+
+		// SIEM-4 reliable ingest (D337): the same CEF/RFC-5424 sink over a STREAM transport, because the
+		// datagram listener cannot lose events VISIBLY — a datagram the kernel discards for want of
+		// buffer never reaches this process, so no counter here can see it. TCP adds delivery and
+		// backpressure; TLS adds an authenticated sender, without which anything that can reach the port
+		// can inject events into a store operators are invited to treat as evidence.
+		for _, sl := range []struct {
+			addr string
+			tls  bool
+			what string
+		}{
+			{cfg.String("OPENSHIELD_SYSLOG_TCP_LISTEN"), false,
+				"delivery + backpressure; the SENDER IS NOT AUTHENTICATED"},
+			{cfg.String("OPENSHIELD_SYSLOG_TLS_LISTEN"), true,
+				"delivery + backpressure + a sender authenticated by client certificate"},
+		} {
+			if sl.addr == "" {
+				continue
+			}
+			var tlsConf *tls.Config
+			if sl.tls {
+				tc, terr := tlsconf.LoadFromEnv()
+				if terr != nil {
+					fatal("syslog TLS ingest: %v", terr)
+				}
+				if tc == nil {
+					// FAIL, do not fall back to plaintext. An operator who configured a TLS ingest port
+					// and got an unauthenticated one has the opposite of what they asked for, silently.
+					fatal("OPENSHIELD_SYSLOG_TLS_LISTEN is set but no TLS material is configured (%s/%s/%s) "+
+						"— refusing to serve evidentiary ingest without an authenticated sender",
+						tlsconf.EnvCA, tlsconf.EnvCert, tlsconf.EnvKey)
+				}
+				tlsConf = tc.ServerConfig()
+			}
+			addr, what := sl.addr, sl.what
+			fmt.Fprintf(os.Stderr, "openshield-server: SIEM-4 syslog STREAM ingest on %s — %s\n", addr, what)
+			go func() {
+				if err := srv.RunCEFSyslogStream(leaderCtx, addr, tlsConf); err != nil && leaderCtx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: syslog stream listener on %s stopped: %v\n", addr, err)
 				}
 			}()
 		}

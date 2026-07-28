@@ -1061,3 +1061,45 @@ for a port that was never going to open. Worth recording beyond the fix: syslog 
 guarantee and no backpressure, so a burst that outpaces the reader is dropped by the kernel with no error
 at either end. The tests resend while waiting and assert on the STORE rather than the send, for the same
 reason a real estate loses events.
+
+
+## Round 22 (D337): the one ingest path with no reliable option
+
+Asked whether UDP was adequate for an audit path, the answer was no, and the reasons were verifiable
+rather than a matter of taste:
+
+- **The loss is structurally invisible.** `Listener.Dropped()` counts messages that FAILED TO PARSE — ones
+  the application received. A datagram the kernel discards for want of buffer never reaches the
+  application, so no counter it keeps can observe it. That is the silent gap D31 forbids, on the one
+  ingest path carrying somebody else's evidence.
+- **The RICH event is the one most likely to vanish.** The buffer is sized to the line bound and a larger
+  datagram is truncated by the kernel, after which the parser rejects it — so a CEF event with a realistic
+  extension set fails as "malformed device" rather than "MTU".
+- **The sender is anonymous.** Anything that can reach the port can inject events into a store operators
+  are invited to treat as evidence, and fabricated evidence is worse than lost evidence.
+
+Meanwhile the product asserts the opposite discipline everywhere else: the endpoint spool makes an outage
+a GAP THAT FILLS IN, and durable telemetry ingest acknowledges only after persistence with at-most-once
+as an explicit opt-out. External logs had at-most-once with no opt-in to anything better.
+
+### The honest claim is narrower than "no loss"
+
+A stream removes kernel-level silent drop and adds backpressure. It does NOT acknowledge PERSISTENCE — a
+process killed with buffered data still loses it, and no syslog device implements an application-level
+ack. So the claim stated in the spec is: **loss now requires a crash or an explicit refusal, both
+observable, rather than a buffer quietly filling.** Anything stronger would be the overclaim this project
+exists to avoid.
+
+### Two things the tests taught
+
+**A TLS 1.3 refusal does not appear at the handshake.** The client sends its certificate in its last
+flight and proceeds; the server verifies afterwards and sends an alert. So `Dial` and `Handshake` both
+SUCCEED against a server about to refuse you, and the refusal surfaces on the first READ. The first
+version of the scenario checked only the handshake and concluded the listener accepted anonymous senders —
+about correct code. A read timeout means accepted; an alert or EOF means refused.
+
+**Framing auto-detection is ambiguous, and the ambiguity must not be fatal.** RFC 6587 allows
+octet-counted and newline-terminated framing, and real senders use both. A newline-framed message that
+merely BEGINS with a digit looks like an octet count until the number fails to parse — so that case is
+counted and skipped rather than closing the connection, because one such message would otherwise stop a
+device's whole feed.

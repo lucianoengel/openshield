@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -207,7 +208,31 @@ func (s *Server) SearchExternalLogs(ctx context.Context, f ExternalLogFilter) ([
 // whose persistence fails, is COUNTED (CEFDropped) and skipped, never crashing the listener — best-
 // effort ingest of an external feed, availability over completeness. Runs on the leader only.
 func (s *Server) RunCEFSyslog(ctx context.Context, addr string) error {
-	sink := func(m syslog.Message) {
+	l, err := syslog.Listen(addr, s.cefSink(), nil)
+	if err != nil {
+		return err
+	}
+	s.cefListenAddr.Store(l.Addr().String())
+	return l.Serve(ctx)
+}
+
+// RunCEFSyslogStream serves the SAME sink over a stream transport — TCP, or TLS when a config is given
+// (D337).
+//
+// One sink, two transports, deliberately: a second copy of the CEF/RFC-5424 reading is how the two would
+// come to disagree about what a message MEANS, which is the drift the IOC store and the inline NIPS
+// engine were made to share a matcher to avoid. What differs between them is delivery, not meaning.
+func (s *Server) RunCEFSyslogStream(ctx context.Context, addr string, tlsConf *tls.Config) error {
+	l, err := syslog.ListenStream(addr, s.cefSink(), tlsConf, nil)
+	if err != nil {
+		return err
+	}
+	return l.Serve(ctx)
+}
+
+// cefSink reads a syslog message as CEF, falling back to RFC 5424, and persists it as an external log.
+func (s *Server) cefSink() func(syslog.Message) {
+	return func(m syslog.Message) {
 		msg, ok := cef.FromSyslog(m.Msg)
 		if !ok {
 			// SIEM-9: not CEF — try modern syslog (RFC 5424) before giving up. One listener accepting
@@ -237,12 +262,6 @@ func (s *Server) RunCEFSyslog(ctx context.Context, addr string) error {
 		}
 		s.persistExternalLog(e)
 	}
-	l, err := syslog.Listen(addr, sink, nil)
-	if err != nil {
-		return err
-	}
-	s.cefListenAddr.Store(l.Addr().String())
-	return l.Serve(ctx)
 }
 
 // CEFListenAddr reports the bound address of the running CEF-syslog listener (":0" resolves to a real
