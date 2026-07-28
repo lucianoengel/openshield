@@ -32,3 +32,10 @@ var ErrMountScope = errors.New("openmon: a mount-wide scope is refused — every
 // ErrNoPaths is returned when no directory was given. A producer with nothing marked would run, report
 // itself active, and deliver no events — the inert-control failure this project keeps finding.
 var ErrNoPaths = errors.New("openmon: no directories to watch")
+
+// DefaultMaxInFlight bounds concurrently answered permission events.
+//
+// It matches the IPC client's default: the two are the same queue seen from either end, and a producer
+// allowed to run ahead of the client's connection pool would only move the waiting from one side of the
+// socket to the other.
+const DefaultMaxInFlight = 8

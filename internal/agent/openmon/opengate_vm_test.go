@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,4 +213,103 @@ func TestAMountScopeIsRefused(t *testing.T) {
 		t.Error("a regular file was accepted as a gate scope; naming a file is almost always a mistake " +
 			"an operator meant as 'this directory', and the difference is invisible afterwards")
 	}
+}
+
+// TestConcurrentOpensAreNotSerialised is the load question the single-decision measurement cannot
+// answer.
+//
+// THE PER-EVENT BUDGET IS NOT A PER-PROCESS BOUND. The watchdog's budget starts when it dequeues an
+// event, not when the kernel blocked the process — so if events are answered one at a time, the Nth
+// opener waits N × decision-cost while the watchdog believes every answer was inside budget. Nothing
+// in the single-decision latency number reveals that.
+//
+// It matters here and not for the exec gate because of scale. An exec decision is ~41µs (D301), so
+// fifty concurrent execs queue for 2ms — invisible. An open decision is ~6ms at the default prefix, so
+// fifty concurrent opens queue for 300ms, and the last opener waits a third of a second for a gate
+// whose budget says 150ms.
+//
+// The simulated decision cost is deliberate: a real classification would make this measure the worker
+// rather than the queueing, and the queueing is the property under test.
+func TestConcurrentOpensAreNotSerialised(t *testing.T) {
+	requireRootLinux(t)
+	const (
+		openers   = 12
+		perAnswer = 25 * time.Millisecond
+	)
+
+	dir := t.TempDir()
+	for i := 0; i < openers; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "f"+strconv.Itoa(i)), []byte("data\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sock := socketPath(t, "slow.sock")
+	slow := func(context.Context, string, []byte) (openipc.Verdict, error) {
+		time.Sleep(perAnswer)
+		return openipc.VerdictAllow, nil
+	}
+	srv := &openipc.Server{Decide: slow, Timeout: 5 * time.Second}
+	go func() { _ = srv.Listen(ctx, sock) }()
+	waitForSocket(t, sock)
+
+	mon, err := openmon.Open([]string{dir})
+	if err != nil {
+		t.Fatalf("opening the monitor: %v", err)
+	}
+	defer mon.Close()
+	wd := &watchdog.Watchdog{
+		SelfPID: int32(os.Getpid()),
+		Budget:  10 * time.Second, // generous: this measures QUEUEING, not the budget
+		// One client per opener would hide the queueing behind connection concurrency; the production
+		// agent has exactly one.
+		Responder: watchdog.FanotifyResponder{NotifyFD: mon.NotifyFD()},
+		Evaluator: &openipc.Client{SocketPath: sock, Timeout: 5 * time.Second},
+		Audit:     func(context.Context, watchdog.PermissionEvent, watchdog.Severity, string) error { return nil },
+	}
+	go func() { _ = mon.Run(ctx, wd) }()
+	time.Sleep(300 * time.Millisecond)
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < openers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			_ = exec.Command("/bin/cat", filepath.Join(dir, "f"+strconv.Itoa(n))).Run()
+		}(i)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+
+	serial := time.Duration(openers) * perAnswer
+	t.Logf("%d concurrent opens at %s per decision took %s (serial would be ~%s)",
+		openers, perAnswer, elapsed, serial)
+
+	// HALF the serial time is a generous line: perfectly concurrent would be ~perAnswer plus overhead,
+	// and anything at or past serial means the gate is a queue. Generous on purpose — the point is to
+	// catch serialisation, not to assert a particular degree of parallelism on a 4-vCPU VM.
+	if elapsed >= serial/2 {
+		t.Errorf("concurrent opens took %s, close to the %s a SERIAL gate would need. Events are being "+
+			"answered one at a time, so the Nth opener waits N × the decision cost while the watchdog's "+
+			"per-event budget still reads as satisfied — the budget bounds dequeue-to-answer, not "+
+			"block-to-answer", elapsed, serial)
+	}
+}
+
+// waitForSocket blocks until the verdict socket exists, so the first open is not decided by a
+// fail-open that would make a timing assertion meaningless.
+func waitForSocket(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the verdict socket never appeared at %s", path)
 }

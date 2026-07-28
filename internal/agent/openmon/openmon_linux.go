@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"golang.org/x/sys/unix"
 
@@ -17,9 +18,13 @@ const metaLen = 24
 
 // Monitor holds the fanotify descriptor and the directories it marked.
 type Monitor struct {
-	fd      int
-	watched []string
+	fd          int
+	watched     []string
+	maxInFlight int
 }
+
+// SetMaxInFlight bounds how many permission events are answered concurrently. Zero uses the default.
+func (m *Monitor) SetMaxInFlight(n int) { m.maxInFlight = n }
 
 // Open marks each directory for file-open permission events.
 //
@@ -80,6 +85,16 @@ func (m *Monitor) Watched() []string { return append([]string(nil), m.watched...
 // EVERY EVENT IS ANSWERED EXACTLY ONCE and its descriptor released, whatever the verdict. A leaked
 // descriptor is a slow death for the agent; an unanswered event is a process blocked forever.
 func (m *Monitor) Run(ctx context.Context, wd *watchdog.Watchdog) error {
+	n := m.maxInFlight
+	if n <= 0 {
+		n = DefaultMaxInFlight
+	}
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	// Outstanding answers are waited for on the way out, so a shutdown does not leave a process blocked
+	// in a permission window with nothing left to answer it.
+	defer wg.Wait()
+
 	buf := make([]byte, 4096)
 	for {
 		if ctx.Err() != nil {
@@ -111,9 +126,33 @@ func (m *Monitor) Run(ctx context.Context, wd *watchdog.Watchdog) error {
 			if md.FD < 0 {
 				continue // a kernel overflow marker: no descriptor, nothing to answer
 			}
-			e := watchdog.PermissionEvent{PID: md.PID, FD: md.FD, Path: readlinkFD(md.FD)}
-			_ = wd.Handle(ctx, e)
-			unix.Close(int(md.FD))
+			// HANDLED CONCURRENTLY, bounded. Answering one at a time makes the watchdog's per-event
+			// budget meaningless under load: it starts when the event is DEQUEUED, not when the kernel
+			// blocked the process, so the Nth opener waits N × the decision cost while every answer
+			// still reads as inside budget. Measured on a live kernel — twelve concurrent opens at 25ms
+			// each took 306ms, exactly serial.
+			//
+			// The exec gate has the same loop and does not need this: an exec decision is ~41µs, so
+			// fifty concurrent execs queue for 2ms. An open decision is ~6ms, so fifty queue for 300ms.
+			// The same structure is safe at one scale and not at the other.
+			//
+			// BOUNDED, because unbounded goroutines in a process holding CAP_SYS_ADMIN is what an
+			// attacker opening ten thousand files at once would cost. When every slot is busy the
+			// producer BLOCKS here, which is backpressure: the kernel's queue absorbs it, and an event
+			// that waits too long is answered by the watchdog's budget as a fail-open, which is the
+			// correct answer for a gate that cannot keep up.
+			fd := md.FD
+			pid := md.PID
+			sem <- struct{}{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				// readlink INSIDE the goroutine, before the fd is closed: it is best-effort audit data,
+				// and doing it on the read loop would put a /proc lookup in front of every event.
+				_ = wd.Handle(ctx, watchdog.PermissionEvent{PID: pid, FD: fd, Path: readlinkFD(fd)})
+				unix.Close(int(fd))
+			}()
 		}
 	}
 }

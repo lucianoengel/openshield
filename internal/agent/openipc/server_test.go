@@ -36,7 +36,8 @@ func serve(t *testing.T, d *stubDecider) string {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		c := &Client{SocketPath: sock, Timeout: 200 * time.Millisecond}
-		if _, err := c.dial(); err == nil {
+		if conn, err := c.take(time.Now().Add(200 * time.Millisecond)); err == nil {
+			c.give(conn)
 			c.Close()
 			return sock
 		}

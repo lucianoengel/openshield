@@ -1955,3 +1955,43 @@ deliberately not the ceiling and why.
 **This is the third time in two rounds that CI found something the local loop structurally could not**
 — the macOS address limit, the agent's linked-in parsers, and now a timing margin that only shows on a
 slower machine. Each was invisible here by construction rather than by oversight.
+
+
+## Round 40 (D356): the per-event budget was not a per-process bound
+
+D355 ended by naming what the measurement could not answer: the gate had never run under concurrent
+load. It turns out the single-decision number was hiding a structural problem.
+
+**The watchdog's budget starts when it DEQUEUES an event, not when the kernel blocked the process.**
+Both gates answered events one at a time, so the Nth opener waited N × the decision cost while every
+answer still read as inside budget. Measured on a live kernel: twelve concurrent opens at 25ms each
+took **306ms**, exactly serial.
+
+The exec gate has the identical loop and does not need fixing, and the reason is scale rather than
+luck. An exec decision is ~41µs, so fifty concurrent execs queue for 2ms — invisible. An open decision
+is ~6ms, so fifty queue for 300ms. **The same structure is safe at one scale and not at the other**,
+which is why copying a proven shape is not the same as proving it.
+
+### Two changes, and they had to be made together
+
+Handling events concurrently alone would have made it worse: the IPC client held ONE connection, and
+the wire is one request and one response per exchange, so two goroutines would interleave writes and
+read each other's answers. The request-id check catches that and fails open — correct, and useless,
+because the gate would then allow everything under exactly the load it most needs to work.
+
+So the client got a connection pool and the producer a bounded worker set, sized the same. They are the
+same queue seen from either end, and a producer running ahead of the pool would only move the waiting
+from one side of the socket to the other.
+
+**Bounded, not unbounded**: ten thousand simultaneous opens would otherwise cost ten thousand
+goroutines and connections in a process holding CAP_SYS_ADMIN. When every slot is busy the producer
+blocks, the kernel's queue absorbs it, and an event that waits too long is answered by the watchdog's
+budget as a fail-open — the correct answer for a gate that cannot keep up.
+
+306ms → 53ms, and all five VM scenarios still pass.
+
+### The lesson is about what a benchmark measures
+
+A single-decision latency test on an idle machine says the decision fits the window. It cannot say the
+gate does, because it never asks two questions at once — and the thing that breaks is not the decision
+but the queue in front of it. The number was accurate and the conclusion drawn from it was wrong.

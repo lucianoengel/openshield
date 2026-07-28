@@ -37,11 +37,26 @@ type Client struct {
 	// MaxPrefix bounds the bytes read from the event descriptor. Capped at MaxPrefixLen regardless.
 	MaxPrefix int
 
+	// MaxInFlight bounds concurrent verdicts. Each in-flight request holds its own connection, because
+	// the wire is one request and one response per exchange: two goroutines sharing a connection would
+	// interleave writes and read each other's answers, which the request-id check would catch as a
+	// mismatch and turn into a fail-open. Correct, and useless — the gate would allow everything under
+	// exactly the load it most needs to work.
+	MaxInFlight int
+
 	seq atomic.Uint64
 
-	mu   sync.Mutex
-	conn net.Conn
+	mu    sync.Mutex
+	conns chan net.Conn // a pool, sized on first use
 }
+
+// DefaultMaxInFlight bounds concurrent verdicts.
+//
+// Not unbounded: an attacker opening ten thousand files at once would otherwise cost ten thousand
+// connections and goroutines in a process holding CAP_SYS_ADMIN. Not one either — that is the serial
+// gate this exists to replace, where the Nth opener waits N × the decision cost while the watchdog's
+// per-event budget still reads as satisfied.
+const DefaultMaxInFlight = 8
 
 // DefaultTimeout leaves room inside the watchdog's budget for the read, the round trip, and the answer.
 const DefaultTimeout = 150 * time.Millisecond
@@ -64,7 +79,6 @@ func (c *Client) Evaluate(ctx context.Context, e watchdog.PermissionEvent) (watc
 		// The connection is desynchronised: this answer belongs to a different question, and the next
 		// one would too. Drop it so the following event starts clean rather than reading answers one
 		// behind — a gate answering the previous file's question is worse than one that fails open.
-		c.dropConn()
 		return watchdog.VerdictAllow, ErrIDMismatch
 	}
 	if resp.Verdict == VerdictDeny {
@@ -117,13 +131,14 @@ func (c *Client) roundTrip(ctx context.Context, req Request) (Response, error) {
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		conn, err := c.dial()
+		conn, err := c.take(deadline)
 		if err != nil {
-			return Response{}, fmt.Errorf("openipc: dialing the engine: %w", err)
+			return Response{}, fmt.Errorf("openipc: reaching the engine: %w", err)
 		}
 		_ = conn.SetDeadline(deadline)
 		if err := WriteRequest(conn, req); err != nil {
-			c.dropConn()
+			_ = conn.Close()
+			c.give(nil)
 			if attempt == 0 {
 				continue
 			}
@@ -131,42 +146,90 @@ func (c *Client) roundTrip(ctx context.Context, req Request) (Response, error) {
 		}
 		resp, err := ReadResponse(conn)
 		if err != nil {
-			c.dropConn()
+			_ = conn.Close()
+			c.give(nil)
 			if attempt == 0 {
 				continue
 			}
 			return Response{}, fmt.Errorf("openipc: reading the verdict: %w", err)
 		}
+		c.give(conn)
 		return resp, nil
 	}
 	return Response{}, fmt.Errorf("openipc: no answer after a reconnect")
 }
 
-func (c *Client) dial() (net.Conn, error) {
+// pool returns the connection pool, creating it on first use. The channel is the concurrency bound: a
+// caller blocks here when every slot is busy, which is backpressure rather than an unbounded fan-out.
+func (c *Client) pool() chan net.Conn {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn != nil {
-		return c.conn, nil
+	if c.conns == nil {
+		n := c.MaxInFlight
+		if n <= 0 {
+			n = DefaultMaxInFlight
+		}
+		c.conns = make(chan net.Conn, n)
+		for i := 0; i < n; i++ {
+			c.conns <- nil // a nil slot dials on demand
+		}
+	}
+	return c.conns
+}
+
+// take borrows a slot, dialing if its connection is absent or was dropped.
+func (c *Client) take(deadline time.Time) (net.Conn, error) {
+	p := c.pool()
+	var conn net.Conn
+	select {
+	case conn = <-p:
+	case <-time.After(time.Until(deadline)):
+		// Every slot is busy for longer than this event can wait. Returning an error fails the event
+		// OPEN, which is the right answer: a queue that outlives the permission window is a process
+		// blocked past its budget, and the watchdog would have allowed it anyway.
+		return nil, fmt.Errorf("openipc: all %d verdict slots busy", cap(p))
+	}
+	if conn != nil {
+		return conn, nil
 	}
 	conn, err := net.DialTimeout("unix", c.SocketPath, DefaultTimeout)
 	if err != nil {
+		p <- nil // return the slot empty so the pool does not shrink on a failed dial
 		return nil, err
 	}
-	c.conn = conn
 	return conn, nil
 }
 
-func (c *Client) dropConn() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn != nil {
-		_ = c.conn.Close()
-		c.conn = nil
+// give returns a slot. A nil conn returns the slot empty, so the next taker dials fresh.
+func (c *Client) give(conn net.Conn) {
+	select {
+	case c.pool() <- conn:
+	default:
+		// The pool is full, which can only happen if give is called more often than take. Close rather
+		// than leak.
+		if conn != nil {
+			_ = conn.Close()
+		}
 	}
 }
 
-// Close releases the connection.
+// Close releases every pooled connection.
 func (c *Client) Close() error {
-	c.dropConn()
+	c.mu.Lock()
+	p := c.conns
+	c.conns = nil
+	c.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	for i := 0; i < cap(p); i++ {
+		select {
+		case conn := <-p:
+			if conn != nil {
+				_ = conn.Close()
+			}
+		default:
+		}
+	}
 	return nil
 }
