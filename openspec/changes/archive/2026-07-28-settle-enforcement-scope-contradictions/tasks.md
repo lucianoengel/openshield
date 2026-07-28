@@ -25,4 +25,4 @@
 - [x] 3.2 `openspec validate --specs --strict` passes on every capability.
 - [x] 3.3 `OPENSHIELD_REQUIRE_POSTGRES=1 make all` green.
 - [x] 3.4 Record the unwired file-open prefilter in `docs/unwired-audit.md`.
-- [ ] 3.5 Commit with a D-number and archive WITH the spec sync.
+- [x] 3.5 Commit with a D-number and archive WITH the spec sync.
