@@ -1774,3 +1774,61 @@ The library's doc comment says it brokers access and does not prevent bypass. A 
 an application that later takes a direct route to the internal network is announced by nothing. So the
 process says it on every start, alongside the HTTP(S)-only bound and the fact that it is not an
 enrolment tool — the same discipline as the SMTP capture listener and the plaintext syslog stream.
+
+
+## Round 36 (D352): B2 — the inline file-open gate, and the design that had to change first
+
+`internal/agent/prefilter` was the synchronous tier of two-tier inline prevention: complete, tested,
+and answering events nothing produced. The README said so honestly — inline blocking of a file open
+"remains designed and not wired". This wires it.
+
+### Reading the design found two defects before any code
+
+`Decider.DecidePartial` opened `e.Path` to read its prefix. Under the mark, that open raises **another**
+permission event, which the same gate must answer, which opens the file again — a deadlock inside a
+window that is **uninterruptible**, so the machine does not recover. The watchdog exempts only
+`SelfPID`, which does not help: the opener is a different process.
+
+And opening by path is a **TOCTOU hole** — the event names an inode, the path may name a different file
+by then, so the gate would authorize what it inspected while the kernel releases what it did not. That
+one survives any fix to the deadlock.
+
+**The resolution is structural.** The agent reads the bounded prefix from the descriptor the kernel
+already handed it. No new open happens anywhere, so no second event can be raised; and the descriptor
+refers to the inode being decided about, so there is nothing to swap. The alternative — exempting the
+engine's PID — avoids the deadlock by bookkeeping that goes stale on restart or PID reuse, and the
+failure mode of getting it wrong is an unrecoverable host.
+
+That is why this IPC carries content when the exec bridge's doc ends "Never content". The direction is
+what keeps it safe: content travels PRIVILEGED → UNPRIVILEGED, so the agent WRITES bytes it read and
+decodes only a fixed-width verdict frame. The dangerous operation is unchanged, and D13 holds — the
+agent holds bytes, only the worker parses them.
+
+### The kernel answered the question the exec gate got wrong
+
+D224 recorded that a directory inode mark does **not** deliver `FAN_OPEN_EXEC_PERM` for files executed
+within it, which is why execmon marks the mount. Opens are different, and this was measured rather than
+assumed: a directory mark with `FAN_EVENT_ON_CHILD` **does** deliver opens of the files inside.
+
+That difference is what makes a mount mark refusable here. Marking a mount for opens would route every
+open on the host — the package manager's, the shell's, the engine's own — through a permission window
+that blocks its caller uninterruptibly. A mount-wide scope is refused, and so is naming a regular file,
+because that is almost always a mistake an operator meant as "this directory".
+
+### Verified in the order that keeps a host alive
+
+ALLOW first, then fail-open, then scope refusal, then DENY — every command under `sudo -n timeout N`,
+in fresh temp directories, with a short budget. A gate broken in the blocking direction shows up in the
+first test bounded by a timeout rather than in a wedged machine. This host was bricked twice earlier in
+the same session by unbounded root processes in permission windows; the ordering is not ceremony.
+
+All four pass on kernel 6.8. Both mutations fail on the same hardware: a BLOCK that no longer denies
+lets the opener through, and a prefix that is never read leaves the decider with `""` — a content gate
+deciding on nothing.
+
+### What is NOT done, named rather than dropped
+
+The budget measurement. The gate is correct and fails open; what is not established is the p99 cost of
+a decided open, which is the number that decides whether this is deployable on a busy directory. The
+exec gate has that measurement (p50 41µs, p99 987µs against a 200ms window, D301) and this one will
+need its own before it is recommended anywhere real.
