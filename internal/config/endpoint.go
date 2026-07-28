@@ -20,6 +20,16 @@ package config
 var AgentFields = []Field{
 	{Key: "OPENSHIELD_EXEC_MONITOR_DIRS", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Comma-separated paths the exec monitor watches (HIPS-3). Unset means no exec monitoring at all."},
+	// B2 — the inline file-open gate. Separate from the exec gate's settings on purpose: the two have
+	// very different availability costs, and an operator may reasonably want one without the other.
+	{Key: "OPENSHIELD_OPEN_GATE_DIRS", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Comma-separated DIRECTORIES whose file opens are decided inline (B2). Directories only — a mount-wide scope is refused, because every open on the host would then enter a permission window. Unset disables the gate."},
+	{Key: "OPENSHIELD_OPEN_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
+		Description: "Socket the engine answers file-open verdicts on. REQUIRED when the gate is enabled: there is no local fallback, so without it the gate would fail open on every event while reporting itself active."},
+	{Key: "OPENSHIELD_OPEN_IPC_TIMEOUT", Scope: ScopeBootstrap, Kind: KindDuration, Default: "150ms",
+		Description: "Bound on one verdict round trip. Must sit inside the watchdog budget — a client still waiting when the budget elapses is producing an answer nobody can use."},
+	{Key: "OPENSHIELD_OPEN_BUDGET", Scope: ScopeBootstrap, Kind: KindDuration, Default: "500ms",
+		Description: "How long a process may be held in a file-open permission window before the watchdog ALLOWS and audits. This is the host's safety margin, not a tuning knob."},
 	{Key: "OPENSHIELD_EXEC_DENY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Deny-list file of binaries refused at exec."},
 	{Key: "OPENSHIELD_EXEC_ALLOW", Scope: ScopeBootstrap, Kind: KindPath, Default: "",

@@ -14,6 +14,8 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/lucianoengel/openshield/internal/agent/openipc"
+	"github.com/lucianoengel/openshield/internal/agent/prefilter"
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/connectors/dns"
 	"github.com/lucianoengel/openshield/internal/connectors/execaudit"
@@ -581,6 +583,38 @@ func main() {
 		}()
 		log.Warn("engine: exec-verdict IPC ACTIVE — the privileged gate's inline exec decisions now come "+
 			"from this pipeline (policy-driven; intent-driven containment awaits SOAR-7)",
+			slog.String("socket", sock))
+	}
+
+	// B2: answer the privileged FAN_OPEN_PERM gate's questions from this pipeline.
+	//
+	// The agent reads a bounded prefix from the kernel's descriptor and sends it; this side classifies
+	// those bytes in the sandboxed worker and runs the same policy the async tier runs. It NEVER opens
+	// the file — an open here would raise a second permission event the same gate must answer, which
+	// deadlocks inside an uninterruptible window.
+	//
+	// A SEPARATE SOCKET from the exec gate's, so the two are independently enable-able: an operator may
+	// reasonably want exec prevention without file-open prevention, whose availability cost is far
+	// higher.
+	if sock := strings.TrimSpace(os.Getenv("OPENSHIELD_OPEN_IPC_SOCKET")); sock != "" {
+		openSrv := &openipc.Server{
+			Decide: prefilter.NewDecider(worker, pol, 0, 120*time.Millisecond, log),
+			Logger: log,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := openSrv.Listen(ctx, sock); err != nil && ctx.Err() == nil {
+				// Not fatal, for the same reason the exec socket is not: losing it degrades the gate to
+				// audited fail-opens, which is strictly better than taking the engine down and leaving
+				// the endpoint with no pipeline at all.
+				log.Error("engine: open-verdict server stopped", slog.Any("err", err))
+			}
+		}()
+		log.Warn("engine: open-verdict IPC ACTIVE — the privileged file-open gate's inline decisions now "+
+			"come from this pipeline. The verdict is made from a BOUNDED PREFIX, so content past the "+
+			"ceiling is not seen inline; the async tier classifies the whole file and contains it "+
+			"afterwards (D16).",
 			slog.String("socket", sock))
 	}
 

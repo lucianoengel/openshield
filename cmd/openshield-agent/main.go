@@ -61,8 +61,21 @@ func main() {
 
 	dirs := splitEnv("OPENSHIELD_EXEC_MONITOR_DIRS")
 	if len(dirs) == 0 {
-		logf("no exec-monitor configured. Set OPENSHIELD_EXEC_MONITOR_DIRS (comma-separated paths) + " +
-			"OPENSHIELD_EXEC_DENY (deny-list file) to enable HIPS-3 inline exec prevention. " +
+		// THE FILE-OPEN GATE CAN RUN ALONE (B2). The two gates are independent — an operator may want
+		// file-open prevention without exec prevention or the reverse — so an agent configured for one
+		// is not a do-nothing agent.
+		if openGateConfigured() {
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			if err := runOpenGate(ctx); err != nil && ctx.Err() == nil {
+				logf("file-open gate: %v", err)
+				os.Exit(1)
+			}
+			return
+		}
+		logf("no gate configured. Set OPENSHIELD_EXEC_MONITOR_DIRS (comma-separated paths) + " +
+			"OPENSHIELD_EXEC_DENY (deny-list file) for HIPS-3 inline exec prevention, or " +
+			"OPENSHIELD_OPEN_GATE_DIRS + OPENSHIELD_OPEN_IPC_SOCKET for the B2 file-open gate. " +
 			"For the observe path, run openshield-engine.")
 		// Exit non-zero so a service manager does not treat a do-nothing agent as healthy.
 		os.Exit(2)

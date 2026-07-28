@@ -70,6 +70,8 @@ var EngineFields = []Field{
 		Description: "Address for the SMTP capture connector (SMTP-1). A CAPTURE listener, not an MTA, and it does not handle TLS-negotiated sessions. Empty disables it."},
 	{Key: "OPENSHIELD_EXEC_AUDIT_LOG", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "auditd log the exec connector reads (HIPS-5c). Additive and observe-only unless a KILL policy and OPENSHIELD_ENFORCE are both set."},
+	{Key: "OPENSHIELD_OPEN_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
+		Description: "Socket this engine answers FILE-OPEN verdicts on (B2). It serves verdicts; it does not ask for them. The engine CREATES it, so only its parent directory must exist."},
 	{Key: "OPENSHIELD_EXEC_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
 		Description: "Socket this engine answers the privileged exec gate on. It serves verdicts; it does not ask for them. The engine CREATES it, so only its parent directory must exist."},
 	{Key: "OPENSHIELD_FIM_PATHS", Scope: ScopeBootstrap, Kind: KindString, Default: "",

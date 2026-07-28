@@ -21,6 +21,8 @@ func Open(paths []string) (*Monitor, error) {
 
 func (m *Monitor) Close() error { return nil }
 
+func (m *Monitor) NotifyFD() int { return -1 }
+
 func (m *Monitor) Run(ctx context.Context, wd *watchdog.Watchdog) error {
 	return fmt.Errorf("openmon: unsupported on this platform")
 }

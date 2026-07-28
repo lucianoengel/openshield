@@ -64,6 +64,10 @@ func Open(paths []string) (*Monitor, error) {
 	return m, nil
 }
 
+// NotifyFD is the fanotify descriptor the responder writes its answer to. The watchdog owns answering;
+// this exposes the channel it answers on.
+func (m *Monitor) NotifyFD() int { return m.fd }
+
 // Close releases the fanotify descriptor, which drops every mark with it.
 func (m *Monitor) Close() error { return unix.Close(m.fd) }
 
