@@ -1357,3 +1357,60 @@ reached the worker. Withholding the body from the store fails the scenario the s
 "DNS/SMTP inspection" was attributed to the gateway. DNS *sinkholing* is the gateway; DNS query and
 SMTP message inspection are the engine. The claim is now true and it names the right binary — which
 matters more than it looks, because an operator reading it configures the wrong process otherwise.
+
+
+## Round 28 (D344): the reproducible half of the thesis had never been run
+
+The roadmap states the project's thesis in one sentence: *every security decision is explainable,
+**reproducible**, and cryptographically auditable*. `openshieldctl verify` has always covered the
+auditable half — it proves the ledger was not edited. The reproducible half was implemented in
+`core.Replay` and `core.DecisionsEquivalent`, carefully — an explicit allowlist of compared fields,
+with a doc comment explaining that a denylist would let a newly added field weaken replay silently —
+and **had no caller**. No command exposed it. Nobody had ever replayed a decision.
+
+Fifth instance of the shape, and the one closest to the product's central promise.
+
+### The command is narrower than it first appears, and that is the design
+
+The ledger stores **no content** (D10/D29). That is the privacy property the product is built
+around, and it is not being relaxed to make replay convenient. So replay cannot be "re-run decision
+45": the operator supplies the event, from wherever they still have it, and the question answered is
+
+> given THIS input, does the policy still produce what was recorded?
+
+It does **not** establish that the input is what the original decision saw. A file event replays
+against the file's current bytes. Every divergence report therefore names both causes — the policy
+changed, or the input changed — because an operator who reverts a policy over a file somebody edited
+has been misled by a report that was technically accurate. Both the success and the failure report
+state what was not established; a bare "REPRODUCED" invites the stronger reading.
+
+Four outcomes, four exit codes: reproduced, diverged, no such entry, ambiguous id. Collapsing "no
+such decision" into "diverged" would let a typo in an event id fail a policy gate as though the
+policy had regressed.
+
+### The first version failed against a decision the engine had just written
+
+Exit 3, and the only differing field was `policy_id`: recorded as `openshield.default@phase1-1`,
+replayed as `openshield.composite@default`. **Identical rules, different identity, decided by how the
+stage was constructed.** The CLI had called `policy.NewComposite` directly with an empty pack list;
+composing nothing with the default is still labelled composite.
+
+The impact query said HIGH risk on `NewComposite` — two binaries reach it — and reading the caller
+showed the library was already right: `SelectFromEnv` returns `NewDefault` when no packs and no
+custom module are set, which is why the engine stamped `default`. **The bug was in the new code, not
+the old.** The fix was to use the same selector the engine uses, reading the same
+`OPENSHIELD_POLICY_*` environment, so the CLI cannot drift from what the engine loaded — which is the
+only way this command's answer means anything.
+
+Worth keeping: the blast-radius warning was right to fire and wrong to act on. Reading the impacted
+caller was what turned a HIGH-risk edit into a three-line fix in code written ten minutes earlier.
+
+### The mutation killed one test and not the other, honestly
+
+Disabling the action comparison fails the **unit** test, which isolates that field. The
+**integration** scenario still passes, because its divergence changes the input, which changes the
+`reason` as well as the action — so `reason` catches it. That is defence in depth rather than a
+vacuous test, and the division is deliberate: the unit tests pin field-level comparison, the
+integration scenario pins the end-to-end wiring against a decision the engine really wrote. Recording
+it because a surviving mutation always deserves an explanation, and "it is covered elsewhere" is only
+acceptable when the elsewhere is named.

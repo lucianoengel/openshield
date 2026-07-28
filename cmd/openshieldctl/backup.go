@@ -59,7 +59,7 @@ func backupCmd(args []string) int {
 		Witness: f["witness"],
 	}
 	if opts.DSN == "" {
-		opts.DSN = "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable"
+		opts.DSN = defaultDSN
 	}
 	if opts.File == "" {
 		fmt.Fprint(os.Stderr, backupUsage)

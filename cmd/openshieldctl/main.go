@@ -20,12 +20,23 @@ import (
 	"github.com/lucianoengel/openshield/internal/store/postgres"
 )
 
+// defaultDSN is the dev-stack connection, named once. It appeared as a literal in three places, which
+// is three chances for them to drift apart.
+const defaultDSN = "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable"
+
 const usage = `openshieldctl — query the OpenShield audit ledger
 
 usage:
   openshieldctl timeline [--subject S] [--event E] [--since RFC3339] [--until RFC3339] [--anchor FILE]
   openshieldctl verify   [--anchor FILE] [--witness FILE]
   openshieldctl anchor export                        (reads the stored anchor, writes PEM)
+  openshieldctl replay --event FILE
+      (reads OPENSHIELD_POLICY_PACK/PACKS/CUSTOM, like the engine, so it replays
+       against the policy this deployment is configured with)
+      re-evaluate a recorded event and report whether it REPRODUCES the decision the
+      ledger holds. The ledger stores no content, so YOU supply the event: this asks
+      whether the policy still produces that decision from this input, not whether the
+      input is what the original decision saw.
   openshieldctl backup dump  --file DUMP
   openshieldctl backup drill --file DUMP --witness FILE [--anchor FILE] [--print]
       back up and REHEARSE the restore. The drill is not passed until the ledger
@@ -57,6 +68,8 @@ func run(args []string) int {
 		return verifyRelease(args[1:])
 	case "backup":
 		return backupCmd(args[1:])
+	case "replay":
+		return replayCmd(args[1:])
 	}
 	fs := newFlags()
 	sub := parseSubject(cmd, args[1:])
@@ -213,7 +226,7 @@ type flags struct {
 func newFlags() *flags {
 	dsn := os.Getenv("OPENSHIELD_DSN")
 	if dsn == "" {
-		dsn = "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable"
+		dsn = defaultDSN
 	}
 	return &flags{dsn: dsn}
 }
