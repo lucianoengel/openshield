@@ -3,11 +3,14 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/xdr"
 )
@@ -133,6 +136,34 @@ func (s *Server) projectDecisionAlert(ctx context.Context, payload []byte) {
 	}
 	if !alertableAction(d.GetAction()) {
 		return // an allowed decision is not an alert, and not a failure either
+	}
+	// THE CONTRACT IS CHECKED BEFORE THE DECISION IS REASONED ABOUT (D350).
+	//
+	// Signature verification establishes WHO sent this, not that what they sent is expressible in the
+	// platform's contract. Without it, an enrolled agent — compromised, or merely disagreeing about the
+	// enum — can carry `confidence: 999` into severityForDecision, which grades anything at or above
+	// its floor as CRITICAL, and manufacture critical alerts at will. The engine's own producer clamps
+	// confidence strictly below 1.0 (D4), but that clamp is on the PRODUCING side and this payload
+	// never went through it.
+	//
+	// AFTER the alertable check, deliberately: a non-alertable decision is not projected either way, so
+	// contract-checking it first would flood the counter with ALLOWs rather than report an attack.
+	//
+	// hasConfidence is passed TRUE rather than derived from the wire. proto3 cannot distinguish an
+	// absent double from 0.0, and it turns out a legitimate alertable decision can genuinely carry 0.0:
+	// a policy rule that sets no confidence, over an event with no classification hits, produces one —
+	// the NIPS-3 DNS-tunnel rule is exactly that shape. Refusing absence would refuse those alerts.
+	// Absence grades LOW, which is not a forgery vector; the vector is out-of-RANGE, and that is still
+	// refused.
+	if err := core.ValidateDecision(&d, true); err != nil {
+		s.DecisionContractViolations.Add(1)
+		// NAMED, because "a decision was refused" is not actionable and "this agent is sending actions
+		// this build does not know" is.
+		fmt.Fprintf(os.Stderr, "openshield-server: REFUSED a decision that does not satisfy the "+
+			"decision contract — NOT projected into the alert stream, retained as telemetry "+
+			"(event=%s action=%s confidence=%v): %v\n",
+			d.GetEventId(), d.GetAction(), d.GetConfidence(), err)
+		return
 	}
 	subject, kind, ok := s.originatingEvent(ctx, d.GetEventId())
 	if !ok {

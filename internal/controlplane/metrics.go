@@ -66,6 +66,7 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_wef_dropped_total", "Windows Event Forwarding records skipped — a non-zero value means Windows endpoints are reporting events this deployment is discarding.", s.WEFDropped.Load()},
 
 			{"openshield_entity_resolve_failures_total", "Entity-graph writes that failed — a non-zero value means some device or user is NOT in the graph, so cross-domain correlation cannot join on it and an attack spanning that entity surfaces as separate incidents (XDR-1).", s.EntityResolveFailures.Load()},
+			{"openshield_decision_contract_violations_total", "Decisions REFUSED for not satisfying the decision contract (D350) — an action outside the closed set, an absent or out-of-range confidence, or no identifying policy. A non-zero value means an enrolled agent is sending decisions this build cannot reason about: a version skew, or a compromised agent attempting to forge severity.", s.DecisionContractViolations.Load()},
 			{"openshield_retention_record_failures_total", "Retention/purge outcomes that could not be recorded — the purge may have run, but the compliance evidence that it ran is missing (T-013).", s.RetentionRecordFailures.Load()},
 		}
 		// LISTENER REFUSALS, appended only when a listener is actually running. These count what was

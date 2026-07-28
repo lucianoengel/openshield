@@ -178,6 +178,10 @@ type Server struct {
 	// entity-resolve failure, or an insert error) — the derived cross-domain stream is best-effort over
 	// the authoritative per-domain records, so a failure is counted, never fatal (XDR-2).
 	UnifiedAlertFailures atomic.Int64
+	// DecisionContractViolations counts decisions refused because they do not satisfy the decision
+	// contract — an action outside the closed set, a confidence absent or out of range, no identifying
+	// policy (D350). A verified signature says WHO sent it, not that what they sent is expressible.
+	DecisionContractViolations atomic.Int64
 
 	// UnprojectedDecisions counts VERIFIED alertable decisions that could not be projected into the
 	// unified stream — no persisted originating event, a subject-less event, or an unmapped event kind

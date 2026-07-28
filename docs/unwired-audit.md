@@ -1658,3 +1658,64 @@ Verified risk that is stored and never reaches the policy input: the update is s
 accepted, recorded — and the access decision does not change. The request returns 200 and the test
 fails naming the subject. That is precisely the silent degrade this scenario exists to catch, and it
 is indistinguishable from a healthy deployment from every angle except an access decision.
+
+
+## Round 34 (D350): a decision crossing the trust boundary was never contract-checked
+
+`core.ValidateDecision` checks the things that matter about a Decision — the action is in the closed
+set, confidence is in range, a policy id and version identify what produced it — and its own comment
+states the stakes: "An unknown action is a signal that the producer and consumer disagree about the
+contract, which is a security event, not a reason to permit the operation."
+
+It had no caller. Decisions arriving as fleet telemetry were unmarshalled, stored, and projected into
+`unified_alerts` — the stream correlation, incidents and entity risk are built on — unchecked.
+
+### What that permitted
+
+Signature verification runs first (D44), so this is not open injection. It is what an **enrolled**
+agent could do: compromised, key-leaked, or merely version-skewed.
+
+`severityForDecision` calls `Severity(confidence)`, which returns CRITICAL for anything at or above
+its floor, and confidence was never range-checked on ingest. A decision carrying `confidence: 999`
+became a CRITICAL alert. **An agent could manufacture critical alerts at will**, and the engine's own
+producer clamps confidence below 1.0 (D4) — but that clamp is on the producing side, and a telemetry
+payload never passes through it.
+
+An action outside the enum fared no better: `alertableAction` admits anything that is not UNSPECIFIED
+and not ALLOW, and `enforcementAction` — a switch over the known set — returns false for it, grading
+the alert as if nothing had been enforced. The comment on that switch says a total mapping is "exactly
+what makes this mapping safe: a compromised control plane cannot invent an action whose severity we
+failed to consider". True of the control plane. The telemetry path was never held to it.
+
+### Two things the implementation got wrong first, and how they were caught
+
+**Ordering.** Validating before the alertable check flagged every ALLOW, because a legitimate ALLOW
+can carry no policy identity in a fixture and, more importantly, because a non-alertable decision is
+not projected anyway — the counter would have reported traffic rather than attacks. The check now runs
+after, so only decisions that would become alerts are contract-checked.
+
+**Requiring confidence to be PRESENT.** proto3 cannot distinguish an absent double from 0.0, so the
+first version probed the wire form and refused absence. Checking the producing side before believing
+that was right: `confidenceFrom` returns 0.0 for an alertable decision whenever the policy sets no
+confidence over an event with no classification hits — **and the NIPS-3 DNS-tunnel rule shipped in
+D341 is exactly that shape.** Enforcing presence would have refused the alerts of a feature shipped
+nine rounds earlier. Absence grades LOW, which is not a forgery vector; the vector is out-of-range,
+and that is still refused.
+
+### The existing fixture could not have occurred
+
+Two tests failed on the new check because their Decision fixture omitted policy identity — and both
+real producers (the policy stage, and the ledger reading one back) always set it. The fixture was
+standing in for agent telemetry and constructing a shape no producer in the system emits. That is mild
+evidence of the gap itself: a fixture drifts from reality most easily where nothing validates it.
+
+### Why refused decisions are still stored
+
+Two silences were available. Dropping the telemetry keeps the alert stream clean and destroys the
+evidence that a malformed decision arrived — the signal an investigator most wants after learning an
+agent was compromised. Projecting it keeps the evidence and corrupts the stream. So: stored, not
+projected, counted, and logged with which check failed and which agent sent it — because "a decision
+was refused" is not actionable and "this agent is sending actions this build does not know" is.
+
+The counter is an ordinary `atomic.Int64` on the Server, which means **D348's guard forced it onto
+`/metrics`**. That is the first time one of this audit's guards has caught the next round's work.

@@ -38,6 +38,12 @@ func decisionFor(decisionID, eventID string, action corev1.Action, confidence fl
 		Confidence: confidence,
 		Reason:     "blocked: " + seededSecret + " matched CPF 123.456.789-09",
 		DecidedAt:  timestamppb.New(time.Now().UTC()),
+		// POLICY IDENTITY, because every real producer sets it — the policy stage stamps both, and the
+		// ledger reads both back. This fixture omitted them, and stood in for agent telemetry that
+		// always carries them; the projection now contract-checks what it is handed (D350), and a
+		// fixture that no producer in the system could emit would be testing a shape that cannot occur.
+		PolicyId:      "openshield.default",
+		PolicyVersion: "phase1-1",
 	}
 }
 
@@ -316,5 +322,93 @@ func TestProjectionFailureDoesNotAffectIngest(t *testing.T) {
 	}
 	if !sawDecision {
 		t.Fatal("the decision was not persisted — a failing derived projection must not affect ingest")
+	}
+}
+
+// A DECISION CROSSING THE TRUST BOUNDARY IS CONTRACT-CHECKED (D350).
+//
+// core.ValidateDecision existed, checked exactly the properties that matter for a decision arriving
+// from an agent, and had NO CALLER. Signature verification establishes WHO sent a decision (D44); it
+// says nothing about whether what they sent is expressible in the platform's contract.
+//
+// Driven through the REAL verified-ingest path — signed envelopes, embedded NATS, real Postgres —
+// because the gap was never in ValidateDecision (it has unit tests) but in nothing calling it.
+
+// TestAForgedConfidenceDoesNotBecomeACriticalAlert is the attack this closes.
+//
+// severityForDecision grades anything at or above the critical floor as CRITICAL, and confidence was
+// never range-checked on ingest — so an ENROLLED agent could manufacture critical alerts at will. The
+// engine's own producer clamps confidence strictly below 1.0 (D4), but that clamp is on the PRODUCING
+// side, and a telemetry payload never went through it.
+func TestAForgedConfidenceDoesNotBecomeACriticalAlert(t *testing.T) {
+	url := embeddedNATS(t)
+	srv := runServer(t, url)
+	conn, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	pub := signedAgent(t, srv, conn, "agent-forged-confidence")
+	ctx := context.Background()
+	subject := pseudonym.Of("agent-forged-confidence")
+
+	// A WELL-FORMED decision first, so the assertions below cannot pass against a projection that has
+	// stopped working — which would be a far worse outcome than the forgery.
+	if err := pub.PublishEvent(ctx, kindEventFor("evt-ok", subject, corev1.EventKind_EVENT_KIND_PROCESS_EXEC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishDecision(ctx, decisionFor("dec-ok", "evt-ok", corev1.Action_ACTION_KILL_PROCESS, 0.30)); err != nil {
+		t.Fatal(err)
+	}
+	entityID := entityForAlias(t, xdr.KindDevice, subject)
+	waitFor(t, func() bool { return len(alertsByDomain(t, srv, entityID)) >= 1 })
+
+	// THE FORGERY: a verified agent claiming certainty far outside the range.
+	if err := pub.PublishEvent(ctx, kindEventFor("evt-forged", subject, corev1.EventKind_EVENT_KIND_DNS_QUERY)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishDecision(ctx, decisionFor("dec-forged", "evt-forged", corev1.Action_ACTION_BLOCK, 999)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return srv.DecisionContractViolations.Load() >= 1 })
+
+	for _, a := range alertsByDomain(t, srv, entityID) {
+		if a.Severity == controlplane.SeverityCritical {
+			t.Errorf("a CRITICAL alert was projected from confidence 999 (%s/%s) — indistinguishable "+
+				"from a real critical alert in the stream that correlation, incidents and entity risk "+
+				"are built on", a.Domain, a.Title)
+		}
+	}
+}
+
+// TestAnActionOutsideTheClosedSetIsNotProjected.
+//
+// alertableAction admits anything that is not UNSPECIFIED and not ALLOW, so an unknown action number
+// was projected; enforcementAction is a switch over the KNOWN set and returns false for it, so the
+// alert was graded as if nothing had been enforced. The comment on that switch says a total mapping is
+// what makes it safe — true of the control plane, and the telemetry path was never held to it.
+func TestAnActionOutsideTheClosedSetIsNotProjected(t *testing.T) {
+	url := embeddedNATS(t)
+	srv := runServer(t, url)
+	conn, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	pub := signedAgent(t, srv, conn, "agent-unknown-action")
+	ctx := context.Background()
+	subject := pseudonym.Of("agent-unknown-action")
+
+	if err := pub.PublishEvent(ctx, kindEventFor("evt-unknown", subject, corev1.EventKind_EVENT_KIND_PROCESS_EXEC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishDecision(ctx, decisionFor("dec-unknown", "evt-unknown", corev1.Action(9999), 0.5)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return srv.DecisionContractViolations.Load() >= 1 })
+
+	entityID := entityForAlias(t, xdr.KindDevice, subject)
+	if got := len(alertsByDomain(t, srv, entityID)); got != 0 {
+		t.Errorf("%d alert(s) were projected from an action this build does not know", got)
 	}
 }
