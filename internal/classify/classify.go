@@ -58,13 +58,6 @@ func (c *Classifier) AddEDM(index *EDMIndex) {
 	}
 }
 
-// NewWithEDM returns the default classifier plus an EDM detector over the index.
-func NewWithEDM(index *EDMIndex) *Classifier {
-	c := New()
-	c.AddEDM(index)
-	return c
-}
-
 // Classify reads the (worker-bounded) stream fully and runs every detector.
 //
 // A read error is returned as an error, never as an empty result: empty hits

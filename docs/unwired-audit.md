@@ -1465,3 +1465,43 @@ existed all along.
 
 It also inverts the assumption the sweep started from. "No caller" was being read as "dead, delete
 it". Here it meant "the shipped path is doing something else, find out what".
+
+
+## Round 30 (D346): three of the four were dead, and the fourth was a correction to make
+
+D345 removed the EDM builder's defect and stated that the other four no-caller symbols "were what
+they looked like". Applying D345's own lesson to that sentence — check what the shipped path does
+before believing "no caller" means "dead" — found one of the four was wrong.
+
+**`enforcers/process.DenyEnforcer` is deliberately not registered, and the engine says so.** The
+comment beside the registration explains that `DENY_EXEC` is answered by the WATCHDOG's inline path —
+`execguard.Decider` maps it to a kernel `FAN_DENY`, reusing the fail-open budget — and that
+registering the enforcer as well would **double the deny**, once via the enforcer and once via the
+kernel answer. It is kept for the alternate async flow-enforcer model, where an engine dispatches exec
+events without holding the permission fd.
+
+So it is not superseded; it is a documented alternative to a path that is deliberately not taken. It
+stays, and D345's description of it is corrected here rather than left to read as a plan nobody
+executed.
+
+### The three that were dead are gone
+
+- **`core.Replay`** — dispatch-and-compare, which `cli.Replay` now does with reporting: the
+  distinction between a divergence, an unrecorded event and an ambiguous one, and the warning that a
+  divergence can mean the input changed. Two entry points differing only in whether they explain
+  themselves is the duplicate hazard this round exists to remove. `DecisionsEquivalent` — the actual
+  contract — stays, and is what the CLI calls.
+- **`gateway.SignUpdate`** — byte-identical to `controlplane.signRiskUpdate`, which `PublishRisk`
+  really uses. The gateway only VERIFIES. Two producers of one envelope is the hazard that matters:
+  change one to sign a domain-separated payload and the other keeps emitting the old shape while the
+  verifier accepts whichever it was compiled against. The tests that need to construct an envelope
+  now use a helper that lives with the tests, so the duplication is visibly a test concern.
+- **`classify.NewWithEDM` / `NewWithIDM`** — `New()` + `AddEDM()` is what the worker does. After
+  D345, an unused constructor sitting beside the used path is precisely the confusion worth deleting.
+
+### What the round is actually for
+
+Nothing here changes behaviour, and that is the point: the value is in the count of ways a future
+reader can take the wrong path. D345 happened because two builders sat side by side and the shipped
+tool used the wrong one. Every duplicate removed is one fewer chance to repeat it — and every
+duplicate KEPT, like `DenyEnforcer`, now has to say why in the code rather than in a reviewer's head.

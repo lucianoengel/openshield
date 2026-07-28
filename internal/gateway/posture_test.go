@@ -34,7 +34,7 @@ func TestPostureSubscriberBindsSubjectToKey(t *testing.T) {
 
 	signPosture := func(signer ed25519.PrivateKey, subject string, compliant bool) []byte {
 		payload, _ := proto.Marshal(&corev1.PostureUpdate{Subject: subject, Compliant: compliant, DiskEncrypted: true})
-		data, _ := gateway.SignUpdate(payload, signer)
+		data, _ := signUpdateForTest(payload, signer)
 		return data
 	}
 

@@ -15,7 +15,7 @@ import (
 func signRisk(t *testing.T, priv ed25519.PrivateKey, subject string, score float64) []byte {
 	t.Helper()
 	payload, _ := proto.Marshal(&corev1.RiskUpdate{Subject: subject, RiskScore: score})
-	data, err := gateway.SignUpdate(payload, priv)
+	data, err := signUpdateForTest(payload, priv)
 	if err != nil {
 		t.Fatal(err)
 	}

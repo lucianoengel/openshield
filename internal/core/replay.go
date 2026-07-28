@@ -1,25 +1,22 @@
 package core
 
 import (
-	"context"
 	"fmt"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
-// Replay re-runs a recorded Event through a pipeline configuration and reports
-// whether the resulting Decision matches the recorded one.
+// REPLAY IS WHAT MAKES THE AUDIT TRAIL AN INVESTIGATION TOOL RATHER THAN A LOG. "Every decision should
+// be explainable" is unfounded if a recorded decision cannot be reproduced.
 //
-// Replay is what makes the audit trail an investigation tool rather than a log.
-// "Every decision should be explainable" is unfounded if a recorded decision
-// cannot be reproduced.
-func Replay(ctx context.Context, d *Dispatcher, e *corev1.Event, recorded *corev1.Decision) error {
-	got, err := d.Dispatch(ctx, e)
-	if err != nil {
-		return fmt.Errorf("replay dispatch: %w", err)
-	}
-	return DecisionsEquivalent(recorded, got)
-}
+// The dispatch-and-compare entry point that used to live here has moved to `cli.Replay` (D344), which
+// does the same two steps and additionally reports the outcome — including the distinction between a
+// divergence, an unrecorded event and an ambiguous one, and the warning that a divergence can mean the
+// INPUT changed rather than the policy. Two entry points differing only in whether they explain
+// themselves is the duplicate-implementation hazard this codebase has been bitten by (D345), so there
+// is one, and it is the one an operator can run.
+//
+// DecisionsEquivalent below is the contract both would have shared, and is what `cli.Replay` calls.
 
 // DecisionsEquivalent compares two Decisions on an EXPLICIT field list.
 //

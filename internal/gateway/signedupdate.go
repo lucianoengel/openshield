@@ -9,13 +9,12 @@ import (
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
-// SignUpdate wraps a marshalled payload (a RiskUpdate / PostureUpdate) in a SignedUpdate,
-// signing the payload bytes with the publisher's Ed25519 private key (SEC-1). This is the
-// publisher side; the gateway verifies with verifySignedUpdate.
-func SignUpdate(payload []byte, priv ed25519.PrivateKey) ([]byte, error) {
-	sig := ed25519.Sign(priv, payload)
-	return proto.Marshal(&corev1.SignedUpdate{Payload: payload, Signature: sig})
-}
+// THE GATEWAY ONLY VERIFIES. The producer lives in the control plane
+// (controlplane.signRiskUpdate, reached from PublishRisk); a second signing helper used to sit here,
+// byte-identical to it and called by nothing but tests. Two producers of one envelope is the hazard
+// that matters: change one to sign a domain-separated payload and the other keeps emitting the old
+// shape, while the verifier accepts whichever it was compiled against. There is now one producer, and
+// the test helper that constructs signed updates lives with the tests.
 
 // verifySignedUpdate decodes a SignedUpdate and verifies its signature against the trusted
 // publisher key BEFORE the caller interprets the payload (SEC-1) — an unverified update's

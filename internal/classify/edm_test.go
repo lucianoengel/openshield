@@ -93,7 +93,8 @@ func TestEDMSerializeRoundTripCarriesNoRawValue(t *testing.T) {
 
 func TestEDMDetector(t *testing.T) {
 	idx, _ := BuildEDMIndex([]string{"ACCT-00099812-XZ", "MEMBER-55521190"}, 0.001)
-	c := NewWithEDM(idx)
+	c := New()
+	c.AddEDM(idx)
 
 	// Content carrying an indexed value (in different formatting).
 	hits, err := c.Classify(context.Background(), strings.NewReader("please review acct 00099812 xz for the customer"))

@@ -154,13 +154,6 @@ func (c *Classifier) AddIDM(index *DocumentIndex) {
 	}
 }
 
-// NewWithIDM returns the default classifier plus an IDM detector.
-func NewWithIDM(index *DocumentIndex) *Classifier {
-	c := New()
-	c.AddIDM(index)
-	return c
-}
-
 // Marshal serializes the document index (fingerprints, doc ids, counts, k, fraction)
 // — never any raw text.
 func (d *DocumentIndex) Marshal() []byte {

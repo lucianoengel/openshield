@@ -315,7 +315,11 @@ func TestReplayReproducesRecordedDecision(t *testing.T) {
 	recorded.DecisionId = "recorded-in-the-past"
 	recorded.DecidedAt = timestamppb.New(time.Now().Add(-time.Hour))
 
-	if err := core.Replay(context.Background(), build(), testEvent(), recorded); err != nil {
+	got, derr := build().Dispatch(context.Background(), testEvent())
+	if derr != nil {
+		t.Fatalf("replay dispatch: %v", derr)
+	}
+	if err := core.DecisionsEquivalent(recorded, got); err != nil {
 		t.Errorf("replay did not reproduce the recorded decision: %v", err)
 	}
 }

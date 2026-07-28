@@ -105,7 +105,8 @@ func TestIDMSerializeCarriesNoRawText(t *testing.T) {
 }
 
 func TestIDMDetectorIntegration(t *testing.T) {
-	c := NewWithIDM(docIndex(t))
+	c := New()
+	c.AddIDM(docIndex(t))
 	excerpt := "acme acquiring all outstanding shares of beta at a price of forty two dollars per share, subject to regulatory approval and shareholder ratification this agreement contains material non public information"
 	hits, err := c.Classify(context.Background(), strings.NewReader(excerpt))
 	if err != nil {
