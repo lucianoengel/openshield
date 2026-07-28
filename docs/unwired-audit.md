@@ -463,3 +463,46 @@ find a spec that does not mention hash chaining and conclude it is theirs to des
 archive step's "archive without syncing" option, taken repeatedly. Recorded here rather than fixed in
 passing: reconstructing thirty capability specs from their archived deltas is its own piece of work, and
 doing it silently inside a test change would bury it.
+
+
+## Round 10 (D321): a setting whose type made its feature unreachable
+
+The exec-verdict socket had never been exercised through a binary. Writing the first scenario that
+starts the real engine with `OPENSHIELD_EXEC_IPC_SOCKET` produced this, immediately:
+
+```
+openshield-engine: invalid configuration:
+  OPENSHIELD_EXEC_IPC_SOCKET=".../v.sock": path is not readable (from env)
+```
+
+The setting was declared `KindPath`, which requires the path to exist and be readable at startup. The
+engine CREATES that socket. So the engine could not start with the setting set, and HIPS-3's
+policy-backed exec verdicts were unreachable through configuration — a shipped feature nobody could turn
+on. This is D318's `OPENSHIELD_QUEUE_DIR` bug exactly: the configuration layer refusing to boot without
+something the code creates two hundred lines later.
+
+**The other end was worse.** The privileged gate declared the same socket the same way, so the gate
+refused to start unless the engine was already up. The gate sits in the exec path of every process on
+the host and is built to fail OPEN when the engine is unreachable — that is ADR-8, and it is the reason
+the feature is deployable at all. Requiring the engine's socket at startup makes it fail CLOSED before it
+has run a line: install the agent, start it before the engine, and nothing on the box execs.
+
+Neither end was visible to any test, and the reason is worth stating because it generalises: the package
+tests construct the gate and the verdict server DIRECTLY, so nothing ever went through a binary's
+configuration validation. A kind is only wrong at `main()`.
+
+Fixed by declaring all four socket fields `KindOutputPath` (parent must exist; the leaf need not), and
+guarded statically — any declared setting whose key ends in `_SOCKET` must be `KindOutputPath`. A type
+error that made a feature unreachable deserves a check that costs nothing to run.
+
+### The running score
+
+Ten rounds, and the ways a green test can mean nothing now number six:
+
+1. it never ran (a skip nobody noticed);
+2. everything was refused for an unrelated reason (vacuous negatives);
+3. the window was too short (timing);
+4. the fixture could not have exercised the guard;
+5. the negative was built against an intuition rather than the detector's actual metric;
+6. **the assertions are individually correct and their ORDER makes them vacuous** — the reload case,
+   where "still blocked" after a bad edit is also satisfied by an emptied catalog.

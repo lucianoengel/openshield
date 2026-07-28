@@ -55,3 +55,26 @@ away.
 #### Scenario: A dead engine still allows execution
 - **WHEN** the engine is unavailable while a containment is nominally in effect
 - **THEN** the execution is allowed and the fail-open is audited
+
+### Requirement: The exec-verdict socket is reachable through configuration
+
+The engine SHALL serve exec verdicts on the configured socket, answering BLOCK exactly when the pipeline
+decides DENY_EXEC and ALLOW otherwise. Because the engine CREATES that socket and the privileged gate
+merely connects to it, neither side's configuration SHALL require the socket to exist at startup —
+requiring it makes the serving side unbootable and makes the gate, whose contract is to fail OPEN when
+the engine is unreachable, fail CLOSED before it has run.
+
+When the engine is unreachable the gate SHALL answer ALLOW and SHALL report why, so the fail-open is
+auditable rather than indistinguishable from a permitted execution.
+
+#### Scenario: A denied binary is refused over the socket
+- **WHEN** the gate asks the running engine about a path the policy denies
+- **THEN** the answer is BLOCK
+
+#### Scenario: A permitted binary is allowed over the socket
+- **WHEN** the gate asks about a path the policy permits
+- **THEN** the answer is ALLOW
+
+#### Scenario: A stopped engine yields a reported fail-open
+- **WHEN** the engine is stopped and the gate asks about a path the policy denies
+- **THEN** the answer is ALLOW and an error describing the failure accompanies it

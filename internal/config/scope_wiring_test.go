@@ -209,3 +209,35 @@ func TestAnUnreachableThresholdIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestASocketPathIsNeverRequiredToExist is the static half of D321.
+//
+// A socket is never a file the operator supplies. One process CREATES it and another CONNECTS to it, so
+// KindPath — which demands the path already be readable at startup — is wrong at both ends, in two
+// different ways:
+//
+//   - on the creating end it makes the feature unreachable through configuration: the engine refused to
+//     boot until the socket it was about to create already existed;
+//   - on the connecting end it inverts a safety contract. The privileged exec gate is built to fail OPEN
+//     when the engine is unreachable, because it sits in the exec path of every process on the host.
+//     Demanding the engine's socket at startup makes it fail CLOSED before it has run a line — the one
+//     failure mode ADR-8 exists to forbid.
+//
+// Both were shipped, and both were invisible to every test, because the package tests construct the gate
+// and the server directly and never go through a binary's configuration validation. So the guard is
+// static: any declared setting naming a socket must be KindOutputPath.
+func TestASocketPathIsNeverRequiredToExist(t *testing.T) {
+	for cmd, fields := range cmdFields {
+		for _, f := range fields {
+			if !strings.HasSuffix(f.Key, "_SOCKET") {
+				continue
+			}
+			if f.Kind != KindOutputPath {
+				t.Errorf("%s declares %s as %q. A socket path must be %q: KindPath requires it to exist "+
+					"at startup, which either makes the creating side unbootable or makes the connecting "+
+					"side fail CLOSED when the other end is down",
+					cmd, f.Key, f.Kind, KindOutputPath)
+			}
+		}
+	}
+}

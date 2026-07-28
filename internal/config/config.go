@@ -49,14 +49,22 @@ const (
 	// KindPath is a filesystem path — rendered as a file picker, and never redacted (a path is not a
 	// credential, and hiding it makes misconfiguration undiagnosable).
 	KindPath Kind = "path"
-	// KindOutputPath is a path the PRODUCT CREATES rather than one the operator supplies — a spool
-	// directory, a state file. Validated on its PARENT being usable, never on its own existence.
+	// KindOutputPath is a path the OPERATOR DOES NOT SUPPLY — either one the product creates (a spool
+	// directory, a state file) or one another component creates and this one connects to (an IPC
+	// socket). Validated on its PARENT being usable, never on its own existence.
 	//
 	// The distinction is not pedantry (D318). OPENSHIELD_QUEUE_DIR was declared KindPath, so startup
 	// demanded that the spool directory already exist while `queue.Open` did MkdirAll on it two hundred
 	// lines later: the configuration layer refused to boot without something the code would have created
 	// itself. Every other KindPath field is a key, a policy or a baseline the operator PROVIDES, where
 	// requiring existence is exactly right — which is why the wrong kind here went unnoticed.
+	//
+	// The IPC-socket half is the same bug with a worse consequence (D321). Both ends of the exec-verdict
+	// and print-verdict sockets were KindPath, so the ENGINE refused to start until the socket it was
+	// about to create already existed — making the feature unreachable through configuration — and the
+	// privileged GATE refused to start unless the engine was already up. That second one inverts the
+	// contract the gate exists to honour: it is built to tolerate a dead engine by failing OPEN, and
+	// requiring the engine's socket at startup makes it fail CLOSED before it has run a line.
 	KindOutputPath Kind = "output_path"
 )
 

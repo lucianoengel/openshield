@@ -57,3 +57,26 @@ SHALL NOT carry evidence content, file contents, or classifier output beyond typ
 #### Scenario: The ticket body is metadata only
 - **WHEN** a ticket is created
 - **THEN** its body contains the pseudonymous subject, severity and counts, and no evidence content
+
+### Requirement: The closed vocabulary and connector identity are the operator's
+
+The ticketing connector's CLOSED vocabulary SHALL be operator-configured, and the configured list SHALL
+REPLACE the shipped default rather than extend it — a deployment whose ticketing system says "erledigt"
+must not also close incidents on a status it never declared. The connector's NAME SHALL be
+operator-configured and recorded on the incident⇄ticket link, so two configured ticketing systems can be
+told apart.
+
+An unresponsive remote system SHALL NOT wedge the sync loop: the configured request timeout SHALL bound
+each attempt, and the loop SHALL keep retrying on its interval.
+
+#### Scenario: A configured closed status closes its incident
+- **WHEN** the remote ticket reports a status in the operator's configured closed vocabulary
+- **THEN** the linked incident is closed
+
+#### Scenario: A default status outside the configured vocabulary does not
+- **WHEN** the remote ticket reports a status from the shipped default list that this deployment has not configured
+- **THEN** the linked incident is not closed
+
+#### Scenario: An unresponsive ticketing system does not stop the loop
+- **WHEN** the remote system accepts connections and never answers
+- **THEN** each attempt is abandoned within the configured timeout and the loop continues retrying
