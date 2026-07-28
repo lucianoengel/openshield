@@ -338,13 +338,10 @@ func TestATamperedEDMIndexIsRefused(t *testing.T) {
 
 	// The worker ABORTS on a bad index rather than starting without it: silently classifying with no
 	// index would leave an operator believing EDM is on.
-	out, err := runCapture(t, "openshield-worker", []string{
+	out := refuseToStart(t, "openshield-worker", []string{
 		"OPENSHIELD_EDM_INDEX=" + index,
 		"OPENSHIELD_DLP_INDEX_PUBKEY=" + filepath.Join(work, "op.pub"),
 	})
-	if err == nil {
-		t.Fatalf("the worker STARTED with a tampered index:\n%s", out)
-	}
 	// The refusal must name the VERIFICATION, not merely fail. A tampered blob also fails to PARSE, so
 	// "the worker exited" cannot tell a signature check from a decoder giving up — and a build with the
 	// signature check removed still exits, which is exactly what an earlier version of this assertion
@@ -384,13 +381,10 @@ func TestAnEDMIndexSignedByTheWrongKeyIsRefused(t *testing.T) {
 		t.Fatalf("building: %v\n%s", err, out)
 	}
 
-	out, err := runCapture(t, "openshield-worker", []string{
+	out := refuseToStart(t, "openshield-worker", []string{
 		"OPENSHIELD_EDM_INDEX=" + index,
 		"OPENSHIELD_DLP_INDEX_PUBKEY=" + operatorPub,
 	})
-	if err == nil {
-		t.Fatalf("the worker loaded an index signed by an UNTRUSTED key:\n%s", out)
-	}
 	if !contains(out, "refusing to load an unverified index") {
 		t.Errorf("the refusal does not name the signature check:\n%s", out)
 	}

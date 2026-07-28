@@ -438,12 +438,45 @@ func Ctx(t *testing.T) context.Context {
 
 // runCapture runs a binary to completion and returns its combined output and exit error. Used for
 // subcommands, which are the operator-facing surface and are otherwise covered by nothing.
+// runRefusalTimeout bounds how long runCapture waits for a binary to exit.
+//
+// Generous, because the commands it runs are short-lived (a keygen, an index build, a startup that
+// should fail) and a slow machine must not turn a pass into a failure.
+const runRefusalTimeout = 30 * time.Second
+
+// runCapture runs a binary to completion and returns its combined output.
+//
+// IT IS BOUNDED, and the reason is the shape of what it is used for. Most of its callers assert that a
+// binary REFUSES to start — a tampered index, a feed whose signature does not verify. When the refusal
+// works the process exits immediately; when it does NOT work, the process starts successfully and runs
+// forever, and an unbounded wait hangs the whole suite until the package timeout.
+//
+// That is exactly backwards: the case being tested for is the failure, so the failure must be the FAST
+// path. A mutation that removes a signature check should fail this in seconds with "did not exit",
+// rather than after ten minutes with a goroutine dump — the first names the defect, the second reads as
+// a broken test.
 func runCapture(t *testing.T, name string, env []string, args ...string) (string, error) {
 	t.Helper()
 	cmd := exec.Command(Binary(t, name), args...)
 	cmd.Env = append(os.Environ(), env...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	var buf syncBuffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return buf.String(), err
+	case <-time.After(runRefusalTimeout):
+		_ = cmd.Process.Kill()
+		<-done
+		// A DISTINCT error, not just any error. "Still running" must never be mistaken for "refused":
+		// a caller that only checks err != nil would read the timeout as a successful refusal and pass
+		// on exactly the build that has stopped refusing. See refuseToStart.
+		return buf.String(), fmt.Errorf("%w: %s ran for %s without exiting", errStillRunning, name, runRefusalTimeout)
+	}
 }
 
 // contains is a readability helper; the assertions read better than strings.Contains inline.
@@ -627,4 +660,27 @@ func SocketPath(t *testing.T, name string) string {
 		t.Fatalf("socket path is %d bytes, over the %d-byte unix address limit: %s", len(p), maxSunPath, p)
 	}
 	return p
+}
+
+// errStillRunning marks a runCapture that timed out with the process alive.
+var errStillRunning = errors.New("the process did not exit")
+
+// refuseToStart runs a binary that MUST refuse to start, and returns its output.
+//
+// It exists because "the binary refused" is not the same claim as "runCapture returned an error", and
+// conflating them is a false pass waiting to happen. A binary that wrongly STARTS produces a timeout —
+// also an error — so a caller checking only `err != nil` would pass on precisely the build whose refusal
+// has been removed. The distinction is the whole point of the assertion, so it belongs in one helper
+// rather than at every call site.
+func refuseToStart(t *testing.T, name string, env []string, args ...string) string {
+	t.Helper()
+	out, err := runCapture(t, name, env, args...)
+	switch {
+	case errors.Is(err, errStillRunning):
+		t.Fatalf("%s did NOT refuse — it started and kept running. Whatever it was given was accepted:\n%s",
+			name, out)
+	case err == nil:
+		t.Fatalf("%s exited successfully instead of refusing:\n%s", name, out)
+	}
+	return out
 }
