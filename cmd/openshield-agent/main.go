@@ -94,7 +94,12 @@ func main() {
 			"with a high-severity audit — a dead engine must never brick execution", ipcSocket, client.Timeout)
 	}
 
-	mon, err := execmon.Open(dirs)
+	// THE MARK'S BREADTH FOLLOWS THE GATE'S SEMANTICS (D331). Narrow only when the ONLY signal is the
+	// allowlist, whose scope D330 already bounded to these directories; anything else — a deny-list, a
+	// behavioural floor, a pipeline verdict — decides on binaries wherever they run from, and narrowing
+	// would silently reduce what it catches.
+	mode := markModeFor(ev, ipcSocket != "")
+	mon, err := execmon.OpenWithMode(dirs, mode)
 	if err != nil {
 		logf("opening exec-permission monitor (need root + a permission-capable kernel): %v", err)
 		os.Exit(1)
@@ -114,7 +119,23 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	logf("HIPS-3 inline exec prevention ACTIVE (dirs=%d budget=%s)", len(dirs), wd.Budget)
+
+	if mode == execmon.MarkPerFile {
+		// Without this the narrowing is a BYPASS, not an optimisation: an unmarked binary produces no
+		// event and, under default-deny, runs. A watcher failure is loud and does not stop the agent —
+		// the marks already placed keep working — but it must never be silent.
+		go func() {
+			if err := mon.WatchForNewExecutables(ctx, func(err error) {
+				logf("WARNING: could not mark a new executable (%v) — a binary added to a watched "+
+					"directory may execute WITHOUT a verdict until the agent restarts", err)
+			}); err != nil && ctx.Err() == nil {
+				logf("WARNING: the new-executable watcher stopped (%v) — binaries added from now on may "+
+					"execute WITHOUT a verdict", err)
+			}
+		}()
+	}
+	logf("HIPS-3 inline exec prevention ACTIVE (dirs=%d budget=%s mark=%s marked=%d)",
+		len(dirs), wd.Budget, mode, mon.Marked())
 	if err := mon.Run(ctx, wd); err != nil && ctx.Err() == nil {
 		logf("exec monitor stopped: %v", err)
 		os.Exit(1)
@@ -187,4 +208,21 @@ func envDuration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// markModeFor picks the kernel mark from the gate's semantics.
+//
+// PER-FILE ONLY WHEN THE ALLOWLIST IS THE SOLE SIGNAL. A deny-list names binaries to refuse wherever
+// they run from; a behavioural floor and a pipeline verdict decide on whatever they are shown. Each of
+// those is GLOBAL, and a deployment combining them with an allowlist gets the union — which is global —
+// so the mount mark stays. Correctness first: narrowing can only lose events, and losing one is a
+// bypass, while keeping the broad mark only costs.
+func markModeFor(ev execmon.DenyEvaluator, ipcGate bool) execmon.MarkMode {
+	allowlistOnly := len(ev.AllowPaths)+len(ev.AllowBasenames) > 0 &&
+		len(ev.DenyPaths) == 0 && len(ev.DenyBasenames) == 0 &&
+		ev.BehaviorFloor <= 0 && !ipcGate
+	if allowlistOnly {
+		return execmon.MarkPerFile
+	}
+	return execmon.MarkMount
 }

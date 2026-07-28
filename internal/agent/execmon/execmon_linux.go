@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"golang.org/x/sys/unix"
@@ -15,14 +16,34 @@ import (
 
 // Monitor is a running fanotify exec-permission group.
 type Monitor struct {
-	fd int // the fanotify group fd
+	fd      int // the fanotify group fd
+	mode    MarkMode
+	marked  int
+	watched []string
 }
 
-// Open creates a fanotify group in permission-content mode and marks FAN_OPEN_EXEC_PERM
-// on each watched path, so an exec of a binary under a watched path raises a permission
-// event this monitor answers. It needs CAP_SYS_ADMIN (privileged). At least one path is
-// required; a bad path aborts (a mis-configured monitor must not run watching nothing).
-func Open(paths []string) (*Monitor, error) {
+// Open creates a fanotify group in permission-content mode and marks FAN_OPEN_EXEC_PERM,
+// so an exec of a watched binary raises a permission event this monitor answers. It needs
+// CAP_SYS_ADMIN (privileged). At least one path is required; a bad path aborts (a
+// mis-configured monitor must not run watching nothing).
+//
+// Equivalent to OpenWithMode(paths, MarkMount) — the broad, always-correct choice.
+func Open(paths []string) (*Monitor, error) { return OpenWithMode(paths, MarkMount) }
+
+// OpenWithMode chooses the mark's breadth, which must match the gate's SEMANTICS (D331).
+//
+// The two modes fail in opposite directions and the asymmetry is the whole design: a mount mark can only
+// WASTE (an event, and a blocked process, for every exec on the mount — including ones the gate does not
+// police), while per-file marks can only MISS (anything not marked produces no event, and under
+// default-deny an unseen exec RUNS). In a security control those are not symmetric, so narrowness is
+// used only where the scope is already defined and defended.
+//
+// MEASURED on kernel 6.8, because the mount mark exists precisely because a narrower one was tried and
+// did not deliver (D224): a mount mark delivers for direct children, nested children and nothing on
+// other mounts; a per-file mark delivers only for the file itself; and a DIRECTORY mark with
+// FAN_EVENT_ON_CHILD is refused outright with EINVAL. That last one would have been the best answer —
+// one mark per directory, new files covered by the kernel — and it is not available.
+func OpenWithMode(paths []string, mode MarkMode) (*Monitor, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("execmon: no paths to watch")
 	}
@@ -37,14 +58,68 @@ func Open(paths []string) (*Monitor, error) {
 	// events are on the file, so a mount mark is required to catch execs under a path.
 	// This is broader than the named path (the whole mount); a later increment can narrow
 	// with per-file marks or path filtering.
+	m := &Monitor{fd: fd, mode: mode, watched: append([]string(nil), paths...)}
+	if mode == MarkPerFile {
+		if err := m.markExecutables(paths); err != nil {
+			unix.Close(fd)
+			return nil, err
+		}
+		return m, nil
+	}
 	for _, p := range paths {
 		if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD|unix.FAN_MARK_MOUNT, unix.FAN_OPEN_EXEC_PERM, unix.AT_FDCWD, p); err != nil {
 			unix.Close(fd)
 			return nil, fmt.Errorf("execmon: marking mount for %s: %w", p, err)
 		}
 	}
-	return &Monitor{fd: fd}, nil
+	return m, nil
 }
+
+// MarkFile adds a per-file mark, used both for the initial walk and for binaries that appear later.
+// An unmarkable file is an ERROR to the caller rather than a silent skip: under default-deny an unmarked
+// binary produces no event and therefore RUNS, so a skipped mark is a bypass, not a missed optimisation.
+func (m *Monitor) MarkFile(path string) error {
+	if err := unix.FanotifyMark(m.fd, unix.FAN_MARK_ADD, unix.FAN_OPEN_EXEC_PERM, unix.AT_FDCWD, path); err != nil {
+		return fmt.Errorf("execmon: marking file %s: %w", path, err)
+	}
+	return nil
+}
+
+// markExecutables walks each watched path and marks every regular file with an execute bit.
+//
+// It walks rather than reading one level, because a per-file mark does NOT cover a nested directory
+// (measured) — so a tree walk is what makes "the monitored directory" mean the directory and everything
+// under it, which is what an operator naming a directory means.
+func (m *Monitor) markExecutables(paths []string) error {
+	marked := 0
+	for _, root := range paths {
+		err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+				return nil
+			}
+			if err := m.MarkFile(p); err != nil {
+				return err
+			}
+			marked++
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("execmon: walking %s: %w", root, err)
+		}
+	}
+	m.marked = marked
+	return nil
+}
+
+// Marked reports how many files carry a per-file mark, so a caller can say so at startup rather than
+// leaving an operator to guess what is covered.
+func (m *Monitor) Marked() int { return m.marked }
+
+// Watched returns the directories this monitor was pointed at.
+func (m *Monitor) Watched() []string { return m.watched }
 
 // NotifyFD is the fanotify group fd the FanotifyResponder writes answers to.
 func (m *Monitor) NotifyFD() int { return m.fd }

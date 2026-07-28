@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/lucianoengel/openshield/internal/agent/execmon"
 )
 
 // TestBuildEvaluatorRequiresASignal: the agent refuses to run answering every exec ALLOW — a no-op
@@ -105,5 +107,44 @@ func TestAnAllowlistCarriesTheMonitoredDirectoriesAsItsScope(t *testing.T) {
 	if len(ev.AllowScope) != 1 || ev.AllowScope[0] != "/opt/watched" {
 		t.Errorf("AllowScope = %v, want the monitored directories — without it the default-deny is "+
 			"unbounded and the setting is unusable", ev.AllowScope)
+	}
+}
+
+// TestTheMarkModeFollowsTheGateSemantics (D331).
+//
+// Per-file marking can only MISS; the mount mark can only WASTE. Those are not symmetric risks in a
+// security control, so the narrow mode is used ONLY where the scope is already bounded — the allowlist,
+// per D330. Every other signal decides on binaries wherever they run from, and a deployment combining
+// them gets the union, which is global.
+func TestTheMarkModeFollowsTheGateSemantics(t *testing.T) {
+	allow := execmon.DenyEvaluator{AllowPaths: map[string]bool{"/opt/a": true}}
+	deny := execmon.DenyEvaluator{DenyBasenames: map[string]bool{"nc": true}}
+	both := execmon.DenyEvaluator{
+		AllowPaths:    map[string]bool{"/opt/a": true},
+		DenyBasenames: map[string]bool{"nc": true},
+	}
+	floor := execmon.DenyEvaluator{AllowPaths: map[string]bool{"/opt/a": true}, BehaviorFloor: 0.9}
+
+	for _, c := range []struct {
+		name string
+		ev   execmon.DenyEvaluator
+		ipc  bool
+		want execmon.MarkMode
+		why  string
+	}{
+		{"allowlist alone", allow, false, execmon.MarkPerFile,
+			"its reach is the monitored directories, so an exec elsewhere is out of scope by definition"},
+		{"deny-list alone", deny, false, execmon.MarkMount,
+			"a deny-list names binaries to refuse WHEREVER they run from"},
+		{"allowlist + deny-list", both, false, execmon.MarkMount,
+			"the union of a scoped and a global signal is global"},
+		{"allowlist + behavioural floor", floor, false, execmon.MarkMount,
+			"the floor decides on whatever it is shown"},
+		{"allowlist + IPC gate", allow, true, execmon.MarkMount,
+			"a pipeline verdict is not bounded by the allowlist's scope"},
+	} {
+		if got := markModeFor(c.ev, c.ipc); got != c.want {
+			t.Errorf("%s: mark = %v, want %v — %s", c.name, got, c.want, c.why)
+		}
 	}
 }

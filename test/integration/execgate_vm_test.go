@@ -194,3 +194,87 @@ func writeEmptyDenyList(t *testing.T, dir string) string {
 	}
 	return p
 }
+
+// TestABinaryCreatedAfterStartupIsStillRefused is the assertion that makes narrowing the kernel mark
+// safe rather than clever (D331).
+//
+// With per-file marks the agent covers what existed when it started. A binary dropped into a watched
+// directory afterwards is unmarked, produces NO permission event, and under default-deny therefore RUNS
+// — which is a better outcome for an attacker than being allowed, because the execution is also
+// invisible. An inotify watch marks it as it appears; this is what proves the watch is wired and works
+// on a real kernel rather than in a unit test's imagination.
+func TestABinaryCreatedAfterStartupIsStillRefused(t *testing.T) {
+	requireRootKernel(t)
+	work := t.TempDir()
+	watch := filepath.Join(work, "bin")
+	if err := os.MkdirAll(watch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	permitted := execBin(t, watch, "permitted-tool")
+
+	allowList := filepath.Join(work, "allow.txt")
+	if err := os.WriteFile(allowList, []byte(permitted+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := Start(t, "openshield-agent", []string{
+		"OPENSHIELD_EXEC_MONITOR_DIRS=" + watch,
+		"OPENSHIELD_EXEC_ALLOW=" + allowList,
+	})
+	agent.WaitForOutput("mark=per-file", 60*time.Second)
+	time.Sleep(2 * time.Second)
+
+	// The agent is up and narrow. NOW drop a binary in — the move an attacker makes.
+	dropped := execBin(t, watch, "dropped-tool")
+	time.Sleep(2 * time.Second) // let the watcher mark it
+
+	err := exec.Command(dropped).Run()
+	if err == nil {
+		t.Fatalf("a binary CREATED AFTER the agent started RAN under an allowlist. Narrowing the kernel "+
+			"mark without marking new files turns an optimisation into a bypass — and a better one than "+
+			"being allowed, because the exec raises no event at all\n%s", agent.Output())
+	}
+	if !isEPERM(err) {
+		t.Errorf("the dropped binary failed with %v, want EPERM", err)
+	}
+
+	// And the allowlisted one still runs, so this cannot pass by refusing everything.
+	if err := exec.Command(permitted).Run(); err != nil {
+		t.Errorf("the allowlisted binary was refused (%v) after the watcher ran\n%s", err, agent.Output())
+	}
+}
+
+// TestAMovedInBinaryIsStillRefused covers the other way a binary arrives: built elsewhere, then moved
+// into place. A create-only watch would miss it, and "mv" is the more likely of the two.
+func TestAMovedInBinaryIsStillRefused(t *testing.T) {
+	requireRootKernel(t)
+	work := t.TempDir()
+	watch := filepath.Join(work, "bin")
+	staging := filepath.Join(work, "staging")
+	for _, d := range []string{watch, staging} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	permitted := execBin(t, watch, "permitted-tool")
+	allowList := filepath.Join(work, "allow.txt")
+	if err := os.WriteFile(allowList, []byte(permitted+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := Start(t, "openshield-agent", []string{
+		"OPENSHIELD_EXEC_MONITOR_DIRS=" + watch,
+		"OPENSHIELD_EXEC_ALLOW=" + allowList,
+	})
+	agent.WaitForOutput("mark=per-file", 60*time.Second)
+	time.Sleep(2 * time.Second)
+
+	built := execBin(t, staging, "moved-tool")
+	moved := filepath.Join(watch, "moved-tool")
+	if err := os.Rename(built, moved); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+
+	if err := exec.Command(moved).Run(); err == nil {
+		t.Fatalf("a binary MOVED into a watched directory RAN under an allowlist\n%s", agent.Output())
+	}
+}

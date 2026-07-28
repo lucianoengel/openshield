@@ -873,3 +873,58 @@ capability file, which the sync only writes at archive — so the gate would be 
 change is proposed until the moment it lands. Active deltas are now honoured only where they RELAX
 (REMOVED counts, ADDED does not), which is the mirror of the removal fix in D323. Both come from the same
 rule: a guard that blocks ordinary work is a guard someone switches off.
+
+
+## Round 18 (D331): fixing the waste, without turning it into a bypass
+
+D330 fixed the exec allowlist's DECISION and left its COST: the agent answered a permission event for
+every execution on the marked mount, each one blocking the executing process for a readlink and a kernel
+round-trip. That is a tax on every process launch, paid for executions the gate had already decided it
+does not police.
+
+### Measure first, because this is exactly where the wrong answer was learned before
+
+The mount mark exists because a narrower one was tried and did not deliver (D224). So all three shapes
+were measured on kernel 6.8 rather than read from a man page:
+
+| mark | direct child | nested | outside |
+|---|---|---|---|
+| mount | delivered | delivered | not delivered |
+| directory + `FAN_EVENT_ON_CHILD` | **EINVAL — refused outright** | — | — |
+| per-file | delivered | not delivered | not delivered |
+
+`FAN_EVENT_ON_CHILD` would have been the best answer — one mark per directory, new files covered by the
+kernel — and it is simply not available for exec-permission events. That has now been rediscovered twice,
+so it is a test that prints its result rather than a comment that can be doubted.
+
+**The `outside` column also reframes D330.** It reads "not delivered" for the mount mark because the
+probe ran under `/tmp`, which is **tmpfs — a different mount from `/`**. That is why the damage varied by
+location: a monitored directory under `/opt` marks `/` and takes `sudo` and `bash` with it, while one
+under `/tmp` marks only tmpfs. A blast radius that depends on where the operator points it is worse than
+a constant one, because nothing about testing it in one place predicts the other.
+
+### The asymmetry that decides the design
+
+Per-file marking can only MISS. The mount mark can only WASTE. In a security control those are not
+symmetric, so narrowness is applied only where the scope is already defined and defended:
+
+- **allowlist → per-file.** D330 bounded its reach to the monitored directories, so an execution outside
+  them is out of scope by definition and an event for it is pure cost.
+- **deny-list, behavioural floor, pipeline verdict → mount.** Each names or decides on binaries wherever
+  they run from. A deployment combining them with an allowlist gets the union, which is global.
+
+### The hole that would have made this a bypass
+
+A per-file mark covers what existed when it was applied. Under default-deny an unmarked binary produces
+NO event and therefore RUNS — so a naive narrowing hands an attacker something better than being
+allowed: an execution that is also invisible. Closed with an inotify watch marking on create, move-in and
+close-after-write (close-after-write matters because a file is typically created empty and made
+executable later).
+
+Proven on the real kernel, and the mutation is the point: with the watcher removed, a binary DROPPED into
+a watched directory runs, and so does one MOVED in. Both scenarios fail. That is the assertion that
+separates an optimisation from a bypass.
+
+**The residual race is stated, not hidden:** a binary created and executed before the watcher's mark
+lands escapes. The window is bounded by scheduler latency rather than by an operator noticing, which is
+the improvement — but it is not zero.
