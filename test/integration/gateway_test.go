@@ -152,13 +152,13 @@ func TestTheGatewayClassifiesAndAuditsProxiedTraffic(t *testing.T) {
 	})
 	// The body must NOT be in the ledger. The gateway holds plaintext to proxy it; the evidence store
 	// keeps type + confidence + count (D10), and a ledger containing the CPF makes the audit the leak.
-	var payload string
-	if err := pool.QueryRow(Ctx(t),
-		`SELECT coalesce(payload::text,'') FROM audit_entries LIMIT 1`).Scan(&payload); err == nil {
-		if contains(payload, "111.444.777-35") || contains(payload, "11144477735") {
-			t.Errorf("the proxied BODY reached the ledger:\n%s", payload)
-		}
-	}
+	//
+	// THIS ASSERTION USED TO NEVER RUN (D338). It queried a `payload` column, which `audit_entries` does
+	// not have and never had, and the `if err == nil` guard turned the resulting error into a silent
+	// skip — so the project's most important privacy claim was checked by code that could not execute.
+	// The helper casts the whole ROW instead, so it cannot name a wrong column, and a query failure is a
+	// failure rather than a pass.
+	assertLedgerCarriesNone(t, stack, "111.444.777-35", "11144477735")
 }
 
 // blockOnCPF is a policy that actually blocks. The shipped default emits ALERT or ALLOW and never

@@ -1103,3 +1103,44 @@ octet-counted and newline-terminated framing, and real senders use both. A newli
 merely BEGINS with a digit looks like an octet count until the number fails to parse — so that case is
 counted and skipped rather than closing the connection, because one such message would otherwise stop a
 device's whole feed.
+
+
+## Round 23 (D338): the privacy assertion that could not run
+
+`internal/signature` measured at zero integration coverage, so NIPS content signatures got scenarios —
+a marked body blocked before it leaves, a `nocase` rule matching a differently-cased marker, a malformed
+ruleset stopping the worker, hot reload served-stale. Writing the content-free half found something worse
+than an uncovered package.
+
+**The ledger has no `payload` column, and never has.** The existing assertion in `gateway_test.go` read:
+
+```go
+if err := pool.QueryRow(ctx, `SELECT coalesce(payload::text,'') FROM audit_entries LIMIT 1`).
+    Scan(&payload); err == nil {
+    if contains(payload, "111.444.777-35") { t.Errorf("the proxied BODY reached the ledger") }
+}
+```
+
+The query errored on every run, `err == nil` was never true, and the body of the check never executed. So
+the project's **most important privacy claim** — no content reaches the audit trail (D10/D29) — was
+guarded by code that could not run, in the one place the claim is most load-bearing: a DLP product whose
+evidence store contains the evidence.
+
+This is the fourth way a green test means nothing, met again and at its sharpest: **the fixture could not
+have exercised the guard.** Here the guard was not merely weak, it was unreachable, and the `err == nil`
+made unreachability look like success.
+
+### The fix has to be un-missable, not merely correct
+
+Naming the right column would work until someone adds another. `assertLedgerCarriesNone` casts the WHOLE
+ROW (`audit_entries::text`), so it cannot name a wrong column, it covers columns added later, and a query
+error is a FAILURE rather than a skip — because an assertion that cannot run must never look like one
+that passed. It also fails when zero rows were checked, since passing over an empty ledger proves nothing
+about a pipeline that was supposed to write to it.
+
+### And the mutation nearly lied too
+
+The first mutant leaked content by concatenating a string to `reason` — which is a `*string`, so it did
+not compile, and both tests "failed" on a broken build. That would have been recorded as a successful
+verification. Only re-checking `go build` before believing the result caught it. A mutant that does not
+compile proves nothing, and it fails in exactly the way a successful mutation looks.

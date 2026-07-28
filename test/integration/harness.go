@@ -684,3 +684,46 @@ func refuseToStart(t *testing.T, name string, env []string, args ...string) stri
 	}
 	return out
 }
+
+// assertLedgerCarriesNone fails if any audit row contains one of the given strings, ANYWHERE in it.
+//
+// IT CASTS THE WHOLE ROW, and that is the point rather than a shortcut. The obvious version names a
+// column — and the version this replaces named `payload`, a column that DOES NOT EXIST. The query
+// errored on every run, the caller guarded it with `if err == nil`, and so the project's most important
+// privacy assertion ("no content reaches the ledger", D10/D29) never executed at all.
+//
+// `audit_entries::text` renders every column of the row whatever the schema is, so this cannot miss a
+// column that is added later, and a mistyped name fails loudly instead of silently skipping. A query
+// error is a FAILURE here for the same reason: an assertion that cannot run must not look like one that
+// passed.
+func assertLedgerCarriesNone(t *testing.T, stack *Stack, forbidden ...string) {
+	t.Helper()
+	pool := openPool(t, stack.DSN)
+	rows, err := pool.Query(Ctx(t), `SELECT audit_entries::text FROM audit_entries`)
+	if err != nil {
+		t.Fatalf("reading the ledger to check for content leakage: %v", err)
+	}
+	defer rows.Close()
+	checked := 0
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		checked++
+		for _, f := range forbidden {
+			if strings.Contains(row, f) {
+				t.Fatalf("the ledger row contains %q — the audit trail is where the sensitive value "+
+					"finally appears, which is the leak the content-free contract exists to prevent:\n%s",
+					f, row)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if checked == 0 {
+		t.Fatal("no audit rows were checked for content leakage — the assertion would pass on an empty " +
+			"ledger, which proves nothing about a pipeline that is supposed to have written to it")
+	}
+}
