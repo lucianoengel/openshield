@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,8 +17,8 @@ import (
 // filtered, and a filtered warning is a silence with extra steps.
 func TestDiscardsAreReportedOnlyWhenTheyMove(t *testing.T) {
 	var n atomic.Int64
-	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	buf := &lockedBuffer{}
+	log := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -52,4 +53,33 @@ func TestDiscardsAreReportedOnlyWhenTheyMove(t *testing.T) {
 		t.Errorf("a stable counter kept producing warnings, which is how a real signal gets filtered "+
 			"out by an operator:\n%s", got)
 	}
+}
+
+// lockedBuffer is a race-free sink for the reporter's goroutine.
+//
+// A bare bytes.Buffer here is a DATA RACE — slog writes it from the reporting goroutine while the test
+// reads it — and `go test -race` in CI is what caught it, not the local run. Worth keeping the note:
+// the local check and the tree-wide one are looking for different things, and a concurrent test that
+// passes without -race has established nothing about concurrency.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
 }
