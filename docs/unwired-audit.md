@@ -722,3 +722,47 @@ It catches a path too long to bind, knowable from the VALUE ALONE before anythin
 attempt permissions, a full filesystem, or a stale socket held by another process. A configuration layer
 that pretended to predict a syscall's outcome would be wrong the first time the two disagreed, and would
 then be the thing standing between an operator and a working deployment.
+
+
+## Round 15 (D327): a test that asserted the right outcome through the wrong path
+
+The webhook signature (SIEM-8b) binds a timestamp INTO the MAC — `HMAC(secret, "<ts>." + body)` — so a
+captured delivery expires. Without that binding a webhook URL is an endpoint anyone who saw one delivery
+can page an on-call team through, indefinitely, with a message the receiver has cryptographic reason to
+trust.
+
+The first version of the test aged the VERIFIER'S CLOCK past the tolerance and asserted the capture no
+longer verified. It passed. Then the mutation — sign the body ALONE, leaving the timestamp unbound —
+**also passed**.
+
+The reason is worth keeping. `VerifySignature` checks the timestamp's freshness window BEFORE it computes
+the MAC, so an aged capture is rejected on the window check whether or not the signature covers the
+timestamp. The test asserted the correct OUTCOME ("a replay is rejected") through a path that never
+touched the mechanism it claimed to cover.
+
+What fixes it is asking what the attacker would actually do: replay the captured body and signature with
+a **refreshed timestamp header**. That forces the MAC to be consulted, and the mutation now fails.
+
+### A seventh way a green test can mean nothing
+
+The list so far was: it never ran; everything was refused for an unrelated reason; the window was too
+short; the fixture could not exercise the guard; the negative was built against an intuition rather than
+the detector's metric; the assertions were individually right and their ORDER made them vacuous. Add:
+
+7. **The assertion is satisfied by a cheaper check that runs first.** A defence in depth means an earlier
+   layer can answer for a later one, and a test written against the OUTCOME rather than the MECHANISM
+   will happily measure the wrong layer.
+
+It generalises past signatures: any time a verifier does a cheap rejection before an expensive one, a
+test of the expensive one has to construct input the cheap one accepts.
+
+### And the fix was wrong once too, in a way that only showed on the clock
+
+The corrected assertion forged the timestamp as `time.Now().Unix()` — which, when the delivery and the
+assertion land in the SAME SECOND, is byte-identical to the captured one. The forgery is then a no-op,
+verification correctly succeeds, and the test fails on correct code. It passed on one run and failed on
+the next, three seconds apart, with nothing changed but a second boundary.
+
+Deriving the forged value from the CAPTURED timestamp (`captured + 1`) makes it deterministic, and the
+test now refuses to run at all if the two ever coincide — because a scenario that cannot tell its own
+input apart is asserting nothing. Green three times running, and still killed by the mutation.
