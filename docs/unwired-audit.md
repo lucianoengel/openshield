@@ -2033,3 +2033,43 @@ Each measurement was accurate and each conclusion drawn from it was too narrow �
 only meaningful against the specific thing being measured, and the next bottleneck is always
 downstream of where you stopped looking. The stub that made D356's measurement clean is what hid
 D357's.
+
+
+## Round 42 (D358): the gate refused opens and left no evidence
+
+D357 ended by naming the async tier as unverified. Looking at it found something worse than an
+unverified half: **a gated open, including a DENIED one, produced no ledger row at all.**
+
+`Decider.DecidePartial` deliberately set no `OnOutcome`, with a comment giving the reason: "the
+synchronous tier does not write the ledger — the async engine owns the durable audit row (D16)." That
+is a correct division of labour, and for the inline file-open gate the async engine **does not exist**.
+The gate's events reach no pipeline; `PreFilter` and its `AsyncSubmitter` seam are not wired, because
+the engine's server calls `DecideBytes` directly.
+
+So the platform whose thesis is that every decision is explainable, reproducible and cryptographically
+auditable was refusing file opens and writing nothing down. The one decision an investigator would most
+want to review — an inline refusal — was the one that was never recorded.
+
+### Handed out, not written, inside the window
+
+The outcome is passed to the caller inside the permission window and QUEUED; a goroutine appends. The
+ledger write must not sit inside the window — the watchdog makes exactly this point about its own
+fail-open audit, and for the same reason: a slow append would hold a blocked process for the duration
+of a database write.
+
+A full queue **drops and counts**, reported at shutdown. Holding a process in an uninterruptible window
+to wait for a database is a worse failure than a missing row, and a silent drop would be worse than
+either.
+
+### What is still not done, and why it is harder than it looks
+
+The async tier — classifying the WHOLE file rather than the prefix — remains unwired, and the reason is
+the same recursion that shaped the whole design. The async classification would open the file; that
+open falls under the mark; the gate must answer it; and if that event is also submitted asynchronously,
+it recurses forever. Solving it needs the engine's PID exempted from the gate, which is the bookkeeping
+answer D352 rejected because its failure mode is an unrecoverable host.
+
+So the honest position: the gate decides from a prefix, records that decision as evidence, and does NOT
+deepen the classification afterwards. The design's second tier assumes an exemption that does not exist,
+and the README's claim about the async tier should be read as describing the file-watcher path rather
+than the gate.

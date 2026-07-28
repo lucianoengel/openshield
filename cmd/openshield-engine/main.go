@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -628,6 +629,51 @@ func main() {
 		// is not ALLOW", so a new action added to the closed set does not silently become a reason to
 		// block an open.
 		od := prefilter.NewDecider(worker, pol, 0, 120*time.Millisecond, log)
+
+		// EVERY GATED OPEN BECOMES EVIDENCE, and the write happens OUTSIDE the permission window.
+		//
+		// The decider used to record nothing, on the stated grounds that the async engine owns the
+		// durable row — but these events never reach one, so a gated open, including a DENIED one,
+		// produced no ledger entry at all. For a platform whose thesis is that every decision is
+		// evidence, an inline refusal that leaves no trace is the gap.
+		//
+		// The outcome is handed over inside the window and QUEUED; a goroutine appends. A full channel
+		// DROPS and counts rather than blocking, because holding a process in an uninterruptible window
+		// to wait for a database is a worse failure than a missing row — and a silent drop would be
+		// worse than either, so it is counted.
+		auditSink := core.NewAuditSink(ledger)
+		type gateOutcome struct {
+			st *core.State
+			o  core.Outcome
+		}
+		gateAudit := make(chan gateOutcome, 256)
+		var gateAuditDropped atomic.Int64
+		od.SetOnOutcome(func(_ context.Context, st *core.State, o core.Outcome) error {
+			select {
+			case gateAudit <- gateOutcome{st, o}:
+			default:
+				gateAuditDropped.Add(1)
+			}
+			return nil
+		})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					if n := gateAuditDropped.Load(); n > 0 {
+						log.Warn("engine: file-open gate audit rows DROPPED — decisions were made that "+
+							"are not in the ledger", slog.Int64("dropped", n))
+					}
+					return
+				case g := <-gateAudit:
+					if err := auditSink.Record(ctx, g.st, g.o); err != nil {
+						log.Error("engine: recording a file-open gate decision", slog.Any("err", err))
+					}
+				}
+			}
+		}()
 		openSrv := &openipc.Server{
 			Decide: func(ctx context.Context, path string, prefix []byte) (openipc.Verdict, error) {
 				dec, derr := od.DecideBytes(ctx, path, prefix)

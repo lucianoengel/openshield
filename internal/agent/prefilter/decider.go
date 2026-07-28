@@ -33,12 +33,22 @@ type classifier interface {
 // in the unprivileged engine, not the privileged agent) may hold bytes; only the worker
 // parses them (D13).
 type Decider struct {
-	c        classifier
-	policy   core.Stage
-	maxBytes uint64
-	open     func(path string) (io.ReadCloser, error) // injectable for tests
-	deadline time.Duration
-	logger   *slog.Logger
+	c         classifier
+	policy    core.Stage
+	maxBytes  uint64
+	open      func(path string) (io.ReadCloser, error) // injectable for tests
+	deadline  time.Duration
+	logger    *slog.Logger
+	onOutcome func(context.Context, *core.State, core.Outcome) error
+}
+
+// SetOnOutcome installs a sink for each decision's outcome.
+//
+// It is called INSIDE the permission window, so an implementation must not block: enqueue and return.
+// Writing a ledger row here directly would hold a blocked process for the duration of a database
+// append, which is the failure the watchdog's own audit ordering avoids.
+func (d *Decider) SetOnOutcome(f func(context.Context, *core.State, core.Outcome) error) {
+	d.onOutcome = f
 }
 
 // NewDecider builds the partial decider. maxBytes bounds the synchronous prefix read
@@ -119,8 +129,23 @@ func (d *Decider) DecideBytes(ctx context.Context, path string, prefix []byte) (
 	reg.Register(prefixClassifyStage{c: d.c, body: prefix, maxBytes: d.maxBytes})
 	reg.Register(d.policy)
 	disp := core.NewDispatcher(&reg, d.deadline)
-	// NO OnOutcome: the synchronous tier does not write the ledger — the async engine
-	// owns the durable audit row (D16). The decision is returned to the prefilter only.
+	// OnOutcome HANDS THE OUTCOME OUT rather than writing the ledger here.
+	//
+	// The synchronous tier must not write the ledger inside the permission window — the watchdog makes
+	// the same point about its own fail-open audit, and for the same reason: a slow append would hold a
+	// blocked process for the duration of a database write.
+	//
+	// Nor can it simply skip auditing, which is what it used to do on the grounds that "the async engine
+	// owns the durable record". For the inline file-open gate there IS no async engine downstream: the
+	// events never reach one, so a gated open — including a DENIED one — produced no evidence at all.
+	// For a platform whose thesis is that every decision is evidence, an inline refusal that leaves no
+	// row is the gap, not the audit.
+	//
+	// So the outcome is handed to the caller, which is expected to record it ASYNCHRONOUSLY, after the
+	// kernel has been answered.
+	if d.onOutcome != nil {
+		disp.OnOutcome = d.onOutcome
+	}
 	return disp.Dispatch(ctx, ev)
 }
 
