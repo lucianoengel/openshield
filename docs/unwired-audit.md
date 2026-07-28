@@ -1505,3 +1505,56 @@ Nothing here changes behaviour, and that is the point: the value is in the count
 reader can take the wrong path. D345 happened because two builders sat side by side and the shipped
 tool used the wrong one. Every duplicate removed is one fewer chance to repeat it — and every
 duplicate KEPT, like `DenyEnforcer`, now has to say why in the code rather than in a reviewer's head.
+
+
+## Round 31 (D347): the exec source read the file once and stopped
+
+`internal/connectors/execaudit` measured at zero integration coverage. Driving it found the same
+shape again, in the endpoint's process-visibility source.
+
+`OPENSHIELD_EXEC_AUDIT_LOG` is described as "auditd log the exec connector reads". Point it at
+`/var/log/audit/audit.log` and the engine `os.Open`s it, the scanner's `for sc.Scan()` drains it,
+reaches EOF, and returns **nil** — a successful return. The goroutine exits. Every execution recorded
+BEFORE startup is ingested; **none after it, ever**, and nothing is logged, because nothing failed.
+The startup line says `exec connector ENABLED` either way.
+
+So HIPS process detection was a control that reported itself on, processed a backlog once, and was
+inert for the life of the process. "No suspicious executions" and "no executions were looked at" read
+identically.
+
+The engine's own comment named the intended sources — "a tailed audit log, a fifo, or the audit
+socket" — so the deployment shape was understood. The setting's description does not say it and the
+code did not enforce it, which is the whole distance between a design and a product.
+
+### A reader that does not end, not a loop that restarts
+
+The scanner's contract is unchanged: give it an `io.Reader`, it pairs SYSCALL+EXECVE and emits.
+Teaching that loop about log rotation would put filesystem logic inside a record parser. Instead the
+engine supplies a reader that waits on EOF instead of returning it, resumes from zero when the file is
+shorter than what was consumed (truncation), and reopens when the path names a different inode
+(rotation). A fifo is left alone — it already blocks correctly while a writer holds it open, and
+wrapping it would add a poll to a path that is already right.
+
+Both rotation cases are best-effort and can lose records written to the old file between the last read
+and the rename. That bound is the filesystem's; it is named rather than claimed away.
+
+### And an ended source is now loud
+
+`execSource` returning nil meant both "the context was cancelled" and "the stream ended". One is a
+clean shutdown, the other is the endpoint silently ceasing to report executions while the process
+keeps running. They are now distinguished: shutdown stays quiet, an end-of-source under a running
+engine is a WARN naming what was lost.
+
+### The test had to be written the hard way round
+
+The records are appended AFTER the engine is running, against a file that is EMPTY at startup — the
+exact state in which the old code gave up. Writing them first would have passed against the broken
+behaviour, which is precisely how a defect survives a fully unit-tested parser: the parser was never
+the problem.
+
+### The mutation failed to compile, again
+
+The first mutant removed the follower and left its import unused, so the build failed and the test
+"failed" for the wrong reason — which is indistinguishable from a successful mutation unless you check
+`go build` first. Same trap as D338, caught the same way. The compiling mutant, which keeps the import
+live and simply does not install the follower, times out waiting for the appended execution.

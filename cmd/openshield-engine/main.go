@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/connectors/dns"
+	"github.com/lucianoengel/openshield/internal/connectors/execaudit"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -296,15 +298,37 @@ func main() {
 			fatal(log, "opening exec audit log", err)
 		}
 		defer f.Close()
+
+		// A REGULAR FILE IS FOLLOWED. Handed straight to the scanner it would be drained once and
+		// end at EOF — every execution before startup ingested, none after it, and no signal that it
+		// happened. A fifo or socket already blocks correctly while a writer holds it open, so it is
+		// left as it is.
+		var src io.Reader = f
+		mode := "read-once"
+		if st, serr := f.Stat(); serr == nil && st.Mode().IsRegular() {
+			src = execaudit.Follow(ctx, f, execLog, 0)
+			mode = "following"
+		}
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := execSource(ctx, f, events, log); err != nil {
+			err := execSource(ctx, src, events, log)
+			if err != nil {
 				log.Error("exec source", slog.String("err", err.Error()))
+				return
+			}
+			// THE SOURCE ENDED. On shutdown that is normal and silent; while the engine is still
+			// running it is a loss of endpoint process visibility, and "no suspicious executions" then
+			// reads exactly like "nothing was looked at" (D31).
+			if ctx.Err() == nil {
+				log.Warn("engine: exec source ENDED — no further process executions will be observed "+
+					"on this endpoint. The engine keeps running; HIPS process detection does not.",
+					slog.String("source", execLog), slog.String("mode", mode))
 			}
 		}()
 		log.Info("engine: exec connector ENABLED — process executions enter the pipeline (HIPS-5)",
-			slog.String("source", execLog))
+			slog.String("source", execLog), slog.String("mode", mode))
 	}
 
 	// Optional File Integrity Monitoring source (HIPS-4). When OPENSHIELD_FIM_PATHS names critical
