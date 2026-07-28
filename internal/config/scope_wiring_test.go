@@ -53,6 +53,7 @@ var cmdFields = map[string][]Field{
 	"openshield-anchor":       AnchorFields,
 	"openshield-print-filter": PrintFilterFields,
 	"openshieldctl":           CtlFields,
+	"openshield-ztna-client":  ZTNAClientFields,
 	// Operator-local tools with no declared configuration surface of their own.
 	"openshield-dlp-index":    nil,
 	"openshield-fim-baseline": nil,

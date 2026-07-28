@@ -31,6 +31,7 @@ in a runbook is read as a commitment.
 | `openshieldctl` | operator workstation | Verify the ledger, verify a restore, verify a release, read timelines. |
 | `openshield-anchor` | operator/witness | Exports and witnesses external anchors. |
 | `openshield-provision` | operator | Enrollment and provisioning. |
+| `openshield-ztna-client` | endpoint (unprivileged) | Zero-Trust access broker for applications: presents the DEVICE certificate to the access proxy over the `HTTP_PROXY` convention, loopback-only. It brokers access — it does not prevent an application taking a direct route. |
 | `openshield-print-filter` | endpoint (CUPS) | Print DLP; sits in the CUPS filter chain. |
 | `openshield-fim-baseline` | endpoint/operator | Builds the file-integrity baseline. |
 | `openshield-dlp-index` | operator | Builds the signed exact-data-match index. |

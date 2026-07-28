@@ -182,3 +182,21 @@ var CtlFields = []Field{
 		Default:     "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable",
 		Description: "Postgres connection the CLI reads. Overridden by --dsn."},
 }
+
+// ZTNAClientFields declares what cmd/openshield-ztna-client reads (ZT-4).
+//
+// All BOOTSTRAP: the client never reaches a database, and each of these is needed before it can do
+// anything at all. A wrong path therefore fails at startup with the field named, rather than at the
+// first brokered request as a TLS error an operator has to decode.
+var ZTNAClientFields = []Field{
+	{Key: "OPENSHIELD_ZTNA_BROKER", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "URL of the access proxy this client brokers to (ZT-4). Required."},
+	{Key: "OPENSHIELD_ZTNA_CERT", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "This DEVICE's certificate, presented to the broker so the connection is authorized by device identity. Required — a client without one would forward traffic unauthenticated while looking like protection."},
+	{Key: "OPENSHIELD_ZTNA_KEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "Private key for the device certificate. Required."},
+	{Key: "OPENSHIELD_ZTNA_CA", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "CA bundle the broker's certificate is verified against. Required — without it the client would trust whatever answers."},
+	{Key: "OPENSHIELD_ZTNA_LISTEN", Scope: ScopeBootstrap, Kind: KindString, Default: "127.0.0.1:3128",
+		Description: "Loopback address the local proxy binds. MUST be loopback: a broker on a routable interface is a relay anyone on the LAN could drive with this device's identity."},
+}

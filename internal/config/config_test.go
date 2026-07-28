@@ -461,7 +461,8 @@ func TestEveryBinaryIsCovered(t *testing.T) {
 		"openshield-agent": config.AgentFields, "openshield-worker": config.WorkerFields,
 		"openshield-engine": config.EngineFields, "openshield-fleet-agent": config.FleetAgentFields,
 		"openshield-anchor": config.AnchorFields, "openshield-print-filter": config.PrintFilterFields,
-		"openshieldctl": config.CtlFields,
+		"openshieldctl":          config.CtlFields,
+		"openshield-ztna-client": config.ZTNAClientFields,
 	}
 	entries, err := os.ReadDir(filepath.Join("..", "..", "cmd"))
 	if err != nil {

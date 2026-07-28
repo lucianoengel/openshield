@@ -1719,3 +1719,58 @@ was refused" is not actionable and "this agent is sending actions this build doe
 
 The counter is an ordinary `atomic.Int64` on the Server, which means **D348's guard forced it onto
 `/metrics`**. That is the first time one of this audit's guards has caught the next round's work.
+
+
+## Round 35 (D351): a capability that no operator could start
+
+`internal/ztna` is the endpoint half of Zero-Trust access. It brokers an application's traffic to the
+access proxy while presenting the DEVICE's certificate, refuses to start without an identity, binds
+loopback only, never falls back to a direct connection when the broker refuses, and does not follow
+redirects off the authorized path. Four tests drive it against a real access proxy.
+
+**No binary built it, and no settings existed.** An operator had no way to run it, however the
+deployment was configured. The roadmap counts ZT-4 as shipped; the README had to be corrected in D343
+to say the endpoint client was "built and not yet shipped as a binary" — a sentence that existed only
+because of this gap, and which this round deletes.
+
+Second instance of a whole capability being unreachable, after the SMTP connector (D342), and found
+the same way.
+
+### The binary is thin, deliberately
+
+Everything that decides anything stays in the library, because that is where the four tests reach. The
+binary reads configuration, builds TLS material, and calls `ListenAndServe`. A binary that
+re-implemented the loopback check or the identity refusal would have moved those decisions out from
+under their tests while appearing to strengthen them.
+
+Every configuration problem is fatal. A ZTNA client that started without a device certificate would
+forward traffic unauthenticated while looking like protection — worse than not running, because the
+application keeps working and nobody learns the identity was never presented.
+
+### Three guards caught the work, which is the point of having them
+
+Adding the binary failed `TestEveryBinaryIsCovered` immediately: five `OPENSHIELD_*` variables read
+with no declared field set. There are **two** such registries — one in `scope_wiring_test.go`, one in
+`config_test.go` — and updating only the first left the second failing. Then
+`TestRunbookDocumentsExactlyTheShippedBinaries` refused it for a third reason: a binary ships and the
+runbook does not name it, so "an operator meets a component the documentation does not mention".
+
+None of the three was written for this change. Between them they made it impossible to add a binary
+that is unconfigurable, undeclared, or undocumented — which is precisely the class of gap this audit
+has spent thirty-five rounds finding by hand.
+
+### The mutation is unusually clean
+
+Removing the device certificate from the client's TLS config produces:
+
+    502 "ztna: broker unreachable: … remote error: tls: certificate required"
+
+The broker refuses the connection outright. That is the property stated as plainly as it can be: the
+request is authorized by the DEVICE's identity, and without it there is no request at all.
+
+### The limit is now stated where it will be read
+
+The library's doc comment says it brokers access and does not prevent bypass. A README is read once;
+an application that later takes a direct route to the internal network is announced by nothing. So the
+process says it on every start, alongside the HTTP(S)-only bound and the fact that it is not an
+enrolment tool — the same discipline as the SMTP capture listener and the plaintext syslog stream.
