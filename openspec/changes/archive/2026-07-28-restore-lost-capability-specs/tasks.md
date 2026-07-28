@@ -48,5 +48,5 @@
 - [x] 4.3 `OPENSHIELD_REQUIRE_POSTGRES=1 make all` green.
 - [x] 4.4 Record the round in `docs/unwired-audit.md`: the spec store is the seventh defect shape — a
       source of truth that loses its history through the tool meant to maintain it.
-- [ ] 4.5 Commit with a D-number, and archive this change WITH the spec sync (the option whose absence
+- [x] 4.5 Commit with a D-number, and archive this change WITH the spec sync (the option whose absence
       caused this).
