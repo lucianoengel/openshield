@@ -58,7 +58,7 @@ var EngineFields = []Field{
 		Description: "Address for the DNS query connector (NIPS-3). Empty disables it."},
 	{Key: "OPENSHIELD_EXEC_AUDIT_LOG", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "auditd log the exec connector reads (HIPS-5c). Additive and observe-only unless a KILL policy and OPENSHIELD_ENFORCE are both set."},
-	{Key: "OPENSHIELD_EXEC_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindOutputPath, Default: "",
+	{Key: "OPENSHIELD_EXEC_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
 		Description: "Socket this engine answers the privileged exec gate on. It serves verdicts; it does not ask for them. The engine CREATES it, so only its parent directory must exist."},
 	{Key: "OPENSHIELD_FIM_PATHS", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Critical files/dirs to monitor for integrity (HIPS-4). Unset leaves FIM inert."},
@@ -98,7 +98,7 @@ var EngineFields = []Field{
 		Description: "Applications whose copies are never read \u2014 password managers and the like. Exclusions are applied BEFORE the read."},
 	{Key: "OPENSHIELD_CLIPBOARD_MEDIATE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Set to MEDIATE the X11 clipboard rather than observe it: owning the selection gives per-destination enforcement."},
-	{Key: "OPENSHIELD_PRINT_SOCKET", Scope: ScopeBootstrap, Kind: KindOutputPath, Default: "",
+	{Key: "OPENSHIELD_PRINT_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
 		Description: "Socket the CUPS print filter asks for print verdicts on. The engine CREATES it, so only its parent directory must exist."},
 }
 
@@ -159,7 +159,7 @@ var AnchorFields = []Field{
 // PrintFilterFields is what the CUPS filter reads. One setting, because everything else about a print job
 // comes from CUPS itself.
 var PrintFilterFields = []Field{
-	{Key: "OPENSHIELD_PRINT_SOCKET", Scope: ScopeBootstrap, Kind: KindOutputPath,
+	{Key: "OPENSHIELD_PRINT_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath,
 		Description: "Socket the filter asks the engine for a print verdict on. Unset means the filter passes every job through — fail-open, because a DLP that breaks printing gets uninstalled (D17)."},
 }
 

@@ -232,11 +232,12 @@ func TestASocketPathIsNeverRequiredToExist(t *testing.T) {
 			if !strings.HasSuffix(f.Key, "_SOCKET") {
 				continue
 			}
-			if f.Kind != KindOutputPath {
+			if f.Kind != KindSocketPath {
 				t.Errorf("%s declares %s as %q. A socket path must be %q: KindPath requires it to exist "+
-					"at startup, which either makes the creating side unbootable or makes the connecting "+
-					"side fail CLOSED when the other end is down",
-					cmd, f.Key, f.Kind, KindOutputPath)
+					"at startup (which either makes the creating side unbootable or makes the connecting "+
+					"side fail CLOSED when the other end is down), and KindOutputPath applies no length "+
+					"bound — so an over-long path reaches the kernel and comes back as EINVAL",
+					cmd, f.Key, f.Kind, KindSocketPath)
 			}
 		}
 	}

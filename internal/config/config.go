@@ -66,6 +66,24 @@ const (
 	// contract the gate exists to honour: it is built to tolerate a dead engine by failing OPEN, and
 	// requiring the engine's socket at startup makes it fail CLOSED before it has run a line.
 	KindOutputPath Kind = "output_path"
+	// KindSocketPath is a unix socket path: an output path (one side creates it, the other connects)
+	// that is additionally BOUNDED by the platform's `sockaddr_un` address limit.
+	//
+	// The bound is the whole reason this is a kind of its own, and it REVERSES D321 (D325). D321 met
+	// this question and declined, because a socket kind then behaved identically to KindOutputPath and a
+	// kind distinguished only by its name is noise in a schema that drives a UI. That was right; its
+	// premise has changed. The two now differ in behaviour, and a behavioural difference is exactly what
+	// earns a distinct kind.
+	//
+	// The alternative — a length check inside KindOutputPath keyed on the field's NAME ending in
+	// `_SOCKET` — would put a behavioural rule in a string comparison, where the next setting called
+	// something else silently gets no bound.
+	//
+	// What it catches: a path too long to bind, known from the VALUE ALONE, before anything is created.
+	// What it deliberately does not: permissions, a full filesystem, a stale socket held by another
+	// process. A configuration layer that pretended to predict a syscall's outcome would be wrong the
+	// first time the two disagreed.
+	KindSocketPath Kind = "socket_path"
 )
 
 // Field is ONE declaration, used for both reading and describing. There is deliberately no second list.
@@ -365,7 +383,7 @@ func (r *Resolver) Validate() error {
 // also a snapshot: a path readable at boot can stop being readable an hour later, so the check must not
 // be mistaken for a guarantee. The reader gives the real error at the point of use.
 func parseForOrigin(f Field, raw, origin string) error {
-	if (f.Kind == KindPath || f.Kind == KindOutputPath) && origin == "default" {
+	if (f.Kind == KindPath || f.Kind == KindOutputPath || f.Kind == KindSocketPath) && origin == "default" {
 		return nil
 	}
 	return parseFor(f, raw)
@@ -400,7 +418,16 @@ func parseFor(f Field, raw string) error {
 		if _, err := os.Stat(raw); err != nil {
 			return fmt.Errorf("path is not readable")
 		}
-	case KindOutputPath:
+	case KindOutputPath, KindSocketPath:
+		// A socket is bounded by the kernel's address size, and the kernel does NOT truncate: it refuses
+		// the bind with EINVAL, surfaced as "bind: invalid argument" — a message naming neither the
+		// length nor the cause. Checked FIRST, because a too-long path is wrong regardless of what its
+		// parent directory looks like, and the length is the more useful thing to be told.
+		if f.Kind == KindSocketPath && len(raw) > MaxSocketPath {
+			return fmt.Errorf("socket path is %d bytes, over this platform's %d-byte limit — the bind "+
+				"would fail with \"invalid argument\", which names neither the length nor the cause",
+				len(raw), MaxSocketPath)
+		}
 		// The PARENT must exist and be a directory. Checking the path itself would refuse a spool
 		// directory that has simply not been created yet — which is every first boot — while checking
 		// nothing at all would accept a typo that silently spools into an unwritable place.

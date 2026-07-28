@@ -676,3 +676,49 @@ This cannot hide a regression, which is the only reason it is acceptable: it fir
 environment failed before our code was reached. If xclip can read its own selection and our reader
 cannot, that still fails. A half-working toolchain is the same situation as an absent one — which this
 test already skipped for.
+
+
+## Round 14 (D325): the same limit, on the product side
+
+D324 fixed the TEST suite's exposure to the unix address limit. The product had the same exposure and no
+guard: every socket setting was `KindOutputPath`, which checks the parent directory and nothing about
+length.
+
+The failure it produces is quiet in a particular way worth naming. The engine validates its
+configuration, starts the verdict server, logs `exec-verdict IPC ACTIVE`, and only then fails to listen —
+so the operator has a process that SAID the feature was on. The privileged gate, unable to reach a socket
+that was never bound, degrades to its static path and fails open with an audit per exec, exactly as
+designed. **Every component behaves correctly, the deployment does not work, and nothing names the
+cause.** That is the shape this audit keeps finding: not a broken part, but a correct one reporting
+success for something that did not happen.
+
+### Reversing a decision, on the record
+
+D321 met this exact question — should a socket be its own configuration kind? — and answered no, because
+a socket kind would then have behaved identically to `KindOutputPath`, and a kind distinguished from
+another only by its name is noise in a schema that drives a UI.
+
+That reasoning was right, and its premise has changed: the two kinds now differ in BEHAVIOUR, which is
+precisely what earns a distinct kind. The alternative considered and rejected — a length check inside
+`KindOutputPath` keyed on the field's NAME ending in `_SOCKET` — would put a behavioural rule in a string
+comparison, where the next setting called something else silently gets no bound.
+
+Recorded as a reversal rather than done quietly. A decision register that only ever accumulates is one
+nobody trusts to describe the code.
+
+### Refusing what works is worse than a message that varies
+
+The tempting simplification is to validate against 104 everywhere: one number, one message, no build
+tags. It is wrong. A 106-byte socket path binds correctly on Linux, and refusing it would be rejecting
+VALID configuration — leaving an operator with a correct value the product will not take and no recourse.
+So the constant is the running platform's: 108 on Linux, 104 elsewhere.
+
+The general form: a check that rejects working configuration is a worse defect than the one it prevents,
+because the operator cannot route around it.
+
+### What the check deliberately does not do
+
+It catches a path too long to bind, knowable from the VALUE ALONE before anything is created. It does not
+attempt permissions, a full filesystem, or a stale socket held by another process. A configuration layer
+that pretended to predict a syscall's outcome would be wrong the first time the two disagreed, and would
+then be the thing standing between an operator and a working deployment.
