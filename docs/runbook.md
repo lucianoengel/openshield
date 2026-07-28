@@ -38,9 +38,14 @@ bounded prefix of every file opened in the watched directories, at roughly **0.4
 
 | `OPENSHIELD_OPEN_PREFIX_BYTES` | cost per open | suits |
 |---|---|---|
-| 64 KiB (default) | ~26 ms | a directory of sensitive documents, opened occasionally |
-| 16 KiB | ~6 ms | a shared working directory |
+| 64 KiB (the ceiling) | ~26 ms | a quiet directory of sensitive documents — only ~5x margin against the window |
+| 16 KiB (**default**) | ~6 ms | a shared working directory |
 | 4 KiB | ~1.5 ms | anything busier |
+
+The default is deliberately **not** the ceiling. At 64 KiB the margin against the permission window is
+about five times, which sounds ample and is not: anything that slows the machine consumes it, and an
+over-budget verdict does not arrive late — it **fails open silently** while the gate still reports
+itself active.
 
 Every open in those directories waits that long, and the waiting process is **uninterruptible**. Do not
 point it at a source tree, a build directory, or anything on a hot path. Lowering the prefix trades

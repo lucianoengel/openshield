@@ -50,7 +50,7 @@ func runOpenGate(ctx context.Context) error {
 	// to be: the decision costs roughly 0.4ms per KiB, so the 64KiB ceiling is ~26ms per open. That is
 	// fine for a directory of sensitive documents and ruinous for a source tree, and an operator who
 	// cannot lower it has only the choice between a slow directory and no gate.
-	prefix := envInt("OPENSHIELD_OPEN_PREFIX_BYTES", openipc.MaxPrefixLen)
+	prefix := envInt("OPENSHIELD_OPEN_PREFIX_BYTES", DefaultPrefixBytes)
 	if prefix <= 0 || prefix > openipc.MaxPrefixLen {
 		prefix = openipc.MaxPrefixLen
 	}
@@ -85,6 +85,18 @@ func runOpenGate(ctx context.Context) error {
 
 	return mon.Run(ctx, wd)
 }
+
+// DefaultPrefixBytes is a quarter of the ceiling, deliberately.
+//
+// At the 64KiB ceiling the decision costs ~26ms against a 150ms window — about five times the margin,
+// which sounds ample and is not: anything that slows the machine eats it, and an over-budget verdict
+// does not arrive late, it FAILS OPEN silently while the gate still reports itself active. CI proved
+// the point by blowing the deadline under the race detector, which is several times slower than
+// production but no slower than a loaded host.
+//
+// 16KiB costs ~6ms, leaving roughly 25x. An operator who wants more inline depth on a quiet directory
+// can raise it knowing what it costs.
+const DefaultPrefixBytes = 16 << 10
 
 // envInt reads an integer setting, falling back on anything unparseable.
 //

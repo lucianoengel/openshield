@@ -47,6 +47,17 @@ func TestTheOpenDecisionFitsThePermissionWindow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("latency measurement; skipped under -short")
 	}
+	if raceDetectorOn {
+		// A LATENCY MEASUREMENT UNDER THE RACE DETECTOR MEASURES THE RACE DETECTOR. It instruments every
+		// memory access, costing several times the real work, so the number would be neither the
+		// production cost nor a stable threshold — and a build gate that fails on instrumentation
+		// overhead is one that gets marked flaky and ignored.
+		//
+		// It skips rather than loosening its budget, because a budget wide enough to pass under
+		// instrumentation would no longer fail when the real path regressed, which is the only thing
+		// this test is for.
+		t.Skip("latency measurement is meaningless under -race; run without it")
+	}
 	ctx := context.Background()
 
 	bin := filepath.Join(t.TempDir(), "openshield-worker")

@@ -1927,3 +1927,31 @@ run it again on the hardware.
 `make quick` and targeted package tests pass on Linux for all of it. The macOS limit is invisible here
 by construction, and the agent-dependency check is not in the fast loop. CI is the tree-wide check
 precisely because it runs what the local loop cannot.
+
+
+## Round 39 (D355): CI ate the headroom, and the default was wrong
+
+The latency test failed on CI under `-race`: *decision 38 failed: stage "prefilter-classify": context
+deadline exceeded.* Locally the same measurement is p99 29ms against a 150ms window.
+
+Two conclusions, and the second matters more.
+
+**A latency measurement under the race detector measures the race detector.** It instruments every
+memory access at several times the cost of the real work, so the number is neither production's nor a
+stable threshold. The test now skips under `-race` — and skips rather than widening its budget,
+because a budget loose enough to pass under instrumentation would no longer fail when the real path
+regressed, which is the only thing the test is for.
+
+**But the failure was also telling the truth about the default.** At the 64 KiB ceiling the margin is
+about five times. That sounds ample and is not: the race detector is several times slower than
+production and no slower than a loaded host, and an over-budget verdict does not arrive late — it
+**fails open silently** while the gate still reports itself active. Five times is not a margin for a
+control whose failure is invisible.
+
+So the default is now 16 KiB (~6ms, roughly 25x), with the ceiling available to an operator who wants
+more inline depth on a quiet directory and now knows what it costs. The runbook says the default is
+deliberately not the ceiling and why.
+
+**This is the third time in two rounds that CI found something the local loop structurally could not**
+— the macOS address limit, the agent's linked-in parsers, and now a timing margin that only shows on a
+slower machine. Each was invisible here by construction rather than by oversight.
