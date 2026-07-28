@@ -31,6 +31,22 @@ in a runbook is read as a commitment.
 | `openshieldctl` | operator workstation | Verify the ledger, verify a restore, verify a release, read timelines. |
 | `openshield-anchor` | operator/witness | Exports and witnesses external anchors. |
 | `openshield-provision` | operator | Enrollment and provisioning. |
+<!-- b2-guidance -->
+
+**Before enabling the file-open gate (B2)**, know what it costs. The inline decision classifies a
+bounded prefix of every file opened in the watched directories, at roughly **0.4ms per KiB**:
+
+| `OPENSHIELD_OPEN_PREFIX_BYTES` | cost per open | suits |
+|---|---|---|
+| 64 KiB (default) | ~26 ms | a directory of sensitive documents, opened occasionally |
+| 16 KiB | ~6 ms | a shared working directory |
+| 4 KiB | ~1.5 ms | anything busier |
+
+Every open in those directories waits that long, and the waiting process is **uninterruptible**. Do not
+point it at a source tree, a build directory, or anything on a hot path. Lowering the prefix trades
+inline detection depth for latency — the async tier still classifies the whole file and contains it
+afterwards, so what is lost is inline refusal of content that appears past the ceiling, not detection.
+
 | `openshield-ztna-client` | endpoint (unprivileged) | Zero-Trust access broker for applications: presents the DEVICE certificate to the access proxy over the `HTTP_PROXY` convention, loopback-only. It brokers access — it does not prevent an application taking a direct route. |
 | `openshield-print-filter` | endpoint (CUPS) | Print DLP; sits in the CUPS filter chain. |
 | `openshield-fim-baseline` | endpoint/operator | Builds the file-integrity baseline. |

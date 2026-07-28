@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,10 +46,18 @@ func runOpenGate(ctx context.Context) error {
 	}
 	defer mon.Close()
 
+	// THE PREFIX IS THE DEPLOYABILITY KNOB, and it is configurable because the measurement said it had
+	// to be: the decision costs roughly 0.4ms per KiB, so the 64KiB ceiling is ~26ms per open. That is
+	// fine for a directory of sensitive documents and ruinous for a source tree, and an operator who
+	// cannot lower it has only the choice between a slow directory and no gate.
+	prefix := envInt("OPENSHIELD_OPEN_PREFIX_BYTES", openipc.MaxPrefixLen)
+	if prefix <= 0 || prefix > openipc.MaxPrefixLen {
+		prefix = openipc.MaxPrefixLen
+	}
 	client := &openipc.Client{
 		SocketPath: sock,
 		Timeout:    envDuration("OPENSHIELD_OPEN_IPC_TIMEOUT", openipc.DefaultTimeout),
-		MaxPrefix:  openipc.MaxPrefixLen,
+		MaxPrefix:  prefix,
 	}
 	defer client.Close()
 
@@ -68,11 +77,29 @@ func runOpenGate(ctx context.Context) error {
 		},
 	}
 
-	logf("B2 file-open gate ACTIVE on %s (verdicts from %s, budget=%s, prefix<=%dKiB). "+
+	logf("B2 file-open gate ACTIVE on %s (verdicts from %s, budget=%s, prefix<=%dKiB ~%dms/open). "+
 		"EVERY failure FAILS OPEN with a high-severity audit — a gate that failed closed would hang "+
 		"every process on this host. The verdict comes from a BOUNDED PREFIX, so content past the "+
 		"ceiling is not seen inline; the async tier classifies the whole file and contains it after.",
-		strings.Join(dirs, ","), sock, budget, openipc.MaxPrefixLen>>10)
+		strings.Join(dirs, ","), sock, budget, prefix>>10, (prefix>>10)*4/10)
 
 	return mon.Run(ctx, wd)
+}
+
+// envInt reads an integer setting, falling back on anything unparseable.
+//
+// A fallback rather than a fatal, because this value is a performance knob and not a security one: a
+// typo costs latency, and refusing to start would trade the whole gate for a misspelling. The declared
+// field is range-checked by the config validation that runs before this (PLAT-5); this is the last line
+// of defence, not the first.
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }

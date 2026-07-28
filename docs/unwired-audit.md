@@ -1832,3 +1832,44 @@ The budget measurement. The gate is correct and fails open; what is not establis
 a decided open, which is the number that decides whether this is deployable on a busy directory. The
 exec gate has that measurement (p50 41µs, p99 987µs against a 200ms window, D301) and this one will
 need its own before it is recommended anywhere real.
+
+
+## Round 37 (D353): measuring B2 found the knob it was missing
+
+D352 landed the file-open gate and named what was not done: the budget measurement. This is it, and
+measuring changed the product rather than merely documenting it.
+
+**p50 26ms, p99 29ms, against a 150ms window.** It fits — with roughly five times the headroom — so the
+gate delivers verdicts rather than silently degrading to fail-open, which is the correctness property
+the number exists to establish.
+
+But fitting the budget is not the same as being deployable, and the exec gate's number makes the
+contrast plain: **41µs there, 26ms here.** Three orders of magnitude, because an exec decision
+classifies a path and an open decision classifies 64 KiB of content.
+
+### The curve is what an operator needs, not the ceiling
+
+| prefix | p50 |
+|---|---|
+| 4 KiB | 1.5 ms |
+| 16 KiB | 6.4 ms |
+| 64 KiB | 25.9 ms |
+
+Linear, at about 0.4ms per KiB. That is fine for a directory of sensitive documents opened
+occasionally, and ruinous for a source tree — and every open in those directories waits that long,
+uninterruptibly.
+
+### And the knob did not exist
+
+The prefix size was hard-coded to the ceiling. An operator with a busier directory had only the choice
+between a slow directory and no gate at all, which is not a choice anyone makes in favour of the gate.
+`OPENSHIELD_OPEN_PREFIX_BYTES` now exists, the startup line reports the resulting cost per open, and
+the runbook carries the table above with the blunt advice not to point this at a build directory.
+
+**This is the argument for measuring rather than declaring done.** The gate was correct, tested on a
+live kernel, mutation-verified, and shipped with a missing setting that would have made it unusable
+wherever anyone actually wanted it. Nothing about that was visible from the code; it took a number.
+
+The measurement is a build gate, like the exec gate's, and for the same reason: an over-budget verdict
+does not make the product slow, it makes the gate stop happening while every log line still reports it
+as active.

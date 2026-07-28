@@ -26,6 +26,8 @@ var AgentFields = []Field{
 		Description: "Comma-separated DIRECTORIES whose file opens are decided inline (B2). Directories only — a mount-wide scope is refused, because every open on the host would then enter a permission window. Unset disables the gate."},
 	{Key: "OPENSHIELD_OPEN_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
 		Description: "Socket the engine answers file-open verdicts on. REQUIRED when the gate is enabled: there is no local fallback, so without it the gate would fail open on every event while reporting itself active."},
+	{Key: "OPENSHIELD_OPEN_PREFIX_BYTES", Scope: ScopeBootstrap, Kind: KindInt, Default: "65536",
+		Description: "Bytes of each file read and classified inline (B2). THIS IS THE DEPLOYABILITY KNOB: cost is roughly linear at ~0.4ms/KiB, so 64KiB costs ~26ms per open and 4KiB costs ~1.5ms. A directory of sensitive documents tolerates the ceiling; a source tree or build directory does not. Lowering it trades inline detection depth for latency — the async tier still classifies the whole file."},
 	{Key: "OPENSHIELD_OPEN_IPC_TIMEOUT", Scope: ScopeBootstrap, Kind: KindDuration, Default: "150ms",
 		Description: "Bound on one verdict round trip. Must sit inside the watchdog budget — a client still waiting when the budget elapses is producing an answer nobody can use."},
 	{Key: "OPENSHIELD_OPEN_BUDGET", Scope: ScopeBootstrap, Kind: KindDuration, Default: "500ms",
