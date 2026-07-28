@@ -211,15 +211,61 @@ func Verify(dir string, manifestBytes, sig []byte, pub ed25519.PublicKey) (Manif
 	return m, nil
 }
 
-// LoadAndVerify is the operator-facing path: read the manifest, signature and public key from a release
-// directory and check it. Verification should be a command someone runs, not a paragraph in a README.
-func LoadAndVerify(dir string) (Manifest, error) {
+// Fingerprint identifies a public key compactly enough to be compared by eye.
+//
+// A full key in terminal output is unreadable and gets copied wrongly, which matters because the whole
+// point of reporting the key is that two operators can establish they verified against the SAME one.
+func Fingerprint(pub ed25519.PublicKey) string {
+	sum := sha256.Sum256(pub)
+	return hex.EncodeToString(sum[:8])
+}
+
+// LoadAndVerifyWithKey verifies a release against a public key the operator obtained OUT OF BAND.
+//
+// THIS IS THE ONLY WAY TO ESTABLISH AUTHENTICITY, and the reason is structural rather than a matter of
+// care: everything in the release directory is under the control of whoever modified the download.
+// Verification that reads its key from there answers "is this set internally consistent" — a question an
+// attacker who re-signs the whole set with a key of their own can arrange a "yes" to. Only a key from
+// somewhere else can answer "did the project sign this".
+//
+// The shipped key is NOT consulted here, on any condition. A fallback — on an unreadable pin, on a
+// mismatch between the two — would reintroduce the entire gap through the error path, and an attacker who
+// can modify the download can usually arrange the condition.
+func LoadAndVerifyWithKey(dir string, pub ed25519.PublicKey) (Manifest, error) {
 	var m Manifest
-	manifestBytes, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if len(pub) != ed25519.PublicKeySize {
+		return m, fmt.Errorf("release: pinned public key is %d bytes, want %d", len(pub), ed25519.PublicKeySize)
+	}
+	manifestBytes, sig, err := loadMeta(dir)
 	if err != nil {
 		return m, err
 	}
-	sig, err := os.ReadFile(filepath.Join(dir, SignatureName))
+	return Verify(dir, manifestBytes, sig, pub)
+}
+
+// loadMeta reads the manifest and its signature. Shared so the pinned and unpinned paths cannot drift.
+func loadMeta(dir string) (manifestBytes, sig []byte, err error) {
+	manifestBytes, err = os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		return nil, nil, err
+	}
+	sig, err = os.ReadFile(filepath.Join(dir, SignatureName))
+	if err != nil {
+		return nil, nil, err
+	}
+	return manifestBytes, sig, nil
+}
+
+// LoadAndVerify is the operator-facing path: read the manifest, signature and public key from a release
+// directory and check it. Verification should be a command someone runs, not a paragraph in a README.
+//
+// IT CHECKS INTEGRITY, NOT AUTHENTICITY — see LoadAndVerifyWithKey. It reads the key from the directory
+// it is verifying, so it establishes that the artifact set matches one signature, not whose. That is
+// worth having (it catches every corruption and every post-signing edit) and it is strictly less than an
+// operator reading "verified" is likely to assume, which is why the command says so.
+func LoadAndVerify(dir string) (Manifest, error) {
+	var m Manifest
+	manifestBytes, sig, err := loadMeta(dir)
 	if err != nil {
 		return m, err
 	}

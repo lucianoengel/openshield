@@ -95,16 +95,56 @@ func releaseManifest(args []string) int {
 func verifyRelease(args []string) int {
 	fs := flag.NewFlagSet("verify-release", flag.ContinueOnError)
 	dir := fs.String("dir", "dist", "release directory")
+	keyPath := fs.String("key", "", "ed25519 PUBLIC key obtained out of band; without it, authenticity "+
+		"is not established")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	m, err := release.LoadAndVerify(*dir)
+
+	var (
+		m    release.Manifest
+		used ed25519.PublicKey
+		err  error
+	)
+	if *keyPath != "" {
+		// A PROBLEM WITH THE PINNED KEY IS FATAL, never a fallback to the key inside the release. Falling
+		// back would reintroduce the whole gap through the error path, and an attacker who can modify the
+		// download can usually arrange the condition that triggers it.
+		key, rerr := os.ReadFile(*keyPath)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "openshieldctl: reading the pinned public key: %v\n", rerr)
+			return 1
+		}
+		if len(key) != ed25519.PublicKeySize {
+			fmt.Fprintf(os.Stderr, "openshieldctl: the pinned key is %d bytes, want %d (raw ed25519 public "+
+				"key)\n", len(key), ed25519.PublicKeySize)
+			return 1
+		}
+		used = ed25519.PublicKey(key)
+		m, err = release.LoadAndVerifyWithKey(*dir, used)
+	} else {
+		m, err = release.LoadAndVerify(*dir)
+		if err == nil {
+			used, _ = os.ReadFile(filepath.Join(*dir, release.PublicKeyName))
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "verified %d artifact(s): %s (commit %s, built with %s)\n",
-		len(m.Entries), m.Version, m.Commit, m.GoVersion)
+
+	fmt.Fprintf(os.Stdout, "verified %d artifact(s): %s (commit %s, built with %s) against key %s\n",
+		len(m.Entries), m.Version, m.Commit, m.GoVersion, release.Fingerprint(used))
+	if *keyPath == "" {
+		// SAY WHAT WAS NOT ESTABLISHED. An operator who runs a verification command and sees success will
+		// believe the strongest claim it could plausibly be making — so a limit that is not stated becomes
+		// a false belief, which is the D31 rule applied to the supply chain. This check read its key from
+		// the directory it was checking: an attacker who re-signs the set with a key of their own passes it.
+		fmt.Fprintf(os.Stderr, "openshieldctl: INTEGRITY only — the artifact set matches a signature made "+
+			"by the key SHIPPED WITH IT, which does not establish that the project signed this release. "+
+			"Re-run with --key <path to the project's public key, obtained out of band> to check "+
+			"authenticity.\n")
+	}
 	return 0
 }
 

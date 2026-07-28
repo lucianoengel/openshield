@@ -1144,3 +1144,52 @@ The first mutant leaked content by concatenating a string to `reason` — which 
 not compile, and both tests "failed" on a broken build. That would have been recorded as a successful
 verification. Only re-checking `go build` before believing the result caught it. A mutant that does not
 compile proves nothing, and it fails in exactly the way a successful mutation looks.
+
+
+## Round 24 (D339): the verification that could not tell who signed
+
+`internal/release` measured at zero integration coverage and both of its subcommands —
+`openshieldctl release-manifest` and `verify-release` — had never been invoked by the suite. A poor
+place for a gap: this is the code that decides whether the thing running as root on every endpoint is
+the thing the project built, and a supply-chain control nobody has executed end to end is a README.
+
+The scenarios exercise the operator path — sign a directory with one command, check it with another —
+and every refusal holds: a byte changed at the same length, an artifact added after signing, an
+artifact removed, and a manifest rewritten to match a swapped binary (rejected on the signature, not
+the digests, because a coherent forgery has correct digests). The SBOM is real too — built from the
+binary's recorded module graph, so the staged release includes an actual Go binary; over non-binaries
+the SBOM generates successfully and says nothing, and the assertion would have passed against it.
+
+### What the coverage exercise actually found
+
+`verify-release` reads its public key from the **same directory it is verifying**. So an attacker who
+can modify a download can swap a binary, re-sign the entire set with a key of their own, replace
+`release-key.pub`, and pass verification — every digest matches a manifest signed by a key that is
+present. The command answers *is this set internally consistent*, and an operator who runs it and sees
+`verified 4 artifacts` reasonably believes it answered *did the project sign this*.
+
+No amount of care inside the verifier closes that, because the entire input is the attacker's. The
+fix is not a better check but a second input: `--key`, a public key obtained out of band.
+
+### The fallback is the bypass
+
+When `--key` is supplied the shipped key is **not read at all** — not on an unreadable pin, not on a
+malformed one, not on a mismatch. A fallback would reintroduce the whole gap through the error path,
+and an attacker who can modify the download can usually arrange the condition that triggers it. Both
+mutations confirm this is load-bearing rather than decorative: falling back when the pinned key fails
+to verify makes the re-signed release pass, and treating an unusable pin as absent makes all three
+unusable-pin cases pass.
+
+The unpinned path stays, because checking that a download was not corrupted is worth doing before an
+operator has any key. What does not stay is the silence: it now prints what it did and did not
+establish, and how to establish the rest. D31 applied to the supply chain — the limit that is not
+stated becomes a false belief, and here the belief is about the binary running as root.
+
+### Testing a limit you intend to remove
+
+The first version of this asserted the gap: it re-signed a release with an attacker key, confirmed
+`verify-release` accepted it, and logged the reason. That test is worth writing — a demonstrated
+limitation is much harder to forget than an assumed one — but it is worth keeping only until the
+limit is closed. It is now the *unpinned half* of the pinning test, where it still asserts something
+true and sits next to the pinned half that refuses the same directory. The difference between the two
+runs is one flag and nothing else, which is what makes it about the key rather than about the release.

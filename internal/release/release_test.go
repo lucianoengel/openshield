@@ -2,6 +2,7 @@ package release_test
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -269,5 +270,120 @@ func TestSBOMDescribesWhatShipped(t *testing.T) {
 		if c.Name == "" || c.Version == "" {
 			t.Errorf("component with no name or version: %+v", c)
 		}
+	}
+}
+
+// TestPinnedVerificationIgnoresTheShippedKey.
+//
+// The unit-level half of the same claim the integration suite makes over the CLI: a release re-signed
+// with another key verifies against the key inside it and MUST NOT verify against a pinned one.
+func TestPinnedVerificationIgnoresTheShippedKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "artifact_linux_amd64"), []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projectPub, projectPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attackerPub, attackerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(priv ed25519.PrivateKey, pub ed25519.PublicKey) {
+		t.Helper()
+		m, err := release.Build(dir, "v1", "c1", "go1", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig, err := release.Sign(m, priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canonical, err := m.Canonical()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, body := range map[string][]byte{
+			release.ManifestName: canonical, release.SignatureName: sig, release.PublicKeyName: pub,
+		} {
+			if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	sign(projectPriv, projectPub)
+	if _, err := release.LoadAndVerifyWithKey(dir, projectPub); err != nil {
+		t.Fatalf("a genuine release was refused under its own key: %v", err)
+	}
+
+	// Re-signed by the attacker, shipped key replaced.
+	if err := os.WriteFile(filepath.Join(dir, "artifact_linux_amd64"), []byte("evil!!"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sign(attackerPriv, attackerPub)
+	if _, err := release.LoadAndVerify(dir); err != nil {
+		t.Fatalf("the unpinned path refused a self-consistent release, so the pinned comparison below "+
+			"is not isolating the key: %v", err)
+	}
+	if _, err := release.LoadAndVerifyWithKey(dir, projectPub); err == nil {
+		t.Fatal("a release re-signed with another key verified under the project's pinned key")
+	}
+}
+
+// TestAWrongSizedPinnedKeyIsAnErrorNotAFallback: on a GENUINE release, so a fallback would succeed.
+func TestAWrongSizedPinnedKeyIsAnErrorNotAFallback(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "artifact_linux_amd64"), []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := release.Build(dir, "v1", "c1", "go1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := release.Sign(m, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := m.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		release.ManifestName: canonical, release.SignatureName: sig, release.PublicKeyName: pub,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := release.LoadAndVerifyWithKey(dir, ed25519.PublicKey("short")); err == nil {
+		t.Fatal("a wrong-sized pinned key verified a release — the key is being ignored")
+	}
+}
+
+// TestFingerprintDistinguishesKeys. A fingerprint that collided, or that was constant, would let two
+// operators agree they used the same key while using different ones.
+func TestFingerprintDistinguishesKeys(t *testing.T) {
+	a, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Fingerprint(a) == release.Fingerprint(b) {
+		t.Fatal("two different keys have the same fingerprint")
+	}
+	if release.Fingerprint(a) != release.Fingerprint(a) {
+		t.Fatal("the fingerprint is not stable")
+	}
+	if len(release.Fingerprint(a)) != 16 {
+		t.Fatalf("fingerprint is %d hex chars, want 16", len(release.Fingerprint(a)))
 	}
 }
