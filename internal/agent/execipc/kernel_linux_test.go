@@ -86,7 +86,7 @@ func TestKernelExecDeniedViaIPC(t *testing.T) {
 	copyExecutable(t, allowed)
 
 	// The engine side: a real execipc.Server whose verdict comes through the real execguard mapping.
-	socket := filepath.Join(t.TempDir(), "verdict.sock")
+	socket := socketPath(t, "v.sock")
 	srv := &execipc.Server{
 		Evaluate: execguard.ExecEvaluator{Decide: execguard.Decider(stubProcessor{denyPath: denied})}.Evaluate,
 		Logf:     func(format string, a ...any) { t.Logf("server: "+format, a...) },
@@ -191,7 +191,7 @@ func TestKernelExecDeniedByContainIntent(t *testing.T) {
 		return corev1.IntentVerb_INTENT_VERB_UNSPECIFIED, "", false
 	})
 
-	socket := filepath.Join(t.TempDir(), "verdict.sock")
+	socket := socketPath(t, "v.sock")
 	srv := &execipc.Server{
 		Evaluate: execguard.ExecEvaluator{Decide: execguard.Decider(subjectStamper{eng: eng, subject: subject})}.Evaluate,
 		Logf:     func(f string, a ...any) { t.Logf("server: "+f, a...) },

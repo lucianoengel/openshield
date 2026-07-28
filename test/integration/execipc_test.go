@@ -40,10 +40,10 @@ func TestTheEngineAnswersExecVerdictsOverTheIpcSocket(t *testing.T) {
 	migrateStack(t, stack)
 	work := t.TempDir()
 
-	// A SHORT socket path. A unix socket address is bounded at ~108 bytes by the kernel, and a
-	// `t.TempDir()` under a long test name silently overruns it — the engine then fails to listen for a
-	// reason that has nothing to do with what is under test.
-	sock := filepath.Join(t.TempDir(), "v.sock")
+	// A SHORT socket path — see SocketPath. A `t.TempDir()` address embeds the test's NAME and overruns
+	// the kernel's limit, after which the engine fails to listen for a reason that has nothing to do with
+	// what is under test.
+	sock := SocketPath(t, "v.sock")
 	policy := filepath.Join(work, "exec.rego")
 	if err := os.WriteFile(policy, []byte(denyExec), 0o600); err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestAnExecVerdictSurvivesTheEngineGoingAway(t *testing.T) {
 	stack := StartStack(t)
 	migrateStack(t, stack)
 	work := t.TempDir()
-	sock := filepath.Join(t.TempDir(), "v.sock")
+	sock := SocketPath(t, "v.sock")
 	policy := filepath.Join(work, "exec.rego")
 	if err := os.WriteFile(policy, []byte(denyExec), 0o600); err != nil {
 		t.Fatal(err)

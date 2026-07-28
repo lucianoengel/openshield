@@ -623,3 +623,56 @@ correctness:
 The refusal behaviour is what made this happen at all: the tools were built to FAIL on an unrecognized
 delta section rather than skip it, so `REMOVED` had to be implemented instead of silently dropped. That
 is the same refusal the original clobbering sync lacked.
+
+
+## Round 13 (D324): the gate was green because nobody looked at CI
+
+CI had been failing for **over a day — every run since 2026-07-27T00:24, sixty consecutive runs** — while
+`make all` was green locally after every commit. One job of nine: `build (macos-latest)`.
+
+The cause is a platform constant. `sockaddr_un.sun_path` holds **104 bytes on macOS** and 108 on Linux,
+and the kernel does not truncate an over-long address — it refuses the bind with EINVAL, surfaced as
+`bind: invalid argument`, a message naming neither the length nor the cause. `t.TempDir()` builds its
+path from the TEST'S NAME, and a macOS runner's temp prefix is already ~48 bytes, leaving about 31 for
+the name.
+
+So the rule has a genuinely perverse shape: **a descriptive test name breaks the test, and a terse one
+hides the bug until someone renames it.** `TestMismatchedResponseIDIsRejected` is 33 characters.
+
+### Verifying a macOS fix without a Mac
+
+The constraint is reproducible anywhere, because it is arithmetic on a path. Setting `TMPDIR` to a
+53-byte directory on Linux makes its 108-byte limit exactly as tight as macOS's 104 against a real 49-byte
+prefix — so passing there implies passing on macOS. Before the fix: 5 bind failures. After: none. That is
+a better check than "it looks right", and it took one line of shell.
+
+The fix is a `socketPath` helper that allocates outside the test-named directory **and asserts the
+length**, so the failure lands on the author's machine instead of on a runner nobody watches. A static
+guard in `internal/fitness` now rejects any `t.TempDir()`-derived socket path — and caught two in the
+integration suite that I had written myself, in a file whose comment described this very limit.
+
+### A test that poisoned its own next run
+
+Chasing the CI failure surfaced a second one locally. `TestRealX11ClipboardRoundTrip` starts an Xvfb on
+`:97` and killed it with SIGKILL, so Xvfb never removed `/tmp/.X97-lock`. Every subsequent run found the
+display locked, started a server that exited immediately, and failed several seconds later with *"the
+first poll of a non-empty clipboard reported no change"* — a message about the clipboard, for a fault in
+the display. Same shape as the leaked containers of D313: a test whose cleanup does not clean up, whose
+next run pays, and whose error message points somewhere else.
+
+It also stayed invisible because `make test` runs `go test -race ./...` **without `-count=1`**, so an
+unchanged package keeps serving a cached PASS. The gate had genuinely not re-run that test since it last
+succeeded. Worth stating plainly: a green gate means "nothing that changed is broken", not "nothing is
+broken".
+
+### Skip on a broken environment, fail on a broken product
+
+The real cause of the clipboard failure turned out to be neither the lock nor the code: an `xclip`
+unpacked from a `.deb` into a home directory starts, accepts the write, stays alive, and never serves the
+selection. The test now probes the toolchain with xclip reading back its OWN selection, bounded by a
+context because the failure mode is a HANG rather than an error, and SKIPS when that fails.
+
+This cannot hide a regression, which is the only reason it is acceptable: it fires only when the
+environment failed before our code was reached. If xclip can read its own selection and our reader
+cannot, that still fails. A half-working toolchain is the same situation as an absent one — which this
+test already skipped for.

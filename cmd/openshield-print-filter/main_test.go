@@ -27,7 +27,7 @@ func buildFilter(t *testing.T) string {
 // serveVerdict runs a real printguard server returning a fixed verdict, and records what it was asked.
 func serveVerdict(t *testing.T, v printguard.Verdict) (socket string, seen *printguard.Request) {
 	t.Helper()
-	socket = filepath.Join(t.TempDir(), "print.sock")
+	socket = socketPath(t, "p.sock")
 	var got printguard.Request
 	srv := &printguard.Server{Decide: func(_ context.Context, req printguard.Request) (printguard.Verdict, error) {
 		got = req
@@ -117,7 +117,7 @@ func TestAllowedJobIsPassedThroughByteForByte(t *testing.T) {
 // because a daemon died gets uninstalled, which protects nothing.
 func TestUnreachableEngineStillPrints(t *testing.T) {
 	bin := buildFilter(t)
-	stdout, stderr, code := runFilter(t, bin, filepath.Join(t.TempDir(), "absent.sock"), sensitiveJob)
+	stdout, stderr, code := runFilter(t, bin, socketPath(t, "absent.sock"), sensitiveJob)
 	if code != 0 {
 		t.Fatalf("an unreachable engine aborted the job (exit %d) — printing must not depend on the "+
 			"agent being alive", code)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,7 +30,7 @@ type stubServer struct {
 
 func newStubServer(t *testing.T, handle func(execipc.Request) (execipc.Response, bool)) *stubServer {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "exec.sock")
+	socket := socketPath(t, "e.sock")
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +138,7 @@ func TestMismatchedResponseIDIsRejected(t *testing.T) {
 // TestUnreachableSocketFailsOpen: no engine at all → an error (which the watchdog turns into an audited
 // allow), never a block and never a hang.
 func TestUnreachableSocketFailsOpen(t *testing.T) {
-	c := newTestClient(filepath.Join(t.TempDir(), "nonexistent.sock"))
+	c := newTestClient(socketPath(t, "absent.sock"))
 	defer c.Close()
 	v, err := c.Evaluate(context.Background(), watchdog.PermissionEvent{PID: 1, Path: "/bin/x"})
 	if err == nil {
@@ -240,7 +239,7 @@ func TestVerdictCacheCollapsesAForkStorm(t *testing.T) {
 // TestEngineRestartRecovers: an engine that dies and comes back must leave no stuck error state and no
 // stuck denial — execs during the outage fail open, and the next exec after recovery is evaluated again.
 func TestEngineRestartRecovers(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "restart.sock")
+	socket := socketPath(t, "r.sock")
 	answer := func(req execipc.Request) (execipc.Response, bool) {
 		return execipc.Response{ID: req.ID, Verdict: execipc.VerdictDeny}, false
 	}

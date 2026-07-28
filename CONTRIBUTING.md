@@ -66,6 +66,24 @@ timeout — which a faster loop surfaces sooner anyway.
 Do not run the full gate after every edit. It is ten minutes, and running it thirty times to catch two
 things that take four seconds to find is how a gate stops being run at all.
 
+**Then check CI, because the local gate cannot see two things it can never see.**
+
+1. **The platforms you do not run.** CI builds on Linux, Windows and macOS and runs `-race` on the two
+   POSIX ones. A macOS-only failure sat red for sixty consecutive runs while every local gate was green:
+   a unix socket path built from `t.TempDir()` overflows macOS's 104-byte address limit once the test's
+   name passes about 31 characters (D324). Nothing local could have caught it.
+2. **Anything the build cache is entitled to skip.** `go test` reuses a cached PASS for a package whose
+   inputs have not changed, and the toolchain on your PATH is not one of those inputs — so installing or
+   breaking `xclip` changes what a test does while the cache keeps answering for the old result. CI runs
+   uncached on a fresh machine every time.
+
+A green local gate means *nothing that changed is broken*. It does not mean *nothing is broken*, and the
+difference is exactly the size of what CI covers. Checking after a push is one command:
+
+```
+gh run list --workflow=CI --limit 1
+```
+
 ### Optional test infrastructure
 
 Most of the suite needs only Go. These unlock the tests that would otherwise skip:

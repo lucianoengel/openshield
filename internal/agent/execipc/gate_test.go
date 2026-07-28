@@ -73,7 +73,7 @@ func gate(t *testing.T, c *execipc.Client, budget time.Duration) (*watchdog.Watc
 // privileged gate that fails closed when its evaluator dies removes the host's ability to run programs
 // (D17/D73), so "fails open" here is a property to protect, not a bug to fix.
 func TestGateFailsOpenLoudlyWhenTheEngineIsGone(t *testing.T) {
-	c := newTestClient(t.TempDir() + "/absent.sock")
+	c := newTestClient(socketPath(t, "absent.sock"))
 	defer c.Close()
 	w, resp, audits, mu := gate(t, c, 500*time.Millisecond)
 
@@ -190,7 +190,7 @@ func TestServerAnswersFromTheEvaluator(t *testing.T) {
 		{name: "evaluation error", err: errors.New("policy exploded"), wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			socket := t.TempDir() + "/verdict.sock"
+			socket := socketPath(t, "v.sock")
 			srv := &execipc.Server{
 				Evaluate: func(context.Context, watchdog.PermissionEvent) (watchdog.Verdict, error) {
 					return tc.verdict, tc.err
@@ -226,7 +226,7 @@ func TestServerAnswersFromTheEvaluator(t *testing.T) {
 // TestServerRemovesStaleSocket: an unclean shutdown leaves a socket file behind. If bind failed on it, the
 // engine would come back with the exec gate silently unable to get verdicts for the life of the process.
 func TestServerRemovesStaleSocket(t *testing.T) {
-	socket := t.TempDir() + "/stale.sock"
+	socket := socketPath(t, "s.sock")
 	for i := 0; i < 2; i++ {
 		srv := &execipc.Server{
 			Evaluate: func(context.Context, watchdog.PermissionEvent) (watchdog.Verdict, error) {

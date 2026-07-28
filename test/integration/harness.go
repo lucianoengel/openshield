@@ -604,3 +604,27 @@ func waitPostgresQueryable(t *testing.T, dsn string) {
 	}
 	t.Fatalf("postgres never became queryable at %s: %v", dsn, last)
 }
+
+// maxSunPath is the shortest unix-address limit across supported platforms (104 on macOS, 108 on Linux).
+const maxSunPath = 104
+
+// SocketPath returns a unix socket path short enough to bind, and fails if it is not.
+//
+// `t.TempDir()` embeds the TEST NAME, so a descriptive name pushes a socket address over the kernel's
+// limit and `bind` fails with "invalid argument" — a message naming neither the length nor the cause.
+// This suite is Linux-only, so the macOS limit does not bite here; the helper exists anyway because the
+// hazard is the same one that took CI down, and a rule with an exception nobody can see is a rule that
+// erodes. `internal/fitness` enforces it across the tree.
+func SocketPath(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "os")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	p := filepath.Join(dir, name)
+	if len(p) > maxSunPath {
+		t.Fatalf("socket path is %d bytes, over the %d-byte unix address limit: %s", len(p), maxSunPath, p)
+	}
+	return p
+}
