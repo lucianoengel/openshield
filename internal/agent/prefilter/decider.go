@@ -91,13 +91,27 @@ func (d *Decider) DecidePartial(ctx context.Context, e watchdog.PermissionEvent)
 	if err != nil {
 		return nil, fmt.Errorf("prefilter: reading prefix of %s: %w", e.Path, err)
 	}
+	return d.DecideBytes(ctx, e.Path, prefix)
+}
 
+// DecideBytes decides from a prefix the CALLER already holds, without opening anything.
+//
+// It is the path the inline file-open gate uses (B2): the privileged agent reads the prefix from the
+// descriptor the kernel supplied with the permission event and sends those bytes over the IPC, so this
+// process never opens the file. That is not an optimisation — an open here would raise a SECOND
+// permission event which the same gate must answer, deadlocking inside a window that is
+// uninterruptible, and it would be a TOCTOU hole besides, since the path may name a different file by
+// the time it is opened.
+//
+// DecidePartial above is the same decision over bytes it reads itself, for callers that are not behind
+// a permission gate. One implementation, two ways in.
+func (d *Decider) DecideBytes(ctx context.Context, path string, prefix []byte) (*corev1.Decision, error) {
 	ev := &corev1.Event{
-		EventId:     "perm-" + e.Path,
+		EventId:     "perm-" + path,
 		ConnectorId: "prefilter",
 		Kind:        corev1.EventKind_EVENT_KIND_FILE_OPENED,
 		Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
-			Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: e.Path},
+			Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: path},
 		}},
 	}
 
