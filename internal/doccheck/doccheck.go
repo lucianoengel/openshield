@@ -128,10 +128,20 @@ func CheckDecisionRegister(text string) error {
 // requirementHeading matches a capability requirement heading in a spec or a change delta.
 var requirementHeading = regexp.MustCompile(`(?m)^### Requirement: (.+)$`)
 
-// deltaSection matches a delta's operation heading. Only ADDED and MODIFIED occur in this archive; an
-// unrecognized one is an ERROR rather than a skip, because skipping a section is precisely how the
-// requirements were lost.
+// deltaSection matches a delta's operation heading.
 var deltaSection = regexp.MustCompile(`(?m)^## (\w+) Requirements`)
+
+// knownSections are the delta operations this check implements. An unrecognized one is an ERROR rather
+// than a skip — refusing is what forced REMOVED and RENAMED to be implemented instead of silently
+// dropped (D323), and skipping a section is how 170 requirements were lost in the first place (D322).
+var knownSections = map[string]bool{"ADDED": true, "MODIFIED": true, "REMOVED": true, "RENAMED": true}
+
+// renameFrom and renameTo read the FROM:/TO: lines of a RENAMED section, which names its requirements
+// in prose rather than in headings.
+var (
+	renameFrom = regexp.MustCompile(`(?mi)^\s*[-*]?\s*\**FROM\**:\s*` + "`?" + `### Requirement: (.+?)` + "`?" + `\s*$`)
+	renameTo   = regexp.MustCompile(`(?mi)^\s*[-*]?\s*\**TO\**:\s*` + "`?" + `### Requirement: (.+?)` + "`?" + `\s*$`)
+)
 
 // SpecGap is one requirement an archived change introduced that its capability spec no longer holds.
 type SpecGap struct {
@@ -167,29 +177,53 @@ func CheckSpecStore(deltas map[string]map[string]string, specs map[string]string
 	for change := range deltas {
 		changes = append(changes, change)
 	}
-	// Chronological: archive directories are date-prefixed, so lexical order is date order. It matters
-	// only for WHICH change a gap is attributed to — the last one to introduce the requirement.
+	// Chronological: archive directories are date-prefixed, so lexical order is date order.
 	sort.Strings(changes)
 
-	attributed := map[[2]string]string{} // (capability, requirement) -> latest change introducing it
+	type state struct {
+		op     string // the LAST operation applied to this requirement
+		change string
+	}
+	current := map[[2]string]state{}
 	order := make([][2]string, 0)
+	note := func(capability, requirement, op, change string) {
+		key := [2]string{capability, requirement}
+		if _, seen := current[key]; !seen {
+			order = append(order, key)
+		}
+		current[key] = state{op: op, change: change}
+	}
+
 	for _, change := range changes {
 		for capability, text := range deltas[change] {
-			if m := deltaSection.FindStringSubmatch(text); m != nil {
-				for _, s := range deltaSection.FindAllStringSubmatch(text, -1) {
-					if s[1] != "ADDED" && s[1] != "MODIFIED" {
-						return nil, fmt.Errorf("%s/%s: unrecognized delta section %q — refusing to "+
-							"ignore it, because ignoring a section is how requirements were lost",
-							change, capability, s[1])
-					}
+			sections := deltaSection.FindAllStringSubmatchIndex(text, -1)
+			for _, s := range sections {
+				if name := text[s[2]:s[3]]; !knownSections[name] {
+					return nil, fmt.Errorf("%s/%s: unrecognized delta section %q — refusing to "+
+						"ignore it, because ignoring a section is how requirements were lost",
+						change, capability, name)
 				}
 			}
-			for _, m := range requirementHeading.FindAllStringSubmatch(text, -1) {
-				key := [2]string{capability, strings.TrimSpace(m[1])}
-				if _, seen := attributed[key]; !seen {
-					order = append(order, key)
+			sectionAt := func(pos int) string {
+				op := "ADDED"
+				for _, s := range sections {
+					if s[0] < pos {
+						op = text[s[2]:s[3]]
+					} else {
+						break
+					}
 				}
-				attributed[key] = change
+				return op
+			}
+			for _, m := range requirementHeading.FindAllStringSubmatchIndex(text, -1) {
+				note(capability, strings.TrimSpace(text[m[2]:m[3]]), sectionAt(m[0]), change)
+			}
+			// A rename retires the old heading and puts the new one in force.
+			for _, m := range renameFrom.FindAllStringSubmatch(text, -1) {
+				note(capability, strings.TrimSpace(m[1]), "REMOVED", change)
+			}
+			for _, m := range renameTo.FindAllStringSubmatch(text, -1) {
+				note(capability, strings.TrimSpace(m[1]), "ADDED", change)
 			}
 		}
 	}
@@ -197,11 +231,16 @@ func CheckSpecStore(deltas map[string]map[string]string, specs map[string]string
 	var gaps []SpecGap
 	for _, key := range order {
 		capability, requirement := key[0], key[1]
-		spec, ok := specs[capability]
-		if ok && strings.Contains(spec, "### Requirement: "+requirement) {
+		// A requirement a later change RETIRED is correctly absent. Without this, removing anything
+		// would be impossible without switching the guard off — and a check that must be switched off
+		// to do ordinary work does not survive contact with ordinary work.
+		if current[key].op == "REMOVED" {
 			continue
 		}
-		gaps = append(gaps, SpecGap{Capability: capability, Requirement: requirement, Change: attributed[key]})
+		if spec, ok := specs[capability]; ok && strings.Contains(spec, "### Requirement: "+requirement) {
+			continue
+		}
+		gaps = append(gaps, SpecGap{Capability: capability, Requirement: requirement, Change: current[key].change})
 	}
 	return gaps, nil
 }

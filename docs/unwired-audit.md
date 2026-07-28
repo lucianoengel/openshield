@@ -558,3 +558,68 @@ that quietly means nothing.
 6. Correct components that combine into a broken behaviour.
 7. **A source of truth that loses its history through the tool meant to maintain it** — and a validator
    already failing loudly enough that the loss made no sound.
+
+
+## Round 12 (D323): settling two contradictions, and a third finding
+
+D322 restored 170 requirements without reconciling them to the code, on the principle that a
+contradiction you can see is a decision waiting to be made. Two were settled here, and settling them
+required establishing what the product actually prevents — which turned out to be a per-domain answer,
+not a yes or no.
+
+| domain | inline prevention today | mechanism |
+|---|---|---|
+| execution | yes | `FAN_OPEN_EXEC_PERM` answered `FAN_DENY` |
+| network flow | yes | TPROXY drop at L4; gateway refuses before forwarding |
+| print job | yes | CUPS filter refuses before the printer |
+| clipboard paste | yes, where the display server allows mediation | X11 selection ownership |
+| USB device | yes | sysfs deauthorization |
+| **file open** | **no** | nothing answers `FAN_OPEN_PERM` |
+
+### The old requirement was right, and is still right about files
+
+The temptation was to call it obsolete. It is not. Its reasoning — *"the file was already read, that is
+how it was classified"* — is a statement about an unavoidable ORDERING, not about an unfinished feature.
+You cannot block an open on a classification that requires the open.
+
+What expired is the GENERALIZATION. It was written when file access was the only channel and it
+generalized to all channels; the channels that arrived since decide on a path, a destination or a device
+identity, none of which requires reading content. So the replacement is per-domain, and each claim must
+name its mechanism — a stronger anti-overclaim rule than the original, because "we do not prevent" is
+unfalsifiable and ages badly, while "an exec is prevented by answering the permission event with DENY"
+can be checked and can be wrong.
+
+### A spec that UNDERSTATES is as useless as one that overstates
+
+These two requirements are where the project states its central honesty commitment, so a reader checking
+for overclaim found a spec claiming LESS than the product does. The same understatement was on the
+README — `openshield-agent` was still described as *"deferred… inline blocking, not yet wired"* long
+after D244 proved it denying execs on a live kernel — and in the DPIA template's suggested wording. Both
+corrected. `docs/decisions.md` was deliberately NOT touched: it is a dated register of what was decided
+when, and D49 and D94 were true when written.
+
+### The third finding: the file-open prefilter has no caller
+
+`internal/agent/prefilter` implements the two-tier answer to the permission-window problem, and `grep`
+finds no reference to it outside its own package. The `inline-prevention` capability already carries a
+requirement for it. Shape 5 again — a design with tests and no runner — and it is precisely why the file
+row above still says no. Recorded, not fixed: wiring it needs a privileged agent mode marking
+`FAN_OPEN_PERM`, a partial-classification path through the sandboxed worker, and a root-gated kernel
+test.
+
+### A guard that blocks ordinary work gets switched off
+
+D322's guard demanded that every archived requirement be present. This change is the first to RETIRE
+one, and it hit the guard immediately — twice over. Removal had to become expressible, or the only way to
+retire a requirement would be to disable the check. Two fixes, both about survivability rather than
+correctness:
+
+- the tools replay operations IN ORDER and honour the last one, so removed-then-re-added is required
+  again (a set of removals would have been wrong the moment the project changed its mind);
+- they read ACTIVE changes as well as archived ones, because a removal only reaches the archive at the
+  change's last step, and a guard that is red for the whole life of the work it exists to permit is one
+  somebody turns off.
+
+The refusal behaviour is what made this happen at all: the tools were built to FAIL on an unrecognized
+delta section rather than skip it, so `REMOVED` had to be implemented instead of silently dropped. That
+is the same refusal the original clobbering sync lacked.

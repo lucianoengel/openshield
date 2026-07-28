@@ -198,7 +198,7 @@ OpenShield ships as focused, single-responsibility binaries (all Go, `cmd/`):
 | **`openshield-gateway`** | The network data plane. TLS-intercepting proxy (inline DLP), ZTNA access broker, and DNS/SMTP inspection — each request classified in the sandboxed worker. |
 | **`openshield-server`** | The fleet control plane. Ingests signed telemetry over NATS, persists the fleet aggregate, runs correlation/incidents and alert delivery. It coordinates and observes; it does not control. |
 | **`openshield-fleet-agent`** | The fleet-facing endpoint half: generates a per-agent identity, enrolls, and publishes signed telemetry, heartbeats, and device posture. |
-| **`openshield-agent`** | The privileged inline-enforcement agent (fanotify **permission** mode) — **deferred** (needs `CAP_SYS_ADMIN`; inline blocking, not yet wired). |
+| **`openshield-agent`** | The privileged inline-enforcement agent (fanotify **permission** mode). Needs `CAP_SYS_ADMIN`. It refuses an **execution** inline — statically, or on a verdict from the engine's full pipeline. Inline blocking of a file **open** is designed and not wired. |
 | **`openshield-provision`** | Issues the credentials the stack needs (enrollment tokens, client certs). Minimal provisioning for dev and small fleets — not a full PKI. |
 | **`openshield-anchor`** | Witnesses the audit-ledger head and stores an external anchor. It attests to the head; it cannot append — a witness the ledger writer cannot impersonate. |
 | **`openshieldctl`** | Operator CLI for querying and verifying the audit ledger. |

@@ -77,17 +77,31 @@ originating `Event`, the `Classification`, or any handle from which they could b
 - **AND** this is proven by a test package that is expected NOT to compile, asserted in CI —
   not by a comment stating the intent
 
-### Requirement: Phase 1 records decisions without acting on them
-During Phase 1 the pipeline SHALL record every `Decision` to the audit path and SHALL NOT
-invoke any enforcer (D1). The contract is defined in full now; only its execution is deferred.
+### Requirement: Recording is unconditional; acting is opt-in
 
-#### Scenario: A block decision is recorded, not executed
-- **WHEN** policy evaluation produces `ACTION_BLOCK` in a Phase 1 deployment
+Every Decision SHALL be recorded to the audit path whether or not it is acted upon, and enforcement
+SHALL be OFF unless it has been explicitly enabled. A deployment that has not opted in SHALL behave
+exactly as an observing one: the Decision is written, no enforcer runs, and the underlying operation
+proceeds.
+
+The asymmetry is deliberate. Recording is what the audit trail is for and must never depend on
+configuration, or a gap in the record would mean "nothing happened" and "enforcement was off" at the
+same time. Acting is the half that can break a machine, so it is the half that must be asked for.
+
+#### Scenario: A blocking decision in an observing deployment is recorded, not executed
+- **WHEN** policy evaluation produces an enforcing action and enforcement has not been enabled
 - **THEN** the Decision is written to the audit path
-- **AND** the underlying operation proceeds unimpeded
 - **AND** no enforcer is invoked
+- **AND** the underlying operation proceeds
 
-<!-- Added by change `add-agent-process-boundary` (2026-07-20). -->
+#### Scenario: The same decision with enforcement enabled is both recorded and carried out
+- **WHEN** policy evaluation produces an enforcing action and enforcement has been enabled
+- **THEN** the Decision is written to the audit path BEFORE the enforcer runs
+- **AND** the enforcement outcome is audited
+
+#### Scenario: Recording does not depend on the enforcement setting
+- **WHEN** the same event is decided in an observing deployment and in an enforcing one
+- **THEN** both write a Decision, and the records are distinguishable only by the enforcement outcome
 
 ### Requirement: Decisions record the enrichment context version
 `Decision` MUST carry a `context_version` identifying the enrichment Context it was evaluated

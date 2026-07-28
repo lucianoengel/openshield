@@ -54,6 +54,9 @@
 - **Works council / employee representatives consulted:** _____________________
 - **Review date:** __________
 
-> OpenShield is tamper-**evident**, not tamper-proof; it detects, it does not prevent; and anyone
-> with root on a monitored host can defeat the agent. State these limits honestly in your own
-> documentation — overclaiming a monitoring tool's capabilities is itself a compliance risk.
+> OpenShield is tamper-**evident**, not tamper-proof. It can refuse an execution, a network flow, a
+> print job, a clipboard paste and a USB device before they complete; it CANNOT prevent a file from
+> being read, because reading the file is how it is classified — there, it contains after the fact.
+> And anyone with root on a monitored host can defeat the agent. State these limits honestly in your
+> own documentation — overclaiming a monitoring tool's capabilities is itself a compliance risk, and
+> so is understating them if you rely on the understatement.

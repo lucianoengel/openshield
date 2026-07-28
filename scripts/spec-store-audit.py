@@ -16,13 +16,22 @@ import sys
 from collections import defaultdict
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# The two section types this archive actually contains. Anything else must STOP the tools rather than
-# be skipped: quietly ignoring a section is the exact behaviour that emptied control-plane/spec.md.
-KNOWN_SECTIONS = {"ADDED", "MODIFIED"}
+# The delta operations the tools implement. An unknown one is an ERROR, never a skip: refusing is what
+# forced REMOVED and RENAMED to be implemented rather than silently dropped (D323), and skipping is how
+# 170 requirements were lost (D322).
+KNOWN_SECTIONS = {"ADDED", "MODIFIED", "REMOVED", "RENAMED"}
+
+
+RENAME_FROM = re.compile(r"^\s*[-*]?\s*\**FROM\**:\s*`?### Requirement: (.+?)`?\s*$", re.I)
+RENAME_TO = re.compile(r"^\s*[-*]?\s*\**TO\**:\s*`?### Requirement: (.+?)`?\s*$", re.I)
 
 
 def parse_delta(path):
-    """Yield (section, requirement_name) in file order, refusing an unknown section type."""
+    """Yield (section, requirement_name) in file order, refusing an unknown section type.
+
+    A RENAMED section names its requirements with FROM:/TO: lines rather than headings, so both forms
+    are yielded: the old name as RENAMED_FROM and the new one as RENAMED_TO.
+    """
     section = None
     for lineno, line in enumerate(open(path, encoding="utf-8"), 1):
         m = re.match(r"^## (\w+) Requirements", line)
@@ -35,6 +44,15 @@ def parse_delta(path):
                     "Refusing to continue: skipping a section is how the requirements were lost."
                 )
             continue
+        if section == "RENAMED":
+            m = RENAME_FROM.match(line)
+            if m:
+                yield "RENAMED_FROM", m.group(1).strip()
+                continue
+            m = RENAME_TO.match(line)
+            if m:
+                yield "RENAMED_TO", m.group(1).strip()
+                continue
         m = re.match(r"^### Requirement: (.+)$", line)
         if m:
             yield section, m.group(1).strip()
@@ -49,37 +67,65 @@ def capability_headers(path):
     }
 
 
+def latest_operations(deltas):
+    """Return {(capability, requirement): (operation, change)} after replaying the archive in order.
+
+    The LAST operation wins, which is the only rule that makes removal work. Tracking a set of removed
+    requirements instead would be wrong the moment one is removed and later added again — and a check
+    that cannot express "we retired this, then changed our minds" is one people route around.
+    """
+    state = {}
+    for d in deltas:
+        cap = d.split("/specs/")[1].split("/")[0]
+        change = (d.split("/archive/")[1] if "/archive/" in d else d.split("/changes/")[1]).split("/")[0]
+        for op, name in parse_delta(d):
+            if op == "RENAMED_FROM":
+                state[(cap, name)] = ("REMOVED", change)
+            elif op == "RENAMED_TO":
+                state[(cap, name)] = ("ADDED", change)
+            else:
+                state[(cap, name)] = (op, change)
+    return state
+
+
 def main():
     deltas = sorted(glob.glob(os.path.join(REPO, "openspec/changes/archive/*/specs/*/spec.md")))
     if not deltas:
         sys.exit("no archived deltas found — is this being run outside the repo?")
+    # ACTIVE changes count as the newest operations. A change that RETIRES a requirement only reaches
+    # the archive at its last step, so without this the audit is red for the whole life of the work it
+    # exists to permit — and a check that fails throughout ordinary work gets switched off.
+    deltas += sorted(
+        p for p in glob.glob(os.path.join(REPO, "openspec/changes/*/specs/*/spec.md"))
+        if "/archive/" not in p
+    )
 
-    missing = defaultdict(list)  # capability -> [(requirement, change)]
-    seen = defaultdict(set)      # capability -> {requirement}
-    caps = set()
+    state = latest_operations(deltas)
+    missing = defaultdict(list)
+    in_force = defaultdict(set)
+    caps = {cap for cap, _ in state}
 
-    for d in deltas:
-        cap = d.split("/specs/")[1].split("/")[0]
-        change = d.split("/archive/")[1].split("/")[0]
-        caps.add(cap)
+    for (cap, name), (op, change) in state.items():
+        if op == "REMOVED":
+            continue  # deliberately retired — absence is correct, not a loss
+        in_force[cap].add(name)
         have = capability_headers(os.path.join(REPO, "openspec/specs", cap, "spec.md"))
-        for _, name in parse_delta(d):
-            seen[cap].add(name)
-            if have is None or name not in have:
-                # Report a requirement once, against the LAST change that introduced it — an
-                # ADDED-then-MODIFIED chain is one missing requirement, not three.
-                missing[cap] = [x for x in missing[cap] if x[0] != name] + [(name, change)]
+        if have is None or name not in have:
+            missing[cap].append((name, change))
 
-    total = sum(len(v) for v in seen.values())
+    total = sum(len(v) for v in in_force.values())
     gone = sum(len(v) for v in missing.values())
+    retired = sum(1 for op, _ in state.values() if op == "REMOVED")
+
     for cap in sorted(missing):
-        print(f"\n{cap}  —  {len(missing[cap])} missing of {len(seen[cap])}")
-        for name, change in missing[cap]:
+        print(f"\n{cap}  —  {len(missing[cap])} missing of {len(in_force[cap])}")
+        for name, change in sorted(missing[cap]):
             print(f"    {name}\n        introduced by {change}")
 
     print(
-        f"\n{gone} of {total} archived requirements are absent from their capability file "
-        f"({len(missing)} capabilities damaged, {len(caps) - len(missing)} intact)."
+        f"\n{gone} of {total} in-force archived requirements are absent from their capability file "
+        f"({len(missing)} capabilities damaged, {len(caps) - len(missing)} intact; "
+        f"{retired} deliberately retired and correctly absent)."
     )
     return 1 if gone else 0
 

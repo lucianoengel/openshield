@@ -87,11 +87,75 @@ func TestARequirementWithNoArchivedSourceIsAllowed(t *testing.T) {
 	}
 }
 
+// TestARetiredRequirementIsNotReportedAsLost (D323).
+//
+// A requirement a later change deliberately REMOVED must stop being demanded. Without this the guard
+// makes removal impossible — the retired requirement sits in an archived delta forever, so the check
+// asks for it forever, and the only way to retire anything is to switch the guard off. A check that has
+// to be switched off to do ordinary work does not survive contact with ordinary work.
+func TestARetiredRequirementIsNotReportedAsLost(t *testing.T) {
+	deltas := map[string]map[string]string{
+		"2026-01-01-first": {"ledger": "## ADDED Requirements\n\n### Requirement: Phase 1 never enforces\n\ntext\n"},
+		"2026-02-01-later": {"ledger": "## REMOVED Requirements\n\n### Requirement: Phase 1 never enforces\n\n" +
+			"**Reason**: enforcers exist now\n**Migration**: see the opt-in rule\n"},
+	}
+	specs := map[string]string{"ledger": "## Requirements\n\n### Requirement: Enforcement is opt-in\n\ntext\n"}
+
+	gaps, err := doccheck.CheckSpecStore(deltas, specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gaps) != 0 {
+		t.Errorf("a deliberately retired requirement was reported as lost: %v", gaps)
+	}
+}
+
+// TestARequirementRemovedThenAddedAgainIsRequired is why the check replays operations in order rather
+// than collecting a set of removals. A project is allowed to change its mind.
+func TestARequirementRemovedThenAddedAgainIsRequired(t *testing.T) {
+	deltas := map[string]map[string]string{
+		"2026-01-01-first":  {"ledger": "## ADDED Requirements\n\n### Requirement: Entries chain\n\ntext\n"},
+		"2026-02-01-second": {"ledger": "## REMOVED Requirements\n\n### Requirement: Entries chain\n\n**Reason**: x\n"},
+		"2026-03-01-third":  {"ledger": "## ADDED Requirements\n\n### Requirement: Entries chain\n\ntext\n"},
+	}
+	gaps, err := doccheck.CheckSpecStore(deltas, map[string]string{"ledger": "## Requirements\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gaps) != 1 || gaps[0].Change != "2026-03-01-third" {
+		t.Errorf("a requirement removed and then re-added must be required again, attributed to the "+
+			"change that brought it back; got %v", gaps)
+	}
+}
+
+// TestARenamedRequirementIsFollowedToItsNewHeading.
+//
+// RENAMED is implemented although this change does not use it. Leaving it a loud refusal would mean the
+// next person to rename a requirement stops to build tooling first — which is the tax that makes people
+// route around a check rather than use it.
+func TestARenamedRequirementIsFollowedToItsNewHeading(t *testing.T) {
+	deltas := map[string]map[string]string{
+		"2026-01-01-first": {"ledger": "## ADDED Requirements\n\n### Requirement: Old name\n\ntext\n"},
+		"2026-02-01-later": {"ledger": "## RENAMED Requirements\n\n- FROM: `### Requirement: Old name`\n" +
+			"- TO: `### Requirement: New name`\n"},
+	}
+	specs := map[string]string{"ledger": "## Requirements\n\n### Requirement: New name\n\ntext\n"}
+
+	gaps, err := doccheck.CheckSpecStore(deltas, specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gaps) != 0 {
+		t.Errorf("a renamed requirement was reported as lost under its OLD heading: %v", gaps)
+	}
+}
+
 // TestAnUnknownDeltaSectionIsRefused. Ignoring a section is the behaviour that produced this whole
-// repair, so meeting one the check has not been taught must be an ERROR, never a skip.
+// repair, so meeting one the check has not been taught must be an ERROR, never a skip. The refusal is
+// what forced REMOVED and RENAMED to be implemented rather than dropped.
 func TestAnUnknownDeltaSectionIsRefused(t *testing.T) {
 	deltas := map[string]map[string]string{
-		"2026-01-01-first": {"ledger": "## REMOVED Requirements\n\n### Requirement: Gone\n\ntext\n"},
+		"2026-01-01-first": {"ledger": "## DEPRECATED Requirements\n\n### Requirement: Gone\n\ntext\n"},
 	}
 	if _, err := doccheck.CheckSpecStore(deltas, map[string]string{"ledger": ""}); err == nil {
 		t.Error("an unrecognized delta section was accepted. A section this check cannot interpret must " +
@@ -115,6 +179,27 @@ func readSpecStore(t *testing.T) (deltas map[string]map[string]string, specs map
 		}
 		rel := strings.SplitN(p, "/archive/", 2)[1]
 		change := strings.SplitN(rel, "/", 2)[0]
+		capability := strings.SplitN(strings.SplitN(p, "/specs/", 2)[1], "/", 2)[0]
+		if deltas[change] == nil {
+			deltas[change] = map[string]string{}
+		}
+		deltas[change][capability] = string(b)
+	}
+
+	// ACTIVE changes count too, and sorting them last makes them the newest operations.
+	//
+	// Without this, a change that RETIRES a requirement has a red gate for its whole life: the removal
+	// only reaches the archive when the change is archived, which is the last step. A guard that fails
+	// throughout the work it is meant to permit is a guard someone switches off. Prefixing with "~"
+	// sorts an active change after every date-prefixed archived one.
+	active, _ := filepath.Glob("../../openspec/changes/*/specs/*/spec.md")
+	for _, p := range active {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel := strings.SplitN(p, "/changes/", 2)[1]
+		change := "~active/" + strings.SplitN(rel, "/", 2)[0]
 		capability := strings.SplitN(strings.SplitN(p, "/specs/", 2)[1], "/", 2)[0]
 		if deltas[change] == nil {
 			deltas[change] = map[string]string{}

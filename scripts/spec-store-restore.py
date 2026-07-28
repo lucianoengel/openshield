@@ -24,7 +24,10 @@ import sys
 from collections import defaultdict
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KNOWN_SECTIONS = {"ADDED", "MODIFIED"}
+KNOWN_SECTIONS = {"ADDED", "MODIFIED", "REMOVED", "RENAMED"}
+
+RENAME_FROM = re.compile(r"^\s*[-*]?\s*\**FROM\**:\s*`?### Requirement: (.+?)`?\s*$", re.I | re.M)
+RENAME_TO = re.compile(r"^\s*[-*]?\s*\**TO\**:\s*`?### Requirement: (.+?)`?\s*$", re.I | re.M)
 
 
 def split_requirements(text, source):
@@ -33,14 +36,37 @@ def split_requirements(text, source):
     A block runs from its heading to the next heading (or EOF), so scenarios travel with the
     requirement they belong to.
     """
+    return [(name, block) for name, block, _ in split_with_sections(text, source)]
+
+
+def split_with_sections(text, source):
+    """Return [(name, block, section)] — the section a requirement was declared under.
+
+    The section is what makes removal work: a block under '## REMOVED Requirements' is a withdrawal
+    with a Reason and a Migration, and restoring it into the capability file would put the retirement
+    notice back into the spec as though it were a requirement.
+    """
+    _refuse_unknown_sections(text, source)
+    section_at = []
+    for m in re.finditer(r"^## (\w+) Requirements", text, re.M):
+        section_at.append((m.start(), m.group(1)))
+
+    def section_for(pos):
+        current = "ADDED"
+        for at, name in section_at:
+            if at < pos:
+                current = name
+            else:
+                break
+        return current
+
     out = []
     positions = [m.start() for m in re.finditer(r"^### Requirement: ", text, re.M)]
     for i, start in enumerate(positions):
         end = positions[i + 1] if i + 1 < len(positions) else len(text)
         block = text[start:end].rstrip()
         name = block.split("\n", 1)[0][len("### Requirement: "):].strip()
-        out.append((name, block))
-    _refuse_unknown_sections(text, source)
+        out.append((name, block, section_for(start)))
     return out
 
 
@@ -103,13 +129,27 @@ def main():
 
         # Chronological replay: later wins. `sorted` is chronological because the directories are
         # date-prefixed, and same-day changes keep a stable order.
-        latest, origin, times_seen = {}, {}, defaultdict(int)
+        latest, origin, times_seen, retired = {}, {}, defaultdict(int), set()
         for d in deltas:
             change = d.split("/archive/")[1].split("/")[0]
-            for name, block in split_requirements(open(d, encoding="utf-8").read(), d):
+            text = open(d, encoding="utf-8").read()
+            for name, block, section in split_with_sections(text, d):
+                if section == "REMOVED":
+                    # Withdrawn. Drop the body so a later run cannot resurrect a retired requirement,
+                    # and remember it so nothing restores it.
+                    retired.add(name)
+                    latest.pop(name, None)
+                    continue
+                retired.discard(name)  # removed and then added again: in force once more
                 if name in latest and latest[name] != block:
                     times_seen[name] += 1
                 latest[name], origin[name] = block, change
+            for m in RENAME_FROM.finditer(text):
+                old = m.group(1).strip()
+                retired.add(old)
+                latest.pop(old, None)
+            for m in RENAME_TO.finditer(text):
+                retired.discard(m.group(1).strip())
         collisions += [(cap, n) for n, c in times_seen.items() if c]
 
         current_text = open(main_path, encoding="utf-8").read() if os.path.exists(main_path) else ""

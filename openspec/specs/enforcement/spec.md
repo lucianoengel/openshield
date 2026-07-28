@@ -209,22 +209,38 @@ keeps observe-only the default — enforcement is opt-in, per action.
 
 <!-- restored from 2026-07-21-add-enforcement-dispatch -->
 
-### Requirement: Post-decision enforcement contains, it does not prevent
-Documentation and any surface MUST describe enforcement as CONTAINMENT after detection (quarantine,
-encrypt, revoke), not PREVENTION of the access that triggered it. Inline blocking within the
-permission window is not provided.
+### Requirement: Prevention is claimed only where the product prevents
 
-The file was already read — that is how it was classified. Post-decision enforcement moves,
-encrypts or revokes after the fact; it does not stop the open. Calling this "prevention" would be
-the exact overclaim the threat model forbids (D16); inline blocking stays deferred because the
-pipeline cannot complete in the permission window (T-002).
+Documentation and every operator-facing surface SHALL describe enforcement per domain, and SHALL NOT
+generalize either way — neither claiming prevention the product does not perform, nor denying prevention
+it does. A claim of prevention MUST name the mechanism that carries it out.
 
-#### Scenario: No surface claims prevention
-- **WHEN** enforcement is described
-- **THEN** it is described as post-decision containment, defeatable by root, with inline blocking
-  named as deferred and infeasible for classification-dependent decisions
+**Prevented inline**, before the operation completes: an execution (an exec-permission event answered
+DENY), a network flow (dropped at L4, or refused by the gateway before it is forwarded), a print job
+(refused before it reaches the printer), a clipboard paste where the display server permits mediation,
+and a USB device (deauthorized).
 
-<!-- restored from 2026-07-21-add-enforcement-dispatch -->
+**Contained after the fact, never prevented: FILE ACCESS.** The file was already read — that is how it
+was classified — so quarantine, encrypt-local and revocation act on a read that already happened. This
+is the original limit and it is unchanged, because the mechanism is unchanged: nothing in the shipped
+product answers a file-open permission event. The two-tier prefilter that would (`internal/agent/prefilter`)
+is designed and has no caller.
+
+**Defeatable by root** in every case (D16). None of the above is a claim of prevention against an
+administrator of the host.
+
+#### Scenario: A file-access surface claims containment, not prevention
+- **WHEN** enforcement of a filesystem decision is described
+- **THEN** it is described as post-decision containment, defeatable by root, and does not claim the
+  offending read was prevented
+
+#### Scenario: An inline-prevention surface names its mechanism
+- **WHEN** a surface states that an execution, flow, print job, paste or device was prevented
+- **THEN** the mechanism that prevented it is named, and the claim is not generalized to file access
+
+#### Scenario: No surface claims prevention against root
+- **WHEN** any enforcement is described
+- **THEN** it is qualified as defeatable by an administrator of the host
 
 ### Requirement: File enforcers do not follow a symlink at the flagged path
 A file enforcer MUST NOT read or act THROUGH a symlink at the target path, and MUST refuse a target
