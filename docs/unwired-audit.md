@@ -807,3 +807,69 @@ Asked whether a targeted run was really 30 seconds, the honest answer was no —
 integration invocation builds the test binary AND the twelve product binaries into a temp dir, then each
 scenario starts its own NATS container and database. Guessing at it twice was worse than measuring it
 once.
+
+
+## Round 17 (D330): a setting that bricks the host, found by testing it once
+
+`OPENSHIELD_EXEC_ALLOW` — application whitelisting, default-deny — had never been exercised anywhere.
+The first integration test for it asserted the obvious pair (an allowlisted binary runs, an unlisted one
+does not) and failed. Investigating took the rooted VM down twice and needed an out-of-band reboot, which
+is the clearest possible statement of the defect.
+
+**Measured on a live kernel**, with an allowlist naming one binary in one monitored directory:
+
+```
+/home/coder/probe/bin/permitted-tool: Operation not permitted
+/usr/bin/sudo:                        Operation not permitted
+/usr/bin/cat:                         Operation not permitted
+/bin/bash:                            Operation not permitted   ← sshd could not start a login shell
+```
+
+**The failure is unrecoverable in the way that matters.** Stopping the agent needs `sudo`; `sudo` needs
+`exec`; `exec` is denied. Logging in needs a shell, also denied. The only exit is a power cycle.
+
+### The cause was written down in the code, three years of good intentions ago
+
+Exec-permission events are delivered only for a MOUNT mark — a directory inode mark does not deliver
+`FAN_OPEN_EXEC_PERM` for files executed inside it (the D224 lesson). So `execmon.Open` marks the mount,
+with a comment saying exactly that:
+
+> This is broader than the named path (the whole mount); a later increment can narrow with per-file
+> marks or path filtering.
+
+For a **deny-list** the breadth is harmless: it refuses exactly what it names. For an **allow-list** it
+is catastrophic, because the rule is *everything not named*, and "everything" turned out to be the
+filesystem rather than the configured directories. Nothing carried the narrowing forward to the decision.
+
+### The shape worth remembering
+
+A known, documented over-approximation was safe for every consumer that existed — and then a consumer
+arrived for which it was fatal. The comment was accurate, the code was as designed, and no test failed,
+because the only test of the allowlist called the evaluator directly with paths of its own choosing. The
+matcher was CORRECT in isolation; it was the scope it ran in that was wrong.
+
+That is the sixth defect shape (correct components combining into a broken behaviour) at its sharpest,
+and it argues for something specific: **when a control changes from enumerate-what-to-block to
+enumerate-what-to-allow, its blast radius inverts, and every over-approximation upstream of it has to be
+re-examined.** Default-deny is not "the deny-list with a different list".
+
+### The fix, and what it deliberately does not do
+
+The default-deny is now bounded by `OPENSHIELD_EXEC_MONITOR_DIRS`: an exec outside every monitored
+directory is out of scope and permitted. The deny-list is deliberately left unscoped — an enumerated
+refusal has a blast radius equal to what it names, so breadth costs nothing there, and narrowing it would
+silently weaken existing deployments. An allowlist with no directory to bound it is now REFUSED at
+startup rather than armed.
+
+The mark itself is still broad, so the agent still answers a permission event for every exec on the
+mount. That waste is real and is not fixed here; what is fixed is that the answer is now correct.
+Narrowing the mark is separate work with its own kernel-level risks, and pretending otherwise is how a
+scope fix becomes a rewrite.
+
+### The guard learned the other half of its own lesson
+
+Landing this tripped the spec-store check: an ACTIVE change's newly-ADDED requirement was demanded in the
+capability file, which the sync only writes at archive — so the gate would be red from the moment a
+change is proposed until the moment it lands. Active deltas are now honoured only where they RELAX
+(REMOVED counts, ADDED does not), which is the mirror of the removal fix in D323. Both come from the same
+rule: a guard that blocks ordinary work is a guard someone switches off.

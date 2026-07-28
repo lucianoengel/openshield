@@ -134,6 +134,9 @@ var deltaSection = regexp.MustCompile(`(?m)^## (\w+) Requirements`)
 // knownSections are the delta operations this check implements. An unrecognized one is an ERROR rather
 // than a skip — refusing is what forced REMOVED and RENAMED to be implemented instead of silently
 // dropped (D323), and skipping a section is how 170 requirements were lost in the first place (D322).
+// activePrefix marks a change that has not been archived yet (see readSpecStore).
+const activePrefix = "~active/"
+
 var knownSections = map[string]bool{"ADDED": true, "MODIFIED": true, "REMOVED": true, "RENAMED": true}
 
 // renameFrom and renameTo read the FROM:/TO: lines of a RENAMED section, which names its requirements
@@ -215,14 +218,30 @@ func CheckSpecStore(deltas map[string]map[string]string, specs map[string]string
 				}
 				return op
 			}
+			// An ACTIVE change is a PROPOSAL, and its deltas are honoured only where they RELAX.
+			//
+			// Its REMOVED entries must count, or retiring a requirement leaves the gate red for the whole
+			// life of the work that retires it. Its ADDED entries must NOT, because demanding a
+			// not-yet-shipped requirement be present in the capability file inverts the workflow: the
+			// sync happens at archive, so the gate would be red from the moment a change is proposed
+			// until the moment it lands. Both directions of that were learned the hard way — a guard
+			// that blocks ordinary work is a guard someone switches off.
+			active := strings.HasPrefix(change, activePrefix)
 			for _, m := range requirementHeading.FindAllStringSubmatchIndex(text, -1) {
-				note(capability, strings.TrimSpace(text[m[2]:m[3]]), sectionAt(m[0]), change)
+				op := sectionAt(m[0])
+				if active && op != "REMOVED" {
+					continue
+				}
+				note(capability, strings.TrimSpace(text[m[2]:m[3]]), op, change)
 			}
 			// A rename retires the old heading and puts the new one in force.
 			for _, m := range renameFrom.FindAllStringSubmatch(text, -1) {
 				note(capability, strings.TrimSpace(m[1]), "REMOVED", change)
 			}
 			for _, m := range renameTo.FindAllStringSubmatch(text, -1) {
+				if active {
+					continue // the new heading is not required until the change lands
+				}
 				note(capability, strings.TrimSpace(m[1]), "ADDED", change)
 			}
 		}

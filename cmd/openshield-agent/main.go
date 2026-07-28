@@ -69,7 +69,7 @@ func main() {
 	}
 
 	ipcSocket := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_IPC_SOCKET"))
-	ev, err := buildEvaluator(ipcSocket != "")
+	ev, err := buildEvaluator(ipcSocket != "", dirs)
 	if err != nil {
 		logf("loading exec deny-list: %v", err)
 		os.Exit(1)
@@ -125,7 +125,7 @@ func main() {
 // file (OPENSHIELD_EXEC_DENY) and an optional behavioral score floor
 // (OPENSHIELD_EXEC_BEHAVIOR_FLOOR). At least one signal must be configured, so the agent
 // does not run answering every exec ALLOW (a no-op enforcement is a misconfiguration).
-func buildEvaluator(ipcGate bool) (execmon.DenyEvaluator, error) {
+func buildEvaluator(ipcGate bool, monitorDirs []string) (execmon.DenyEvaluator, error) {
 	var ev execmon.DenyEvaluator
 	if f := strings.TrimSpace(os.Getenv("OPENSHIELD_EXEC_DENY")); f != "" {
 		paths, bases, err := execmon.LoadDenyList(f)
@@ -149,8 +149,18 @@ func buildEvaluator(ipcGate bool) (execmon.DenyEvaluator, error) {
 			return ev, err
 		}
 		ev.AllowPaths, ev.AllowBasenames = paths, bases
-		logf("WARNING: application whitelisting (default-deny) is ON — only binaries in %s may execute; "+
-			"an incomplete allowlist can break the host", f)
+		// SCOPE IT (D330). Without this the default-deny covers the whole MOUNT the monitored directory
+		// lives on — every executable on the filesystem — which refuses `sudo`, `cat` and the login
+		// shell, and leaves a machine that can only be recovered by a power cycle.
+		ev.AllowScope = monitorDirs
+		if len(ev.AllowScope) == 0 {
+			return ev, fmt.Errorf("OPENSHIELD_EXEC_ALLOW is set but no monitored directory bounds it: an " +
+				"unbounded default-deny refuses every executable on the mount, including the ones needed " +
+				"to stop this agent")
+		}
+		logf("WARNING: application whitelisting (default-deny) is ON — under %v, only binaries in %s may "+
+			"execute. Execs elsewhere are OUT OF SCOPE and unaffected. An incomplete allowlist can still "+
+			"break anything that runs from those directories", monitorDirs, f)
 	}
 	if len(ev.DenyPaths) == 0 && len(ev.DenyBasenames) == 0 && ev.BehaviorFloor <= 0 &&
 		len(ev.AllowPaths) == 0 && len(ev.AllowBasenames) == 0 && !ipcGate {

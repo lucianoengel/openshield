@@ -75,6 +75,35 @@ type DenyEvaluator struct {
 	// availability over a false block, D17).
 	AllowPaths     map[string]bool
 	AllowBasenames map[string]bool
+	// AllowScope BOUNDS the default-deny to the directories the operator asked to police, and it is
+	// load-bearing rather than tidy (D330).
+	//
+	// The kernel mark is necessarily BROADER than the configuration: exec-permission events are only
+	// delivered for a MOUNT mark, because a directory inode mark does not deliver FAN_OPEN_EXEC_PERM for
+	// files executed inside it. So the agent observes every execution on the mount. A deny-list is
+	// unaffected — it refuses exactly what it names — but an unbounded default-deny refuses every
+	// executable on the filesystem, which was measured on a live kernel to refuse `sudo`, `cat` and
+	// `/bin/bash`, taking sshd's login shell with it. The machine could then only be recovered by a
+	// power cycle: stopping the agent needs exec, and logging in needs exec.
+	//
+	// EMPTY MEANS UNSCOPED, and the caller must not leave it so when an allowlist is set. That is
+	// enforced at the wiring site rather than here, because this type has no way to tell "the operator
+	// declared no directories" from "nobody passed them through".
+	AllowScope []string
+}
+
+// inScope reports whether a resolved exec path lies under a monitored directory — the boundary the
+// default-deny is allowed to act inside.
+func (d DenyEvaluator) inScope(path string) bool {
+	for _, dir := range d.AllowScope {
+		if dir == "" {
+			continue
+		}
+		if path == dir || strings.HasPrefix(path, strings.TrimSuffix(dir, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (d DenyEvaluator) allowlistActive() bool {
@@ -96,8 +125,10 @@ func (d DenyEvaluator) Evaluate(_ context.Context, e watchdog.PermissionEvent) (
 				return watchdog.VerdictBlock, nil
 			}
 		}
-		// Application whitelisting: default-deny a resolved exec that is not on the allowlist.
-		if d.allowlistActive() && !d.AllowPaths[path] && !d.AllowBasenames[base] {
+		// Application whitelisting: default-deny a resolved exec that is not on the allowlist — but ONLY
+		// inside the monitored directories. An exec elsewhere on the mount was never in the scope the
+		// operator declared, and refusing it is what makes the host unrecoverable (see AllowScope).
+		if d.allowlistActive() && d.inScope(path) && !d.AllowPaths[path] && !d.AllowBasenames[base] {
 			return watchdog.VerdictBlock, nil
 		}
 	}

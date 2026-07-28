@@ -13,7 +13,7 @@ func TestBuildEvaluatorRequiresASignal(t *testing.T) {
 	t.Setenv("OPENSHIELD_EXEC_ALLOW", "")
 	t.Setenv("OPENSHIELD_EXEC_BEHAVIOR_FLOOR", "")
 
-	_, err := buildEvaluator(false)
+	_, err := buildEvaluator(false, []string{"/opt/watched"})
 	if err == nil {
 		t.Fatal("buildEvaluator with no signal and no IPC gate succeeded — a no-op exec gate must be refused")
 	}
@@ -29,7 +29,7 @@ func TestIPCGateSatisfiesTheSignalRequirement(t *testing.T) {
 	t.Setenv("OPENSHIELD_EXEC_ALLOW", "")
 	t.Setenv("OPENSHIELD_EXEC_BEHAVIOR_FLOOR", "")
 
-	ev, err := buildEvaluator(true)
+	ev, err := buildEvaluator(true, []string{"/opt/watched"})
 	if err != nil {
 		t.Fatalf("buildEvaluator with the IPC gate on: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestStaticModeIsUnchanged(t *testing.T) {
 	t.Setenv("OPENSHIELD_EXEC_ALLOW", "")
 	t.Setenv("OPENSHIELD_EXEC_BEHAVIOR_FLOOR", "")
 
-	ev, err := buildEvaluator(false)
+	ev, err := buildEvaluator(false, []string{"/opt/watched"})
 	if err != nil {
 		t.Fatalf("static mode: %v", err)
 	}
@@ -63,4 +63,47 @@ func TestStaticModeIsUnchanged(t *testing.T) {
 
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// TestAnAllowlistWithoutAScopeIsRefused (D330).
+//
+// An unbounded default-deny refuses every executable on the MOUNT — the kernel mark is necessarily a
+// mount mark — which measured out as refusing `sudo`, `cat` and `/bin/bash` on a live kernel and left a
+// machine recoverable only by a power cycle. If nothing bounds it, the agent must refuse to start rather
+// than arm it: there is no safe interpretation of "deny everything not listed, everywhere".
+func TestAnAllowlistWithoutAScopeIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	list := dir + "/allow.txt"
+	if err := writeFile(list, "/opt/watched/tool\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENSHIELD_EXEC_DENY", "")
+	t.Setenv("OPENSHIELD_EXEC_ALLOW", list)
+	t.Setenv("OPENSHIELD_EXEC_BEHAVIOR_FLOOR", "")
+
+	if _, err := buildEvaluator(false, nil); err == nil {
+		t.Fatal("an allowlist with NO monitored directory to bound it was accepted. Unbounded, it refuses " +
+			"every executable on the mount, including the ones needed to stop the agent")
+	}
+}
+
+// TestAnAllowlistCarriesTheMonitoredDirectoriesAsItsScope.
+func TestAnAllowlistCarriesTheMonitoredDirectoriesAsItsScope(t *testing.T) {
+	dir := t.TempDir()
+	list := dir + "/allow.txt"
+	if err := writeFile(list, "/opt/watched/tool\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENSHIELD_EXEC_DENY", "")
+	t.Setenv("OPENSHIELD_EXEC_ALLOW", list)
+	t.Setenv("OPENSHIELD_EXEC_BEHAVIOR_FLOOR", "")
+
+	ev, err := buildEvaluator(false, []string{"/opt/watched"})
+	if err != nil {
+		t.Fatalf("buildEvaluator: %v", err)
+	}
+	if len(ev.AllowScope) != 1 || ev.AllowScope[0] != "/opt/watched" {
+		t.Errorf("AllowScope = %v, want the monitored directories — without it the default-deny is "+
+			"unbounded and the setting is unusable", ev.AllowScope)
+	}
 }

@@ -77,12 +77,21 @@ def latest_operations(deltas):
     state = {}
     for d in deltas:
         cap = d.split("/specs/")[1].split("/")[0]
-        change = (d.split("/archive/")[1] if "/archive/" in d else d.split("/changes/")[1]).split("/")[0]
+        is_archived = "/archive/" in d
+        change = (d.split("/archive/")[1] if is_archived else d.split("/changes/")[1]).split("/")[0]
+        # An ACTIVE change is a proposal: honour it only where it RELAXES. Its REMOVED entries count (or
+        # retiring a requirement keeps the gate red for the life of the change that retires it); its
+        # ADDED entries do not, because the sync happens at archive and demanding them earlier would
+        # make every proposal red from the moment it is written.
+        active = not is_archived
         for op, name in parse_delta(d):
             if op == "RENAMED_FROM":
                 state[(cap, name)] = ("REMOVED", change)
             elif op == "RENAMED_TO":
-                state[(cap, name)] = ("ADDED", change)
+                if not active:
+                    state[(cap, name)] = ("ADDED", change)
+            elif active and op != "REMOVED":
+                continue
             else:
                 state[(cap, name)] = (op, change)
     return state
