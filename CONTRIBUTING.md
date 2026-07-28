@@ -51,6 +51,21 @@ If that model isn't one you want to contribute to, that's a reasonable position.
   (D314). If you add a gated test, install the thing it is gated on somewhere and check it passes.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 
+### The loop
+
+`make quick` (about 4 seconds) while you iterate; `make all` (about 10 minutes, mostly the integration
+suite) before you push.
+
+`quick` is not a guess about what matters. It is the set of checks that actually caught things a targeted
+`go test ./some/package/` missed: cross-compilation, and the static declaration/fitness guards. A file
+behind a `linux` build tag with no portable stub breaks the Windows and macOS builds while every package
+test passes; a setting read by a command but never declared is invisible to the command's own tests.
+Everything else the full gate ever caught was infrastructure — a full disk, a suite outgrowing its
+timeout — which a faster loop surfaces sooner anyway.
+
+Do not run the full gate after every edit. It is ten minutes, and running it thirty times to catch two
+things that take four seconds to find is how a gate stops being run at all.
+
 ### Optional test infrastructure
 
 Most of the suite needs only Go. These unlock the tests that would otherwise skip:

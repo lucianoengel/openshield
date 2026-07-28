@@ -1,9 +1,34 @@
 GO ?= go
 PROTOC ?= protoc
 
-.PHONY: all build test integration vet check cross-compile proto proto-check tidy release verify-release
+.PHONY: all quick build test integration vet check cross-compile proto proto-check tidy release verify-release
 
 all: vet test check build cross-compile integration
+
+# THE FAST FEEDBACK LOOP, for while you are iterating. Run `all` before pushing; run this in between.
+#
+# It is not a judgement call about what to skip — it is the set of checks that ACTUALLY CAUGHT things a
+# targeted `go test ./some/package/` would have missed. Over one long session, that was exactly two
+# classes:
+#
+#   - CROSS-COMPILATION. A new file behind a `linux` build tag with no portable stub breaks the Windows
+#     and macOS builds and NOTHING else notices; the package tests pass on the machine you are sitting at.
+#   - THE DECLARATION AND FITNESS GUARDS. A setting read by a command but never declared, a test entry
+#     point in a non-_test.go file, an invariant named in a doc with no test behind it. These are static
+#     checks over the whole tree, so no targeted run reaches them.
+#
+# Everything else the full gate caught was infrastructure — a full disk, a suite outgrowing its timeout —
+# which a faster loop finds just as well, sooner.
+#
+# It deliberately does NOT run the integration suite or the race detector. Those are the slow, valuable
+# parts, and skipping them is the whole point: they belong to `all`, before a push.
+quick: vet
+	$(GO) build ./...
+	GOOS=windows GOARCH=amd64 $(GO) build ./...
+	GOOS=darwin  GOARCH=amd64 $(GO) build ./...
+	$(GO) test -count=1 ./internal/config/ ./internal/fitness/ ./internal/doccheck/
+	./scripts/check-core-deps.sh
+	./scripts/check-agent-deps.sh
 
 build:
 	$(GO) build ./...

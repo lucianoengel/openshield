@@ -560,3 +560,36 @@ which point the separation the comment argues for is whatever the operator happe
 #### Scenario: The minted CA is accepted by the gateway
 - **WHEN** the gateway starts with the minted interception CA configured
 - **THEN** it enables interception, so the command produces what the binary actually consumes
+
+### Requirement: Beaconing detection distinguishes rhythm from volume
+The beaconing sweep SHALL report a destination contacted at a regular interval, SHALL NOT report
+irregular traffic of comparable volume, SHALL honour an operator allowlist, and SHALL consider only
+VERIFIED telemetry.
+
+Each half decides whether the capability is usable. A detector that also fires on bursty browsing is
+counting contacts rather than measuring rhythm, and on a real network it gets muted within a week —
+taking the genuine findings with it. The allowlist is what lets an operator keep it on at all, because
+most beacons on a real network are legitimate: telemetry agents, update checkers, monitoring probes.
+
+The verified filter is D44 applied to analytics. If unverified telemetry steered this, anyone able to
+reach the broker could manufacture a command-and-control finding against a host of their choosing —
+turning a detector into a way to point an investigation at a person.
+
+#### Scenario: A metronome is reported and bursty traffic is not
+- **WHEN** one destination is contacted at an even interval and another receives the same number of
+  contacts at widely varying intervals
+- **THEN** only the first is reported
+- **AND** "irregular" must mean irregular THROUGHOUT: regularity is 1 − MAD/median, and the median
+  absolute deviation is robust to outliers by design, so a mostly-constant rhythm with occasional
+  interruptions scores as a perfect metronome — which is correct, since an implant that misses a
+  check-in is still an implant
+
+#### Scenario: An allowlisted destination is silent
+- **WHEN** two destinations have IDENTICAL rhythms and one is allowlisted
+- **THEN** only the other is reported, so the allowlist is the only difference between them
+
+#### Scenario: Unverified telemetry cannot manufacture a finding
+- **WHEN** unsigned events describing a perfect rhythm are published by something that never enrolled
+- **THEN** no finding names that destination
+- **AND** a genuine beacon is asserted alongside, so "no finding" cannot be satisfied by a sweep that
+  is simply not running

@@ -391,3 +391,33 @@ Seven rounds. Five greppable shapes, plus one that is not greppable at all:
 And four ways a green test can mean nothing: it never ran; everything was refused for an unrelated
 reason; the window was too short; or the fixture could not have exercised the guard (a corrupt blob
 fails before the overwrite check it was meant to prove).
+
+
+## Round 8 (D319): the loop got 150x faster, and a detector got a real negative
+
+### The gate was being run when it did not need to be
+
+Running `make all` (about ten minutes, mostly the integration suite) after every edit is how a gate stops
+being run at all. Reviewing what the full gate ACTUALLY caught over this session that a targeted
+`go test ./some/package/` would have missed, the answer was exactly two classes:
+
+- **Cross-compilation.** A file behind a `linux` build tag with no portable stub breaks the Windows and
+  macOS builds while every package test passes on the machine you are sitting at.
+- **The static declaration and fitness guards.** A setting read by a command but never declared; a test
+  entry point in a non-`_test.go` file. These scan the whole tree, so no targeted run reaches them.
+
+Everything else it caught was infrastructure — a full disk, a suite outgrowing its timeout — which a
+faster loop surfaces sooner anyway. `make quick` runs exactly those checks in **4 seconds**. `make all`
+still runs before every push.
+
+### Writing a negative case is harder than it looks
+
+The beaconing detector needed a "this is NOT a beacon" case. The first attempt used a repeating
+27s/27s/6s gap pattern as "bursty" traffic — and it was reported as a beacon, correctly. Regularity is
+1 − MAD/median, and the MEDIAN absolute deviation of a set where two-thirds of the values are identical
+is ZERO, giving a perfect score. That robustness is the right design: an implant that misses a check-in
+is still an implant. But it means a negative case has to be irregular THROUGHOUT, not mostly-regular
+with interruptions.
+
+The lesson generalises: a negative fixture has to be built against the metric the detector actually uses,
+not against an intuition about what "irregular" looks like.
