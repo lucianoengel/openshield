@@ -170,10 +170,17 @@ func decodeMeta(buf []byte) (m meta, rest []byte, ok bool) {
 	m.Vers = buf[4]
 	m.FD = int32(uint32(buf[16]) | uint32(buf[17])<<8 | uint32(buf[18])<<16 | uint32(buf[19])<<24)
 	m.PID = int32(uint32(buf[20]) | uint32(buf[21])<<8 | uint32(buf[22])<<16 | uint32(buf[23])<<24)
-	if m.EventLen < metaLen || int(m.EventLen) > len(buf) {
+	// COMPARED IN uint64, NOT int — the same 32-bit fix as execmon's decoder, and it matters more here.
+	// `int(m.EventLen)` is -1 on a 32-bit platform when event_len is 0xFFFFFFFF, both bounds checks then
+	// pass (the under-run one because the field is unsigned), and the slice panics. This decoder feeds
+	// the loop that answers FAN_OPEN_PERM, so the panic does not merely crash a goroutine: every process
+	// opening a watched file stays stopped in an uninterruptible window until the watchdog budget fires.
+	// Found by FuzzDecodeMeta under GOARCH=386.
+	if m.EventLen < metaLen || uint64(m.EventLen) > uint64(len(buf)) {
 		return m, nil, false
 	}
-	return m, buf[m.EventLen:], true
+	// Safe as an int now: the guard above proved EventLen fits within len(buf).
+	return m, buf[int(m.EventLen):], true
 }
 
 type meta struct {

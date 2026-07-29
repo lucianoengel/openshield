@@ -2177,3 +2177,120 @@ resubmitted.
 `TestEndpointEnvVarsAreDeclared` refused the three new settings until they were declared with their
 reasoning. The config schema is where an operator meets this feature, and three undeclared knobs would
 have shipped as folklore.
+
+
+## Round 45 (D362): fuzzing the privileged decoders, and a suite that had never run on 32-bit
+
+The roadmap named fuzzing the untrusted parsers as a gap a reviewer checks before betting on the
+platform. Measured before starting: **one** fuzz target in the tree, no corpus, and no `-fuzz` token in
+the Makefile or either workflow — in a project whose entire privilege split is justified by parsers
+being dangerous.
+
+### The stated reason was wrong, and inheriting it would have been dishonest
+
+The roadmap said *"the D13 threat — ClamAV-CVE-class RCE"*. Go is memory-safe; a heap overflow reaching
+code execution is ruled out by the language, not by testing for it. What these decoders can actually do
+is panic, allocate unboundedly, or fail to advance — and the reason that matters here is what the
+process is, not what the language allows. The agent answers BLOCKING permission events, so while it is
+dead or spinning every process opening a watched file sits in an uninterruptible window until the
+watchdog budget fires, with the gate failing open throughout.
+
+### Two survey findings that would have sent the work to the wrong code
+
+`connectors/fanotify.ParseEvent` is **not** in the privileged binary — `go list -deps
+./cmd/openshield-agent` returns eight openshield packages and that is not one of them. The agent carries
+its own duplicated, unexported decoders in `execmon` and `openmon`. Anyone looking for "the agent's
+fanotify parser" under `connectors/` fuzzes something that never runs privileged.
+
+And the IPC asymmetry is already right: the agent is the *client* on both sockets, so it decodes only
+the fixed-width `ReadResponse` — no peer-supplied length, nothing to allocate from. A strength to
+confirm, not a gap to close.
+
+### The prediction was zero defects. It was wrong.
+
+Stated in the proposal before starting, and left there: all three decoders bound their declared length
+against the buffer before slicing, and on reading they look correct. They are correct — **on the
+architecture the tests run on.**
+
+`int(someUint32FromTheWire)` is **-1** on a 32-bit platform. Then every "is this past the ceiling?"
+check passes, and the slice panics:
+
+| Site | On 32-bit | Found by |
+| --- | --- | --- |
+| `execmon.decodeMeta` | `buf[4294967295:]` panics | `FuzzDecodeMeta` under `GOARCH=386` |
+| `openmon.decodeMeta` | same, in the `FAN_OPEN_PERM` loop | `FuzzDecodeMeta` under `GOARCH=386` |
+| `openipc.ReadRequest` | short allocation, then `body[:pathLen]` panics | an EXISTING test under `GOARCH=386` |
+| the inotify record walk | `buf[16:15]` panics | reading the arithmetic while extracting it |
+
+**The real finding is not three bugs. It is that the suite had never run on a 32-bit architecture**,
+while `GOARCH=386` and `GOARCH=arm` both compile the agent today. The `openipc` site was already covered
+by a test called `TestADeclaredLengthBeyondTheBoundIsRefusedBeforeAllocating` — the exact property that
+fails — and it passed on amd64 forever. So the durable fix is a CI step, not four patches.
+
+The order of the conversion is what decides it, and neither site says which discipline it relies on.
+`connectors/fanotify.ParseEvent` converts to `int` **before** comparing, so its negative value trips the
+under-run check and it is *accidentally* safe. The privileged decoders compare the unsigned field first,
+so `0xFFFFFFFF < 24` is false and the guard lets it through.
+
+### Fuzzing alone would not have found all of it
+
+The inotify site came from reading the arithmetic during the extraction. No amount of fuzzing on amd64
+would ever have reported it, because on amd64 it is correct. That is worth keeping: the fuzzer found two,
+`GOARCH=386` on an existing test found one, and reading found one.
+
+### An assertion that could not fail
+
+The new targets assert declared bounds. One of them was decoration: every seed declared a huge length
+and supplied no body, so `io.ReadFull` errored before the assertion was reached, and raising the ceiling
+sixteenfold did not fail the target. It needed a seed carrying an over-ceiling body — which the fuzzer
+would not have built inside any budget worth running. **The mutation is what exposed that**, and the
+first attempt at that mutation failed to compile, so the compile was checked explicitly before the
+result was believed (the D359 lesson, applied rather than relearned).
+
+### Honest bounds
+
+None of these is reachable through a real kernel or a well-behaved peer, which write real lengths. They
+are latent panics in privileged code on two shipped architectures, not live holes — and the decoders'
+own comments promise they survive malformed input.
+
+After the fixes: seven targets, ~380M executions, no crashers, so `testdata/fuzz/` is empty. That is a
+result, not a missing deliverable. The CI fuzz step is a **smoke test** and is labelled as one; twenty
+seconds explores almost none of the space. The durable value is that `go test` replays a target's seed
+corpus on every ordinary run, so the first crasher anyone finds becomes a permanent check for free.
+
+The three decoders of `fanotify_event_metadata` are deliberately **not** unified. Fuzzing both privileged
+ones is how one learns whether they behave identically; merging them first would destroy the evidence.
+
+### And the 32-bit run found something bigger than a decoder bug
+
+Extending the `GOARCH=386` run to `internal/agent` failed with `parser worker unavailable: EOF`. The
+worker was not crashing — it was **refusing to start**:
+
+```
+openshield-worker: refusing to parse without a sandbox: sandbox: loading seccomp filter:
+failed to assemble policy: found unknown syscalls for arch i386: accept
+```
+
+**The sandboxed worker cannot run on linux/386 at all**, and `make cross-compile` builds it happily
+while nothing says so. That is the silent-gap shape (D31) at platform scale: the endpoint's content
+parser is non-functional on an architecture the build supports.
+
+**The second half is worse than the first.** `internal/agent/sandbox` is a DENYLIST naming `socket`,
+`connect`, `bind`, `accept` and friends — and on i386 socket operations go through **`socketcall`**,
+which is not in the list. So even if the filter assembled, it would block nothing: the parser could
+reach the network by the one entry point the denylist does not name. The failure to assemble is what is
+currently protecting the boundary, by refusing to parse rather than parsing under a filter that would
+not hold.
+
+That is the right direction (fail toward refusing), and it is protecting us **by accident** — the policy
+never reasoned about a second syscall ABI. The denylist's own comment already concedes the shape of this:
+it says an allowlist is stronger and that the denylist was chosen to avoid breaking on Go runtime
+upgrades. An architecture with a different socket ABI is the same class of fragility from a direction the
+comment did not anticipate.
+
+**NOT FIXED HERE, and deliberately.** Adding `socketcall` would make the filter assemble on i386, at
+which point the worker would start — with a sandbox this session cannot properly test the enforcement of.
+Shipping a sandbox that looks applied and is not is a worse outcome than a platform that refuses to run.
+The decision is an owner-level one: either support 32-bit x86 (port the policy and prove enforcement on
+that architecture) or state that only 64-bit is supported and stop cross-compiling as though it were.
+Recorded on the roadmap as an open item rather than guessed at.

@@ -433,8 +433,20 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
 **Ongoing / parallel — strongly recommended, not strictly gating:**
 
 - **CI hardening (the non-latency half)** — the project already runs mutation + real-runtime/VM + race.
-  Named gaps a reviewer expects at this ambition: **fuzz** the untrusted parsers (the D13 threat —
-  ClamAV-CVE-class RCE), **property tests** for the ledger and the policy lattice, and **golden-trace /
+  **Fuzz of the PRIVILEGED parse surface: DONE (D362).** Seven targets over the decoders reachable from
+  `cmd/openshield-agent`, asserting termination and declared bounds rather than only absence of panic.
+  **The justification recorded here was wrong and is corrected:** "ClamAV-CVE-class RCE" is not the
+  threat — Go is memory-safe, and that class is ruled out by the language. What these decoders can do is
+  panic, allocate unboundedly, or fail to advance, and in a process that answers BLOCKING permission
+  events each of those is a host-wide availability event (openers stopped in uninterruptible windows,
+  gate failing open) rather than a lost feature.
+  It found **one bug at three sites**: `int(someUint32FromTheWire)` is -1 on a 32-bit platform, so every
+  ceiling check passed and the following slice panicked. The deeper finding is that **the suite had never
+  run on a 32-bit architecture** while the agent compiles for `GOARCH=386`/`arm` — one site was already
+  covered by a test named for the exact property that failed. A `GOARCH=386` CI step is the durable fix.
+  *Remaining:* fuzz the UNPRIVILEGED surface (increment 2 — archive/OOXML/PDF extraction, `extractSNI`,
+  the two index loaders, DNS/SMTP/CEF, and `LoadSignedRules`, whose envelope is unmarshalled before its
+  signature is checked); **property tests** for the ledger and the policy lattice; and **golden-trace /
   replay** tests (a recorded event stream must reproduce identical decisions + ledger rows). (The
   latency-budget benchmark is gating — see above.)
 - **Contributor onboarding** — the codebase is genuinely hard to enter cold. Deliverables: an architecture
@@ -442,6 +454,15 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   entity graph, risk flow); a "how to add a producer / classify plugin / playbook step" tutorial with one
   worked example plugin; and Good-First-Issue labelling. Keep the internal `D<n>` build handles out of
   public/contributor-facing docs — they are stable references, not onboarding material.
+- **32-bit x86 is unsupported in practice and the build does not say so (found D362)** — the worker
+  REFUSES TO START on linux/386: its seccomp denylist names `accept`, which is not a syscall on that
+  architecture, so the filter fails to assemble and it will not parse without a sandbox. And the denylist
+  would be INEFFECTIVE there anyway, because i386 socket operations go through `socketcall`, which the
+  list does not name — the assembly failure is what is currently holding the boundary, by refusing to run.
+  Right direction, reached by accident. **Owner decision, not a bug fix:** either port the policy and
+  prove enforcement on 32-bit, or declare 64-bit-only and stop cross-compiling as though it were
+  supported. Deliberately not guessed at — a sandbox that looks applied and is not is worse than a
+  platform that refuses to run.
 - **Plugin resource isolation** — hardening the worker beyond the seccomp/cgroup sandbox: per-plugin
   CPU/memory/fd budgets, a decompression-bomb ceiling shared with DLP-8/NIPS-4, and a per-plugin circuit
   breaker so one detector cannot starve, deadlock, leak descriptors, or fork-bomb the shared worker.

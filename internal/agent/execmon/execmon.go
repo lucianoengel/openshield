@@ -52,10 +52,21 @@ func decodeMeta(buf []byte) (m meta, rest []byte, ok bool) {
 	m.Mask = binary.LittleEndian.Uint64(buf[8:16])
 	m.FD = int32(binary.LittleEndian.Uint32(buf[16:20]))
 	m.PID = int32(binary.LittleEndian.Uint32(buf[20:24]))
-	if m.EventLen < metaLen || int(m.EventLen) > len(buf) {
+	// COMPARED IN uint64, NOT int, AND THIS IS A FIX. `int(m.EventLen) > len(buf)` was the original, and
+	// on a 32-bit platform `int` is 32 bits, so an event_len of 0xFFFFFFFF converts to -1: the
+	// over-run check reads `-1 > 24` and passes, the under-run check reads `0xFFFFFFFF < 24` on the
+	// UNSIGNED field and also passes, and the slice below panics with `[4294967295:24]`. The agent
+	// builds for linux/386 and linux/arm today. Found by FuzzDecodeMeta under GOARCH=386; on amd64 the
+	// same input is rejected correctly, which is why nothing had noticed.
+	//
+	// The order of the conversion is what decides this. `connectors/fanotify.ParseEvent` converts to int
+	// BEFORE comparing, so its negative value trips the under-run check and it is accidentally safe —
+	// same class, opposite outcome, and neither site says which discipline it is relying on.
+	if m.EventLen < metaLen || uint64(m.EventLen) > uint64(len(buf)) {
 		return m, nil, false // a length that under/over-runs the buffer is malformed
 	}
-	return m, buf[m.EventLen:], true
+	// Safe as an int now: the guard above proved EventLen fits within len(buf).
+	return m, buf[int(m.EventLen):], true
 }
 
 // DenyEvaluator is the pure, parser-free inline exec decider (satisfies watchdog.Evaluator).

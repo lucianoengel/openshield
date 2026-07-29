@@ -135,14 +135,25 @@ func ReadRequest(r io.Reader) (Request, error) {
 	if head[4] != version {
 		return Request{}, fmt.Errorf("%w: %d", ErrBadVersion, head[4])
 	}
-	pathLen := int(binary.BigEndian.Uint16(head[17:19]))
-	prefixLen := int(binary.BigEndian.Uint32(head[19:23]))
-	if pathLen > MaxPathLen {
-		return Request{}, fmt.Errorf("%w: %d bytes", ErrPathTooLong, pathLen)
+	// BOUNDED IN uint64, THEN NARROWED. `int(binary.BigEndian.Uint32(...))` was the original, and on a
+	// 32-bit platform `int` is 32 bits: a declared prefix length of 0xFFFFFFFF becomes -1, the ceiling
+	// check reads `-1 > 65536` and PASSES, `make([]byte, pathLen-1)` allocates one byte short, and
+	// `body[:pathLen]` panics — `slice bounds out of range [:2] with capacity 1`.
+	//
+	// TestADeclaredLengthBeyondTheBoundIsRefusedBeforeAllocating exists to catch exactly this and had
+	// been passing, because nothing ever ran the suite on a 32-bit architecture. `GOARCH=386` and
+	// `GOARCH=arm` both compile the agent today. The path length is a uint16 and was never at risk,
+	// which is why only one of the two lengths was wrong.
+	pathLen64 := uint64(binary.BigEndian.Uint16(head[17:19]))
+	prefixLen64 := uint64(binary.BigEndian.Uint32(head[19:23]))
+	if pathLen64 > MaxPathLen {
+		return Request{}, fmt.Errorf("%w: %d bytes", ErrPathTooLong, pathLen64)
 	}
-	if prefixLen > MaxPrefixLen {
-		return Request{}, fmt.Errorf("%w: %d bytes", ErrPrefixTooLong, prefixLen)
+	if prefixLen64 > MaxPrefixLen {
+		return Request{}, fmt.Errorf("%w: %d bytes", ErrPrefixTooLong, prefixLen64)
 	}
+	// Safe to narrow now: both are proved to sit under their ceilings, which fit in an int everywhere.
+	pathLen, prefixLen := int(pathLen64), int(prefixLen64)
 	body := make([]byte, pathLen+prefixLen)
 	if _, err := io.ReadFull(r, body); err != nil {
 		return Request{}, frameErr(err)

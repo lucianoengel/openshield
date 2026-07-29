@@ -115,6 +115,40 @@ jobs:
         run: go test -count=1 -v ./internal/exfil/ && go test -count=1 -run TestExfilChannelAwarePolicy -v ./internal/policy/
       - name: agent process-boundary invariants
         run: go test -run 'TestFrame|TestOversized|TestTruncated|TestClassifierError|TestUnreadable|TestByteCeiling|TestWorkerRefuses|TestPrivilegedTalks|TestWorkerTimeout' -v ./internal/agent/
+      # THE SUITE ON A 32-BIT ARCHITECTURE. Nothing ever ran it there, and the agent compiles for
+      # GOARCH=386 and GOARCH=arm today — so `int(someUint32FromTheWire)` was -1 on those platforms,
+      # every "is this length past the ceiling?" check passed, and the slice that followed panicked.
+      # Three decoders in the privileged agent had it, and one of them was already covered by a test
+      # named for the exact property that failed. It passed on amd64 forever.
+      #
+      # These packages are the ones that decode a length they did not choose: kernel event structures,
+      # IPC frames, signed index blobs. Cheap, and it is the only thing standing between that class of
+      # bug and a 32-bit endpoint.
+      # SCOPED TO THE DECODERS, and the exclusion is stated rather than left as a shrug: `internal/agent`
+      # itself is NOT here because its test builds and execs the real worker, and THE WORKER CANNOT START
+      # ON i386 AT ALL — its seccomp denylist names `accept`, which is not a syscall on that architecture,
+      # so the filter fails to assemble and the worker refuses to parse without a sandbox. That is the
+      # safe direction and it is a real platform gap; see docs/unwired-audit.md round 45. Running it here
+      # would report that gap as a decoder failure, which is the wrong diagnosis in the wrong place.
+      - name: wire and kernel decoders on 32-bit (int is 32 bits there; a uint32 length becomes -1)
+        env:
+          GOARCH: "386"
+        run: go test -count=1 ./internal/agent/execmon/ ./internal/agent/openmon/ ./internal/agent/openipc/ ./internal/agent/execipc/ ./internal/classify/ ./internal/connectors/fanotify/ ./internal/core/
+      # The fuzz targets' SEED CORPUS runs on every ordinary `go test`; this is the only step that
+      # actually MUTATES input, and it is a SMOKE TEST — twenty seconds explores almost none of the
+      # space, so finding nothing here is close to no evidence. The durable value is that a crasher
+      # found in a long local run gets committed under testdata/fuzz/ and is replayed forever after.
+      - name: fuzz smoke over the privileged decoders (NOT a soak)
+        run: |
+          set -e
+          for t in FuzzDecodeMeta FuzzDecodeInotify; do
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=20s ./internal/agent/execmon/
+          done
+          go test -run '^$' -fuzz '^FuzzDecodeMeta$' -fuzztime=20s ./internal/agent/openmon/
+          for t in FuzzReadRequest FuzzReadResponse; do
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=20s ./internal/agent/openipc/
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=20s ./internal/agent/execipc/
+          done
 
   ledger:
     # The audit ledger's storage layer is tested against a REAL PostgreSQL.

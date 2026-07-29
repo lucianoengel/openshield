@@ -70,23 +70,12 @@ func (m *Monitor) WatchForNewExecutables(ctx context.Context, onErr func(error))
 		if err != nil || n <= 0 {
 			return ctx.Err()
 		}
-		for off := 0; off+16 <= n; {
-			// struct inotify_event { int wd; uint32 mask; uint32 cookie; uint32 len; char name[]; }
-			w := int32(u32(buf[off:]))
-			evMask := u32(buf[off+4:])
-			nameLen := int(u32(buf[off+12:]))
-			nameStart := off + 16
-			if nameStart+nameLen > n {
-				break
-			}
-			name := trimNUL(buf[nameStart : nameStart+nameLen])
-			off = nameStart + nameLen
-
-			dir, ok := wd[w]
-			if !ok || name == "" {
+		for _, rec := range decodeInotify(buf[:n]) {
+			dir, ok := wd[rec.WD]
+			if !ok || rec.Name == "" {
 				continue
 			}
-			p := filepath.Join(dir, name)
+			p := filepath.Join(dir, rec.Name)
 			info, err := os.Stat(p)
 			if err != nil {
 				continue
@@ -101,9 +90,61 @@ func (m *Monitor) WatchForNewExecutables(ctx context.Context, onErr func(error))
 			if err := m.MarkFile(p); err != nil && onErr != nil {
 				onErr(err)
 			}
-			_ = evMask
 		}
 	}
+}
+
+// inotifyRecord is one decoded `struct inotify_event`. Name is the kernel's NUL-padded name[] field
+// trimmed — an ATTACKER-CREATED FILENAME, which is why the decode is worth isolating.
+type inotifyRecord struct {
+	WD   int32
+	Mask uint32
+	Name string
+}
+
+// decodeInotify decodes every complete record in buf.
+//
+// EXTRACTED FROM THE READ LOOP so it can be tested and fuzzed at all. In the loop it was unreachable
+// without a real inotify descriptor and a real filesystem, which is why it had no test of any kind —
+// and it is the only place in the privileged agent that parses a length supplied by something other
+// than a fixed-width struct field.
+//
+// It emits records whose Name is empty rather than dropping them: the caller decides what to skip, and
+// a decoder that silently discards inputs is a decoder a fuzz target cannot see the whole behaviour of.
+//
+// struct inotify_event { int wd; uint32 mask; uint32 cookie; uint32 len; char name[]; }
+func decodeInotify(buf []byte) []inotifyRecord {
+	const hdr = 16
+	var out []inotifyRecord
+	for off := 0; off+hdr <= len(buf); {
+		// UINT64 ARITHMETIC, NOT int, AND THIS IS A FIX RATHER THAN A STYLE CHOICE.
+		//
+		// `int(u32(...))` was the original, and on a 32-bit platform `int` is 32 bits, so a len field of
+		// 0xFFFFFFFF converts to -1. The bounds check `nameStart+nameLen > n` then reads 15 > n, passes
+		// for any buffer longer than that, and the slice panics with `[16:15]`. Verified by compiling the
+		// original arithmetic for GOARCH=386 and running it; on amd64 it is harmless, which is exactly
+		// why nothing had noticed. The agent builds for linux/386 and linux/arm today.
+		//
+		// Not attacker-reachable through a real kernel — the kernel writes a real padded length — so this
+		// is a latent panic in privileged code rather than a live hole. But the decoder's own contract
+		// says a malformed record must never panic or over-read, and on two architectures it compiles for
+		// it did not hold.
+		nameLen := uint64(u32(buf[off+12:]))
+		nameStart := uint64(off) + hdr
+		if nameStart+nameLen > uint64(len(buf)) {
+			// A record running past the buffer ends the WALK, not just this record: the stream's framing
+			// is in doubt from here, so continuing would decode from the middle of a name.
+			break
+		}
+		out = append(out, inotifyRecord{
+			WD:   int32(u32(buf[off:])),
+			Mask: u32(buf[off+4:]),
+			Name: trimNUL(buf[nameStart : nameStart+nameLen]),
+		})
+		// Advances by at least hdr on every iteration, so the walk terminates whatever the lengths say.
+		off = int(nameStart + nameLen)
+	}
+	return out
 }
 
 func u32(b []byte) uint32 {
