@@ -97,6 +97,22 @@ jobs:
         run: ./scripts/check-opencore-boundary.sh check && ./scripts/check-opencore-boundary.sh --selftest
       - name: privileged agent has no parser dependency
         run: ./scripts/check-agent-deps.sh
+      # KNOWN-VULNERABLE DEPENDENCIES, and this was missing while the sophisticated half shipped.
+      # PLAT-6 builds reproducibly, signs a manifest and signs an SBOM — it attests in detail to WHAT
+      # went into a release and never asked whether any of it had a published advisory. When this step
+      # was first run it found a REACHABLE one: GO-2026-5970, an infinite loop on invalid input in
+      # golang.org/x/text, reached from the control plane's own pgxpool.New. For a product whose threat
+      # model is largely about not wedging, a remote input that can spin the control plane forever is
+      # the shape that matters, not the CVSS.
+      #
+      # govulncheck rather than an SBOM-versus-OSV diff, deliberately: it does REACHABILITY analysis, so
+      # it separates "we require a module with an advisory" (2 today, uncalled) from "our code calls the
+      # vulnerable symbol" (0). Without that distinction the check either cries wolf or gets ignored,
+      # and an ignored security check is worse than none.
+      - name: no reachable known vulnerabilities in dependencies
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: enforcement dispatch + quarantine (post-decision, observe-only default)
         run: go test -count=1 -v ./internal/engine/ ./internal/enforcers/...
       - name: NIPS-2 threat-intel engine (IOC match + policy blocks a known-bad flow)
