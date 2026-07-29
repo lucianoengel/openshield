@@ -2073,3 +2073,34 @@ So the honest position: the gate decides from a prefix, records that decision as
 deepen the classification afterwards. The design's second tier assumes an exemption that does not exist,
 and the README's claim about the async tier should be read as describing the file-watcher path rather
 than the gate.
+
+
+## Round 43 (D359): the engine's half of the gate, against a real ledger
+
+B2's producer needs CAP_SYS_ADMIN and is verified on the VM. The ENGINE's half needs neither — it
+answers verdicts on a socket from the real pipeline — and until now was covered only by unit tests with
+a stubbed decider. That is the half a deployment actually runs.
+
+The scenario drives the socket with a hand-built frame and asserts on POSTGRES: ordinary content
+allowed, a checksum-backed CPF refused, both decisions in the ledger, and the ledger content-free.
+
+**The frame is hand-rolled rather than imported, deliberately.** Encoding with the same code the engine
+decodes with would agree with itself whatever either does. A frame built from the format as DOCUMENTED
+catches a wire change both sides adopted without anyone noticing the compatibility break.
+
+It also asserts the engine started a WORKER POOL — D357's finding, where a single worker silently
+serialises every classification and undoes the gate's concurrency.
+
+### The mutation failed to compile, and my check missed it
+
+The first mutant produced a syntax error, and the shell chain (`go build … | head -3 && echo
+MUTANT_COMPILES`) reported success because `head` exited zero. The test then "failed" on a broken
+build, which is indistinguishable from a successful mutation.
+
+**Third time this session** — D338, D347, now here — and the first two were caught by re-reading the
+output. This one was caught only because the failure message named a build error rather than an
+assertion. The lesson has upgraded from "check `go build` first" to "the check itself must not be able
+to lie": piping a compiler through `head` discards its exit status.
+
+The compiling mutant — the seam installed but discarding every outcome, which is exactly D358's
+behaviour — times out waiting for rows that never arrive.
