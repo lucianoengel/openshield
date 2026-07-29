@@ -52,6 +52,32 @@ point it at a source tree, a build directory, or anything on a hot path. Lowerin
 inline detection depth for latency — the async tier still classifies the whole file and contains it
 afterwards, so what is lost is inline refusal of content that appears past the ceiling, not detection.
 
+**The async tier costs one extra gate round trip per gated file.** After answering, the engine submits
+the open for full-file classification, and that classification *opens the file* — an open which is
+itself gated, so it pays the prefix cost in the table above one more time (~6 ms at the default). So
+budget **two** inline decisions per distinct file, not one.
+
+That second open is answered but **not** resubmitted, which is what stops the cycle from running
+forever. The suppression is keyed on the path:
+
+| Setting | Default | What it governs |
+|---|---|---|
+| `OPENSHIELD_GATE_ASYNC_TTL` | 30s | How long after a full classification the same path is not re-classified. |
+| `OPENSHIELD_GATE_ASYNC_MAX` | 4096 | Ceiling on tracked paths. |
+| `OPENSHIELD_GATE_WORKER_POOL` | 8 | Sandboxed workers **reserved** for gate verdicts, separate from the classification pool. |
+
+*Limits, stated rather than discovered:*
+
+- **A repeat open inside the TTL gets a fresh verdict but not a fresh classification.** The gate decides
+  every open, always; only re-reading an unchanged file is suppressed.
+- **At the `_MAX` ceiling, submissions are declined rather than evicting a live entry** — evicting one
+  would re-arm the loop. Declining means a file was gated and never fully classified. Both that and a
+  full queue are counted and reported on shutdown as *"gated opens were NOT fully classified"*. Treat a
+  non-zero count as a detection gap, not as noise.
+- Do not raise `OPENSHIELD_GATE_WORKER_POOL` by lowering the classification pool to compensate. The
+  point of the separate pool is **reservation**: the nested decision caused by the async tier's own open
+  cannot be starved by that async work. A shared pool of the same total size does not have that property.
+
 | `openshield-ztna-client` | endpoint (unprivileged) | Zero-Trust access broker for applications: presents the DEVICE certificate to the access proxy over the `HTTP_PROXY` convention, loopback-only. It brokers access — it does not prevent an application taking a direct route. |
 | `openshield-print-filter` | endpoint (CUPS) | Print DLP; sits in the CUPS filter chain. |
 | `openshield-fim-baseline` | endpoint/operator | Builds the file-integrity baseline. |

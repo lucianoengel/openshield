@@ -2104,3 +2104,76 @@ to lie": piping a compiler through `head` discards its exit status.
 
 The compiling mutant — the seam installed but discarding every outcome, which is exactly D358's
 behaviour — times out waiting for rows that never arrive.
+
+
+## Round 44 (D360): the second tier, and a rejected option that was never necessary
+
+Round 42 closed with the async tier "still unwired", and gave a reason:
+
+> Solving it needs the engine's PID exempted from the gate, which is the bookkeeping answer D352
+> rejected because its failure mode is an unrecoverable host.
+
+**That reason was wrong**, and it is worth saying why rather than quietly shipping the fix. The
+recursion is real — the async classification opens the file, that open falls under the mark, the gate
+answers it, and answering submits again — but breaking it does not require knowing which processes are
+ours. It requires knowing which **paths** are already being classified. Suppress on the path and the
+classification's own open is still decided, simply not resubmitted; the loop terminates after one
+iteration, and no exemption exists to go stale.
+
+The mistake has a shape worth naming: **I inferred the solution space from the failure.** The failure
+was "our own process's open comes back to us", so the fix had to be about identifying our own process.
+It did not. The question the code actually has to answer is not *who is opening this* but *have I
+already asked for this to be classified*.
+
+### The seam was there the whole time
+
+`prefilter.PreFilter` has carried an `AsyncSubmitter` interface since Phase B — documented, typed, and
+called on every evaluation. It was never given an implementation by the gate's wiring, so the interface
+was satisfied by `nil` and the call was skipped. The eighth entry in the list below applies: coverage of
+a requirement is not coverage of the path that ships. `AsyncSubmitter` was covered. The engine's gate
+never used it.
+
+### A TTL alone would not have worked, and the reason is timing
+
+The obvious suppressor is a map from path to expiry. It is wrong in a way that is invisible in a fast
+test: if the entry expires **before** the classification's own open arrives, that open resubmits, and
+the cycle restarts every TTL — forever, more slowly than a tight loop, which makes it harder to notice
+rather than less harmful.
+
+So an entry is *pending* from submission until the classification reports, and a pending entry does not
+expire. The suppression structurally covers the gap between submitting and the open that submission
+causes, however long the queue is. `Done` is load-bearing, not bookkeeping — and mutating `live()` back
+to a plain TTL fails the unit test that says so.
+
+### The bound refuses rather than evicts
+
+The cache is keyed on paths, which are whatever the host opens, so it needs a ceiling. At the ceiling it
+**declines new submissions** rather than evicting a live entry. Evicting one would re-arm the cycle for
+the evicted path — the mechanism added to bound memory would restore the loop it was added alongside.
+Declining costs a full-file classification, which is a detection gap, and it is counted and reported at
+shutdown. Given a gap or a wedged host, take the gap and say so.
+
+### Reservation is not capacity
+
+The gate now runs its **own** worker pool. A larger shared pool was considered and is not equivalent:
+the nested decision is caused by the very async work that would otherwise take the last worker, so
+under load the gate times out and fails open exactly when it is busiest. A bigger pool makes that less
+likely; reservation makes it impossible. Those are different properties and only one of them is what
+the failure needs.
+
+### The VM test asserts termination, and the mutation is capped
+
+A design that recurses does not produce a red test. It produces a host that stops — every opener sits
+in an uninterruptible permission window. So the VM scenario hard-caps resubmission at twenty, far above
+the one a correct implementation reaches and far below what hurts.
+
+That cap is what makes the mutation runnable rather than a thing to reason about and hope. With the
+dedupe removed: **21 gate questions, 21 classifications, cap fired, FAIL**. With it: **2 questions, 1
+classification.** The second question is the classifier's own open — decided, as it must be, and not
+resubmitted.
+
+### A guard caught it again
+
+`TestEndpointEnvVarsAreDeclared` refused the three new settings until they were declared with their
+reasoning. The config schema is where an operator meets this feature, and three undeclared knobs would
+have shipped as folklore.

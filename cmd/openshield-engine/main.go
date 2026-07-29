@@ -127,24 +127,15 @@ func main() {
 	}
 	log.Info("policy loaded (DLP-5b: packs compose with the default)", slog.String("bundle", pol.Bundle()))
 
-	// A WORKER POOL, sized by what will actually run concurrently.
+	// THE CLASSIFICATION WORKER POOL, sized by what will actually run concurrently.
 	//
 	// privileged.Worker.Classify holds a mutex for the whole request, so one worker serialises every
-	// classification. That is correct for the async path — file events arrive one at a time from the
-	// watcher — and wrong for the inline file-open gate, where the whole point of D356's concurrency is
-	// that N blocked processes are decided in parallel. Measured: eight concurrent decisions take 54ms
-	// against one worker and 11ms against a pool of eight.
-	//
-	// So the default follows the gate: one worker normally, and the gate's in-flight bound when the gate
-	// is enabled. Making it automatic rather than a warning is deliberate — an operator who enables the
-	// gate and misses a log line would get silently serialised decisions, which is the failure mode this
-	// whole area keeps producing.
+	// classification. That is correct here: asynchronous file events arrive one at a time from the
+	// watcher. The inline file-open gate needs concurrency (D356/D357) and gets its OWN pool below —
+	// see the reservation argument there; it is a different property from this pool's size.
 	poolSize := envInt("OPENSHIELD_WORKER_POOL", 0)
 	if poolSize <= 0 {
 		poolSize = 1
-		if strings.TrimSpace(os.Getenv("OPENSHIELD_OPEN_IPC_SOCKET")) != "" {
-			poolSize = openipc.DefaultMaxInFlight
-		}
 	}
 	worker, err := privileged.StartPool(ctx, workerBin, poolSize)
 	if err != nil {
@@ -628,7 +619,32 @@ func main() {
 		// Only an action that MEANS refuse becomes a deny, listed explicitly rather than "anything that
 		// is not ALLOW", so a new action added to the closed set does not silently become a reason to
 		// block an open.
-		od := prefilter.NewDecider(worker, pol, 0, 120*time.Millisecond, log)
+		// A DEDICATED WORKER POOL FOR GATE VERDICTS, reserved rather than merely larger.
+		//
+		// The gate's own asynchronous tier (below) classifies the whole file, and that classification
+		// OPENS the file — an open the gate must itself answer while the classification holds a worker.
+		// Sharing one pool means the nested decision waits for capacity the outer work is using, so
+		// under load the gate times out and fails open exactly when it is busiest. A bigger shared pool
+		// makes that less likely and does not remove it: reservation is a different property from
+		// capacity, and what is needed here is that the gate's worker cannot be taken by work the gate
+		// itself caused.
+		//
+		// The size is the client's in-flight bound, so N blocked processes are decided in parallel
+		// (D356/D357) rather than queued behind one worker's mutex.
+		gatePoolSize := envInt("OPENSHIELD_GATE_WORKER_POOL", 0)
+		if gatePoolSize <= 0 {
+			gatePoolSize = openipc.DefaultMaxInFlight
+		}
+		gateWorker, err := privileged.StartPool(ctx, workerBin, gatePoolSize)
+		if err != nil {
+			fatal(log, "starting the gate worker pool", err)
+		}
+		defer gateWorker.Close()
+		log.Info("engine: gate worker pool", slog.Int("size", gatePoolSize),
+			slog.String("why", "verdicts are decided concurrently AND are reserved — a nested decision "+
+				"caused by the async tier's own open can never be starved by that async work"))
+
+		od := prefilter.NewDecider(gateWorker, pol, 0, 120*time.Millisecond, log)
 
 		// EVERY GATED OPEN BECOMES EVIDENCE, and the write happens OUTSIDE the permission window.
 		//
@@ -674,9 +690,79 @@ func main() {
 				}
 			}
 		}()
+		// THE SECOND TIER: the whole file is classified after the gate has answered.
+		//
+		// The inline verdict comes from a bounded prefix, so content past that ceiling is invisible to
+		// it — that is the design (D16: friction, not prevention), and without this it is ALL the design
+		// delivers. Here the event enters the ordinary pipeline, so the full file is classified, gets
+		// its durable row and can be contained.
+		//
+		// The submission is what makes the gate recursive: this classification opens the file, that open
+		// is gated, and answering it would submit again without end. prefilter.PathSuppressor breaks the
+		// cycle on the PATH — the classifier's own open still gets a verdict, it is simply not
+		// resubmitted — and it is bounded because the keys are whatever the host opens.
+		suppress := prefilter.NewPathSuppressor(
+			envDuration("OPENSHIELD_GATE_ASYNC_TTL", 0), 0, envInt("OPENSHIELD_GATE_ASYNC_MAX", 0))
+		gateAsync := make(chan *corev1.Event, 256)
+		var gateAsyncDropped atomic.Int64
+		submitAsync := func(path string) {
+			if !suppress.Admit(path) {
+				return
+			}
+			ev := &corev1.Event{
+				EventId:     "opengate-" + path,
+				ConnectorId: "opengate",
+				Kind:        corev1.EventKind_EVENT_KIND_FILE_OPENED,
+				Target: &corev1.Event_Filesystem{Filesystem: &corev1.FilesystemSubject{
+					Identity: &corev1.FilesystemSubject_ResolvedPath{ResolvedPath: path},
+				}},
+			}
+			select {
+			case gateAsync <- ev:
+			default:
+				// A NON-BLOCKING SEND, because this runs inside the permission window: blocking here
+				// would hold an uninterruptible process while the queue drains. Released rather than
+				// left suppressed — nothing was classified, so the next open SHOULD try again, and it
+				// cannot re-arm the cycle because a submission that never ran opens nothing.
+				suppress.Release(path)
+				gateAsyncDropped.Add(1)
+			}
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					if n := gateAsyncDropped.Load(); n > 0 {
+						log.Warn("engine: gated opens were NOT fully classified — the async queue was "+
+							"full, so only the inline prefix was ever seen for these files",
+							slog.Int64("dropped", n))
+					}
+					if n := suppress.Saturated(); n > 0 {
+						log.Warn("engine: gated opens were NOT fully classified — the suppression cache "+
+							"was at its ceiling", slog.Int64("declined", n))
+					}
+					return
+				case ev := <-gateAsync:
+					path := ev.GetFilesystem().GetResolvedPath()
+					// Done AFTER processing, never before: the suppression has to still be in force
+					// while this classification's own open is being gated, and that open happens
+					// somewhere inside here. Starting the TTL at submission instead would let a slow
+					// queue outrun it, and the cycle would restart every TTL forever.
+					processOne(ctx, eng, ev, log)
+					suppress.Done(path)
+				}
+			}
+		}()
+
 		openSrv := &openipc.Server{
 			Decide: func(ctx context.Context, path string, prefix []byte) (openipc.Verdict, error) {
 				dec, derr := od.DecideBytes(ctx, path, prefix)
+				// SUBMITTED WHATEVER THE VERDICT IS, including on a decide error and including on a
+				// DENY. A refused open is the case an investigator most wants the full classification
+				// of, and an inline error is the case where the prefix decision is worth least.
+				submitAsync(path)
 				if derr != nil {
 					return openipc.VerdictAllow, derr
 				}
@@ -700,9 +786,10 @@ func main() {
 		}()
 		log.Warn("engine: open-verdict IPC ACTIVE — the privileged file-open gate's inline decisions now "+
 			"come from this pipeline. The verdict is made from a BOUNDED PREFIX, so content past the "+
-			"ceiling is not seen inline; the async tier classifies the whole file and contains it "+
-			"afterwards (D16).",
-			slog.String("socket", sock))
+			"ceiling is not seen inline; each gated open is then submitted to the async tier, which "+
+			"classifies the WHOLE file, records it and can contain it (D16). A repeat open of the same "+
+			"path still gets a verdict but is re-classified only after the suppression window.",
+			slog.String("socket", sock), slog.Duration("async_suppress_ttl", envDuration("OPENSHIELD_GATE_ASYNC_TTL", prefilter.DefaultSuppressTTL)))
 	}
 
 	go func() { wg.Wait(); close(events) }()
