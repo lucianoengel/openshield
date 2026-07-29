@@ -60,8 +60,18 @@ jobs:
           go-version-file: go.mod
       - name: install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # PINNED TO THE RUNTIME VERSION IN go.mod, for two reasons that point the same way.
+      #
+      # SUPPLY CHAIN: this generator WRITES CODE THAT ENTERS THE BUILD. `@latest` meant a hijacked
+      # protobuf release could emit whatever it liked into the .pb.go files, in the one job whose output
+      # is then compared against the committed tree — so the comparison would agree with the attacker.
+      # Of the two unpinned installs this workflow had, this was the dangerous one.
+      #
+      # CORRECTNESS: a generator newer than the runtime it generates against can emit code the runtime
+      # does not support. Keeping the two equal is the only version relationship that is defensible;
+      # bump this line when go.mod's google.golang.org/protobuf moves.
       - name: install protoc-gen-go
-        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
       - name: generated code is current
         run: make proto-check
 
@@ -109,9 +119,19 @@ jobs:
       # it separates "we require a module with an advisory" (2 today, uncalled) from "our code calls the
       # vulnerable symbol" (0). Without that distinction the check either cries wolf or gets ignored,
       # and an ignored security check is worse than none.
+      #
+      # THE VERSION IS PINNED, and the first draft of this step was not — it said `@latest`, which is a
+      # supply-chain risk introduced BY a supply-chain check. `go install ...@latest` runs whatever that
+      # module publishes next, in CI, with the workflow's context; a hijacked release would execute there
+      # before it ever reached a developer. It also makes the check non-reproducible: a new release can
+      # change findings and fail the build with no code change, and a security gate that breaks on its own
+      # schedule is a gate people learn to bypass.
+      #
+      # The vulnerability DATABASE is still fetched live, which is the point of it — pinning the scanner
+      # is not meant to pin what is known.
       - name: no reachable known vulnerabilities in dependencies
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           "$(go env GOPATH)/bin/govulncheck" ./...
       - name: enforcement dispatch + quarantine (post-decision, observe-only default)
         run: go test -count=1 -v ./internal/engine/ ./internal/enforcers/...

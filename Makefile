@@ -30,6 +30,7 @@ quick: vet
 	./scripts/check-core-deps.sh
 	./scripts/check-agent-deps.sh
 	./scripts/check-no-binaries.sh
+	./scripts/check-ci-pins.sh
 
 build:
 	$(GO) build ./...
