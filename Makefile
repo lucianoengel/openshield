@@ -29,6 +29,7 @@ quick: vet
 	$(GO) test -count=1 ./internal/config/ ./internal/fitness/ ./internal/doccheck/
 	./scripts/check-core-deps.sh
 	./scripts/check-agent-deps.sh
+	./scripts/check-no-binaries.sh
 
 build:
 	$(GO) build ./...

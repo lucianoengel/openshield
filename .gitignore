@@ -4,6 +4,25 @@
 *.test
 *.out
 
+# Built commands. `go build ./cmd/openshield-engine/` writes its binary into the working directory,
+# which is ordinary and leaves an artifact `git add -A` cannot tell from a source file — that is how
+# 161 MB of stale executables reached the public repo once already. scripts/check-no-binaries.sh
+# fails the build if one is ever tracked again; this keeps it from happening in the first place.
+# Binaries are distributed by `make release`, with a signed manifest and SBOM over them.
+/openshield-agent
+/openshield-engine
+/openshield-fleet-agent
+/openshield-gateway
+/openshield-provision
+/openshield-server
+/openshield-worker
+/openshieldctl
+/openshield-anchor
+/openshield-ztna-client
+/openshield-print-filter
+/openshield-fim-baseline
+/openshield-dlp-index
+
 # local dev
 .env
 *.local.yaml
