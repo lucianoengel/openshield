@@ -267,6 +267,20 @@ func TestTheClosedVocabularyBelongsToTheOperator(t *testing.T) {
 	Eventually(t, 90*time.Second, "a ticket to be opened", func() bool { return tickets.count() > 0 })
 
 	pool := openPool(t, stack.DSN)
+	// WAIT FOR THE ROW, NOT ONLY FOR THE POST. `tickets.count() > 0` means the fake service desk RECEIVED
+	// the create; the local itsm_tickets row is written afterwards, once that call returns. Asserting on
+	// the row immediately after the remote side saw it is a race, and it lost once in CI
+	// (run 30582119025) with "no rows in result set" on a commit that touched only the fleet agent.
+	//
+	// This is the same shape as D414: waiting for a condition that does not imply the thing then asserted.
+	Eventually(t, 90*time.Second, "the ticket link to be recorded locally", func() bool {
+		var n int
+		if err := pool.QueryRow(Ctx(t), `SELECT count(*) FROM itsm_tickets`).Scan(&n); err != nil {
+			return false
+		}
+		return n > 0
+	})
+
 	// The connector NAME is recorded on the ticket link. It is how a deployment with two ticketing
 	// systems tells which one owns a ticket; a hardcoded name makes those two rows collide.
 	var connector string
