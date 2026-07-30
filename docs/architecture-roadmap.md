@@ -382,9 +382,65 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   attribution; content-hash application whitelisting.
   *(Full-pipeline inline `DENY_EXEC` is MVP — Lane E, HIPS-3 inc 2.)*
 
+### Broker lifecycle — found by the offline-queue recovery test (D367)
+- **PLAT-10 · A broker that returns with empty JetStream state wedges the fleet, silently** — new work · M.
+  **Reproduced, not theorised** (`Stack.RestoreBrokerEmpty` exists for it): stop the broker, bring one back
+  on the same port with a fresh JetStream store, and telemetry never resumes. Measured: rows frozen for
+  30s+ while the agent publishes every 500ms, and **the control plane logs nothing at all**. A
+  volume-backed restart of the same broker recovers fine (2 -> 120 rows), which is what makes this
+  specific and not a general "outage" story.
+  Cause: `natsx.EnsureTelemetryStream` is called from exactly two places —
+  `controlplane.Run` and `SignedPublisher.UseJetStream` — both at **process startup only**. A broker with
+  no stream therefore stays without one. The agent's publishes fail forever (`no response from stream`,
+  at least logged agent-side); the server's durable push consumer was deleted with the stream and it says
+  nothing. Every agent's spool then grows to its 10,000 ceiling and begins dropping the OLDEST records.
+  This is not exotic ops: `podman rm` + recreate the broker, or an orchestrator rescheduling it onto new
+  storage, produces it exactly.
+  **It needs BOTH halves and a half-fix is worse than none:** re-ensuring the stream from the agent on
+  reconnect recreates the stream while the control plane's consumer stays dead — so the stream exists,
+  publishes succeed, and still no row appears, which is harder to diagnose than the current failure. The
+  fix is a reconnect handler on the control plane that re-ensures the stream and RE-SUBSCRIBES (tear down
+  `sigSub`, resubscribe with the same durable), plus the agent-side re-ensure. **Minimum bar even if
+  self-healing is deferred: the server must say something** — a silent fleet-wide telemetry outage is a
+  direct D31 violation, and D31 is the reason the rest of this product is trustworthy.
+
+### Data-at-rest discovery (DSPM) — from the enterprise gap assessment
+- **DSPM-1 · One object-store discovery connector** — new work · M. **The largest name-versus-capability
+  gap in the product** ([`enterprise-gap-assessment.md`](enterprise-gap-assessment.md)): OpenShield
+  classifies data IN MOTION past an interposition point, and the only cloud surface that exists is
+  CloudTrail *log ingest* (`internal/connectors/cloudtrail`) plus AWS-key secret detection in
+  `internal/classify/secrets.go`. There is no S3, Azure Blob, GCS, M365/SharePoint or Google Workspace
+  enumeration, so the product cannot answer **"where is my sensitive data"** — the first question asked of
+  anything called a Data Security Platform. Data in a bucket is invisible until someone touches it on an
+  instrumented host.
+  Scope one store (S3 is the obvious first): enumerate objects, fetch a bounded prefix, feed the EXISTING
+  classifier, emit findings as Events with a store/bucket/key subject. **Not architecturally hard** — the
+  classifier, the boundary and the audit path all exist; it is absent because it was never queued.
+  **And it is the strongest available test of the D26/D69 fitness claim**, better than the S3 connector
+  T-014 dismissed as isomorphic: a discovery producer **pulls and enumerates on a schedule** rather than
+  being pushed events, which is a genuinely new producer *shape*. If that forces a core change, the
+  10-year claim needs revisiting — finding that out is the point.
+  *Honest scope note:* discovery without **access context** (who can reach this bucket) is half of what
+  DSPM buyers mean; the other half is a separate ticket and should not be implied by this one.
+
 ### Zero Trust
 - **ZT-5 · Policy admin + session recording** — new work · L. Ties to the UI (PLAT-1).
-- **ZT-6 · SAML** — P · L. Only after OIDC proves the SSO seam.
+- **ZT-7 · Operator SSO, and the role must leave the certificate** — new work · M. Two things, and the
+  second is a DEFECT rather than a missing integration. Operator identity today is mTLS client certs only
+  (`tlsconf` sets `RequireAndVerifyClientCert`) with the RBAC tier carried IN the issued certificate
+  (`internal/provision/provision.go` — `RoleAnalyst`/`RoleResponder`/`RoleAdmin`, ordered by
+  `internal/controlplane/views.go`). There is no SAML anywhere in the tree, and the only OIDC
+  (`internal/gateway/identity`) authenticates ZTNA *subjects* through the access proxy — **not operators**.
+  - *The checkbox:* enterprise IAM gates on SSO + SCIM deprovisioning. "We issue you a certificate" fails
+    procurement regardless of being cryptographically better, because the control being bought is
+    centralised joiner/mover/leaver.
+  - *The defect:* because the role is IN the cert, a demotion is not effective until it expires or is
+    revoked. There is no "revoke this analyst's responder rights now" primitive. For a product whose
+    thesis is an auditable decision record, an authorization change on a certificate-lifetime delay is a
+    hole. **Fix this first — it is a prerequisite for SSO anyway**, and it is worth doing even if SSO
+    never ships.
+- **ZT-6 · SAML** — P · L. Only after OIDC proves the SSO seam. Note ZT-7 is the *operator* half; ZT-6 and
+  the existing OIDC are the *subject* half, and conflating them is how the SSO gap stayed invisible.
 
 ### Cross-platform (Windows/macOS)
 - **PLAT-7 · Native OS watch + Windows/macOS validation** (ADR-11) — L. The OBSERVE path already runs
@@ -494,8 +550,10 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   rather than a missing integration; **zero tenant scoping** (deliberate per D21, still a limit on what
   the open product can do); and **no data-at-rest discovery** — the AWS surface is CloudTrail log ingest
   only, so the product cannot answer "where is my sensitive data", which is the first question asked of a
-  Data Security Platform. The recommendation ordering is in that file; the top item is one object-store
-  discovery connector, which is also the strongest available test of the D26/D69 fitness claim.
+  Data Security Platform. The recommendation ordering is in that file. **All five recommendations now have
+  a home:** object-store discovery is **DSPM-1**, operator SSO + the role-in-certificate defect is
+  **ZT-7**, the four unproven distributed properties are above, a Windows agent is **PLAT-7**, and
+  positioning is the owner/README task named at the top of this file — deliberately not an infra ticket.
 - **Contributor onboarding** — the codebase is genuinely hard to enter cold. Deliverables: an architecture
   tour; **diagrams** (agent lifecycle, event flow, playbook execution, intent publication, attestation,
   entity graph, risk flow); a "how to add a producer / classify plugin / playbook step" tutorial with one

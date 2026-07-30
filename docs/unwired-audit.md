@@ -2423,3 +2423,88 @@ A package can be imported by a binary and still be unreachable at runtime becaus
 on. The closure check raises the floor; it does not close the class. And statement coverage is not path
 coverage — every line of a function can run without its error branch ever being taken, which is exactly
 why the 51.2% is a work list and not a grade.
+
+---
+
+## Round 47 (D367): the offline queue's recovery half, and a broker that comes back wrong
+
+The enterprise gap assessment named four distributed properties the single-host fleet topology cannot
+prove. **Offline-queue drain after a real disconnection** was one, and checking it found that the drain
+had no test at all — not a weak test, none.
+
+`TestTelemetryIsSpooledDuringAnOutage` stops the broker and asserts the spool becomes non-empty. D40/D67
+claims "spool signed telemetry when the control plane is unreachable and **re-send it on reconnect**, so
+an outage causes a gap, not silent loss". **No scenario had ever brought a broker back**, so
+`Queue.Drain`, `SignedPublisher.Flush` and the NATS reconnect they depend on ran in nothing.
+
+The half that was asserted is the half that costs nothing if it is wrong. A spool that fills and never
+empties is indistinguishable from a working one until an investigator asks about the outage window.
+
+### The assertion had to be the spool, not the row count
+
+The agent keeps producing after recovery, so "rows increased" is satisfied by an agent that discarded
+every spooled record and resumed — which is the failure under test. `Queue.Drain` removes a record only
+after its send succeeds and stops at the first failure keeping the rest, so **an empty spool is proof
+every record in it was delivered**, and proof that does not encode the on-disk format.
+
+### The first version of the test accused the product of the worst version of the bug
+
+It read the row count at the instant the spool emptied:
+
+```
+outage: 2 record(s) held on the spool, 2 row(s) stored before it
+the spool emptied but only 0 row(s) appeared for 2 held record(s)
+```
+
+That is the wording of `Drain` removing records it never delivered. It was a race in the test. An empty
+spool means the **broker** accepted them; the row appears only once the control plane has consumed them
+off JetStream and written them — two milestones, the second lagging. Probing it directly showed
+recovery working (2 → 20 → 40 → … → 120 rows).
+
+Worth keeping because of the direction of the error: the count cannot distinguish "not yet stored" from
+"thrown away", and the wrong reading is the alarming one. A less careful pass ships a bug report against
+working code.
+
+### What it did find: an empty-state broker wedges the fleet, silently
+
+Before the JetStream store was moved into a volume, the restored broker had empty state and the drain
+failed forever with `nats: no response from stream`. That is not a harness artifact to paper over — it
+is a real defect, reproduced:
+
+| Broker comes back… | Result |
+| --- | --- |
+| with its JetStream store (a restart) | recovers fully — 2 → 120 rows |
+| with a fresh store (`podman rm` + recreate) | **never recovers; the control plane logs nothing** |
+
+`natsx.EnsureTelemetryStream` is called from exactly two places — `controlplane.Run` and
+`SignedPublisher.UseJetStream` — both at **process startup only**. Nothing recreates a missing stream.
+The agent's publishes fail forever (at least logged agent-side); the control plane's durable push
+consumer was deleted with the stream and it says **nothing at all**, while every agent's spool grows
+toward its 10,000 ceiling and starts dropping the oldest records. A silent fleet-wide telemetry outage
+is a direct D31 violation, and D31 is the reason the rest of this product is trustworthy.
+
+Ordinary ops produces it: remove and recreate the broker container, or let an orchestrator reschedule it
+onto new storage.
+
+**Not fixed here, and the reason is specific rather than a shrug.** Re-ensuring the stream from the agent
+on reconnect is the tempting one-line fix, and it would make things *worse*: the stream would be
+recreated, publishes would succeed, the control plane's consumer would still be dead, and still no row
+would appear — a state harder to diagnose than the current one, that looks fixed. The fix needs a
+control-plane reconnect handler that re-ensures **and re-subscribes**, which is a lifecycle change in the
+ingest path. Filed as PLAT-10 with the reproduction and with the minimum bar recorded: even if
+self-healing is deferred, the server must say something.
+
+`Stack.RestoreBrokerEmpty` exists now so the defect is reproducible in one call rather than
+rediscoverable.
+
+### Still unproven, and named rather than implied
+
+- **A true network partition of the endpoint** — interface removed, different IP on rejoin — as opposed
+  to a broker outage. The podman primitives are verified: rootless `network disconnect`/`connect` works
+  cleanly, a `CGO_ENABLED=0` agent runs in an alpine container with the binary bind-mounted, and
+  `host.containers.internal` is reachable from a container on a custom network. The test is not written.
+- **The reconnect budget.** The agent passes NO reconnect options, so the NATS client defaults apply:
+  `MaxReconnects=60` × `ReconnectWait=2s`. An endpoint offline for more than roughly two minutes gives
+  up permanently and its spool never drains — a laptop closed for lunch is the normal case, not an edge
+  case. This scenario's outage is far shorter and so neither proves nor disproves it. Next to measure.
+- Clock skew, and per-node limits under real contention.

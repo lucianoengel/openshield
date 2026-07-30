@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,17 @@ type Stack struct {
 	// hostPort is the Postgres address, kept so an additional database can be addressed on the same
 	// container without re-parsing the DSN.
 	hostPort string
+	// natsVolume is the broker's JetStream store, kept OUTSIDE the container so that taking the broker
+	// away and bringing it back is a RESTART rather than a fresh broker. Without it the restored broker
+	// has empty JetStream state, the telemetry stream is absent, and every spooled record fails to send
+	// with "no response from stream" — which is a real product gap (the stream is only ever created at
+	// process startup) but not the one a drain scenario is trying to measure.
+	natsVolume string
+	// natsPort is the broker's HOST port, kept so RestoreBroker can rebind the SAME one. An agent's
+	// OPENSHIELD_NATS_URL is fixed at startup, so a broker that comes back on a different port is not the
+	// same broker as far as the agent is concerned — and the reconnect it is supposed to survive would
+	// never be attempted against a live listener.
+	natsPort string
 	t        *testing.T
 }
 
@@ -190,14 +202,21 @@ func StartStack(t *testing.T) *Stack {
 	s.DSN = newDatabase(t, s.hostPort)
 
 	natsName := uniqueName(t, "nats")
+	// The JetStream store lives in a named volume so a scenario can RESTART the broker rather than only
+	// destroy it — see the natsVolume field.
+	natsVol := containerPrefix + "js-" + strconv.FormatInt(time.Now().UnixNano()%1e9, 10)
+	run(t, "podman", "volume", "create", natsVol)
+	t.Cleanup(func() { _ = exec.Command("podman", "volume", "rm", "-f", natsVol).Run() })
 	// -js because durable ingest is the DEFAULT (PLAT-2): a producer started against a JetStream-less
 	// broker fails fast by design, so a harness without it would be testing the opt-out path by accident.
 	run(t, "podman", "run", "-d", "--rm", "--name", natsName,
-		"-p", "127.0.0.1::4222", natsImage, "-js")
+		"-v", natsVol+":/data", "-p", "127.0.0.1::4222", natsImage, "-js", "-sd", "/data")
 	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", natsName).Run() })
 	natsPort := hostPort(t, natsName, "4222/tcp")
 	s.NATSURL = "nats://127.0.0.1:" + natsPort
 	s.natsName = natsName
+	s.natsPort = natsPort
+	s.natsVolume = natsVol
 
 	waitTCP(t, "127.0.0.1:"+natsPort, 60*time.Second)
 	return s
@@ -214,6 +233,55 @@ func (s *Stack) StopBroker(t *testing.T) {
 		t.Fatal("this stack has no broker to stop")
 	}
 	run(t, "podman", "stop", "-t", "1", s.natsName)
+	s.natsName = ""
+}
+
+// RestoreBroker brings the broker BACK on the same host port, for the half of an outage scenario that
+// matters most and was untested: not that an endpoint spools, but that it RECOVERS.
+//
+// The spool exists so "an outage causes a gap, not silent loss" (D40/D67). Spooling is only half of that
+// claim — the records have to be re-sent. Until this existed no scenario ever restored a broker, so the
+// drain path ran in no test, and neither did the RECONNECT it depends on.
+//
+// A NEW CONTAINER, because StopBroker stops a `--rm` container and podman removes it. Rebinding the
+// original host port is what makes it the same broker to an agent, whose OPENSHIELD_NATS_URL was fixed at
+// startup and cannot be told about a new one.
+func (s *Stack) RestoreBroker(t *testing.T) { s.restoreBroker(t, true) }
+
+// RestoreBrokerEmpty brings a broker back with EMPTY JetStream state — a fresh store rather than a
+// restart. This is not exotic: an operator who removes and recreates the broker container, or an
+// orchestrator that reschedules it onto new storage, produces exactly this.
+func (s *Stack) RestoreBrokerEmpty(t *testing.T) { s.restoreBroker(t, false) }
+
+func (s *Stack) restoreBroker(t *testing.T, keepState bool) {
+	t.Helper()
+	if s.natsPort == "" {
+		t.Fatal("this stack never had a broker to restore")
+	}
+	name := uniqueName(t, "nats-restored")
+	// The stopped container's port is not always released the instant `podman stop` returns, so the bind
+	// is retried briefly rather than failing the scenario on a teardown race that is not what is under test.
+	var lastOut []byte
+	var err error
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		args := []string{"run", "-d", "--rm", "--name", name}
+		if keepState {
+			args = append(args, "-v", s.natsVolume+":/data")
+		}
+		args = append(args, "-p", "127.0.0.1:"+s.natsPort+":4222", natsImage, "-js", "-sd", "/data")
+		lastOut, err = exec.Command("podman", args...).CombinedOutput()
+		if err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("restoring the broker on port %s: %v\n%s", s.natsPort, err, lastOut)
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", name).Run() })
+	s.natsName = name
+	waitTCP(t, "127.0.0.1:"+s.natsPort, 60*time.Second)
 }
 
 func waitTCP(t *testing.T, addr string, timeout time.Duration) {
