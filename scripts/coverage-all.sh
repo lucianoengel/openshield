@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# The WHOLE coverage picture: unit + integration + privileged, merged.
+#
+# WHY THIS EXISTS AND scripts/coverage-integration.sh IS NOT ENOUGH. That one measures what the integration
+# suite executes in the real binaries, which is a genuinely useful question and a badly misleading answer if
+# it is read as "how much of this code is tested". Measured on the same tree:
+#
+#   integration only          55.2%,  4 packages at 0%
+#   unit + integration        70.2%,  0 packages at 0%
+#   + privileged (this)       71.1%
+#
+# The overall move from the privileged set is small. The PER-PACKAGE move is not, and it lands entirely on
+# the code that matters most:
+#
+#   internal/agent/openmon     11.2% -> 85.0%
+#   internal/agent/execmon     30.7% -> 80.4%
+#   internal/dnsredirect       39.3% -> 77.8%
+#   internal/agent/watchdog    66.7% -> 90.9%
+#   cmd/openshield-agent       18.6% -> 51.7%
+#
+# Those are the fanotify permission gate, the exec gate and the watchdog — the components whose failure
+# wedges a machine. Reporting them in the teens because the measurement could not reach them is worse than
+# not measuring: it invites exactly the "well, it's gated" shrug that let twelve of those tests run in no
+# automated gate at all for months.
+#
+# HONEST LIMITS, because a coverage number invites over-reading:
+#   - Statement coverage is not path coverage. Every line of a function can run without its error branch.
+#   - This is a work list, not a grade.
+#   - test/integration's own figure (~15%) is the harness measuring itself. Ignore it.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+MOD=github.com/lucianoengel/openshield
+OUT=${1:-$(mktemp -d -t openshield-coverage-all-XXXXXX)}
+PRIV=${OPENSHIELD_PRIVILEGED_COVDATA:-}
+mkdir -p "$OUT/unit" "$OUT/merged"
+echo "output: $OUT"
+
+echo
+echo "== unit tests =="
+# -coverpkg=./... so a package's tests count toward every package they exercise, which is what makes the
+# merge meaningful. The per-package line printed here is NOT the per-package figure — covdata below is.
+go test -cover -coverpkg=./... ./... -args -test.gocoverdir="$OUT/unit" >"$OUT/unit.log" 2>&1 || {
+	echo "unit tests reported failures (see $OUT/unit.log); continuing to measure what did run" >&2
+}
+
+echo
+echo "== integration suite, against the real binaries =="
+./scripts/coverage-integration.sh "$OUT/int" >"$OUT/int.log" 2>&1 || {
+	echo "integration run reported failures (see $OUT/int.log); continuing" >&2
+}
+
+inputs="$OUT/unit,$OUT/int/covdata"
+
+echo
+if [ -n "$PRIV" ] && [ -d "$PRIV" ] && [ "$(find "$PRIV" -type f | wc -l)" -gt 0 ]; then
+	echo "== privileged coverage included from $PRIV =="
+	inputs="$inputs,$PRIV"
+else
+	# LOUD, because omitting it does not just lower the number — it lowers it SPECIFICALLY on the fanotify
+	# gate, the exec gate and the watchdog, by four to seven times. A reader who does not know that will
+	# conclude the most dangerous code in the product is the least tested, and the opposite is true.
+	cat >&2 <<'EOF'
+
+== PRIVILEGED COVERAGE MISSING — the figure below UNDERSTATES the security-critical packages ==
+
+The fanotify open gate, the exec gate, the DNS redirect and the clipboard mediator need root (CAP_SYS_ADMIN)
+or a real X display, so their tests do not run here. Without them internal/agent/openmon reads ~11% instead
+of ~85%, and cmd/openshield-agent ~19% instead of ~52%.
+
+To include them, run the privileged binaries as root (a VM, or CI's kernel-enforcement job) with
+-test.gocoverdir pointing at a directory, then re-run this with:
+
+    OPENSHIELD_PRIVILEGED_COVDATA=<that directory> scripts/coverage-all.sh
+
+EOF
+fi
+
+go tool covdata merge -i="$inputs" -o="$OUT/merged"
+go tool covdata textfmt -i="$OUT/merged" -o="$OUT/merged.txt"
+
+echo
+echo "== per package, lowest first =="
+go tool covdata percent -i="$OUT/merged" 2>/dev/null | sed "s|$MOD/||" |
+	awk '{gsub(/%/,"",$3); if ($3 ~ /^[0-9.]+$/) print $3, $1}' | sort -n >"$OUT/bypkg.txt"
+if [ ! -s "$OUT/bypkg.txt" ]; then
+	# An empty work list reads as "everything is covered", so it is an error rather than a report.
+	echo "PARSE PRODUCED NO ROWS from a non-empty merge — fix the parse rather than trusting this" >&2
+	exit 1
+fi
+awk '{printf "%6s%%  %s\n", $1, $2}' "$OUT/bypkg.txt"
+
+echo
+echo "== summary =="
+go tool cover -func="$OUT/merged.txt" | tail -1
+awk '$1<50{a++} $1>=50&&$1<70{b++} $1>=70&&$1<85{c++} $1>=85{d++}
+     END{printf "under 50%%: %d   50-70%%: %d   70-85%%: %d   85%%+: %d   (of %d packages)\n",a+0,b+0,c+0,d+0,NR}' "$OUT/bypkg.txt"
+echo "work list: $OUT/bypkg.txt"

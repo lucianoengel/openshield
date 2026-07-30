@@ -2859,9 +2859,35 @@ under `sudo` in a separate job that emits no coverage. So `internal/agent/openmo
 `internal/clipboard/x11` (20.2%) are all reported below what is actually exercised — their tests run, just
 not in a run that is measured.
 
-Making the kernel job emit `GOCOVERDIR` and merging three datasets is the honest completion of this, and it
-is not done.
+**Now done.** The privileged binaries were rebuilt with `-cover`, run as root on the VM with
+`-test.gocoverdir`, and merged as a third dataset (`scripts/coverage-all.sh`). The overall number barely
+moves — 70.2% → **71.1%** — and the per-package move is the whole point:
 
-**The genuinely low and NOT gated:** `internal/controlplane` at 49.6% — the largest package in the tree and
-the one an operator's whole surface lives in — and `internal/printguard` at 46.4%. Those are the real work
-list, and neither has an excuse.
+| Package | unit+integration | + privileged |
+| --- | --- | --- |
+| `internal/agent/openmon` | 11.2% | **85.0%** |
+| `internal/agent/execmon` | 30.7% | **80.4%** |
+| `internal/dnsredirect` | 39.3% | **77.8%** |
+| `internal/agent/watchdog` | 66.7% | **90.9%** |
+| `internal/clipboard/x11` | 20.2% | **66.7%** |
+| `cmd/openshield-agent` | 18.6% | **51.7%** |
+
+Those are the fanotify permission gate, the exec gate and the watchdog — the components whose failure wedges
+a machine. Reporting them in the teens because the measurement could not reach them is worse than not
+measuring: it invites exactly the "well, it's gated" shrug that let twelve of those tests run in no
+automated gate for months. `coverage-all.sh` therefore prints a LOUD warning when the privileged set is
+absent, naming which packages are being understated and by how much.
+
+### The work list, with every excuse now spent
+
+Three packages under 50%, and one of them does not count:
+
+| Package | | |
+| --- | --- | --- |
+| `test/integration` | 14.8% | the harness measuring itself — not meaningful |
+| `internal/printguard` | 46.4% | real |
+| `internal/controlplane` | 49.6% | real, and the largest package in the tree — an operator's whole surface |
+
+46 of 87 packages sit above 85%. So the answer to "is there more that can be tested" was yes, and it was
+mostly not more TESTS — it was measuring the ones that already existed, and finding that four of them
+hung, were broken, or ran nowhere while looking green.
