@@ -71,7 +71,7 @@ func TestForwardedRedirectSinkholesGatewayClient(t *testing.T) {
 	if _, err := exec.LookPath("dig"); err != nil {
 		t.Skip("dig not available")
 	}
-	cannedUpstream(t) // 127.0.0.2:53 answers NOERROR
+	upstream := cannedUpstream(t) // 127.0.0.2:53 answers NOERROR
 	setupForwardingTopology(t)
 
 	pc, err := net.ListenPacket("udp", "0.0.0.0:0")
@@ -81,7 +81,7 @@ func TestForwardedRedirectSinkholesGatewayClient(t *testing.T) {
 	port := pc.LocalAddr().(*net.UDPAddr).Port
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go dnssink.Resolver{Upstream: "127.0.0.2:53", Blocked: func(n string) bool { return n == "evil.example" }}.Serve(ctx, pc)
+	go dnssink.Resolver{Upstream: upstream, Blocked: func(n string) bool { return n == "evil.example" }}.Serve(ctx, pc)
 
 	if err := InstallForwarded(port, nil); err != nil {
 		t.Fatalf("InstallForwarded: %v", err)

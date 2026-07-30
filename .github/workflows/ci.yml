@@ -387,6 +387,7 @@ jobs:
       - name: compile the privileged test binaries as the build user
         run: |
           go test -c -o /tmp/openmon.test ./internal/agent/openmon/
+          go test -c -o /tmp/dnsredirect.test ./internal/dnsredirect/
           go build -o /tmp/osbin ./cmd/...
           go test -tags integration -c -o /tmp/integration.test ./test/integration/
       # THE OUTPUT IS CHECKED FOR SKIPS, not just for a zero exit. A root-gated test that skips reports
@@ -397,6 +398,14 @@ jobs:
           sudo /tmp/openmon.test -test.v -test.timeout 10m 2>&1 | tee /tmp/openmon.out
           grep -q -- "--- SKIP" /tmp/openmon.out && { echo "a privileged test SKIPPED under root — it is not running what it claims"; exit 1; } || true
           grep -c -- "--- PASS" /tmp/openmon.out
+      # The transparent :53 redirect. Added only after its conntrack flakiness was fixed — wiring a
+      # knowingly-flaky suite into a gate teaches people to ignore the gate, which costs more than the
+      # coverage buys. Verified four consecutive clean package runs under real root first.
+      - name: transparent DNS redirect on a real kernel (nat REDIRECT + SO_MARK loop-break)
+        run: |
+          sudo /tmp/dnsredirect.test -test.v -test.timeout 8m 2>&1 | tee /tmp/dnsr.out
+          grep -q -- "--- SKIP" /tmp/dnsr.out && { echo "a privileged redirect test SKIPPED under root"; exit 1; } || true
+          grep -c -- "--- PASS" /tmp/dnsr.out
       - name: privileged agent end to end (inline DENY_EXEC, whitelisting, mark semantics)
         env:
           OPENSHIELD_INTEGRATION_BIN_DIR: /tmp/osbin

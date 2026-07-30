@@ -4,10 +4,12 @@ package dnsredirect
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,19 +36,57 @@ func rcode(msg []byte) int {
 	return int(msg[3] & 0x0f)
 }
 
-// cannedUpstream is a UDP DNS server on 127.0.0.2:53 that answers every query NOERROR (RCODE 0). Reaching
-// it proves the resolver's marked forward escaped the redirect.
-func cannedUpstream(t *testing.T) {
+// clearRedirectState removes BOTH redirect chains, before a test and after it.
+//
+// THIS IS WHY THE PACKAGE WAS FLAKY UNDER ROOT while every test passed alone. There are two chains — the
+// transparent OUTPUT redirect (Install/Remove) and the forwarded PREROUTING one
+// (InstallForwarded/RemoveForwarded) — and each test only ever cleared ITS OWN. So whichever kind ran last
+// left a rule that redirected the next test's traffic to a resolver port that had since closed, and the
+// symptom was `connection refused` against the canned upstream, in a DIFFERENT test on each run depending
+// on ordering.
+//
+// Clearing both, before AND after, makes each test independent of what ran before it — including a previous
+// test that failed partway and never reached its own teardown, which is exactly when this matters.
+func clearRedirectState(t *testing.T) {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.2:53")
+	clear := func() {
+		_ = Remove(nil)
+		_ = RemoveForwarded(nil)
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+// cannedUpstream is a UDP DNS server answering every query NOERROR (RCODE 0). Reaching it proves the
+// resolver's marked forward escaped the redirect. It returns the address it bound.
+//
+// upstreamSeq hands each test its own loopback address, and that is what finally made this package
+// deterministic under root.
+//
+// CONNTRACK IS THE REASON. A nat REDIRECT decision is cached PER FLOW, and removing the rule does not flush
+// the entries it created — a UDP conntrack entry outlives the test by ~30s. So a later query whose source
+// port happened to collide with an earlier one was still DNAT'd to a resolver port that had since closed,
+// and arrived as `connection refused`. That is why the package passed test-by-test, passed the first run,
+// and failed the next: the damage was done by the PREVIOUS run, not by anything in the current one.
+//
+// Flushing would need the conntrack tool, which is not installed here and would be one more thing a
+// contributor has to have. A DISTINCT DESTINATION per test is a different conntrack tuple, so no stale
+// entry can match — no tooling, and it makes each test independent by construction rather than by cleanup.
+var upstreamSeq atomic.Uint32
+
+func cannedUpstream(t *testing.T) string {
+	t.Helper()
+	// 127.0.0.2, .3, .4 … all local, none of them systemd-resolved's .53/.54.
+	addr := fmt.Sprintf("127.0.0.%d:53", 2+upstreamSeq.Add(1)%40)
+	pc, err := net.ListenPacket("udp", addr)
 	if err != nil {
-		t.Skipf("cannot bind the canned upstream 127.0.0.2:53: %v", err)
+		t.Skipf("cannot bind the canned upstream %s: %v", addr, err)
 	}
 	t.Cleanup(func() { pc.Close() })
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, addr, err := pc.ReadFrom(buf)
+			n, from, err := pc.ReadFrom(buf)
 			if err != nil {
 				return
 			}
@@ -57,9 +97,10 @@ func cannedUpstream(t *testing.T) {
 			copy(reply, buf[:n])
 			reply[2] |= 0x80 // QR = 1 (response)
 			reply[3] = 0x00  // RCODE = 0 (NOERROR)
-			_, _ = pc.WriteTo(reply, addr)
+			_, _ = pc.WriteTo(reply, from)
 		}
 	}()
+	return addr
 }
 
 // dnsQuery sends one query to addr and returns the response (or an error/timeout).
@@ -91,11 +132,29 @@ func requireRedirect(t *testing.T) {
 			t.Skip("neither iptables nor nft present")
 		}
 	}
+
+	// BOTH CHAINS ARE CLEARED, before this test and after it, and this is what made the package pass
+	// test-by-test and fail as a whole under real root (KERNEL-1).
+	//
+	// There are two: the transparent OUTPUT redirect (Install/Remove) and the forwarded PREROUTING one
+	// (InstallForwarded/RemoveForwarded). Every test cleared only ITS OWN kind, so whichever ran last left
+	// a rule that redirected the next test's traffic to a resolver port that had since closed — surfacing
+	// as `connection refused` against the canned upstream, in a DIFFERENT test each run depending on
+	// ordering. Nobody saw it because root-gated tests skip everywhere except a VM somebody remembers.
+	//
+	// Before AND after, because "after" alone does not help a test whose predecessor failed partway and
+	// never reached its own teardown — which is precisely when the leftovers appear.
+	clear := func() {
+		_ = Remove(nil)
+		_ = RemoveForwarded(nil)
+	}
+	clear()
+	t.Cleanup(clear)
 }
 
 // startResolver binds the sinkhole resolver on 127.0.0.1:0 (forwarding to the canned 127.0.0.2:53 upstream
 // with the loop-break mark, sinkholing evil.example) and returns its port.
-func startResolver(t *testing.T) int {
+func startResolver(t *testing.T, upstream string) int {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -103,7 +162,7 @@ func startResolver(t *testing.T) int {
 	}
 	t.Cleanup(func() { pc.Close() })
 	r := dnssink.Resolver{
-		Upstream: "127.0.0.2:53",
+		Upstream: upstream,
 		Mark:     testMark,
 		Blocked:  func(n string) bool { return n == "evil.example" },
 	}
@@ -119,8 +178,8 @@ func startResolver(t *testing.T) int {
 // resolver's own marked upstream forward ESCAPES the redirect (the loop-break).
 func TestTransparentRedirectSinkholesUnconfiguredClient(t *testing.T) {
 	requireRedirect(t)
-	cannedUpstream(t)
-	port := startResolver(t)
+	upstream := cannedUpstream(t)
+	port := startResolver(t, upstream)
 
 	if err := Install(port, testMark, nil); err != nil {
 		t.Fatalf("install redirect: %v", err)
@@ -129,7 +188,7 @@ func TestTransparentRedirectSinkholesUnconfiguredClient(t *testing.T) {
 
 	// A blocked domain, queried against 127.0.0.2:53 (the client's configured DNS) → transparently
 	// redirected to the resolver → NXDOMAIN.
-	resp, err := dnsQuery("127.0.0.2:53", buildQuery(0x1111, "evil.example"))
+	resp, err := dnsQuery(upstream, buildQuery(0x1111, "evil.example"))
 	if err != nil {
 		t.Fatalf("blocked query got no response: %v", err)
 	}
@@ -138,7 +197,7 @@ func TestTransparentRedirectSinkholesUnconfiguredClient(t *testing.T) {
 	}
 
 	// A normal domain → resolver forwards (marked, escaping the redirect) to the real upstream → NOERROR.
-	resp, err = dnsQuery("127.0.0.2:53", buildQuery(0x2222, "good.example"))
+	resp, err = dnsQuery(upstream, buildQuery(0x2222, "good.example"))
 	if err != nil {
 		t.Fatalf("normal query got no response (the loop-break failed?): %v", err)
 	}
@@ -152,8 +211,8 @@ func TestTransparentRedirectSinkholesUnconfiguredClient(t *testing.T) {
 // normal query is never answered. This proves the exemption is load-bearing, not decorative.
 func TestWithoutMarkExemptionResolutionBreaks(t *testing.T) {
 	requireRedirect(t)
-	cannedUpstream(t)
-	port := startResolver(t)
+	upstream := cannedUpstream(t)
+	port := startResolver(t, upstream)
 
 	if err := installBackend(port, testMark, false, nil); err != nil { // exempt=false → the mutation
 		t.Fatalf("install redirect (no exemption): %v", err)
@@ -161,11 +220,11 @@ func TestWithoutMarkExemptionResolutionBreaks(t *testing.T) {
 	defer Remove(nil)
 
 	// A blocked domain is still sinkholed (the resolver answers before forwarding).
-	if resp, err := dnsQuery("127.0.0.2:53", buildQuery(0x3333, "evil.example")); err == nil && rcode(resp) != 3 {
+	if resp, err := dnsQuery(upstream, buildQuery(0x3333, "evil.example")); err == nil && rcode(resp) != 3 {
 		t.Fatalf("blocked domain: RCODE = %d, want 3", rcode(resp))
 	}
 	// A normal domain loops (resolver forward redirected back into itself) → no answer → timeout.
-	if resp, err := dnsQuery("127.0.0.2:53", buildQuery(0x4444, "good.example")); err == nil {
+	if resp, err := dnsQuery(upstream, buildQuery(0x4444, "good.example")); err == nil {
 		t.Fatalf("without the mark exemption a normal query must NOT be answerable, got RCODE %d", rcode(resp))
 	}
 }

@@ -17,7 +17,7 @@ import (
 // wedged.
 func TestWatchdogBypassesAWedgedResolver(t *testing.T) {
 	requireRedirect(t)
-	cannedUpstream(t) // 127.0.0.2:53 answers NOERROR
+	upstream := cannedUpstream(t) // 127.0.0.2:53 answers NOERROR
 
 	// The sinkhole resolver on a high port, blocking evil.example, with its own cancel so we can KILL it.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -26,7 +26,7 @@ func TestWatchdogBypassesAWedgedResolver(t *testing.T) {
 	}
 	port := pc.LocalAddr().(*net.UDPAddr).Port
 	resolverCtx, killResolver := context.WithCancel(context.Background())
-	go dnssink.Resolver{Upstream: "127.0.0.2:53", Mark: testMark, Blocked: func(n string) bool { return n == "evil.example" }}.Serve(resolverCtx, pc)
+	go dnssink.Resolver{Upstream: upstream, Mark: testMark, Blocked: func(n string) bool { return n == "evil.example" }}.Serve(resolverCtx, pc)
 
 	wd := &Watchdog{Port: port, Mark: testMark, Interval: 200 * time.Millisecond, Failures: 2}
 	wdCtx, stopWatchdog := context.WithCancel(context.Background())
@@ -35,7 +35,7 @@ func TestWatchdogBypassesAWedgedResolver(t *testing.T) {
 	time.Sleep(300 * time.Millisecond) // let it install + probe once
 
 	// Redirect active: a blocked domain is transparently sinkholed.
-	if resp, err := dnsQuery("127.0.0.2:53", buildQuery(0x1111, "evil.example")); err != nil {
+	if resp, err := dnsQuery(upstream, buildQuery(0x1111, "evil.example")); err != nil {
 		t.Fatalf("with the redirect active, blocked query got no response: %v", err)
 	} else if rcode(resp) != 3 {
 		t.Fatalf("with the redirect active, evil.example RCODE = %d, want 3 (NXDOMAIN)", rcode(resp))
@@ -48,7 +48,7 @@ func TestWatchdogBypassesAWedgedResolver(t *testing.T) {
 
 	// The redirect is now bypassed: evil.example resolves DIRECTLY at the real upstream (NOERROR) — the
 	// sinkhole is out of the way, and crucially the query is ANSWERED rather than dropped into a dead resolver.
-	resp, err := dnsQuery("127.0.0.2:53", buildQuery(0x2222, "evil.example"))
+	resp, err := dnsQuery(upstream, buildQuery(0x2222, "evil.example"))
 	if err != nil {
 		t.Fatalf("after the resolver died the query was NOT answered — DNS is wedged (bypass failed): %v", err)
 	}
