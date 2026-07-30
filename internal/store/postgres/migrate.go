@@ -206,3 +206,23 @@ func SchemaSkew(ctx context.Context, pool *pgxpool.Pool) (embedded, applied int,
 	}
 	return embedded, applied, nil
 }
+
+// MigrationCount reports how many migration files are embedded.
+//
+// Exported for the idempotency test, which asserts that schema_migrations holds exactly one row per file.
+// That count used to be a literal in the test, so ADDING a migration failed it with a message about a
+// migration having been applied twice — the right guard reporting the wrong cause, which sends the reader
+// looking for a bug that is not there. Derived, the assertion is about idempotency and nothing else.
+func MigrationCount() int {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			n++
+		}
+	}
+	return n
+}

@@ -186,11 +186,17 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	// One row per migration FILE (001..038), and no more no matter how many times
-	// Migrate runs — that stability is the property under test.
-	if n != 38 {
-		t.Errorf("schema_migrations rows = %d, want 38 — a migration applied twice "+
-			"is a migration whose ledger is not what its version claims", n)
+	// One row per migration FILE, and no more no matter how many times Migrate runs — that stability is the
+	// property under test.
+	//
+	// COUNTED FROM THE FILES, not hardcoded. It was a literal (38), so adding a migration failed this test
+	// for a reason that has nothing to do with idempotency — the message said "a migration applied twice"
+	// when in fact one had merely been added. Deriving it keeps the assertion about the property it names,
+	// and still fails if a migration runs twice.
+	want := postgres.MigrationCount()
+	if n != want {
+		t.Errorf("schema_migrations rows = %d, want %d (one per migration file) — a migration applied twice "+
+			"is a migration whose ledger is not what its version claims", n, want)
 	}
 }
 
