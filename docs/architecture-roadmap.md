@@ -383,6 +383,15 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   *(Full-pipeline inline `DENY_EXEC` is MVP — Lane E, HIPS-3 inc 2.)*
 
 ### Broker lifecycle — found by the offline-queue recovery test (D367)
+- **Endpoint partition + ping detection: ✅ DONE (D369).** A container-based scenario removes the AGENT's
+  interface and rejoins it on a different IP. It found a second defect D368 could not help with: an endpoint
+  whose interface vanishes holds a TCP connection that is dead and looks open, and nats.go's keepalive
+  defaults (`PingInterval=2m` x 2) meant **four minutes** before anything noticed — `IsConnected()` stayed
+  true, so no reconnect was attempted and every spool drain timed out while the spool grew 4 -> 76 records.
+  You cannot reconnect a connection you do not know is broken. Now 20s x 2 (~40s), and the scenario went
+  from failing at 208s to passing at 66s. **Remaining of the four properties: clock skew, and per-node
+  limits under contention.** Also untested: a whole SEGMENT partitioning and reconnecting together, which
+  is what the D368 jitter is for.
 - **Reconnect forever: ✅ DONE (D368).** Every long-lived process ran on nats.go's defaults
   (`MaxReconnects=60` x `ReconnectWait=2s` ~= two minutes, then a permanent close with the process still
   running). Measured: a 4s outage recovered fully, a 150s one never did. The agent case is the one that

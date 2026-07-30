@@ -2598,3 +2598,96 @@ not sufficient.
 And infinite retry is a policy choice with a cost worth stating: "the agent is running" no longer implies
 "the agent is connected". The new disconnect log line is what makes that visible, and the fleet-side
 dead-man's-switch is what makes it actionable.
+
+---
+
+## Round 49 (D369): a partitioned endpoint took four minutes to notice, and only a container could show it
+
+Round 48 fixed the reconnect budget and closed by naming a true endpoint partition — the agent's own
+interface vanishing, rather than the broker stopping — as still unproven. Proving it found a second defect
+that the first fix could not have helped with.
+
+### The two outages are not interchangeable, and this is the proof
+
+A stopped broker sends a RST; the client knows at once. An endpoint whose interface is **removed** is left
+holding a TCP connection that is dead and looks open. Nothing arrives to invalidate it, so nats.go's
+keepalive is the only thing that can notice — and its defaults are `PingInterval=2m` with
+`MaxPingsOutstanding=2`: **up to four minutes**. Throughout that window `IsConnected()` stays true, so no
+reconnect is attempted and every spool drain fails.
+
+The agent's own log was the diagnosis, and it is an absence rather than an error:
+
+```
+fleet-agent: flush stopped after 0 (still unreachable?): nats: timeout   (repeated)
+```
+
+No disconnect line. No reconnect line. Still repeating after the network came back. The spool went from 4
+records to 76 while the scenario waited.
+
+**D368's infinite reconnect cannot help here — you cannot reconnect a connection you do not know is
+broken.** Two fixes that both read as "make the client resilient", and the first is invisible without the
+second. That is the argument for testing the partition specifically rather than trusting that an outage is
+an outage.
+
+`PingInterval(20s)` + `MaxPingsOutstanding(2)` puts detection at ~40s. The scenario went from failing after
+208s to passing in 66s, and the log now reads what it should:
+
+```
+nats: broker connection lost (nats: stale connection) — retrying forever; telemetry is being spooled
+nats: broker reconnected to nats://osint-partnats-…:4222 — draining anything spooled during the outage
+```
+
+Mutation: the 2-minute default back → fails with 76 records still held. The constant is load-bearing.
+
+### What the container topology cost, and what it bought
+
+Two obstacles, both informative about the harness:
+
+- **The stack's broker cannot join a bridge network.** The harness starts NATS in the default rootless mode
+  and `podman network connect` refuses it: `"slirp4netns" is not supported: invalid network mode`. The
+  scenario brings up its own broker on the bridge, published to a host port so the control plane still
+  reaches it at 127.0.0.1 while the agent reaches it **by name** — which puts DNS inside the partition
+  rather than beside it.
+- **The agent must not enrol from inside the container.** The enrolment endpoint binds 127.0.0.1, and
+  binding 0.0.0.0 would widen a listener on the developer's machine for a test run. So the agent enrols as a
+  host process, persists its identity (D318), and the container starts with that identity and NO TOKEN — the
+  stronger start anyway, since an agent needing a token to come back has been re-provisioned, not restarted.
+
+Bought: the rejoin gets a **different IP** for free (10.89.1.3 → 10.89.1.4 in the run that proved it), so
+"anything that assumed its own address survives the outage" is covered without arranging it.
+
+### A misleading log line, caught in a PASSING test
+
+`DisconnectErrHandler` fires on a deliberate `Close()` too, with a nil error. So every clean shutdown
+printed:
+
+```
+broker connection lost (<nil>) — retrying forever; telemetry is being spooled, not sent
+```
+
+False on all three counts — nothing lost, nothing retried, nothing spooled. It was visible only in the
+captured shutdown output of a test that **passed**, which is why it nearly survived. A misleading line on a
+green run is the kind that later gets quoted in an incident review. `err == nil` is the discriminator.
+
+Second time in this area the right answer was *do not log that*: the omitted `ClosedHandler` (Round 48)
+fires on clean shutdown for the same reason. Worth stating as a pattern — **nats.go's connection handlers do
+not distinguish "it broke" from "we closed it", so any of them used for alarming needs that guard.**
+
+### The CI runtime, and a guard of mine that was right to go red
+
+Round 48 replaced the `integration-suite` job's `podman --version` with a functional
+`podman run --rm alpine:3 true`, because a runner shipped a podman whose crun could not start anything.
+The next run went **red on that step** — which is the guard working: the suite genuinely could not run, and
+reporting green would have been a lie.
+
+Red for a reason we do not own is still not actionable, so the job now writes a `containers.conf` pinning
+podman to **runc**, which these runners have and which works. The probe stays: if runc is missing too, the
+job fails loudly rather than skipping quietly.
+
+### Still unproven
+
+**Clock skew** and **per-node resource limits under contention** — the remaining two of the four properties
+the enterprise gap assessment named. Partition and offline-queue drain are now closed.
+
+And this partitions ONE endpoint. A whole segment partitioning and reconnecting together is not exercised;
+the reconnect jitter added in Round 48 is the mitigation for that and remains untested at scale.

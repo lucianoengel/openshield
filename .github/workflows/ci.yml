@@ -332,10 +332,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # PIN PODMAN TO runc, because the runner image's crun is broken: `Error: OCI runtime error: crun:
+      # unknown version specified` on every `podman run`. runc is present on these runners (Docker uses
+      # it) and works. This is an environment fix, not a product one — but without it the suite cannot run
+      # here at all, and the probe below would keep the job permanently red for a reason we do not own.
+      #
+      # Written rather than `--runtime runc` on the command line because the harness shells out to plain
+      # `podman` from Go; configuration is the only injection point.
+      - name: use a working OCI runtime
+        run: |
+          mkdir -p ~/.config/containers
+          printf '[engine]\nruntime = "runc"\n' > ~/.config/containers/containers.conf
       # A FUNCTIONAL PROBE, not `podman --version`, which was the first version of this step and is not
-      # enough. A runner can ship a podman whose OCI runtime cannot start anything — observed on this
-      # project: `Error: OCI runtime error: crun: unknown version specified`, reproducible on one runner
-      # while another in the same fleet was fine. `podman --version` succeeds there, every scenario
+      # enough. A runner can ship a podman whose OCI runtime cannot start anything — see above; it is not
+      # hypothetical, it is what this fleet does. `podman --version` succeeds there, every scenario
       # t.Skips, and the job reports green having run nothing. That is the exact failure this step exists
       # to prevent, so it has to prove a container actually RUNS.
       - name: podman must actually run a container, or the suite would skip and report ok

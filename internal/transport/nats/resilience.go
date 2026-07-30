@@ -47,6 +47,25 @@ const (
 	// reconnect does.
 	reconnectJitter    = 1 * time.Second
 	reconnectJitterTLS = 4 * time.Second
+
+	// pingInterval/maxPingsOut decide HOW FAST A SILENTLY DEAD CONNECTION IS NOTICED, and the defaults
+	// (2 minutes x 2) mean up to FOUR MINUTES.
+	//
+	// This only matters for the outage that does not close the socket. A stopped broker sends a RST and the
+	// client knows immediately; an ENDPOINT whose own interface vanishes — a closed laptop, a dropped VPN, a
+	// detached container — leaves a TCP connection that is dead and looks open. Until a ping times out the
+	// client still reports connected, so it does not reconnect, and every attempt to drain the spool fails
+	// with `nats: timeout` while the spool keeps growing.
+	//
+	// Measured in exactly that shape (a container removed from its network): the agent logged neither a
+	// disconnect nor a reconnect for the whole partition, just `flush stopped after 0 (still unreachable?):
+	// nats: timeout` over and over, and it was still doing so after the network came back. A broker-outage
+	// test cannot find this, which is the empirical case for testing a real partition.
+	//
+	// 20s x 2 puts detection at ~40s. The cost is one PING per connection per 20s, which is nothing next to
+	// a four-minute window in which an endpoint is neither delivering nor recovering.
+	pingInterval = 20 * time.Second
+	maxPingsOut  = 2
 )
 
 // ResilienceOptions returns the reconnect policy every LONG-LIVED OpenShield process should use: retry
@@ -67,7 +86,22 @@ func ResilienceOptions(onEvent func(string)) []nats.Option {
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(reconnectWait),
 		nats.ReconnectJitter(reconnectJitter, reconnectJitterTLS),
+		// Detect a dead-but-open connection in ~40s instead of ~4 minutes. See the constants.
+		nats.PingInterval(pingInterval),
+		nats.MaxPingsOutstanding(maxPingsOut),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			// A NIL ERROR MEANS WE CLOSED IT, and this handler fires then too. Without the guard every
+			// clean shutdown printed
+			//
+			//   broker connection lost (<nil>) — retrying forever; telemetry is being spooled, not sent
+			//
+			// which is false on all three counts: nothing was lost, nothing is being retried, and nothing
+			// is being spooled. It showed up in the shutdown output of a passing test, which is the only
+			// reason it was noticed — a misleading line in a log nobody reads on a green run is exactly
+			// the kind of thing that later gets quoted in an incident review.
+			if err == nil {
+				return
+			}
 			// Reported at the moment it happens rather than inferred later from missing data.
 			emit(fmt.Sprintf("broker connection lost (%v) — retrying forever; telemetry is being spooled, not sent", err))
 		}),
