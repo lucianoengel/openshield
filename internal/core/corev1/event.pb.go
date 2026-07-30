@@ -95,6 +95,12 @@ const (
 	EventKind_EVENT_KIND_MEMORY_INJECTION_SUSPECTED EventKind = 12 // a process with writable+executable memory (HIPS-4 W^X)
 	EventKind_EVENT_KIND_CLIPBOARD_COPY             EventKind = 13 // content copied to the clipboard (DLP-2a — an exfil CHANNEL, not a file)
 	EventKind_EVENT_KIND_PRINT_JOB                  EventKind = 14 // a document submitted to a printer (DLP-2b — the other endpoint exfil channel)
+	// DATA AT REST, found by a sweep rather than observed in motion (DSPM-1). Every kind above is something
+	// that HAPPENED — a process opened, wrote, printed, sent. This one is something that IS: an object sitting
+	// in a store, found because we went looking. Reusing FILE_OPENED would have been the cheap option and it
+	// would misreport the event, because nobody opened it; and the difference is one policy needs, since
+	// "this data exists here" and "someone touched this" justify different responses.
+	EventKind_EVENT_KIND_OBJECT_DISCOVERED EventKind = 15
 )
 
 // Enum value maps for EventKind.
@@ -115,6 +121,7 @@ var (
 		12: "EVENT_KIND_MEMORY_INJECTION_SUSPECTED",
 		13: "EVENT_KIND_CLIPBOARD_COPY",
 		14: "EVENT_KIND_PRINT_JOB",
+		15: "EVENT_KIND_OBJECT_DISCOVERED",
 	}
 	EventKind_value = map[string]int32{
 		"EVENT_KIND_UNSPECIFIED":                0,
@@ -132,6 +139,7 @@ var (
 		"EVENT_KIND_MEMORY_INJECTION_SUSPECTED": 12,
 		"EVENT_KIND_CLIPBOARD_COPY":             13,
 		"EVENT_KIND_PRINT_JOB":                  14,
+		"EVENT_KIND_OBJECT_DISCOVERED":          15,
 	}
 )
 
@@ -623,6 +631,7 @@ type Event struct {
 	//	*Event_Process
 	//	*Event_Clipboard
 	//	*Event_Print
+	//	*Event_Object
 	Target        isEvent_Target `protobuf_oneof:"target"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -775,6 +784,15 @@ func (x *Event) GetPrint() *PrintSubject {
 	return nil
 }
 
+func (x *Event) GetObject() *ObjectSubject {
+	if x != nil {
+		if x, ok := x.Target.(*Event_Object); ok {
+			return x.Object
+		}
+	}
+	return nil
+}
+
 type isEvent_Target interface {
 	isEvent_Target()
 }
@@ -803,6 +821,10 @@ type Event_Print struct {
 	Print *PrintSubject `protobuf:"bytes,14,opt,name=print,proto3,oneof"`
 }
 
+type Event_Object struct {
+	Object *ObjectSubject `protobuf:"bytes,15,opt,name=object,proto3,oneof"`
+}
+
 func (*Event_Filesystem) isEvent_Target() {}
 
 func (*Event_Usb) isEvent_Target() {}
@@ -814,6 +836,8 @@ func (*Event_Process) isEvent_Target() {}
 func (*Event_Clipboard) isEvent_Target() {}
 
 func (*Event_Print) isEvent_Target() {}
+
+func (*Event_Object) isEvent_Target() {}
 
 // ProcessSubject is a process execution the HIPS producer observed (Phase E). It carries
 // exec METADATA ONLY (D10/D29) — the executable path, the argument vector, the pid, and the
@@ -968,6 +992,97 @@ func (x *ClipboardSubject) GetDisplayServer() string {
 	return ""
 }
 
+// ObjectSubject is an object found AT REST in an S3-compatible store by a discovery sweep (DSPM-1).
+//
+// STRUCTURED RATHER THAN A URI IN resolved_path, and that was a decision reversed on contact with the
+// contract. The conservative-looking option was to reuse FilesystemSubject and carry "s3://bucket/key" as a
+// path — no new message, no contract growth. But this `target` oneof EXISTS so a producer can carry its own
+// shape, and ClipboardSubject and PrintSubject are the precedent: each arrived with a kind and a subject.
+// Cramming an object into a filesystem path would have worked and would have made every policy that wants
+// "bucket = finance-exports" parse a string, while making an object indistinguishable from a real file
+// except by a scheme prefix. Adding an arm here is how the contract is designed to grow, not a change to
+// the frozen core.
+//
+// Content-free like its siblings. size_bytes is the store's reported size of the WHOLE object, which is
+// deliberately NOT the amount examined — a sweep reads a bounded prefix, so a large object is reported at
+// its true size and covered only in part, and conflating the two would let a partial scan read as a full
+// one. bytes_examined records what was actually looked at, so the gap is visible on the event itself.
+type ObjectSubject struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Store         string                 `protobuf:"bytes,1,opt,name=store,proto3" json:"store,omitempty"` // the endpoint the object lives in (host only — never credentials)
+	Bucket        string                 `protobuf:"bytes,2,opt,name=bucket,proto3" json:"bucket,omitempty"`
+	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`             // the object's FULL size as the store reports it
+	BytesExamined int64                  `protobuf:"varint,5,opt,name=bytes_examined,json=bytesExamined,proto3" json:"bytes_examined,omitempty"` // how much was actually read — less than size_bytes means partial coverage
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObjectSubject) Reset() {
+	*x = ObjectSubject{}
+	mi := &file_openshield_v1_event_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObjectSubject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObjectSubject) ProtoMessage() {}
+
+func (x *ObjectSubject) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_event_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObjectSubject.ProtoReflect.Descriptor instead.
+func (*ObjectSubject) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ObjectSubject) GetStore() string {
+	if x != nil {
+		return x.Store
+	}
+	return ""
+}
+
+func (x *ObjectSubject) GetBucket() string {
+	if x != nil {
+		return x.Bucket
+	}
+	return ""
+}
+
+func (x *ObjectSubject) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ObjectSubject) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *ObjectSubject) GetBytesExamined() int64 {
+	if x != nil {
+		return x.BytesExamined
+	}
+	return 0
+}
+
 // PrintSubject is a print job the endpoint intercepted in the spooler's filter chain (DLP-2b).
 //
 // Content-free, and one field is content-free by DELIBERATE OMISSION: there is no job title. A document's
@@ -986,7 +1101,7 @@ type PrintSubject struct {
 
 func (x *PrintSubject) Reset() {
 	*x = PrintSubject{}
-	mi := &file_openshield_v1_event_proto_msgTypes[8]
+	mi := &file_openshield_v1_event_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -998,7 +1113,7 @@ func (x *PrintSubject) String() string {
 func (*PrintSubject) ProtoMessage() {}
 
 func (x *PrintSubject) ProtoReflect() protoreflect.Message {
-	mi := &file_openshield_v1_event_proto_msgTypes[8]
+	mi := &file_openshield_v1_event_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1011,7 +1126,7 @@ func (x *PrintSubject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrintSubject.ProtoReflect.Descriptor instead.
 func (*PrintSubject) Descriptor() ([]byte, []int) {
-	return file_openshield_v1_event_proto_rawDescGZIP(), []int{8}
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PrintSubject) GetPrinter() string {
@@ -1077,7 +1192,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"httpMethod\x12\x1b\n" +
 	"\thttp_path\x18\t \x01(\tR\bhttpPath\x12=\n" +
 	"\tdirection\x18\n" +
-	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xb4\x05\n" +
+	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xec\x05\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12!\n" +
@@ -1096,7 +1211,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\anetwork\x18\v \x01(\v2\x1d.openshield.v1.NetworkSubjectH\x00R\anetwork\x129\n" +
 	"\aprocess\x18\f \x01(\v2\x1d.openshield.v1.ProcessSubjectH\x00R\aprocess\x12?\n" +
 	"\tclipboard\x18\r \x01(\v2\x1f.openshield.v1.ClipboardSubjectH\x00R\tclipboard\x123\n" +
-	"\x05print\x18\x0e \x01(\v2\x1b.openshield.v1.PrintSubjectH\x00R\x05printB\b\n" +
+	"\x05print\x18\x0e \x01(\v2\x1b.openshield.v1.PrintSubjectH\x00R\x05print\x126\n" +
+	"\x06object\x18\x0f \x01(\v2\x1c.openshield.v1.ObjectSubjectH\x00R\x06objectB\b\n" +
 	"\x06target\"\xa9\x01\n" +
 	"\x0eProcessSubject\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x12\n" +
@@ -1110,7 +1226,14 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x10ClipboardSubject\x12\x1d\n" +
 	"\n" +
 	"byte_count\x18\x01 \x01(\rR\tbyteCount\x12%\n" +
-	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer\"\x8e\x01\n" +
+	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer\"\x95\x01\n" +
+	"\rObjectSubject\x12\x14\n" +
+	"\x05store\x18\x01 \x01(\tR\x05store\x12\x16\n" +
+	"\x06bucket\x18\x02 \x01(\tR\x06bucket\x12\x10\n" +
+	"\x03key\x18\x03 \x01(\tR\x03key\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12%\n" +
+	"\x0ebytes_examined\x18\x05 \x01(\x03R\rbytesExamined\"\x8e\x01\n" +
 	"\fPrintSubject\x12\x18\n" +
 	"\aprinter\x18\x01 \x01(\tR\aprinter\x12\x19\n" +
 	"\bjob_user\x18\x02 \x01(\tR\ajobUser\x12\x1d\n" +
@@ -1121,7 +1244,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x13PURPOSE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vPURPOSE_DLP\x10\x01\x12\x18\n" +
 	"\x14PURPOSE_INSIDER_RISK\x10\x02\x12\x1c\n" +
-	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xcf\x03\n" +
+	"\x18PURPOSE_COMPLIANCE_AUDIT\x10\x03*\xf1\x03\n" +
 	"\tEventKind\x12\x1a\n" +
 	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_KIND_FILE_OPENED\x10\x01\x12\x1c\n" +
@@ -1138,7 +1261,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x1fEVENT_KIND_RANSOMWARE_SUSPECTED\x10\v\x12)\n" +
 	"%EVENT_KIND_MEMORY_INJECTION_SUSPECTED\x10\f\x12\x1d\n" +
 	"\x19EVENT_KIND_CLIPBOARD_COPY\x10\r\x12\x18\n" +
-	"\x14EVENT_KIND_PRINT_JOB\x10\x0e*r\n" +
+	"\x14EVENT_KIND_PRINT_JOB\x10\x0e\x12 \n" +
+	"\x1cEVENT_KIND_OBJECT_DISCOVERED\x10\x0f*r\n" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +
@@ -1157,7 +1281,7 @@ func file_openshield_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_openshield_v1_event_proto_goTypes = []any{
 	(Purpose)(0),                  // 0: openshield.v1.Purpose
 	(EventKind)(0),                // 1: openshield.v1.EventKind
@@ -1170,13 +1294,14 @@ var file_openshield_v1_event_proto_goTypes = []any{
 	(*Event)(nil),                 // 8: openshield.v1.Event
 	(*ProcessSubject)(nil),        // 9: openshield.v1.ProcessSubject
 	(*ClipboardSubject)(nil),      // 10: openshield.v1.ClipboardSubject
-	(*PrintSubject)(nil),          // 11: openshield.v1.PrintSubject
-	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
+	(*ObjectSubject)(nil),         // 11: openshield.v1.ObjectSubject
+	(*PrintSubject)(nil),          // 12: openshield.v1.PrintSubject
+	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
 }
 var file_openshield_v1_event_proto_depIdxs = []int32{
 	4,  // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
 	2,  // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
-	12, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
+	13, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
 	3,  // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
 	0,  // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
 	1,  // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
@@ -1185,12 +1310,13 @@ var file_openshield_v1_event_proto_depIdxs = []int32{
 	7,  // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
 	9,  // 9: openshield.v1.Event.process:type_name -> openshield.v1.ProcessSubject
 	10, // 10: openshield.v1.Event.clipboard:type_name -> openshield.v1.ClipboardSubject
-	11, // 11: openshield.v1.Event.print:type_name -> openshield.v1.PrintSubject
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	12, // 11: openshield.v1.Event.print:type_name -> openshield.v1.PrintSubject
+	11, // 12: openshield.v1.Event.object:type_name -> openshield.v1.ObjectSubject
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_event_proto_init() }
@@ -1210,6 +1336,7 @@ func file_openshield_v1_event_proto_init() {
 		(*Event_Process)(nil),
 		(*Event_Clipboard)(nil),
 		(*Event_Print)(nil),
+		(*Event_Object)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1217,7 +1344,7 @@ func file_openshield_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_event_proto_rawDesc), len(file_openshield_v1_event_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -32,6 +32,12 @@ enum EventKind {
   EVENT_KIND_MEMORY_INJECTION_SUSPECTED = 12; // a process with writable+executable memory (HIPS-4 W^X)
   EVENT_KIND_CLIPBOARD_COPY = 13; // content copied to the clipboard (DLP-2a — an exfil CHANNEL, not a file)
   EVENT_KIND_PRINT_JOB = 14;      // a document submitted to a printer (DLP-2b — the other endpoint exfil channel)
+  // DATA AT REST, found by a sweep rather than observed in motion (DSPM-1). Every kind above is something
+  // that HAPPENED — a process opened, wrote, printed, sent. This one is something that IS: an object sitting
+  // in a store, found because we went looking. Reusing FILE_OPENED would have been the cheap option and it
+  // would misreport the event, because nobody opened it; and the difference is one policy needs, since
+  // "this data exists here" and "someone touched this" justify different responses.
+  EVENT_KIND_OBJECT_DISCOVERED = 15;
 }
 
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
@@ -117,6 +123,7 @@ message Event {
     ProcessSubject process = 12;
     ClipboardSubject clipboard = 13;
     PrintSubject print = 14;
+    ObjectSubject object = 15;
   }
 }
 
@@ -149,6 +156,29 @@ message ProcessSubject {
 message ClipboardSubject {
   uint32 byte_count = 1;      // how much was copied (metadata; a size is not content)
   string display_server = 2;  // "x11" | "wayland" — which capture path observed it
+}
+
+// ObjectSubject is an object found AT REST in an S3-compatible store by a discovery sweep (DSPM-1).
+//
+// STRUCTURED RATHER THAN A URI IN resolved_path, and that was a decision reversed on contact with the
+// contract. The conservative-looking option was to reuse FilesystemSubject and carry "s3://bucket/key" as a
+// path — no new message, no contract growth. But this `target` oneof EXISTS so a producer can carry its own
+// shape, and ClipboardSubject and PrintSubject are the precedent: each arrived with a kind and a subject.
+// Cramming an object into a filesystem path would have worked and would have made every policy that wants
+// "bucket = finance-exports" parse a string, while making an object indistinguishable from a real file
+// except by a scheme prefix. Adding an arm here is how the contract is designed to grow, not a change to
+// the frozen core.
+//
+// Content-free like its siblings. size_bytes is the store's reported size of the WHOLE object, which is
+// deliberately NOT the amount examined — a sweep reads a bounded prefix, so a large object is reported at
+// its true size and covered only in part, and conflating the two would let a partial scan read as a full
+// one. bytes_examined records what was actually looked at, so the gap is visible on the event itself.
+message ObjectSubject {
+  string store = 1;          // the endpoint the object lives in (host only — never credentials)
+  string bucket = 2;
+  string key = 3;
+  int64 size_bytes = 4;      // the object's FULL size as the store reports it
+  int64 bytes_examined = 5;  // how much was actually read — less than size_bytes means partial coverage
 }
 
 // PrintSubject is a print job the endpoint intercepted in the spooler's filter chain (DLP-2b).

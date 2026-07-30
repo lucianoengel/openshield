@@ -422,7 +422,27 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   direct D31 violation, and D31 is the reason the rest of this product is trustworthy.
 
 ### Data-at-rest discovery (DSPM) — from the enterprise gap assessment
-- **DSPM-1 · One object-store discovery connector** — new work · M. **The largest name-versus-capability
+- **DSPM-1 · One object-store discovery connector** — ✅ **DONE (D371)**. `internal/connectors/objectstore`
+  sweeps an S3-compatible bucket on an interval, reads a bounded prefix of each object via a ranged GET, and
+  feeds the same pipeline everything else feeds; content goes to the sandboxed worker via the content store
+  and never onto the Event. No SDK — SigV4 hand-rolled over stdlib HMAC, so the twelve-direct-dependency tree
+  is unchanged AND the connector works against MinIO/Ceph/R2/Wasabi rather than only AWS. Proven against a
+  real MinIO, because a mocked S3 would agree with whatever the signer believes.
+  **THE FITNESS VERDICT (recorded in `sweep.go`, and it reversed the plan):** the producer seam
+  (`Next(ctx) (*corev1.Event, error)`) fits a pull/enumerate producer unchanged — that half held cleanly. The
+  proposal then said to avoid a contract change by carrying `s3://bucket/key` in
+  `FilesystemSubject.resolved_path`, and TRYING IT SHOWED THAT BACKWARDS: `Event.target` is a oneof that
+  exists so a producer can carry its own shape, and ClipboardSubject/PrintSubject are the precedent. So
+  `ObjectSubject` is idiomatic and the URI-in-a-path was the invasive option. Answer to "does the pipeline
+  absorb a new capability by adding a plugin?": **yes**, and this is the strongest evidence yet because the
+  producer shape was genuinely new rather than isomorphic — with the caveat that it survived because the
+  contract had a designed-in growth point, not because the contract never changes.
+  *Residual, and each is stated in the capability spec rather than implied:* no ACCESS CONTEXT (who can reach
+  the bucket) — that is the other half of what DSPM buyers mean; one store family only; a PREFIX per object,
+  so content past the ceiling is unexamined; no incremental since-last-sweep state, so every sweep
+  re-enumerates; read-only, no remediation.
+  **MinIO is in `compose.yaml` for DEV ONLY** — OpenShield scans an object store, it does not provide one,
+  and production points at whatever the operator already runs. **The largest name-versus-capability
   gap in the product** ([`enterprise-gap-assessment.md`](enterprise-gap-assessment.md)): OpenShield
   classifies data IN MOTION past an interposition point, and the only cloud surface that exists is
   CloudTrail *log ingest* (`internal/connectors/cloudtrail`) plus AWS-key secret detection in

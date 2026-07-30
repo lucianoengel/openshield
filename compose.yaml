@@ -37,6 +37,30 @@ services:
     ports:
       - "127.0.0.1:4222:4222"         # client port, localhost only
 
+  # An S3-compatible object store, so DSPM-1 data-at-rest discovery is exercisable from a clean checkout
+  # the way Postgres and NATS make the rest of the pipeline exercisable.
+  #
+  # DEV ONLY, AND NOT A PRODUCT DEPENDENCY. OpenShield SCANS an object store; it does not provide one. A
+  # production deployment points OPENSHIELD_OBJECT_ENDPOINT at whatever the operator already runs — S3, a
+  # Ceph gateway, their own MinIO. Shipping this in a production stack would mean shipping the data store we
+  # are supposed to be inspecting.
+  minio:
+    image: docker.io/minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: openshield
+      MINIO_ROOT_PASSWORD: devdevdev      # DEV ONLY — never a real deployment
+    ports:
+      - "127.0.0.1:9000:9000"             # S3 API, localhost only
+      - "127.0.0.1:9001:9001"             # console, localhost only
+    volumes:
+      - openshield-minio:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # One-shot: run migrations AS THE OWNER and provision the non-owner application login role
   # (PLAT-6b / SEC-6). The long-running services then connect as that non-owner role, so the
   # append-only ledger trigger is not owner-bypassable in the running stack. Owner credentials
@@ -71,3 +95,4 @@ services:
 
 volumes:
   openshield-pgdata:
+  openshield-minio:

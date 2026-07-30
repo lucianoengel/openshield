@@ -275,6 +275,15 @@ func main() {
 			slog.Float64("tunnel_threshold", dns.TunnelThreshold()))
 	}
 
+	// Optional discovery source: data AT REST in an object store (DSPM-1). Off unless configured.
+	if sweep, ok := objectSweepSource(ctx, eng, events, log); ok {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sweep()
+		}()
+	}
+
 	// Optional email source: the SMTP capture connector (SMTP-1). The connector was complete and started
 	// by nothing — no import, no setting — while the product described itself as inspecting SMTP.
 	//
