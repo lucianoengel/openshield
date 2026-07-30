@@ -179,19 +179,49 @@ jobs:
           GOARCH: "386"
         run: go test -count=1 ./internal/agent/execmon/ ./internal/agent/openmon/ ./internal/agent/openipc/ ./internal/agent/execipc/ ./internal/classify/ ./internal/connectors/fanotify/ ./internal/core/
       # The fuzz targets' SEED CORPUS runs on every ordinary `go test`; this is the only step that
-      # actually MUTATES input, and it is a SMOKE TEST — twenty seconds explores almost none of the
+      # actually MUTATES input, and it is a SMOKE TEST — this budget explores almost none of the
       # space, so finding nothing here is close to no evidence. The durable value is that a crasher
       # found in a long local run gets committed under testdata/fuzz/ and is replayed forever after.
+      #
+      # THE BUDGET IS EXECUTIONS, NOT SECONDS, and it was `-fuzztime=20s` until that turned the step
+      # red on a commit that changed nothing about it. `FuzzReadRequest` on openipc failed with
+      # `context deadline exceeded`: throughput dropped to 0/sec exactly at the 20s mark and a worker
+      # did not return from its current input before the coordinator's deadline. It passes locally,
+      # where 32 workers run 900k execs/sec; the runner had 4 workers at 45k/sec — 20× slower, on
+      # inputs up to MaxPrefixLen (64 KiB), which is why openipc/execipc hit this and the
+      # small-input execmon/openmon targets did not.
+      #
+      # "Twenty seconds of fuzzing" is not a reproducible amount of work on a shared runner, and a
+      # gate whose result depends on how busy the machine was is a gate people learn to re-run until
+      # it passes. `-fuzztime=Nx` counts EXECUTIONS: the same work every time, no wall-clock deadline
+      # for a worker to lose a race against. A real crasher still fails the step, which is the only
+      # property that mattered.
+      #
+      # THE EXECIPC BUDGET IS SMALLER, AND THAT IS NOT ARBITRARY — do not normalize it. Measured on a
+      # 32-core machine: openipc's FuzzReadRequest runs ~900,000 execs/sec, execipc's identical-shaped
+      # one runs ~250/sec. A 3600× gap between two decoders that are each O(n) over n ≤ 4096, with the
+      # fuzz body benchmarked at 290 ns/op — so it is not the code under test.
+      #
+      # The cause is the TEST BINARY, which is what Go instruments and whose coverage counters it
+      # snapshots on every execution. `go list -deps -test` reports 23 openshield packages for execipc
+      # against 4 for openipc: its gate_test.go and kernel_linux_test.go pull in engine, policy,
+      # watchdog, execmon and execguard. Fuzzing pays for all of it, per execution.
+      #
+      # Splitting those heavier tests into their own package would make the wire fuzzer ~3600× faster
+      # and is the real fix; it is a test-layout change with its own risk and belongs in its own
+      # ticket, not in a CI tuning commit. Until then the budget follows the measured throughput, so
+      # that what this step costs is predictable and what it buys is not overstated.
       - name: fuzz smoke over the privileged decoders (NOT a soak)
         run: |
           set -e
           for t in FuzzDecodeMeta FuzzDecodeInotify; do
-            go test -run '^$' -fuzz "^${t}$" -fuzztime=20s ./internal/agent/execmon/
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=100000x ./internal/agent/execmon/
           done
-          go test -run '^$' -fuzz '^FuzzDecodeMeta$' -fuzztime=20s ./internal/agent/openmon/
+          go test -run '^$' -fuzz '^FuzzDecodeMeta$' -fuzztime=100000x ./internal/agent/openmon/
           for t in FuzzReadRequest FuzzReadResponse; do
-            go test -run '^$' -fuzz "^${t}$" -fuzztime=20s ./internal/agent/openipc/
-            go test -run '^$' -fuzz "^${t}$" -fuzztime=20s ./internal/agent/execipc/
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=100000x ./internal/agent/openipc/
+            # See the note above: ~250 execs/sec here because the test binary links the pipeline.
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=3000x ./internal/agent/execipc/
           done
 
   ledger:
