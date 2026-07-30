@@ -79,12 +79,9 @@ func NewOIDCVerifier(issuer, audience, roleClaim string, keys map[string]crypto.
 // live JWKS refresher, ZT-2b) rather than a static map — for a provider whose keys rotate. The source's
 // keyFor MUST NOT block on the network (the verify path is HTTP-free). issuer/audience/roleClaim are
 // required exactly as in NewOIDCVerifier; a nil source is a configuration error.
-// A roleClaim is REQUIRED for the ZTNA path (Verify) and may be empty for a verifier used only for
-// operator authentication (VerifySubject), where the role comes from the server-side record rather than the
-// token — see VerifySubject.
 func NewOIDCVerifierWithSource(issuer, audience, roleClaim string, keyFor func(kid string) (crypto.PublicKey, bool)) (*OIDCVerifier, error) {
-	if issuer == "" || audience == "" {
-		return nil, fmt.Errorf("identity: OIDC verifier needs an issuer and an audience")
+	if issuer == "" || audience == "" || roleClaim == "" {
+		return nil, fmt.Errorf("identity: OIDC verifier needs issuer, audience, and role claim")
 	}
 	if keyFor == nil {
 		return nil, fmt.Errorf("identity: OIDC verifier needs a key source")
@@ -422,4 +419,38 @@ func LoadOIDCKeys(dir string) (map[string]crypto.PublicKey, error) {
 		return nil, fmt.Errorf("identity: no .pem keys in %s", dir)
 	}
 	return keys, nil
+}
+
+// NewOperatorVerifier and NewOperatorVerifierWithSource build a verifier for OPERATOR authentication
+// (ZT-7): no role claim, because the role comes from the server-side operator record and never from the
+// token — see VerifySubject.
+//
+// SEPARATE CONSTRUCTORS rather than relaxing the ZTNA ones. Making roleClaim optional there would mean a
+// ZTNA gateway missing its role-claim setting constructs happily and fails later, per request, at the point
+// where a subject's authorization group cannot be read — turning a startup misconfiguration into a runtime
+// one. The ZTNA path keeps failing fast; this path never wanted the field.
+func NewOperatorVerifier(issuer, audience string, keys map[string]crypto.PublicKey) (*OIDCVerifier, error) {
+	if issuer == "" || audience == "" {
+		return nil, fmt.Errorf("identity: operator OIDC verifier needs an issuer and an audience")
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("identity: operator OIDC verifier needs at least one signing key")
+	}
+	static := make(map[string]crypto.PublicKey, len(keys))
+	for k, v := range keys {
+		static[k] = v
+	}
+	return &OIDCVerifier{issuer: issuer, audience: audience,
+		keyFor: func(kid string) (crypto.PublicKey, bool) { k, ok := static[kid]; return k, ok },
+		now:    time.Now}, nil
+}
+
+func NewOperatorVerifierWithSource(issuer, audience string, keyFor func(kid string) (crypto.PublicKey, bool)) (*OIDCVerifier, error) {
+	if issuer == "" || audience == "" {
+		return nil, fmt.Errorf("identity: operator OIDC verifier needs an issuer and an audience")
+	}
+	if keyFor == nil {
+		return nil, fmt.Errorf("identity: operator OIDC verifier needs a key source")
+	}
+	return &OIDCVerifier{issuer: issuer, audience: audience, keyFor: keyFor, now: time.Now}, nil
 }

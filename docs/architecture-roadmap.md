@@ -482,6 +482,16 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   extracted so the operator path shares every fail-closed JWT check with the ZTNA path rather than
   duplicating six of them; the subject is raw rather than pseudonymised, because an operator is not the
   monitored population and an unattributable action is not evidence.
+  **D375 — and operator SSO shipped UNUSABLE until it.** The control plane's HTTP surface is mutual TLS with
+  `RequireAndVerifyClientCert`, so an SSO operator — who by definition has no certificate — was refused at
+  the handshake with `tls: certificate required`, before the bearer token was ever read. The feature could
+  not run in any deployment. An INTEGRATION test found it; the package tests could not, because they drive a
+  handler with a synthesised TLS state. Fixed with `VerifyClientCertIfGiven` scoped to SSO-enabled
+  deployments — a presented certificate is still verified, only absence stops being fatal. The assertion
+  guarding that ("an untrusted certificate is still refused") was itself VACUOUS at first: a client from a
+  second PKI fails the handshake client-side, so it passed against a mutant with no server-side verification
+  at all. See the change's design notes — when asserting one side rejects something, the other side must
+  have no reason to fail.
   **STILL OPEN:** **SCIM** — deprovisioning is a manual `operator-role revoke`, so an IdP deactivating a
   user bounds exposure to a token lifetime rather than removing authority; **no JIT provisioning**, so a
   first-time SSO operator has no access until an admin grants it; **no DPoP on the operator path**, so a

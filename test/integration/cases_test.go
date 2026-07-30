@@ -90,6 +90,54 @@ func (p *pki) operator(t *testing.T, role, cn string) *http.Client {
 	}
 }
 
+// bearerClient trusts the control plane's CA and presents NO client certificate — the shape an SSO
+// operator connects with (ZT-7). Deliberately certificate-free: a client that also presented one would
+// authenticate by certificate and the token path would never be exercised.
+func (p *pki) bearerClient(t *testing.T) *http.Client {
+	t.Helper()
+	caPEM, err := os.ReadFile(p.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("the CA certificate did not parse")
+	}
+	return &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
+	}
+}
+
+// foreignCertClient TRUSTS this PKI's CA as a server root, but presents a client certificate issued by a
+// DIFFERENT CA. That combination is the only way to test the direction that matters: whether the SERVER
+// refuses an untrusted client certificate.
+//
+// The obvious version — build a whole second PKI and use its client — passes for the WRONG REASON: that
+// client does not trust this server's CA, so the handshake fails client-side and the assertion is satisfied
+// without the server having rejected anything. A mutation that removed server-side verification entirely
+// still passed it. Isolating the direction is the whole point.
+func (p *pki) foreignCertClient(t *testing.T, foreign *pki, role, cn string) *http.Client {
+	t.Helper()
+	cert := foreign.leafCert(t, role, cn)
+	caPEM, err := os.ReadFile(p.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("the CA certificate did not parse")
+	}
+	return &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert}, // from the OTHER CA
+			RootCAs:      pool,                    // but this server's CA is trusted, so only the client side is under test
+			MinVersion:   tls.VersionTLS12,
+		}},
+	}
+}
+
 // leafCert issues a role-tagged leaf and loads it as a client certificate.
 func (p *pki) leafCert(t *testing.T, role, cn string, extra ...string) tls.Certificate {
 	t.Helper()

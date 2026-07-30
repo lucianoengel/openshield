@@ -143,6 +143,8 @@ var ServerFields = []Field{
 		Description: "Audience an operator token must carry. Required when an issuer is set."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_JWKS_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "JWKS endpoint for the operator issuer's signing keys. Required when an issuer is set."},
+	{Key: "OPENSHIELD_OPERATOR_OIDC_KEYS_DIR", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "Directory of static issuer signing keys, as an alternative to a JWKS URL. Exactly one of the two must be set — two key sources is ambiguous about which is authoritative."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_JWKS_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "5m",
 		Description: "How often to refresh the operator issuer's JWKS, so an IdP key rotation needs no restart."},
 }

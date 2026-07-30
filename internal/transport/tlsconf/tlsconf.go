@@ -85,6 +85,27 @@ func (c *Config) ServerConfig() *tls.Config {
 	}
 }
 
+// ServerConfigOptionalClientCert verifies a client certificate WHEN ONE IS PRESENTED, and allows a
+// handshake without one — for a listener that also accepts OIDC bearer tokens (ZT-7).
+//
+// WHY THIS EXISTS AND WHY IT IS NOT THE DEFAULT. Operator SSO shipped unusable: the control plane's HTTP
+// surface demands a client certificate at the handshake, so an SSO operator — who by definition has none —
+// was refused with `tls: certificate required` before the bearer token was ever read. The feature could not
+// run in any deployment, which an integration test caught and no package test could.
+//
+// The relaxation is narrow in the way that matters. A certificate that IS presented is still verified
+// against the CA, so certificate authentication is unchanged and a forged or unknown one is still refused at
+// the handshake. What changes is only that ABSENCE is no longer fatal there — it becomes an authorization
+// decision one layer up, where a request with no credential at all is a 401.
+//
+// The caller uses this ONLY when operator SSO is configured. A deployment that has not enabled an identity
+// provider keeps ServerConfig and its handshake-level refusal, so nothing about it changes.
+func (c *Config) ServerConfigOptionalClientCert() *tls.Config {
+	cfg := c.ServerConfig()
+	cfg.ClientAuth = tls.VerifyClientCertIfGiven
+	return cfg
+}
+
 // ClientConfig presents this end's certificate and verifies the server against
 // the CA.
 func (c *Config) ClientConfig() *tls.Config {

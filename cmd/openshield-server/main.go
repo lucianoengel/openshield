@@ -59,6 +59,7 @@ func main() {
 	// ZT-7: operator SSO. Off unless an issuer is configured — enabling an IdP must not happen by accident.
 	// The token AUTHENTICATES; the role still comes from the operator record, so a demotion applies to a
 	// token already issued (see internal/controlplane/operator_roles.go).
+	operatorSSOEnabled := false
 	setUpOperatorSSO := func(srv *controlplane.Server, ctx context.Context) {
 		issuer := os.Getenv("OPENSHIELD_OPERATOR_OIDC_ISSUER")
 		audience := os.Getenv("OPENSHIELD_OPERATOR_OIDC_AUDIENCE")
@@ -66,23 +67,41 @@ func main() {
 		if issuer == "" {
 			return
 		}
-		if audience == "" || jwksURL == "" {
+		keysDir := os.Getenv("OPENSHIELD_OPERATOR_OIDC_KEYS_DIR")
+		if audience == "" || (jwksURL == "" && keysDir == "") {
 			// A half-configured IdP must not silently mean "certificates only": an operator team that
 			// believes SSO is on would find out from a support ticket.
-			fatal("operator SSO: OPENSHIELD_OPERATOR_OIDC_ISSUER is set but AUDIENCE or JWKS_URL is not")
+			fatal("operator SSO: OPENSHIELD_OPERATOR_OIDC_ISSUER is set but AUDIENCE, or both JWKS_URL and " +
+				"KEYS_DIR, are not")
 		}
-		ref, err := identitypkg.NewJWKSRefresher(jwksURL, envDuration("OPENSHIELD_OPERATOR_OIDC_JWKS_INTERVAL", 5*time.Minute))
-		if err != nil {
-			fatal("operator SSO: %v", err)
+		if jwksURL != "" && keysDir != "" {
+			// Two key sources is ambiguous about which one is authoritative, and a deployment that thinks
+			// it rotated keys in the one that is being ignored has a silent trust problem.
+			fatal("operator SSO: set OPENSHIELD_OPERATOR_OIDC_JWKS_URL or _KEYS_DIR, not both")
 		}
-		ref.Start(ctx)
-		// EMPTY ROLE CLAIM, deliberately: this verifier is used only through VerifySubject, and reading a
-		// role out of the token is the defect ZT-7 removed from certificates.
-		v, err := identitypkg.NewOIDCVerifierWithSource(issuer, audience, "", ref.KeyFor)
-		if err != nil {
-			fatal("operator SSO: %v", err)
+		// NO ROLE CLAIM, by construction: the operator constructors do not take one, because reading a role
+		// out of the token is the defect ZT-7 removed from certificates.
+		var v *identitypkg.OIDCVerifier
+		var verr error
+		if jwksURL != "" {
+			ref, rerr := identitypkg.NewJWKSRefresher(jwksURL, envDuration("OPENSHIELD_OPERATOR_OIDC_JWKS_INTERVAL", 5*time.Minute))
+			if rerr != nil {
+				fatal("operator SSO: %v", rerr)
+			}
+			ref.Start(ctx)
+			v, verr = identitypkg.NewOperatorVerifierWithSource(issuer, audience, ref.KeyFor)
+		} else {
+			keys, kerr := identitypkg.LoadOIDCKeys(keysDir)
+			if kerr != nil {
+				fatal("operator SSO: %v", kerr)
+			}
+			v, verr = identitypkg.NewOperatorVerifier(issuer, audience, keys)
+		}
+		if verr != nil {
+			fatal("operator SSO: %v", verr)
 		}
 		srv.SetOperatorOIDC(v)
+		operatorSSOEnabled = true
 		fmt.Fprintf(os.Stderr, "openshield-server: operator SSO ACTIVE (issuer %s). Tokens AUTHENTICATE; "+
 			"authorization still comes from `operator-role set`, so an SSO operator with no record has no "+
 			"access whatever their token claims.\n", issuer)
@@ -615,7 +634,17 @@ func main() {
 				fmt.Fprintf(os.Stderr, "openshield-server: enrollment endpoint on %s\n", addr)
 				var serveErr error
 				if tlsConf != nil {
-					serveErr = srv.ServeHTTPTLS(leaderCtx, addr, tlsConf.ServerConfig())
+					// WHEN OPERATOR SSO IS ON, a client certificate becomes OPTIONAL at the handshake.
+					// Without this the feature is unreachable: an SSO operator has no certificate, so the
+					// mutual-TLS listener refuses them with `tls: certificate required` before the bearer
+					// token is ever read. A presented certificate is still verified against the CA, so
+					// certificate authentication is unchanged and an unknown one is still refused here —
+					// only ABSENCE stops being fatal, becoming a 401 one layer up.
+					cfg := tlsConf.ServerConfig()
+					if operatorSSOEnabled {
+						cfg = tlsConf.ServerConfigOptionalClientCert()
+					}
+					serveErr = srv.ServeHTTPTLS(leaderCtx, addr, cfg)
 				} else {
 					serveErr = srv.ServeHTTP(leaderCtx, addr)
 				}
