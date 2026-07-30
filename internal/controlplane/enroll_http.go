@@ -89,6 +89,11 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// the most sensitive read → admin; the read queue → analyst; the mutating acks → responder.
 		// A higher tier satisfies a lower one, and a legacy `operator` cert ranks as admin (unchanged).
 		mux.Handle("/view", s.requireTier(RoleAdmin, s.ViewHandler()))
+		// SCIM (ZT-7): the identity provider's deprovisioning hook. NOT behind an operator tier — it
+		// authenticates with its own token, because an operator credential that could reach it would let an
+		// analyst deactivate an admin.
+		mux.Handle(scimUsers, s.ScimHandler())
+		mux.Handle(scimUsers+"/", s.ScimHandler())
 		opRead := s.OperatorReadHandler() // one inner mux; the outer mount applies the tier gate per route
 		mux.Handle("/alerts", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/alerts/ack", s.requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)

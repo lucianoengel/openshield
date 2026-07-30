@@ -313,3 +313,25 @@ func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
 	}
 	return operatorAuth{identity: sub, ok: true}
 }
+
+// recordOperatorIdentity notes that an identity EXISTS, without granting it anything.
+//
+// Used by SCIM provisioning. The empty role is the point: `roleRank("")` is 0, so the operator is
+// authorized for nothing until an administrator grants a tier. Recording them anyway is what makes them
+// visible to `operator-role list` and what lets a later revocation be an UPDATE rather than an insert of a
+// row nobody expected.
+//
+// An existing row is left alone apart from clearing a revocation — re-provisioning must not silently
+// downgrade someone who already has a tier.
+func (s *Server) recordOperatorIdentity(ctx context.Context, identity, by string) error {
+	if strings.TrimSpace(identity) == "" {
+		return errors.New("controlplane: no identity")
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
+		 VALUES ($1,'',false,now(),$2)
+		 ON CONFLICT (identity) DO UPDATE SET revoked = false, updated_at = now(),
+		     updated_by = EXCLUDED.updated_by`,
+		identity, by)
+	return err
+}
