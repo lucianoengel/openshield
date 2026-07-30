@@ -598,6 +598,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			{"fleet_control_applied", func() int64 { a, _ := gw.FleetControlCounts(); return a }},
 			{"fleet_control_rejected", func() int64 { _, r := gw.FleetControlCounts(); return r }},
 			{"entity_link_failures", ap.EntityLinkFailures.Load},
+			{"enforcement_audit_dropped", gw.EnforceAuditDropped},
 		}
 		if gw.KillSwitch != nil {
 			degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})

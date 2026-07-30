@@ -74,12 +74,14 @@ type Gateway struct {
 	KillSwitch *core.KillSwitch
 	// fleetControl is kept so its counters can be reported; see FleetControlCounts.
 	fleetControl *intent.FleetControlSubscriber
-	classifier   classifier
-	policy       core.Stage
-	ledger       core.Ledger
-	deadline     time.Duration
-	logger       *slog.Logger
-	now          func() time.Time
+	// enforceAuditDropped counts enforcement-audit appends that failed — the gateway half of R34-7.
+	enforceAuditDropped atomic.Int64
+	classifier          classifier
+	policy              core.Stage
+	ledger              core.Ledger
+	deadline            time.Duration
+	logger              *slog.Logger
+	now                 func() time.Time
 
 	// maxBytes caps how much of a body the worker parses (decompression-bomb
 	// ceiling, D13). Zero lets the worker apply its own default.
@@ -432,8 +434,26 @@ func (g *Gateway) recordEnforcement(ctx context.Context, dec *corev1.Decision, e
 	} else {
 		entry.OutcomeKind = "enforced"
 	}
-	_ = g.ledger.Append(ctx, entry)
+	// NEVER SILENTLY DROP THE ENFORCEMENT-AUDIT APPEND. This used to be `_ = g.ledger.Append(...)`, which
+	// is the one thing the comment above it forbids: an automated action whose record fails to write
+	// leaves no evidence that it happened, and nothing said so.
+	//
+	// The engine's identical path was fixed by R34-7 and the gateway's was not — the same code, one of
+	// them corrected. It matters more here than it looks, because recordSuppression routes through this
+	// function: a kill-switch suppression whose append failed produced exactly the state its own comment
+	// calls out, "a silent kill switch is indistinguishable from a product that has stopped working".
+	if err := g.ledger.Append(ctx, entry); err != nil {
+		g.enforceAuditDropped.Add(1)
+		g.logger.Error("gateway: enforcement-audit append failed (recorded as dropped; the action itself "+
+			"still happened, only the evidence of it is missing)",
+			slog.Any("err", err), slog.String("outcome", entry.OutcomeKind))
+	}
 }
+
+// EnforceAuditDropped is the count of enforcement-audit appends that failed — a non-zero value means some
+// automated-action outcomes, including anything the emergency disable suppressed, are missing from the
+// trail. Mirrors the engine's counter of the same name (R34-7).
+func (g *Gateway) EnforceAuditDropped() int64 { return g.enforceAuditDropped.Load() }
 
 // recordSuppression audits an enforcement the emergency disable prevented (PLAT-9). Recorded
 // INDIVIDUALLY, not merely as switch state: an operator asking "what did we not block during those forty
