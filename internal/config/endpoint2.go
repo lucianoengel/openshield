@@ -74,6 +74,8 @@ var EngineFields = []Field{
 	// ZT-7: refuse a role that exists only in an operator's certificate. The intended END STATE; not the
 	// default only because flipping it before every operator has a row locks a deployment out of its own
 	// control plane, including the admin who would have to fix it.
+	{Key: "OPENSHIELD_SMTP_DECIDE_TIMEOUT", Scope: ScopeBootstrap, Kind: KindDuration, Default: "20s",
+		Description: "How long the mail path waits for a verdict at end-of-DATA when enforcement is on. The reply to the final '.' is the only moment SMTP can refuse a message, so the session is held until the pipeline answers. On timeout the message is ACCEPTED and the fail-open is logged (D17/D18) — a stuck classification must not hold a client at '.' indefinitely, leaving mail neither delivered nor refused."},
 	{Key: "OPENSHIELD_OPERATOR_ROLES_STRICT", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
 		Description: "Refuse operator roles embedded in certificates; require a server-side record (ZT-7). Set once every operator has one — until then a missing record falls back to the certificate and is logged."},
 	{Key: "OPENSHIELD_OBJECT_ENDPOINT", Scope: ScopeBootstrap, Kind: KindString, Default: "",

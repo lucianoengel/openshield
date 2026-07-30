@@ -306,6 +306,21 @@ func main() {
 		if err != nil {
 			fatal(log, "smtp listen", err)
 		}
+		// MAIL FILTERING IS OPT-IN, behind the same switch as every other enforcer (D1: observe-only is
+		// the default that cannot break traffic). With it unset the listener captures and accepts exactly
+		// as before; with it set, a message the policy refuses gets a 5xx at end-of-DATA instead of being
+		// reported after it left.
+		if os.Getenv("OPENSHIELD_ENFORCE") != "" {
+			sl.Decide = smtpFilter(ctx, eng, sstore,
+				envDuration("OPENSHIELD_SMTP_DECIDE_TIMEOUT", 20*time.Second), log)
+			log.Warn("engine: SMTP FILTERING ACTIVE — a refused message is rejected with 550 at "+
+				"end-of-DATA and is NOT delivered. A pipeline error or timeout ACCEPTS the message "+
+				"(fail-open, D17/D18) and says so.",
+				slog.String("listen", smtpAddr))
+		} else {
+			log.Info("engine: SMTP capture only — inspected and recorded, never refused (set " +
+				"OPENSHIELD_ENFORCE to reject on the mail path)")
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

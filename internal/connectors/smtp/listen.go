@@ -46,7 +46,30 @@ type Listener struct {
 	MaxConns    int
 	IdleTimeout time.Duration
 	sem         chan struct{}
+
+	// Decide turns this from a CAPTURE endpoint into a FILTERING one (NIPS: "SMTP is captured and
+	// inspected, not filtered" was the named gap). It is called at end-of-DATA — the only moment SMTP
+	// offers to refuse a message — and returning true rejects it with a 5xx instead of accepting it.
+	//
+	// NIL IS THE DEFAULT AND CHANGES NOTHING (D1, observe-only): every existing deployment keeps
+	// capturing and accepting exactly as before. Filtering is opt-in, like every other enforcer.
+	//
+	// It REPLACES the sink for that message rather than running alongside it. The engine's implementation
+	// runs the full pipeline synchronously to reach a verdict, and calling the sink as well would put the
+	// same message through classify → policy → audit twice — one message, two ledger entries, two alerts.
+	//
+	// FAIL-OPEN IS THE CALLER'S JOB, and it is stated here because the failure is silent otherwise: an
+	// implementation that returns true on its own internal error would block mail because the classifier
+	// was down, which is how a DLP product takes out a mail server. D17/D18 — the engine's hook returns
+	// false when the pipeline errors, and bounds itself with a deadline.
+	Decide func(*Message) bool
+	// rejected counts messages refused by Decide.
+	rejected atomic.Int64
 }
+
+// Rejected reports how many messages were REFUSED at end-of-DATA. Zero when no Decide hook is
+// configured, which is the observe-only default.
+func (l *Listener) Rejected() int64 { return l.rejected.Load() }
 
 // Listen binds a TCP socket at addr and delivers each parsed message to sink.
 func Listen(addr string, sink func(*Message), logger *slog.Logger) (*Listener, error) {
@@ -132,6 +155,9 @@ func (l *Listener) handle(conn net.Conn) {
 	// unterminated flood returns EOF at the ceiling instead of exhausting memory.
 	r := bufio.NewReader(io.LimitReader(conn, maxBody+1))
 	inData := false
+	// decided is set once a Decide hook has handled the message at end-of-DATA, so the delivery at QUIT
+	// (or connection close) does not put the SAME message through the pipeline a second time.
+	decided := false
 	var total int64
 	for {
 		// Per-line idle deadline (slowloris defense): a client that stalls between lines is dropped
@@ -153,7 +179,26 @@ func (l *Listener) handle(conn net.Conn) {
 		if inData {
 			if trimmed == "." {
 				inData = false
-				w("250 2.0.0 queued\r\n")
+				// THE ONLY MOMENT SMTP OFFERS TO REFUSE A MESSAGE. After this reply the client
+				// considers it accepted, so a verdict reached later can report but cannot prevent.
+				if l.Decide != nil {
+					decided = true
+					if m, perr := ParseSession([]byte(transcript.String())); perr != nil {
+						// Unparseable: counted and ACCEPTED, never refused. Refusing what we failed to
+						// understand would make a parser bug look like a policy decision to the sender.
+						l.dropped.Add(1)
+						w("250 2.0.0 queued\r\n")
+					} else if l.Decide(m) {
+						l.rejected.Add(1)
+						// 550 5.7.1 is the policy refusal: permanent, so a conforming sender does not
+						// retry the same content forever, and distinguishable from a 4xx capacity issue.
+						w("550 5.7.1 message refused by policy\r\n")
+					} else {
+						w("250 2.0.0 queued\r\n")
+					}
+				} else {
+					w("250 2.0.0 queued\r\n")
+				}
 			}
 			continue
 		}
@@ -167,13 +212,17 @@ func (l *Listener) handle(conn net.Conn) {
 			w("354 end data with <CRLF>.<CRLF>\r\n")
 		case upper == "QUIT":
 			w("221 2.0.0 bye\r\n")
-			l.deliver(transcript.String())
+			if !decided {
+				l.deliver(transcript.String())
+			}
 			return
 		default:
 			w("250 2.0.0 ok\r\n")
 		}
 	}
-	l.deliver(transcript.String())
+	if !decided {
+		l.deliver(transcript.String())
+	}
 }
 
 // deliver parses the captured transcript and hands the message to the sink; a session that
