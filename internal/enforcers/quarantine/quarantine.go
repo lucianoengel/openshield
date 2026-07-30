@@ -64,6 +64,46 @@ var (
 	_ core.TargetedEnforcer = (*Enforcer)(nil)
 )
 
+// reserveDest picks a destination name inside dstDir that is not already taken, and CLAIMS it atomically.
+//
+// THE BUG THIS FIXES DESTROYED EVIDENCE AND REPORTED SUCCESS. The destination used to be
+// `dstDir/filepath.Base(src)` with an unconditional os.Rename over it. Quarantine two files that share a
+// base name — /finance/customers.csv and /sales/customers.csv, which is the NORMAL case for DLP, where
+// what gets flagged is exactly the recurring names — and the second silently overwrote the first. Both
+// calls returned nil, the ledger recorded two containments, and the quarantine directory held one file.
+// The first file was already moved out of its original location by then, so its content was simply gone,
+// and an investigator opening `customers.csv` would be reading the other one's contents under that name.
+//
+// The claim is made with O_CREATE|O_EXCL rather than a stat-then-rename, because stat-then-rename is a
+// race: two enforcements (or two processes sharing a quarantine directory) can both see the name free.
+// os.Rename then replaces the placeholder we just created, which is exactly what we want — the name is
+// ours before anything moves.
+//
+// The disambiguator is a counter rather than a hash of the source path: an investigator listing the
+// directory should be able to read it. Collisions beyond the cap are an error, not a silent overwrite.
+func reserveDest(dstDir, base string) (string, error) {
+	const maxAttempts = 1000
+	ext := filepath.Ext(base)
+	stem := base[:len(base)-len(ext)]
+	for i := 0; i < maxAttempts; i++ {
+		name := base
+		if i > 0 {
+			name = fmt.Sprintf("%s.%d%s", stem, i, ext)
+		}
+		dst := filepath.Join(dstDir, name)
+		f, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close()
+			return dst, nil
+		}
+		if !os.IsExist(err) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("quarantine: %s already holds %d files named like %q; refusing to overwrite one",
+		dstDir, maxAttempts, base)
+}
+
 // fsMover moves files on the real filesystem into an owner-only quarantine dir.
 type fsMover struct{}
 
@@ -78,17 +118,27 @@ func (fsMover) Move(src, dstDir string) (string, error) {
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		return "", err
 	}
-	dst := filepath.Join(dstDir, filepath.Base(src))
+	dst, err := reserveDest(dstDir, filepath.Base(src))
+	if err != nil {
+		return "", err
+	}
 	if err := os.Rename(src, dst); err != nil {
 		// Rename fails across filesystems; fall back to copy+remove. Read WITHOUT
 		// following a symlink at src: a swapped symlink must not make us copy an
 		// attacker-chosen file into quarantine (D65). Rename itself does not follow
 		// a symlink source; this closes the fallback path's follow.
+		//
+		// The reserved placeholder is REMOVED on every failure below. Left behind it would be a 0-byte
+		// file in the quarantine directory, indistinguishable from a genuinely quarantined empty file —
+		// and it would also consume the un-suffixed name, so the next quarantine of that base name would
+		// be filed as "customers.1.csv" for no reason a reader could work out.
 		data, rerr := safeio.ReadRegularNoFollow(src)
 		if rerr != nil {
+			_ = os.Remove(dst)
 			return "", rerr
 		}
 		if werr := os.WriteFile(dst, data, 0o600); werr != nil {
+			_ = os.Remove(dst)
 			return "", werr
 		}
 		_ = os.Remove(src)
