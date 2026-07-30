@@ -62,6 +62,34 @@ func ledgerStack(t *testing.T, want int) (*Stack, string) {
 		_ = pool.QueryRow(Ctx(t), `SELECT count(*) FROM audit_entries`).Scan(&n)
 		return n >= want
 	})
+
+	// THE ENGINE IS STOPPED BEFORE THE LEDGER IS USED, and leaving it running made this test flaky in a
+	// way that pointed at the product rather than at the test.
+	//
+	// The loop above keeps WRITING each round until the count crosses `want`, so when it finally does,
+	// files from the last round are still in flight. Entries then land AFTER the caller anchors the head
+	// and before it takes the dump — and the restored ledger's head is past its anchor, which
+	// restore-verify correctly reports as "internally consistent but its completeness is NOT anchor-proven".
+	//
+	// That is the right verdict for the data it was given. The bug was that the test kept moving the head
+	// after promising not to. Observed once in CI (run 30579395550) on a commit that only added a test
+	// file to another package, which is how it was identified as a harness race rather than a regression.
+	eng.Stop()
+
+	// And the count must be STABLE afterwards, or the stop did not take and the race is merely narrower.
+	var settled int
+	if err := pool.QueryRow(Ctx(t), `SELECT count(*) FROM audit_entries`).Scan(&settled); err != nil {
+		t.Fatalf("reading the settled ledger size: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	var after int
+	if err := pool.QueryRow(Ctx(t), `SELECT count(*) FROM audit_entries`).Scan(&after); err != nil {
+		t.Fatalf("re-reading the settled ledger size: %v", err)
+	}
+	if after != settled {
+		t.Fatalf("the ledger is still growing after the engine was stopped (%d -> %d); anchoring it now "+
+			"would produce an anchor the head immediately outruns", settled, after)
+	}
 	return stack, work
 }
 
