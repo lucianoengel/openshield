@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -21,7 +22,14 @@ type Server struct {
 	// Logf is optional.
 	Logf func(format string, a ...any)
 
-	listener net.Listener
+	// mu guards addr. Listen runs in its own goroutine — that is the only way to use it, since it blocks
+	// until ctx is done — so ANY caller that then asks where it bound is reading across a goroutine
+	// boundary. The obvious spelling, a plain `listener net.Listener` field read by Addr, was a data race
+	// on two counts: the unsynchronised field itself, and `net.UnixListener.Addr()` racing with the
+	// `Close()` that the ctx watcher performs. Storing the resolved address once, under a lock, removes
+	// both — Addr never touches the listener.
+	mu   sync.RWMutex
+	addr string
 }
 
 // Listen serves until ctx is cancelled. A stale socket file is removed first, so a restart after an unclean
@@ -44,7 +52,9 @@ func (s *Server) Listen(ctx context.Context, socket string) error {
 		_ = ln.Close()
 		return fmt.Errorf("printguard: chmod %s: %w", socket, err)
 	}
-	s.listener = ln
+	s.mu.Lock()
+	s.addr = ln.Addr().String()
+	s.mu.Unlock()
 	go func() { <-ctx.Done(); _ = ln.Close() }()
 	for {
 		conn, err := ln.Accept()
@@ -58,12 +68,11 @@ func (s *Server) Listen(ctx context.Context, socket string) error {
 	}
 }
 
-// Addr reports the bound socket path.
+// Addr reports the bound socket path, or "" before Listen has bound one.
 func (s *Server) Addr() string {
-	if s.listener == nil {
-		return ""
-	}
-	return s.listener.Addr().String()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.addr
 }
 
 func (s *Server) handle(ctx context.Context, conn net.Conn) {
