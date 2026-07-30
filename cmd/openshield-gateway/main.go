@@ -462,14 +462,20 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			fatal(log, "risk nats", err)
 		}
 		defer conn.Close()
+		// Collected as each signed channel is wired, then reported together. Every one of these counters
+		// existed with a comment saying its subject "must be observable" and nothing read any of them
+		// (D418) — the references were discarded at construction, so the numbers were unreachable.
+		var rejections []rejectionCounter
 		if pk := os.Getenv("OPENSHIELD_RISK_PUBKEY"); pk != "" {
 			pub, err := loadEd25519Pub(pk)
 			if err != nil {
 				fatal(log, "risk pubkey", err)
 			}
-			if _, err := gateway.NewRiskSubscriber(riskStore, pub).Subscribe(conn); err != nil {
+			riskSub := gateway.NewRiskSubscriber(riskStore, pub)
+			if _, err := riskSub.Subscribe(conn); err != nil {
 				fatal(log, "risk subscribe", err)
 			}
+			rejections = append(rejections, rejectionCounter{"risk_rejected", riskSub.Rejected.Load})
 			log.Info("gateway: SIGNED risk subscription active (SEC-1/D91)")
 		} else {
 			log.Warn("gateway: OPENSHIELD_RISK_PUBKEY unset — risk continuous-verification inert (unsigned risk is never applied, SEC-1)")
@@ -485,9 +491,11 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			if err != nil {
 				fatal(log, "posture roster", err)
 			}
-			if _, err := gateway.NewPostureSubscriber(postureStore, resolver).Subscribe(conn); err != nil {
+			postureSub := gateway.NewPostureSubscriber(postureStore, resolver)
+			if _, err := postureSub.Subscribe(conn); err != nil {
 				fatal(log, "posture subscribe", err)
 			}
+			rejections = append(rejections, rejectionCounter{"posture_rejected", postureSub.Rejected.Load})
 			log.Info("gateway: SIGNED device-posture subscription active — per-agent keys (SEC-12/D92)")
 		} else {
 			log.Warn("gateway: OPENSHIELD_POSTURE_ROSTER unset — posture channel inert (unsigned/unenrolled posture is never applied, SEC-12)")
@@ -526,6 +534,7 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 			if _, err := responder.SubscribeReports(conn); err != nil {
 				fatal(log, "attestation report subscribe", err)
 			}
+			rejections = append(rejections, rejectionCounter{"attestation_rejected", responder.Rejected.Load})
 			// Automated network enrollment: a device proves its AK genuine-TPM-resident
 			// by credential activation and self-enrolls over the wire (no operator file).
 			enroller := gateway.NewEnrollmentResponder(av)
@@ -567,6 +576,13 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 				fatal(log, "attestation activate serve", err)
 			}
 			log.Info("gateway: ZT-1 attestation transport + network enrollment active")
+		}
+
+		// Report what the signed channels REFUSED. Only when a count moves, so a healthy gateway is
+		// silent and one being probed says so every interval until it stops (D348's discipline).
+		if len(rejections) > 0 {
+			go reportRejections(ctx, log, envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
+				rejections...)
 		}
 	}
 

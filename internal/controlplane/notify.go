@@ -223,3 +223,16 @@ func (s *Server) NotifyUnrouted() int64 {
 	}
 	return 0
 }
+
+// NotifyMissingSink reports rules naming a sink that is not configured.
+//
+// Its sibling above was exposed; this one was not, and it counts the more specific fault. Load validation
+// refuses a routing table naming an unknown sink, so a non-zero value here means the table changed under a
+// running process — the rule matched, the sink it names does not exist, and the notification went nowhere
+// that rule intended. Counted since it was written and read by nothing (D418).
+func (s *Server) NotifyMissingSink() int64 {
+	if r, ok := s.notifier.(*notify.Router); ok && r != nil {
+		return r.MissingSink.Load()
+	}
+	return 0
+}

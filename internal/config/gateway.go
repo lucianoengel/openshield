@@ -43,6 +43,8 @@ var GatewayFields = []Field{
 		Description: "Local break-glass file. While it EXISTS, this host stops ENFORCING but keeps detecting and auditing \u2014 the answer to \"how do I stop this\" when the control plane is unreachable."},
 	{Key: "OPENSHIELD_BREAK_GLASS_POLL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "10s",
 		Description: "How often the break-glass file is checked. Short: this is the emergency path, and a slow one is not one."},
+	{Key: "OPENSHIELD_DISCARD_REPORT_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "1m",
+		Description: "How often the gateway reports what its SIGNED channels REFUSED (risk, posture, attestation). A counter that has not moved is not reported, so a gateway nobody is probing stays silent; a rising count is someone presenting forged or stale material."},
 	{Key: "OPENSHIELD_ENFORCE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Set to any value to ENFORCE. Unset is observe-only (D1) - the default is deliberately the one that cannot break traffic."},
 	{Key: "OPENSHIELD_REDIRECT_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "https://openshield.invalid/coaching",
