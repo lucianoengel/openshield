@@ -389,8 +389,13 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   defaults (`PingInterval=2m` x 2) meant **four minutes** before anything noticed — `IsConnected()` stayed
   true, so no reconnect was attempted and every spool drain timed out while the spool grew 4 -> 76 records.
   You cannot reconnect a connection you do not know is broken. Now 20s x 2 (~40s), and the scenario went
-  from failing at 208s to passing at 66s. **Remaining of the four properties: clock skew, and per-node
-  limits under contention.** Also untested: a whole SEGMENT partitioning and reconnecting together, which
+  from failing at 208s to passing at 66s. **Remaining of the four properties: per-node limits under contention.**
+  Clock skew is DONE (D377) with a narrower result than expected: liveness was already immune (SEC-3 reads
+  the control plane's own receipt time), and beaconing necessarily trusts the endpoint's clock. Only the
+  FUTURE direction is decidable — an event cannot be observed after it was received — and bounding the past
+  as well destroys detection outright, because every event spooled while an agent was offline (D40/D67) is
+  legitimately past-dated (measured: 1 detection to 0). So backward skew, and therefore the beaconing
+  evasion in its most likely form, is NOT closed and needs a time source the endpoint does not control. Also untested: a whole SEGMENT partitioning and reconnecting together, which
   is what the D368 jitter is for.
 - **Reconnect forever: ✅ DONE (D368).** Every long-lived process ran on nats.go's defaults
   (`MaxReconnects=60` x `ReconnectWait=2s` ~= two minutes, then a permanent close with the process still

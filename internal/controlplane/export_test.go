@@ -119,3 +119,14 @@ func (s *Server) InsertFleetTelemetryForTest(t interface{ Fatalf(string, ...any)
 		t.Fatalf("seeding fleet telemetry: %v", err)
 	}
 }
+
+// PlausibleObservationTimeForTest exposes the clock-skew decision so a test can assert it directly.
+//
+// DIRECTLY, because the end-to-end version does not work and the reason is instructive: seeding beaconing
+// flows inserts them in a tight loop, so their RECEIPT times are milliseconds apart and carry no rhythm for
+// the fallback to find. A test asserting "a future-dated beacon is still detected" therefore cannot pass
+// on the fallback — and the first version of it passed anyway, on rows a previous test had left behind.
+// Clearing the table before seeding is what exposed that.
+func PlausibleObservationTimeForTest(ev *corev1.Event, receivedAt time.Time, tolerance time.Duration) (time.Time, bool) {
+	return plausibleObservationTime(ev, receivedAt, tolerance)
+}

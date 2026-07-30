@@ -137,6 +137,12 @@ var ServerFields = []Field{
 	// demotion applies to a token already issued. An issuer without an audience and a JWKS URL is a hard
 	// failure rather than a silent fallback to certificates-only — an operator team that believes SSO is on
 	// should not learn otherwise from a support ticket.
+	// NIPS-6/clock skew: how far into the FUTURE an agent's timestamp may sit before it stops being trusted
+	// for rhythm analysis. It bounds only the future, deliberately — every event spooled while an agent was
+	// offline (D40/D67) legitimately arrives dated hours earlier, so bounding the past destroys beaconing
+	// detection outright.
+	{Key: "OPENSHIELD_CLOCK_SKEW_TOLERANCE", Scope: ScopeBootstrap, Kind: KindDuration, Default: "2m",
+		Description: "How far ahead of this server an agent's event timestamps may be before they are measured by receipt time instead. An event cannot be observed after it was received, so a future timestamp has no benign reading. A malformed value falls back to the default rather than disabling the bound."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_ISSUER", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "OIDC issuer for OPERATOR login (ZT-7). Empty disables SSO; operators then authenticate with client certificates only."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_AUDIENCE", Scope: ScopeBootstrap, Kind: KindString, Default: "",

@@ -67,6 +67,9 @@ func (s *Server) DetectBeaconing(ctx context.Context, rule BeaconRule, now time.
 	if err != nil {
 		return 0, err
 	}
+	// The clock-skew tolerance is read once per sweep, not per event: it is a plausibility bound, and one
+	// that changed mid-sweep would make a rhythm partly measured one way and partly the other.
+	tolerance := SkewTolerance()
 	perSubject := map[string][]beacon.Contact{}
 	for rows.Next() {
 		var payload []byte
@@ -89,9 +92,22 @@ func (s *Server) DetectBeaconing(ctx context.Context, rule BeaconRule, now time.
 		}
 		// The EVENT's observation time, falling back to receipt: a rhythm measured by when we happened to
 		// receive telemetry would be a rhythm of the transport, not of the endpoint.
-		when := at
-		if t := ev.GetObservedAt(); t.IsValid() {
-			when = t.AsTime()
+		//
+		// UNLESS IT IS DATED IN THE FUTURE, which is unambiguous — an event cannot be observed after it
+		// was received — and would otherwise let an endpoint push its own contacts outside the very window
+		// meant to catch them.
+		//
+		// A PAST timestamp is NOT checked, deliberately: every event this product spools while an agent is
+		// offline (D40/D67) legitimately arrives dated hours earlier, so distrusting the past destroys the
+		// detection entirely (measured: 1 detection to 0). Which means an implant that jitters its reported
+		// times BACKWARDS is indistinguishable from an agent that was disconnected, and this detector does
+		// trust the endpoint's clock in that direction. See internal/controlplane/clockskew.go — the limit
+		// is stated there rather than papered over here.
+		when, trusted := plausibleObservationTime(&ev, at, tolerance)
+		if !trusted && ev.GetObservedAt().IsValid() {
+			if ahead := ev.GetObservedAt().AsTime().Sub(at); ahead > tolerance {
+				reportSkewedAgent(ev.GetAgentId(), ahead, tolerance)
+			}
 		}
 		perSubject[subject] = append(perSubject[subject], beacon.Contact{At: when, Destination: dest})
 	}
