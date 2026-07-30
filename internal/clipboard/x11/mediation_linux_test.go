@@ -61,11 +61,27 @@ func copyWith(t *testing.T, display, text string) *exec.Cmd {
 
 // pasteWith runs a real `xclip -o` — a SEPARATE process asking for the clipboard. What it receives is the
 // enforcement outcome.
+// BOUNDED, and it was not. The comment above used to end "a refused conversion makes xclip exit non-zero
+// with no output", which is one of the two ways a refusal appears. The other is NO RESPONSE AT ALL: an X11
+// selection owner that does not answer a conversion request leaves the requester waiting, and `xclip -o`
+// waits forever. So the DENY assertion — "a refused paste receives nothing" — was implemented as "block
+// until something else gives up", and that something else was Go's 10-minute test timeout.
+//
+// Observed, not theorised: this package HUNG a full-module coverage sweep with `xclip -selection clipboard
+// -o` blocked, and then reported 0% — which reads exactly like "skipped, needs a display". It does not skip
+// here; Xvfb and xclip are both present. It hangs.
+//
+// A denial is now "no content within pasteTimeout" — the same observation with a bound on it. Generous
+// relative to a working conversion (milliseconds), so it cannot turn a slow ALLOW into a false DENY.
+const pasteTimeout = 5 * time.Second
+
 func pasteWith(t *testing.T, display string) string {
 	t.Helper()
-	c := exec.Command("xclip", "-selection", "clipboard", "-o")
+	ctx, cancel := context.WithTimeout(context.Background(), pasteTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-o")
 	c.Env = append(os.Environ(), "DISPLAY="+display)
-	out, _ := c.Output() // a refused conversion makes xclip exit non-zero with no output
+	out, _ := c.Output() // refused: non-zero exit with no output, or no answer at all and we time out
 	return string(out)
 }
 
