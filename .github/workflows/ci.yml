@@ -386,6 +386,12 @@ jobs:
           uname -r
       - name: compile the privileged test binaries as the build user
         run: |
+          # mkdir FIRST: `go build -o DIR ./cmd/...` requires DIR to exist, and fails with
+          # "cannot write multiple packages to non-directory" when it does not. This step passed locally
+          # only because the directory happened to exist there from an earlier command — the job script
+          # itself had never been run as written, which is the gap between "I verified the tests" and
+          # "I verified the job".
+          mkdir -p /tmp/osbin
           go test -c -o /tmp/openmon.test ./internal/agent/openmon/
           go test -c -o /tmp/dnsredirect.test ./internal/dnsredirect/
           go build -o /tmp/osbin ./cmd/...
