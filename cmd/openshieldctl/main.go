@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/cli"
@@ -249,6 +250,19 @@ func (f *flags) parse(args []string) error {
 		next := func() (string, error) {
 			if i+1 >= len(args) {
 				return "", fmt.Errorf("%s needs a value", a)
+			}
+			// A VALUE THAT LOOKS LIKE A FLAG IS A MISSING VALUE, and saying so matters more here than in
+			// most CLIs. Every flag this parser knows takes a value, and none of those values legitimately
+			// begins with "--" (a DSN, a pseudonymous subject, an event id, a path, an RFC3339 time).
+			//
+			// Without this check, `openshieldctl timeline --subject --event` set subject to the literal
+			// string "--event", consumed both tokens, and returned NO ERROR. The query then ran against a
+			// subject that cannot exist and printed an empty timeline — and an empty timeline from an audit
+			// tool reads as "this subject did nothing", which is the one answer it must never invent (D31:
+			// a gap must never be silent). The sibling parser in this same binary, parseBackupFlags,
+			// already refuses to swallow a following flag.
+			if strings.HasPrefix(args[i+1], "--") {
+				return "", fmt.Errorf("%s needs a value, got the flag %q", a, args[i+1])
 			}
 			i++
 			return args[i], nil
