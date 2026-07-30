@@ -68,6 +68,27 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_entity_resolve_failures_total", "Entity-graph writes that failed — a non-zero value means some device or user is NOT in the graph, so cross-domain correlation cannot join on it and an attack spanning that entity surfaces as separate incidents (XDR-1).", s.EntityResolveFailures.Load()},
 			{"openshield_decision_contract_violations_total", "Decisions REFUSED for not satisfying the decision contract (D350) — an action outside the closed set, an absent or out-of-range confidence, or no identifying policy. A non-zero value means an enrolled agent is sending decisions this build cannot reason about: a version skew, or a compromised agent attempting to forge severity.", s.DecisionContractViolations.Load()},
 			{"openshield_retention_record_failures_total", "Retention/purge outcomes that could not be recorded — the purge may have run, but the compliance evidence that it ran is missing (T-013).", s.RetentionRecordFailures.Load()},
+
+			// ELEVEN MORE COUNTERS THAT WERE INCREMENTED AND RENDERED BY NOTHING — the exact defect the
+			// SIEM-4/9 block above records, recurring in every counter added since. Found by asking the
+			// knowledge graph which functions nothing calls: ScimProvisioned, OperatorRoleChanges and
+			// IngestRepairs came back with no callers at all, and the sweep that followed found the rest.
+			//
+			// Most of these are FAILURE counters, which is what makes it matter. A playbook that fails,
+			// an ITSM ticket that is never opened, a correlation that does not run — each increments a
+			// number nobody can read, so the system's "never silent" property is exactly as absent here
+			// as it was there, and invisible for the same reason: the counter LOOKS present in the code.
+			{"openshield_playbook_failures_total", "Playbook executions that failed (SOAR-6) — a playbook that silently does nothing is indistinguishable from one that ran and found nothing to do.", PlaybookFailures.Load()},
+			{"openshield_correlation_failures_total", "Alert correlations that could not be computed (XDR-2) — a non-zero value means incidents that should have been joined were not, and an attack spanning them reads as unrelated noise.", CorrelationFailures.Load()},
+			{"openshield_itsm_failures_total", "Ticket creations or status polls that failed (SOAR-8) — the incident exists here and has no ticket where the responders are looking.", ITSMFailures.Load()},
+			{"openshield_approval_expiry_failures_total", "Four-eyes approvals whose expiry could not be applied — an approval that outlives its window is a standing authorisation nobody granted.", ApprovalExpiryFailures.Load()},
+			{"openshield_beacon_failures_total", "Beaconing analyses that failed to complete — the detector reports nothing found, which looks the same as nothing being there.", BeaconFailures.Load()},
+			{"openshield_ingest_repairs_total", "Times the telemetry consumer had to be rebuilt (PLAT-10) — evidence a broker lost its state, which an operator wants even though the product recovered by itself.", s.IngestRepairs()},
+			{"openshield_ingest_repair_failures_total", "Consumer rebuilds that themselves failed — telemetry is not being ingested and the self-healing did not heal.", s.IngestRepairFailures()},
+			{"openshield_scim_provisioned_total", "Operator identities recorded through SCIM (ZT-7).", ScimProvisioned()},
+			{"openshield_scim_deprovisioned_total", "Operators deactivated by the identity provider through SCIM (ZT-7) — the leaver half of joiner/mover/leaver, and the number an auditor asks for.", ScimDeprovisioned()},
+			{"openshield_operator_role_changes_total", "Operator role grants and revocations applied by this process — privilege changes are exactly what an audit reviews.", OperatorRoleChanges()},
+			{"openshield_skewed_events_total", "Events rejected for an implausible future timestamp — a non-zero value means an endpoint's clock is wrong or an agent is back-dating, and either way its telemetry is not where the timeline puts it.", SkewedEvents()},
 		}
 		// LISTENER REFUSALS, appended only when a listener is actually running. These count what was
 		// turned away BEFORE it became a countable event, so they cannot be derived from the ingest
