@@ -2804,3 +2804,64 @@ The unreachable set is still 9, and still the same 9 — three test-only guards,
 spikes, one `!linux`-gated. Everything added across D365–D380 (objectstore, the SCIM and operator-role
 surfaces, clock skew, ingest healing, transport resilience) is inside the `./cmd/...` closure. The guard
 that would have caught a new unwired feature had nothing to report, which is the outcome it is for.
+
+---
+
+## Round 52 (D381–D383): "it's gated" was doing too much work
+
+The 52.7% report said the remaining zeros were environment-gated and left it there. Pressed on whether
+that was really the end of it, every one of the excuses turned out softer than it looked — and three of
+them were hiding defects rather than merely hiding code.
+
+### The excuses, and what each was covering for
+
+| Claim | What was actually true |
+| --- | --- |
+| "root-gated, runs on the VM" | **Ran nowhere.** 12 tests — inline `DENY_EXEC`, the open gate's EPERM, both fail-open paths, application whitelisting, mount-scope refusal — executed only when somebody remembered. Now a CI job, verified on the VM first. |
+| "unmeasurable" | **We SIGKILLed the parser.** `exec.CommandContext` kills on cancellation, pre-empting `Worker.Close` entirely. 0% → 75.6%. |
+| "root-gated" (dnsredirect) | Ran nowhere **and was broken** — conntrack, below. |
+| "needs a display" (clipboard/x11) | **Does not skip. Hangs**, for the full 10-minute test timeout, and reports 0% — which reads exactly like a skip. |
+
+GitHub runners are full VMs with passwordless sudo. The privileged gating was never about CI being unable;
+it was about nobody having wired it.
+
+### The conntrack one is the one worth remembering
+
+`internal/dnsredirect` passed test-by-test, passed the FIRST package run under real root, and failed the
+next — a different test each time, always `connection refused`.
+
+A nat REDIRECT decision is cached **per flow**, and removing the rule does not flush the entries it made; a
+UDP conntrack entry outlives the test by ~30s. A later query whose ephemeral source port collided with an
+earlier one was still DNAT'd to a resolver port that had since closed. **The damage was done by the previous
+run**, which is why nothing in the current one explained it and why a single test always passed.
+
+First fix — clearing both rule chains — was necessary, correct, and did not help: the leftover was never a
+rule. Fixed by giving each test its own loopback upstream, so no stale tuple can match. Four consecutive
+clean runs where it previously failed two in three.
+
+### And the measurement itself was the wrong measurement
+
+| | Integration only | Unit + integration |
+| --- | --- | --- |
+| total | 55.2% | **70.2%** |
+| packages at 0% | 4 | **0** |
+| under 50% | — | 7 |
+| 85%+ | — | 43 of 86 |
+
+`internal/dnssink` reads 0% on the integration run and 72.5% on its own tests. A number that calls that
+package untested is not measuring what its reader thinks.
+
+### What is still understated, and it is structural
+
+The merged figure covers unit + integration. It does NOT include the privileged runs, because those happen
+under `sudo` in a separate job that emits no coverage. So `internal/agent/openmon` (11.2%),
+`cmd/openshield-agent` (18.6%), `internal/agent/execmon` (30.7%), `internal/dnsredirect` (39.3%) and
+`internal/clipboard/x11` (20.2%) are all reported below what is actually exercised — their tests run, just
+not in a run that is measured.
+
+Making the kernel job emit `GOCOVERDIR` and merging three datasets is the honest completion of this, and it
+is not done.
+
+**The genuinely low and NOT gated:** `internal/controlplane` at 49.6% — the largest package in the tree and
+the one an operator's whole surface lives in — and `internal/printguard` at 46.4%. Those are the real work
+list, and neither has an excuse.
