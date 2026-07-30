@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,20 +32,73 @@ func requireX(t *testing.T) {
 	}
 }
 
+// KILLING THE CHILD IS NOT ENOUGH, and the cost of learning that was two CPU cores pinned at 100% for an
+// hour on the developer's workstation.
+//
+// `xclip` on PATH here is a SHELL WRAPPER that sets LD_LIBRARY_PATH and execs the real binary. Kill the
+// process the way `cmd.Process.Kill()` does — one pid, the direct child — and anything that has not yet
+// been replaced by the exec, or that the exec'd binary itself spawned, survives. It survives ORPHANED, with
+// its parent gone, and then Xvfb is killed by this very cleanup and the orphan spins forever on a dead X
+// connection. Two of them were found at PPID 1 having each burned 62 minutes of CPU in 63 minutes of
+// wall-clock — a busy loop, not a wait.
+//
+// So every child is put in its OWN PROCESS GROUP and the whole group is signalled. That is correct
+// regardless of whether the wrapper had exec'd yet, and regardless of what the real binary forks.
+//
+// It leaked from FAILING runs specifically, which is the worst case: a red test that also wedges the
+// machine it ran on is one people stop running.
+func setpgid(c *exec.Cmd) *exec.Cmd {
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return c
+}
+
+// killGroup signals the process GROUP, then the process, then reaps. Every step is best-effort: the group
+// may already be gone, and a cleanup that failed loudly on an already-dead child would turn tidy teardown
+// into test noise.
+func killGroup(c *exec.Cmd) {
+	if c == nil || c.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+	_ = c.Process.Kill()
+	_, _ = c.Process.Wait()
+}
+
 func startX(t *testing.T, display string) {
 	t.Helper()
-	xvfb := exec.Command("Xvfb", display, "-screen", "0", "640x480x8")
+	xvfb := setpgid(exec.Command("Xvfb", display, "-screen", "0", "640x480x8"))
 	if err := xvfb.Start(); err != nil {
 		t.Skipf("could not start Xvfb: %v", err)
 	}
-	t.Cleanup(func() { _ = xvfb.Process.Kill(); _, _ = xvfb.Process.Wait() })
+	// Registered FIRST, so it runs LAST: t.Cleanup is LIFO, and every xclip must be gone before the display
+	// it is talking to disappears. Reverse the order and each surviving client is handed a dead connection,
+	// which is precisely the busy loop described above.
+	t.Cleanup(func() { killGroup(xvfb) })
 	time.Sleep(800 * time.Millisecond)
 }
+
+// KNOWN RED ON ONE WORKSTATION, AND DELIBERATELY LEFT THAT WAY.
+//
+// requireX checks that Xvfb and xclip EXIST, which is not the same as "this X environment can carry a
+// clipboard". On the luciano-desktop `coder` account, `xclip` resolves to a wrapper under ~/.local/x11 that
+// starts fine but cannot complete a selection transfer, so both tests here fail with empty content —
+// which reads exactly like "the mediator refused a paste it should have allowed". It is not a product
+// failure: the same tests PASS with the distribution's xclip on the rooted VM.
+//
+// AN ENVIRONMENT PREFLIGHT WAS TRIED AND REVERTED, and the reason is worth keeping. A probe that ran plain
+// xclip against plain xclip and skipped when the round trip failed looked airtight — no product code in
+// the path, so it could not mask a real bug. In practice the probe itself was unreliable on a cold Xvfb:
+// across five VM runs it skipped TestMediatorEnforcesPerDestination three times, a test that passes. A
+// flaky gate that SKIPS is worse than the red test it replaces, because a skip is invisible and a failure
+// is not. Retrying against a 12-second deadline did not fix it.
+//
+// So the honest state is recorded here rather than papered over with a gate that lies: verify this package
+// on the VM, and treat a workstation failure as environmental until a VM run says otherwise.
 
 // copyWith runs a real `xclip -i`, which OWNS the selection until something takes it away.
 func copyWith(t *testing.T, display, text string) *exec.Cmd {
 	t.Helper()
-	c := exec.Command("xclip", "-selection", "clipboard", "-i")
+	c := setpgid(exec.Command("xclip", "-selection", "clipboard", "-i"))
 	c.Env = append(os.Environ(), "DISPLAY="+display)
 	in, err := c.StdinPipe()
 	if err != nil {
@@ -53,9 +107,12 @@ func copyWith(t *testing.T, display, text string) *exec.Cmd {
 	if err := c.Start(); err != nil {
 		t.Fatalf("xclip -i: %v", err)
 	}
+	// Registered BEFORE the writes, not after. A t.Fatal between Start and Cleanup — which is exactly what
+	// a failing assertion does — would otherwise leave this process running with nothing scheduled to
+	// reap it. The leak was found after a run in which these tests FAILED.
+	t.Cleanup(func() { killGroup(c) })
 	_, _ = in.Write([]byte(text))
 	_ = in.Close()
-	t.Cleanup(func() { _ = c.Process.Kill(); _, _ = c.Process.Wait() })
 	return c
 }
 
@@ -79,9 +136,15 @@ func pasteWith(t *testing.T, display string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), pasteTimeout)
 	defer cancel()
-	c := exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-o")
+	c := setpgid(exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-o"))
 	c.Env = append(os.Environ(), "DISPLAY="+display)
+	// CommandContext's default cancel kills ONE pid. Through the wrapper script that is not necessarily the
+	// process doing the blocking, so the timeout could fire, Output could return, and the real xclip could
+	// carry on waiting on a selection owner that will never answer.
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+	c.WaitDelay = time.Second
 	out, _ := c.Output() // refused: non-zero exit with no output, or no answer at all and we time out
+	killGroup(c)         // belt and braces: nothing from this paste outlives the call
 	return string(out)
 }
 
