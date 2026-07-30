@@ -266,7 +266,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reportDiscards(ctx, log, "dns", time.Minute,
+			reportDiscards(ctx, log, "dns", envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
 				discardCounter{"rate_limited", dl.RateLimited},
 				discardCounter{"unparsed", dl.Dropped})
 		}()
@@ -319,7 +319,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reportDiscards(ctx, log, "smtp", time.Minute,
+			reportDiscards(ctx, log, "smtp", envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
 				discardCounter{"unparsed_sessions", sl.Dropped},
 				discardCounter{"refused_connections", sl.Refused})
 		}()
@@ -712,7 +712,10 @@ func main() {
 		// resubmitted — and it is bounded because the keys are whatever the host opens.
 		suppress := prefilter.NewPathSuppressor(
 			envDuration("OPENSHIELD_GATE_ASYNC_TTL", 0), 0, envInt("OPENSHIELD_GATE_ASYNC_MAX", 0))
-		gateAsync := make(chan *corev1.Event, 256)
+		// THE DEPTH IS CONFIGURABLE, and it needs to be for two reasons. A deployment on a busy fileserver
+		// may want more headroom than a laptop; and a queue whose overflow cannot be reached is an overflow
+		// path that gets written once and never exercised again.
+		gateAsync := make(chan *corev1.Event, envInt("OPENSHIELD_GATE_ASYNC_QUEUE", 256))
 		var gateAsyncDropped atomic.Int64
 		submitAsync := func(path string) {
 			if !suppress.Admit(path) {
@@ -737,6 +740,28 @@ func main() {
 				gateAsyncDropped.Add(1)
 			}
 		}
+		// REPORTED WHILE RUNNING, not only at shutdown — which is all these counters used to do.
+		//
+		// Every one of them fires under CONTENTION, which is exactly when nobody is going to stop the
+		// process to find out: a busy endpoint dropped gate audit rows (decisions that are NOT in the
+		// ledger, against D358), skipped full classification of gated opens, and declined opens at the
+		// suppression ceiling — silently, for as long as it stayed up. A process that is SIGKILLed or
+		// crashes never reported them at all, so the load that caused the loss was also the reason the
+		// report never arrived.
+		//
+		// The listeners got this in D348 and the gate did not. Same mechanism, same rule: a healthy engine
+		// says nothing, one that starts discarding says so every interval until it stops.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reportDiscards(ctx, log, "open-gate", envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
+				discardCounter{"audit_rows_dropped", gateAuditDropped.Load},
+				discardCounter{"unclassified_queue_full", gateAsyncDropped.Load},
+				discardCounter{"unclassified_suppressor_full", suppress.Saturated},
+				discardCounter{"suppressions_abandoned", suppress.Abandoned},
+			)
+		}()
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

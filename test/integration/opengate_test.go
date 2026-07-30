@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -273,3 +274,72 @@ import rego.v1
 strong if { some h in input.classification; h.confidence >= 0.9 }
 decision := {"action":"BLOCK","reason":"checksum-backed identifier in an opened file","confidence":0.95} if { strong }
 decision := {"action":"ALLOW","reason":"nothing detected","confidence":0.5} if { not strong }`
+
+// TestTheGateSaysSoWHILEItIsDiscardingUnderLoad is the per-node contention property — the last of the four
+// the enterprise gap assessment named as unproven.
+//
+// THE GATE'S DISCARD COUNTERS WERE ONLY EVER LOGGED AT SHUTDOWN. Every one of them fires under CONTENTION,
+// which is precisely when nobody is going to stop the process to find out: a busy endpoint dropped gate
+// AUDIT ROWS — decisions that are therefore not in the ledger, against D358 — skipped full classification
+// of gated opens, and declined opens at the suppression ceiling, silently, for as long as it stayed up. A
+// process SIGKILLed or crashing never reported them at all, so the load that caused the loss was also the
+// reason the report never arrived.
+//
+// The listeners got continuous discard reporting in D348. The gate did not, and nothing noticed because
+// nothing had ever put the gate under load.
+//
+// The queue is set to ONE here so the overflow is reachable. An overflow path that cannot be reached in a
+// test is one that gets written once and is never exercised again.
+func TestTheGateSaysSoWHILEItIsDiscardingUnderLoad(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+	sock := filepath.Join(work, "open.sock")
+
+	eng := Start(t, "openshield-engine", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_WATCH_DIRS=" + t.TempDir(),
+		"OPENSHIELD_OPEN_IPC_SOCKET=" + sock,
+		// A queue of one, and a report every second so the assertion is about the RUNNING process rather
+		// than about shutdown.
+		"OPENSHIELD_GATE_ASYNC_QUEUE=1",
+		"OPENSHIELD_DISCARD_REPORT_INTERVAL=1s",
+	})
+	eng.WaitForOutput("open-verdict IPC ACTIVE", 90*time.Second)
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// A burst of DISTINCT paths, so suppression does not absorb them and the queue is what fills. Each one
+	// still gets a verdict — the gate answers every open, always — but most cannot be queued for full
+	// classification.
+	prefix := []byte("nothing of interest here\n")
+	for i := 0; i < 200; i++ {
+		p := filepath.Join(work, fmt.Sprintf("burst-%d.csv", i))
+		if err := os.WriteFile(p, prefix, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if v := askOpenGate(t, sock, p, prefix); v != 0 {
+			t.Fatalf("a clean file was DENIED (verdict %d) — the gate must fail open, not refuse under "+
+				"load\n%s", v, eng.Output())
+		}
+	}
+
+	// THE ENGINE SAYS SO, WHILE IT IS STILL RUNNING. Not at shutdown, which is what it used to do.
+	Eventually(t, 60*time.Second, "the engine to report that the open gate is discarding", func() bool {
+		return contains(eng.Output(), "open-gate") && contains(eng.Output(), "DISCARDING")
+	})
+
+	// AND EVERY OPEN STILL GOT A VERDICT. Dropping the async classification is a loss of DEPTH, never of
+	// the decision itself — an endpoint under load that started refusing opens, or hanging them, would be
+	// a far worse failure than one that classified less thoroughly.
+	if contains(eng.Output(), "panic") {
+		t.Fatalf("the engine panicked under gate load\n%s", eng.Output())
+	}
+}

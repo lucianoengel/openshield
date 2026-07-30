@@ -389,7 +389,15 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   defaults (`PingInterval=2m` x 2) meant **four minutes** before anything noticed — `IsConnected()` stayed
   true, so no reconnect was attempted and every spool drain timed out while the spool grew 4 -> 76 records.
   You cannot reconnect a connection you do not know is broken. Now 20s x 2 (~40s), and the scenario went
-  from failing at 208s to passing at 66s. **Remaining of the four properties: per-node limits under contention.**
+  from failing at 208s to passing at 66s. **All four of the enterprise assessment's unproven properties are now closed** — partition (D369),
+  offline-queue drain (D367/D370), clock skew (D377, narrowly — see below), and per-node limits under
+  contention (D378). D378's finding: the file-open gate's three discard counters — dropped AUDIT ROWS
+  (decisions not in the ledger, against D358), unclassified gated opens, and suppressor-declined opens —
+  were logged only at `ctx.Done()`. Every one fires under contention, which is exactly when nobody stops the
+  process to look, and a SIGKILLed or crashed engine never reported at all. Now on the existing
+  `reportDiscards` mechanism the listeners got in D348. *Residual:* it makes the loss visible, not
+  preventable; dropped audit rows are not recoverable (the counter says how many, not which); and the engine
+  still has no metrics endpoint by deliberate choice, so a scraper reads the log.
   Clock skew is DONE (D377) with a narrower result than expected: liveness was already immune (SEC-3 reads
   the control plane's own receipt time), and beaconing necessarily trusts the endpoint's clock. Only the
   FUTURE direction is decidable — an event cannot be observed after it was received — and bounding the past

@@ -104,6 +104,13 @@ var EngineFields = []Field{
 		Description: "Sandboxed workers RESERVED for file-open gate verdicts (B2). 0 means the gate's in-flight bound. Reserved rather than shared, and the difference is not capacity: the gate's async tier classifies the whole file, that classification opens the file, and THAT open is gated too — so a nested decision needs a worker while the async work holds one. Sharing a pool means the gate times out and fails open under exactly the load it caused. Only allocated when the gate is enabled."},
 	{Key: "OPENSHIELD_GATE_ASYNC_TTL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "30s",
 		Description: "How long after a gated open is fully classified the same PATH is not re-classified (B2). This suppression is what stops the async tier feeding itself: the classification's own open is still DECIDED, it is simply not resubmitted. A repeat open inside the window gets a fresh verdict but not a fresh classification — the file has not changed. Do not set this to zero; the cycle it breaks ends in a host full of processes stopped in uninterruptible permission windows."},
+	// The DEPTH of the async classification queue, as opposed to the suppression ceiling below. Overflow is
+	// not fatal — the inline verdict was already given — but it means those files were seen only through
+	// their bounded prefix, which is why the overflow is counted and reported while running.
+	{Key: "OPENSHIELD_GATE_ASYNC_QUEUE", Scope: ScopeBootstrap, Kind: KindInt, Default: "256",
+		Description: "Depth of the file-open gate's async full-classification queue. When it fills, gated opens are classified from their inline prefix only, and the shortfall is counted and reported."},
+	{Key: "OPENSHIELD_DISCARD_REPORT_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "1m",
+		Description: "How often the engine reports counters for input it is DISCARDING (listeners and the open gate). A counter that has not moved is not reported, so a healthy engine is silent."},
 	{Key: "OPENSHIELD_GATE_ASYNC_MAX", Scope: ScopeBootstrap, Kind: KindInt, Default: "4096",
 		Description: "Ceiling on paths tracked for that suppression (B2). Bounded because the keys are whatever the host opens, and an unbounded map here is a memory primitive in the process the gate depends on. At the ceiling, submissions are DECLINED rather than evicting a live entry — evicting one would re-arm the cycle — so a saturated cache is a counted detection gap, reported on shutdown."},
 	{Key: "OPENSHIELD_EXEC_IPC_SOCKET", Scope: ScopeBootstrap, Kind: KindSocketPath, Default: "",
