@@ -2880,6 +2880,10 @@ absent, naming which packages are being understated and by how much.
 
 ### The work list, with every excuse now spent
 
+> **The table below is WRONG and is kept as written. See Round 53.** The 71.1% headline and the
+> `internal/controlplane` row are artefacts of a measurement taken with the database down. Corrected figures
+> are 77.2% overall and 76.9% for `controlplane`. The row that survived is `printguard`.
+
 Three packages under 50%, and one of them does not count:
 
 | Package | | |
@@ -2891,3 +2895,80 @@ Three packages under 50%, and one of them does not count:
 46 of 87 packages sit above 85%. So the answer to "is there more that can be tested" was yes, and it was
 mostly not more TESTS — it was measuring the ones that already existed, and finding that four of them
 hung, were broken, or ran nowhere while looking green.
+
+## Round 53 (D386): the measurement made the same mistake it was built to find
+
+The work list above named `internal/controlplane` — the largest package in the tree — as one of two with no
+excuse, at 49.6%. That was not true. It is 76.9%.
+
+The tell was in the sweep's own log, and I had read past it:
+
+```
+ok  github.com/lucianoengel/openshield/internal/controlplane  0.933s  coverage: 6.0% of statements in ./...
+```
+
+Nought-point-nine seconds. That package takes **a hundred seconds** when it can reach a database. I had
+removed the `osdev-pg` container before starting the sweep, so every Postgres-backed test skipped, and the
+merged report attributed the resulting hole to the tests rather than to the run. `internal/controlplane/scim.go`
+read as **nineteen functions at 0%** — code written, tested and mutation-verified the same day.
+
+This is precisely the error class the whole exercise had spent a day finding elsewhere: *a dependency absent,
+the result read as "untested"*. It is what made twelve root-gated tests look like they had no coverage, and
+what made `internal/dnsredirect` look like dead weight. Committing it inside the tool built to prevent it is
+worth recording rather than quietly fixing, because the failure is not carelessness about Postgres — it is
+that **a measurement which cannot reach its dependencies reports a smaller number instead of an error**.
+
+`scripts/coverage-all.sh` now probes `127.0.0.1:55432` and refuses to run without it, and passes
+`OPENSHIELD_REQUIRE_POSTGRES=1` so a missing database is a test FAILURE rather than a skip. The same script
+already refused to report a zero-profile integration run and a parse yielding no rows; this is the third
+instance of one rule — *when the measurement is degraded, say so instead of publishing the degraded number*.
+
+**Corrected, all three datasets merged (unit with a database + integration + privileged):**
+
+| | before | corrected |
+| --- | --- | --- |
+| overall | 71.1% | **77.2%** |
+| `internal/controlplane` | 49.6% | **76.9%** |
+
+| under 50% | 50–70% | 70–85% | 85%+ |
+| --- | --- | --- | --- |
+| 2 | 12 | 26 | 47 |
+
+### What survived: a wire protocol with no tests at all
+
+`internal/printguard` was the one row on the old work list that was real, and the reason is starker than a
+percentage. It had **no test files**. Its 46.4% was entirely incidental — integration tests driving it from
+the outside, never once exercising a malformed frame.
+
+It is the CUPS filter's IPC: 332 lines that decode a frame wrapping *a document from anywhere*, running in
+the spooler's chain where a crash is a failed print job. Its own package comment invokes `execipc`'s
+discipline — "lengths validated BEFORE allocation" — and `execipc` has a fuzzer. This had nothing.
+
+Now 88.4%, and the tests were checked against six mutants rather than trusted:
+
+| mutation | killed by |
+| --- | --- |
+| `ReadResponse` accepts an unknown verdict byte | `TestResponseRoundTripAndRejection` |
+| the job-length bound is removed | `TestDeclaredLengthIsCheckedBeforeAllocating` |
+| the metadata-field bound is removed | same |
+| a failed evaluation is answered as ALLOW | `TestAnEvaluationFailureIsAnErrorNotAnAllow` |
+| the response-id cross-talk guard is removed | `TestAMismatchedResponseIDIsRefused` |
+| the stale socket is not unlinked on restart | `TestAStaleSocketDoesNotWedgeARestart` |
+
+Two of those are load-bearing in a way worth naming. **An unknown verdict byte must be an error**: read
+permissively as "not deny, therefore allow", any corruption or version skew of that single byte silently
+disables print control while still looking like a decision. And **a failed evaluation must be dropped, not
+answered**: the filter does end up allowing the job — that is the documented fail-open — but it must arrive
+there through an *error*, so the failure is visible rather than laundered into a verdict that reads exactly
+like a considered allow.
+
+The job-length test declares two sizes deliberately. `0xFFFFFFFF` shows what the bound is really preventing
+— a peer-supplied length is an allocation primitive. `MaxJobBytes+1` is what makes the bound's *removal*
+detectable, because a decoder without it allocates 8 MiB, hits EOF, and reports a truncated frame instead of
+an oversize one. A test that only used the absurd value would have made the mutant allocate 4 GiB to prove
+the point.
+
+Both decoders also gained fuzzers, wired into CI's existing fuzz step at the same 100,000-execution budget as
+`openipc`. The request fuzzer asserts more than "does not panic": anything that decodes must respect the
+bounds the decoder claims to enforce, and must re-encode — a value that cannot be written back is one the
+decoder invented.

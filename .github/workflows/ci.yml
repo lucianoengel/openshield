@@ -222,6 +222,9 @@ jobs:
             go test -run '^$' -fuzz "^${t}$" -fuzztime=100000x ./internal/agent/openipc/
             # See the note above: ~250 execs/sec here because the test binary links the pipeline.
             go test -run '^$' -fuzz "^${t}$" -fuzztime=3000x ./internal/agent/execipc/
+            # The print filter decodes a frame wrapping a document from anywhere, in the spooler's chain
+            # where a crash is a failed print job. Same shape as openipc, same budget.
+            go test -run '^$' -fuzz "^${t}$" -fuzztime=100000x ./internal/printguard/
           done
 
   ledger:

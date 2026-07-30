@@ -38,9 +38,33 @@ echo "output: $OUT"
 
 echo
 echo "== unit tests =="
-# -coverpkg=./... so a package's tests count toward every package they exercise, which is what makes the
-# merge meaningful. The per-package line printed here is NOT the per-package figure — covdata below is.
-go test -cover -coverpkg=./... ./... -args -test.gocoverdir="$OUT/unit" >"$OUT/unit.log" 2>&1 || {
+# OPENSHIELD_REQUIRE_POSTGRES=1 IS NOT OPTIONAL HERE, and leaving it out produced a wrong headline.
+#
+# Most of internal/controlplane's tests need a database and SKIP without one. Measured with Postgres down,
+# that package ran in 0.9s instead of ~90s and contributed 6% — and the merged report then named it, at
+# 49.6%, as one of two packages "with no excuse". It was an artefact of the measurement, not a gap in the
+# tests, and it is the same mistake this whole exercise kept finding elsewhere: a dependency absent, the
+# result read as "untested".
+#
+# With the flag, a missing database is a hard FAILURE rather than a silent skip. A coverage run that cannot
+# reach its dependencies must say so, not quietly report a smaller number.
+if ! command -v podman >/dev/null 2>&1 || ! (exec 3<>/dev/tcp/127.0.0.1/55432) 2>/dev/null; then
+	cat >&2 <<'EOF'
+
+== NO DATABASE ON 127.0.0.1:55432 ==
+
+internal/controlplane, internal/store and internal/xdr need one; without it their tests skip and this run
+will understate them badly (controlplane drops from ~90s of tests to under a second). Start one first:
+
+    podman run -d --rm --name openshield-dev-pg \
+      -e POSTGRES_USER=openshield -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=openshield \
+      -p 127.0.0.1:55432:5432 docker.io/library/postgres:16
+
+EOF
+	exit 1
+fi
+exec 3<&- 2>/dev/null || true
+OPENSHIELD_REQUIRE_POSTGRES=1 go test -cover -coverpkg=./... ./... -args -test.gocoverdir="$OUT/unit" >"$OUT/unit.log" 2>&1 || {
 	echo "unit tests reported failures (see $OUT/unit.log); continuing to measure what did run" >&2
 }
 
