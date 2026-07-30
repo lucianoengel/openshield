@@ -2972,3 +2972,58 @@ Both decoders also gained fuzzers, wired into CI's existing fuzz step at the sam
 `openipc`. The request fuzzer asserts more than "does not panic": anything that decodes must respect the
 bounds the decoder claims to enforce, and must re-encode — a value that cannot be written back is one the
 decoder invented.
+
+## Round 54 (D387): the credential-minting tool, and a row on the work list that was never work
+
+Next on the corrected list was `internal/core/corev1` at 57.2%. It is **eleven `.pb.go` files and nothing
+else**. That number measures how much of protoc's marshalling boilerplate some test happened to walk
+through; raising it would mean writing tests for generated code to move a figure. It was sitting on a
+published work list directly beneath two packages that genuinely needed tests, reading exactly like them.
+
+So `coverage-all.sh` now classifies a package as generated when it contains `.pb.go` files and no
+hand-written `.go` at all, and prints those rows **separately, below the work list, still with their
+numbers**. Deleting them would be its own dishonesty — a filter nobody can see is indistinguishable from a
+filter that is wrong, and the next person diffing this against `go tool covdata percent` would find rows
+missing with no explanation. Exactly one package in the tree matches.
+
+### `cmd/openshield-provision`: 12.6% → 57.1%
+
+This is the tool that mints every credential the system trusts — the fleet CA, role-tagged agent and
+operator certificates, zero-trust client certificates, escrow, witness and risk keypairs, the TLS
+interception CA, and the per-agent posture roster. 974 lines. It had one test file, 150 lines, covering
+`recover.go` and nothing else.
+
+The invariant worth the most here is the least interesting to look at: **which files are private**. Whether
+`ca-key.pem` lands at 0600 or 0644 is carried by nothing but the mode argument at one call site. Written
+world-readable, every certificate it minted stays valid, every other test still passes, and the only symptom
+is that any local account can mint an agent or operator identity. Six such call sites are now asserted — and
+asserted on the *group/other bits* rather than an exact `0600`, because `os.WriteFile` applies the umask and
+an exact comparison would be testing whoever ran it.
+
+Nine mutants, eight killed:
+
+| mutation | killed by |
+| --- | --- |
+| the CA key is written world-readable | `TestPrivateArtifactsAreNotReadableByAnyoneElse` |
+| the escrow private key is world-readable | same |
+| an issued leaf's key is world-readable | `TestAnIssuedCertificateChainsToTheCAAndCarriesItsRole` |
+| the posture signing key is world-readable | `TestEnrollingAnAgentWritesARosterLineAndAPrivateKey` |
+| re-enrolment appends a second line for one agent | `TestReEnrollingAnAgentReplacesItsLineRatherThanAddingASecond` |
+| a malformed roster line is silently dropped | `TestAMalformedRosterIsRefusedAndLeftUntouched` |
+| the roster is truncated instead of appended | `TestEnrollingASecondAgentKeepsTheFirst` |
+| operator comments are dropped from the roster | `TestRosterCommentsSurviveEnrolment` |
+| the client-certificate `--group` check is removed | **survived** |
+
+**The survivor is reported rather than papered over, because what it revealed is worth more than a ninth
+kill.** The check exists *twice* — once in this command and again in `provision.IssueClientCert`. Removing
+either one alone leaves the property intact and the test green, which is what defence in depth is supposed
+to look like. The risk is that a test written against one guard silently passes on the other's behalf, so
+the property was re-checked with **both** removed: that does fail the test. The test comment now says so.
+A surviving mutant is only a problem when you cannot explain it.
+
+The roster tests are the other half. `posture.go` carries twenty-two lines of comment on why enrolment
+appends rather than rewrites — *"a command that truncated the roster would silently un-enrol every other
+agent"*, surfacing as "the fleet lost its posture signal after we added a laptop" — and until now nothing
+exercised it. Four of the eight kills land there, including the one that matters most operationally: a
+malformed roster is refused **and the file is left byte-for-byte untouched**, so a tool that cannot safely
+rewrite the file does not rewrite it at all.

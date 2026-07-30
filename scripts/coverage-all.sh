@@ -112,11 +112,39 @@ if [ ! -s "$OUT/bypkg.txt" ]; then
 	echo "PARSE PRODUCED NO ROWS from a non-empty merge — fix the parse rather than trusting this" >&2
 	exit 1
 fi
-awk '{printf "%6s%%  %s\n", $1, $2}' "$OUT/bypkg.txt"
+
+# GENERATED PACKAGES ARE SEPARATED, NOT DELETED.
+#
+# internal/core/corev1 is eleven .pb.go files and nothing else. Its 57.2% measures how much of protoc's
+# marshalling boilerplate a test happened to walk through, which is not a fact about this project's testing
+# — and it appeared on a published work list as though it were, directly under two packages that genuinely
+# needed tests. Raising it would mean writing tests for generated code to move a number.
+#
+# They are still PRINTED, below the work list. Dropping them silently would be its own dishonesty: the next
+# person to compare this output against `go tool covdata percent` would find rows missing with no
+# explanation, and a filter nobody can see is indistinguishable from a filter that is wrong.
+: >"$OUT/generated.txt"
+: >"$OUT/worklist.txt"
+while read -r pct pkg; do
+	dir="${pkg#"$MOD"/}"
+	if [ -d "$dir" ] && [ -z "$(find "$dir" -maxdepth 1 -name '*.go' ! -name '*.pb.go' ! -name '*_test.go' -print -quit)" ] &&
+		[ -n "$(find "$dir" -maxdepth 1 -name '*.pb.go' -print -quit)" ]; then
+		printf '%s %s\n' "$pct" "$pkg" >>"$OUT/generated.txt"
+	else
+		printf '%s %s\n' "$pct" "$pkg" >>"$OUT/worklist.txt"
+	fi
+done <"$OUT/bypkg.txt"
+
+awk '{printf "%6s%%  %s\n", $1, $2}' "$OUT/worklist.txt"
+if [ -s "$OUT/generated.txt" ]; then
+	echo
+	echo "-- generated code, reported but NOT a work list (coverage here measures protoc's output) --"
+	awk '{printf "%6s%%  %s\n", $1, $2}' "$OUT/generated.txt"
+fi
 
 echo
 echo "== summary =="
 go tool cover -func="$OUT/merged.txt" | tail -1
 awk '$1<50{a++} $1>=50&&$1<70{b++} $1>=70&&$1<85{c++} $1>=85{d++}
-     END{printf "under 50%%: %d   50-70%%: %d   70-85%%: %d   85%%+: %d   (of %d packages)\n",a+0,b+0,c+0,d+0,NR}' "$OUT/bypkg.txt"
-echo "work list: $OUT/bypkg.txt"
+     END{printf "under 50%%: %d   50-70%%: %d   70-85%%: %d   85%%+: %d   (of %d hand-written packages)\n",a+0,b+0,c+0,d+0,NR}' "$OUT/worklist.txt"
+echo "work list: $OUT/worklist.txt (all packages: $OUT/bypkg.txt)"
