@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"syscall"
 	"testing"
 
 	"github.com/lucianoengel/openshield/internal/core"
@@ -150,17 +149,21 @@ func TestNonRegularSourcesAreRefused(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fifo := filepath.Join(root, "afifo")
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-		t.Skipf("cannot create a fifo here: %v", err)
-	}
 
-	for name, target := range map[string]string{
+	targets := map[string]string{
 		"directory":    dir,
-		"fifo":         fifo,
 		"missing file": filepath.Join(root, "absent"),
 		"empty target": "",
-	} {
+	}
+	// The fifo case lives behind mkfifoTarget, which is build-tagged: syscall.Mkfifo does not exist on
+	// Windows, and this file has to vet there. `make quick` cross-compiles with `go build`, which does NOT
+	// compile test files, so the first version of this test passed locally and failed `go vet ./...` on the
+	// windows runner.
+	if fifo := mkfifoTarget(t, root); fifo != "" {
+		targets["fifo"] = fifo
+	}
+
+	for name, target := range targets {
 		t.Run(name, func(t *testing.T) {
 			if err := enf.EnforceTarget(context.Background(), quarantineDecision(), target); err == nil {
 				t.Fatalf("quarantine accepted a %s and reported success", name)
