@@ -66,16 +66,45 @@ func (k *KillSwitch) Disengage(source string) {
 	k.set(false, "", source)
 }
 
+// set applies a state change, and — the part that was missing — a REASON change while the state is
+// unchanged.
+//
+// THE REASON USED TO FREEZE AT WHATEVER IT WAS WHEN THE SWITCH FIRST ENGAGED. The early return compared
+// only `engaged`, so once engaged, every later Engage was a no-op no matter what it said. That is not
+// hypothetical: WatchBreakGlass gives an EMPTY break-glass file the placeholder reason "break-glass file"
+// (correctly — an empty file still means stop enforcing), and os.WriteFile truncates before it writes. So
+// an operator running `echo "incident 41: ..." > break-glass` engages the switch on the empty moment and
+// the justification they then wrote was DISCARDED, permanently.
+//
+// The reason is the operator's stated justification for disabling enforcement. It is what an incident
+// review reads, and a placeholder in its place is exactly the evidence loss this product exists to prevent
+// (D31). It surfaced as an intermittent CI failure under GOARCH=386 — nothing to do with the architecture,
+// only a loaded runner widening the window between truncate and write.
+//
+// `since` is NOT reset on a reason change: the switch has been engaged since it engaged, and moving that
+// timestamp would misreport how long enforcement has been off.
 func (k *KillSwitch) set(engaged bool, reason, source string) {
 	k.mu.Lock()
-	if k.engaged == engaged {
+	if k.engaged == engaged && k.reason == reason && k.source == source {
 		k.mu.Unlock()
 		return
 	}
-	k.engaged, k.reason, k.source, k.since = engaged, reason, source, time.Now()
+	stateChanged := k.engaged != engaged
+	if stateChanged {
+		k.since = time.Now()
+	}
+	k.engaged, k.reason, k.source = engaged, reason, source
 	cb := k.changed
 	k.mu.Unlock()
-	if cb != nil {
+	// THE CALLBACK FIRES ONLY ON A STATE CHANGE, and the first attempt at this fix fired it on a reason or
+	// source change too. That broke enforcement: WatchBreakGlass's very first poll finds no break-glass file
+	// and calls Disengage, which changes `source` from "" to "local:<path>" without changing the state — so
+	// a spurious "enforcement RESTORED" fired during engine startup and the integration suite caught it.
+	//
+	// Subscribers are wired to TRANSITIONS ("start enforcing", "stop enforcing"), not to metadata. The
+	// reason still updates for every reader of Engaged(), which is what the audit record and the operator
+	// report actually consult — and that is the whole of what the frozen-reason defect cost.
+	if cb != nil && stateChanged {
 		cb(engaged, reason, source)
 	}
 }

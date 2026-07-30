@@ -104,13 +104,33 @@ func TestTheSwitchFailsTowardEnforcing(t *testing.T) {
 			"be allowed to mean 'stop enforcing'")
 	}
 
-	// Present: engaged, carrying the operator's reason.
-	if err := os.WriteFile(path, []byte("incident 41: gateway blocking prod\n"), 0o600); err != nil {
+	// AN EMPTY FILE STILL ENGAGES, with a placeholder reason. Asserted explicitly because it is the state
+	// os.WriteFile passes through — it truncates, then writes — so a poll landing between the two sees
+	// exactly this. Failing toward engaging is correct: an empty break-glass file is still an operator
+	// saying stop.
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, func() bool { e, _ := k.Engaged(); return e })
-	if _, reason := k.Engaged(); reason != "incident 41: gateway blocking prod" {
-		t.Errorf("reason = %q, want the file's contents", reason)
+	if _, reason := k.Engaged(); reason != "break-glass file" {
+		t.Errorf("an empty break-glass file gave reason %q, want the placeholder", reason)
+	}
+
+	// Present with contents: engaged, carrying the operator's reason.
+	if err := os.WriteFile(path, []byte("incident 41: gateway blocking prod\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// THE REASON MUST UPDATE ON AN ALREADY-ENGAGED SWITCH, which is what the empty-file step above sets up
+	// and what used to be impossible: `set` returned early whenever the engaged state was unchanged, so the
+	// reason froze at whatever it was when the switch first engaged.
+	//
+	// That is exactly the sequence `echo "..." > break-glass` produces — os.WriteFile truncates, then
+	// writes — so an operator's justification was DISCARDED whenever a poll landed on the empty moment. It
+	// surfaced as an intermittent CI failure under GOARCH=386, which had nothing to do with the
+	// architecture: a loaded runner simply widens the window. The test was right and the product was wrong.
+	waitUntil(t, func() bool { _, r := k.Engaged(); return r == "incident 41: gateway blocking prod" })
+	if engaged, _ := k.Engaged(); !engaged {
+		t.Error("the reason arrived but the switch is not engaged")
 	}
 
 	// UNREADABLE: the switch is left AS IT IS and the failure is counted. Treating this as "engaged"
