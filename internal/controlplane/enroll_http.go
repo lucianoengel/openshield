@@ -88,49 +88,49 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// PLAT-3/ADR-4: per-route RBAC tiers on the operator surface. The full investigation view is
 		// the most sensitive read → admin; the read queue → analyst; the mutating acks → responder.
 		// A higher tier satisfies a lower one, and a legacy `operator` cert ranks as admin (unchanged).
-		mux.Handle("/view", requireTier(RoleAdmin, s.ViewHandler()))
+		mux.Handle("/view", s.requireTier(RoleAdmin, s.ViewHandler()))
 		opRead := s.OperatorReadHandler() // one inner mux; the outer mount applies the tier gate per route
-		mux.Handle("/alerts", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/alerts/ack", requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)
-		mux.Handle("/search", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/events", requireTier(RoleAnalyst, opRead))               // SIEM-1: event search over the fleet aggregate
-		mux.Handle("/logs", requireTier(RoleAnalyst, opRead))                 // SIEM-4: search ingested third-party external logs
-		mux.Handle("/compliance/retention", requireTier(RoleAnalyst, opRead)) // SIEM-10: retention compliance report
-		mux.Handle("/incidents", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/incidents/ack", requireTier(RoleResponder, opRead))        // SIEM-11b: acknowledge an incident (POST)
-		mux.Handle("/incidents/transition", requireTier(RoleResponder, opRead)) // SOAR-2: advance the lifecycle
+		mux.Handle("/alerts", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/alerts/ack", s.requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)
+		mux.Handle("/search", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/events", s.requireTier(RoleAnalyst, opRead))               // SIEM-1: event search over the fleet aggregate
+		mux.Handle("/logs", s.requireTier(RoleAnalyst, opRead))                 // SIEM-4: search ingested third-party external logs
+		mux.Handle("/compliance/retention", s.requireTier(RoleAnalyst, opRead)) // SIEM-10: retention compliance report
+		mux.Handle("/incidents", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/incidents/ack", s.requireTier(RoleResponder, opRead))        // SIEM-11b: acknowledge an incident (POST)
+		mux.Handle("/incidents/transition", s.requireTier(RoleResponder, opRead)) // SOAR-2: advance the lifecycle
 		// XDR-5: an incident's contributing alerts + evidence references. Analyst tier — it is the drill-down
 		// of the analyst's incident queue and carries no evidence CONTENT (only references and closed-
 		// vocabulary metadata). Serving it records the view, so a read always leaves a trace (D20/L1).
-		mux.Handle("/incidents/timeline", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/overdue", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/subject", requireTier(RoleAnalyst, opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
+		mux.Handle("/incidents/timeline", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/overdue", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/subject", s.requireTier(RoleAnalyst, opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
 		// D290: cases and approvals. Reading an investigation is the ANALYST tier and records the view
 		// (D20); acting on one is RESPONDER. Releasing a legal hold is ADMIN — it is the only operation
 		// here that makes evidence purgeable again, so it sits with the other destructive-adjacent act
 		// rather than with case management.
-		mux.Handle("/cases", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/cases/open", requireTier(RoleResponder, opRead))
-		mux.Handle("/cases/assign", requireTier(RoleResponder, opRead))
-		mux.Handle("/cases/note", requireTier(RoleResponder, opRead))
-		mux.Handle("/cases/close/request", requireTier(RoleResponder, opRead))
-		mux.Handle("/cases/close/approve", requireTier(RoleResponder, opRead))
-		mux.Handle("/cases/hold/release", requireTier(RoleAdmin, opRead))
-		mux.Handle("/approvals", requireTier(RoleAnalyst, opRead))
-		mux.Handle("/approvals/resolve", requireTier(RoleResponder, opRead))
+		mux.Handle("/cases", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/cases/open", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/assign", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/note", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/close/request", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/close/approve", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/cases/hold/release", s.requireTier(RoleAdmin, opRead))
+		mux.Handle("/approvals", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/approvals/resolve", s.requireTier(RoleResponder, opRead))
 		// D291: response intents. RESPONDER for both steps — preparing one opens a four-eyes request in
 		// someone's queue, which is an act, not a read. The four-eyes gate on CONTAIN and REVOKE_TRUST is
 		// the control that separates them from the low-impact verb, not the route tier.
-		mux.Handle("/intents/prepare", requireTier(RoleResponder, opRead))
-		mux.Handle("/intents/publish", requireTier(RoleResponder, opRead))
+		mux.Handle("/intents/prepare", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/intents/publish", s.requireTier(RoleResponder, opRead))
 		// D292: configuration. ADMIN for every route, including the reads: the effective view names every
 		// host-level setting this deployment runs with, and the schema tells a reader exactly which knobs
 		// exist to be turned. Changing configuration can disable detection, so it sits at the same tier
 		// as the full investigation view rather than with the responder's actions.
-		mux.Handle("/config", requireTier(RoleAdmin, opRead))
-		mux.Handle("/config/schema", requireTier(RoleAdmin, opRead))
-		mux.Handle("/config/revisions", requireTier(RoleAdmin, opRead))
-		mux.Handle("/config/rollback", requireTier(RoleAdmin, opRead))
+		mux.Handle("/config", s.requireTier(RoleAdmin, opRead))
+		mux.Handle("/config/schema", s.requireTier(RoleAdmin, opRead))
+		mux.Handle("/config/revisions", s.requireTier(RoleAdmin, opRead))
+		mux.Handle("/config/rollback", s.requireTier(RoleAdmin, opRead))
 	} else {
 		mux.Handle("/enroll", s.EnrollHandler())
 	}

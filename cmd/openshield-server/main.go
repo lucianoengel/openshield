@@ -51,6 +51,8 @@ func main() {
 			os.Exit(fleetControl(dsn, os.Args[2:]))
 		case "config":
 			os.Exit(showConfig(dsn))
+		case "operator-role":
+			os.Exit(operatorRole(dsn, os.Args[2:]))
 		}
 	}
 	// PLAT-5: validate EVERY declared field before doing anything. A malformed value now fails the boot
@@ -720,6 +722,87 @@ func revokeAgent(dsn string, args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "revoked %s\n", args[0])
 	return 0
+}
+
+// operatorRole grants, changes or revokes an operator's authorization (ZT-7).
+//
+// AN OPERATOR-LOCAL COMMAND, not a network route, for the same reason issuance and agent revocation are
+// (D51): the ability to hand out admin must not itself be reachable over the network the admin console
+// uses. Whoever runs this already has database credentials and shell on the control plane.
+func operatorRole(dsn string, args []string) int {
+	usage := "usage: openshield-server operator-role set <identity> <analyst|responder|admin>\n" +
+		"       openshield-server operator-role revoke <identity>\n" +
+		"       openshield-server operator-role list\n\n" +
+		"Takes effect on the operator's NEXT REQUEST — the role is resolved server-side per request, not\n" +
+		"baked into their certificate."
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "operator-role:", err)
+		return 1
+	}
+	defer pool.Close()
+	srv := controlplane.New(pool)
+	// WHO made the change, recorded on the row. An authorization change is itself a security event, and one
+	// that cannot be attributed is not evidence.
+	by := env("USER", "unknown") + "@" + hostname()
+
+	switch args[0] {
+	case "set":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		if err := srv.SetOperatorRole(ctx, args[1], args[2], by); err != nil {
+			fmt.Fprintln(os.Stderr, "operator-role set:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "%s is now %s (effective on their next request)\n", args[1], args[2])
+	case "revoke":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		if err := srv.RevokeOperator(ctx, args[1], by); err != nil {
+			fmt.Fprintln(os.Stderr, "operator-role revoke:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "%s is REVOKED (effective on their next request). Their certificate still\n"+
+			"authenticates them; it no longer authorizes anything.\n", args[1])
+	case "list":
+		rows, err := srv.ListOperatorRoles(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "operator-role list:", err)
+			return 1
+		}
+		if len(rows) == 0 {
+			fmt.Fprintln(os.Stderr, "no operator rows — every operator is running on the role embedded in "+
+				"its certificate, which cannot be changed without reissuing it")
+		}
+		for _, r := range rows {
+			state := r.Role
+			if r.Revoked {
+				state = "REVOKED"
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\n", r.Identity, state, r.UpdatedAt.UTC().Format(time.RFC3339), r.UpdatedBy)
+		}
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	return 0
+}
+
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return h
 }
 
 func env(key, def string) string {

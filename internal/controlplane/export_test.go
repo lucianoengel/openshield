@@ -31,10 +31,14 @@ func RequireRoleForTest(role string) http.Handler {
 	}))
 }
 
-// RequireTierForTest exposes the tiered RBAC gate (PLAT-3) so a test can assert the
+// RequireTierForTest exposes the tiered RBAC gate (PLAT-3/ZT-7) so a test can assert the
 // 401/403/200 outcomes of a minimum-tier requirement directly.
-func RequireTierForTest(minRole string) http.Handler {
-	return requireTier(minRole, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+//
+// It takes a Server now because the gate resolves the role SERVER-SIDE rather than from the certificate
+// (ZT-7). A zero Server has no pool, so the lookup misses and the legacy certificate fallback applies —
+// which is what the existing PLAT-3 cases assert, unchanged.
+func RequireTierForTest(s *Server, minRole string) http.Handler {
+	return s.requireTier(minRole, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 }

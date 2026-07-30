@@ -71,6 +71,11 @@ var EngineFields = []Field{
 	// DSPM-1: data-at-rest discovery. The endpoint is a FULL URL and has no default, deliberately — a
 	// sweep that silently went to the wrong store, or ran with no credentials, would report an empty bucket,
 	// and "no sensitive data found" is the one result nobody goes back to verify.
+	// ZT-7: refuse a role that exists only in an operator's certificate. The intended END STATE; not the
+	// default only because flipping it before every operator has a row locks a deployment out of its own
+	// control plane, including the admin who would have to fix it.
+	{Key: "OPENSHIELD_OPERATOR_ROLES_STRICT", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
+		Description: "Refuse operator roles embedded in certificates; require a server-side record (ZT-7). Set once every operator has one — until then a missing record falls back to the certificate and is logged."},
 	{Key: "OPENSHIELD_OBJECT_ENDPOINT", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Full URL of an S3-compatible object store to sweep for data at rest (DSPM-1), e.g. http://minio:9000. Empty disables discovery."},
 	{Key: "OPENSHIELD_OBJECT_BUCKET", Scope: ScopeBootstrap, Kind: KindString, Default: "",

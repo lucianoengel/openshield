@@ -49,7 +49,14 @@ func unifiedDomainFor(kind corev1.EventKind) (string, bool) {
 		// media — the domain is about which detection plane saw it, not about whether a file was involved.
 		corev1.EventKind_EVENT_KIND_CLIPBOARD_COPY,
 		// A print job (DLP-2b) is the other endpoint exfil channel — same domain.
-		corev1.EventKind_EVENT_KIND_PRINT_JOB:
+		corev1.EventKind_EVENT_KIND_PRINT_JOB,
+		// Data AT REST found by a discovery sweep (DSPM-1). DLP rather than a domain of its own: the
+		// domain names which DETECTION PLANE saw it, and this is the same content classification reaching
+		// the same policy — the difference is that the sweep went looking rather than an interposition
+		// point firing. Giving discovery its own domain would split one data-security picture in two on a
+		// distinction about HOW the bytes arrived, and cross-domain correlation groups by entity precisely
+		// to avoid that.
+		corev1.EventKind_EVENT_KIND_OBJECT_DISCOVERED:
 		return domainDLP, true
 	case corev1.EventKind_EVENT_KIND_PROCESS_EXEC,
 		corev1.EventKind_EVENT_KIND_FILE_DELETED,

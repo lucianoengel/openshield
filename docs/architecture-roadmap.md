@@ -462,7 +462,20 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
 
 ### Zero Trust
 - **ZT-5 · Policy admin + session recording** — new work · L. Ties to the UI (PLAT-1).
-- **ZT-7 · Operator SSO, and the role must leave the certificate** — new work · M. Two things, and the
+- **ZT-7 · Operator SSO, and the role must leave the certificate** — 🟡 **HALF DONE (D372)**: the DEFECT is
+  fixed, the SSO checkbox is not. The role now lives in `operator_roles` and is resolved server-side per
+  request, so a demotion or a revocation takes effect on the operator's next request instead of when their
+  certificate expires — there was previously no way to remove an operator's access at all. Revocation is a
+  ROW, not a delete (a delete would fall back to the certificate and RESTORE the embedded role); a database
+  error DENIES rather than falling back (fail-open is right for enforcement per D17/D18 and wrong for
+  authorization); `agent` is not a grantable operator role, so one compromised endpoint is not a compromised
+  console; no cache, because a TTL sells back the immediacy this buys. `openshield-server operator-role
+  set|revoke|list` is operator-local (D51). Migration path: no row → the certificate still decides and the
+  server says so once with the fixing command; `OPENSHIELD_OPERATOR_ROLES_STRICT=1` refuses that, and is the
+  intended end state.
+  **STILL OPEN, and it is the procurement gate:** OIDC login for operators and SCIM deprovisioning. Also not
+  done: four-eyes on a grant (SOAR has it; this does not), and certificate revocation proper — revoking
+  authorization leaves the identity able to authenticate, just unable to do anything. Two things, and the
   second is a DEFECT rather than a missing integration. Operator identity today is mTLS client certs only
   (`tlsconf` sets `RequireAndVerifyClientCert`) with the RBAC tier carried IN the issued certificate
   (`internal/provision/provision.go` — `RoleAnalyst`/`RoleResponder`/`RoleAdmin`, ordered by

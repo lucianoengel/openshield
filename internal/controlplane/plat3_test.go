@@ -21,7 +21,7 @@ import (
 func TestRequireTierHierarchy(t *testing.T) {
 	ca := newOneCA(t)
 	code := func(minRole, certRole string) int {
-		gate := controlplane.RequireTierForTest(minRole)
+		gate := controlplane.RequireTierForTest(&controlplane.Server{}, minRole)
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		if certRole != "none" {
 			leaf := ca.leaf(t, "x", certRole, nil)

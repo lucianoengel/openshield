@@ -96,10 +96,13 @@ func certRole(state *tls.ConnectionState) string {
 	return ""
 }
 
-// requireRole gates a handler on the verified certificate's role: 401 when there
-// is no verified cert (unauthenticated), 403 when the cert's role is not the one
-// required (authenticated but not authorized), else it serves h. The role comes
-// from the certificate, never the request (D58).
+// requireRole gates a handler on an EXACT role: 401 when there is no verified cert (unauthenticated), 403
+// when the role in force is not the one required (authenticated but not authorized), else it serves h. The
+// role comes from the certificate's identity, never the request (D58).
+//
+// AN EXACT-ROLE GATE IS ONLY USED FOR `agent`, which is not an operator tier and is not in the roles table
+// (see validOperatorRole). So this deliberately still reads the certificate: an agent's role is a property
+// of the credential the fleet was issued, not an operator grant somebody administers.
 func requireRole(role string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
@@ -115,20 +118,36 @@ func requireRole(role string, h http.Handler) http.Handler {
 	})
 }
 
-// requireTier gates a handler on a MINIMUM operator tier (PLAT-3/ADR-4): 401 when there is no
-// verified cert, 403 when the cert's role ranks BELOW minRole, else it serves h. A higher tier
-// satisfies a lower requirement (admin ≥ responder ≥ analyst), and the legacy `operator` role ranks
-// as admin so existing operator certificates keep full access. The role comes from the certificate,
-// never the request (D58).
-func requireTier(minRole string, h http.Handler) http.Handler {
+// requireTier gates a handler on a MINIMUM operator tier (PLAT-3/ADR-4): 401 when there is no verified
+// cert, 403 when the role IN FORCE ranks below minRole, else it serves h. A higher tier satisfies a lower
+// requirement (admin ≥ responder ≥ analyst). The role comes from the identity, never the request (D58).
+//
+// A METHOD, AND THAT IS THE ZT-7 CHANGE (D372). This used to be a package function reading the role out of
+// the certificate's OU, which meant authorization was frozen for the certificate's lifetime: a demotion or
+// a removal did not take effect until it expired, and there was no "revoke this operator's responder rights
+// now" at all. It now resolves against the operator_roles table on every request — see
+// resolveOperatorRole, including why there is no cache and why a database error denies rather than falling
+// back to the certificate.
+func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
 	min := roleRank(minRole)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 			http.Error(w, "client certificate required", http.StatusUnauthorized)
 			return
 		}
-		if roleRank(certRole(r.TLS)) < min {
-			http.Error(w, "forbidden: certificate role tier not authorized for this endpoint", http.StatusForbidden)
+		role, src := s.resolveOperatorRole(r.Context(), r.TLS)
+		if src == roleFromCertificate && role != "" {
+			s.warnLegacyRole(certIdentity(r.TLS), role)
+		}
+		if roleRank(role) < min {
+			// The message distinguishes a REVOCATION from merely ranking too low, because those send an
+			// operator to completely different places: one is "ask for access", the other is "your access
+			// was taken away and you should know that".
+			if src == roleRevoked {
+				http.Error(w, "forbidden: this operator identity has been revoked", http.StatusForbidden)
+				return
+			}
+			http.Error(w, "forbidden: operator role tier not authorized for this endpoint", http.StatusForbidden)
 			return
 		}
 		h.ServeHTTP(w, r)
