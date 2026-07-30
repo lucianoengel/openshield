@@ -2753,3 +2753,54 @@ The enterprise gap assessment named four that a single-host fleet topology canno
 by real tests — **network partition and rejoin** (Round 49) and **offline-queue drain** (Round 47, and this
 round for the empty-broker variant). **Clock skew** and **per-node limits under real contention** remain
 unproven and are still the honest answer to "what does the fleet simulation not tell you".
+
+---
+
+## Round 51: the coverage measurement re-run, after a day of changes
+
+`scripts/coverage-integration.sh` (D365) exists so this number can be re-derived rather than quoted. The
+first measurement predated D365–D380, so it was re-run.
+
+| | Round 46 (D365) | Now |
+| --- | --- | --- |
+| statement coverage, real binaries | 51.2% | **52.7%** |
+| packages measured | 82 | 83 |
+| at 0% | 6 | **5** |
+| under 25% | 10 | 9 |
+| unreachable from any `cmd/` binary | 9 | 9 |
+| integration suite | **2 failures** | **0 failures** (888s) |
+
+### The two results worth reading
+
+**`internal/connectors/rfc5424`: 0.0% → 73.6%.** That was Round 46's real finding — a wired, tested,
+reachable ingest path that no configuration the suite produced could exercise, because every syslog scenario
+sent CEF. It is now the second-best-covered connector in the tree. The measurement found the gap and the
+same measurement confirms it closed, which is the whole argument for the number being reproducible.
+
+**The suite is green under instrumentation.** Round 46 ran with two failures (`seedTimeline` snapshotting
+its ledger baseline after the write it was waiting for) and this one has none, including the 200-second
+reconnect-budget scenario and the container partition. So the earlier failures were the defect they looked
+like, not instrumentation overhead — which is what I wrongly assumed the first time.
+
+`internal/connectors/objectstore`, added today, measures 79.1%.
+
+### The five remaining zeros, unchanged in kind
+
+| Package | Why |
+| --- | --- |
+| `internal/agent/watchdog` | fanotify permission mode needs root; covered on the rooted VM |
+| `internal/dnsredirect` | `CAP_NET_ADMIN` + nft; VM-gated |
+| `internal/dnssink` | reached only by `network_vm_test.go`, which skips without root |
+| `internal/clipboard/x11` | needs an X display |
+| `internal/agent/worker` | **not gated — unmeasurable.** `privileged.Worker.Close` SIGKILLs, and a killed process flushes no profile. Still open, still roadmapped. |
+
+The last one is why 52.7% understates the truth by an unknown amount, over the parse path the privilege
+split exists for. A number with a known blind spot is more useful than one without, provided the blind spot
+is stated every time the number is.
+
+### What did not move, and that is the finding
+
+The unreachable set is still 9, and still the same 9 — three test-only guards, three doc-only packages, two
+spikes, one `!linux`-gated. Everything added across D365–D380 (objectstore, the SCIM and operator-role
+surfaces, clock skew, ingest healing, transport resilience) is inside the `./cmd/...` closure. The guard
+that would have caught a new unwired feature had nothing to report, which is the outcome it is for.
