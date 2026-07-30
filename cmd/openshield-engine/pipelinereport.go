@@ -60,3 +60,44 @@ func reportPipelineOutcomes(ctx context.Context, log *slog.Logger, m *core.Metri
 			slog.Int64("timed_out", timedOut))
 	}
 }
+
+// reportDegraded reports the counters that mean this endpoint is running with less than its full
+// function. Same discipline as everything else here: only when one moves.
+//
+// Enforcement suppressed by the kill switch is the number D418 found unreachable — core.KillSwitch says
+// "an operator asking what was not blocked needs a number, not a state", and there was no way to get the
+// number. Fleet-control rejections are the forged-control signal the subscriber counts and nothing read.
+func reportDegraded(ctx context.Context, log *slog.Logger, interval time.Duration, counters ...discardCounter) {
+	if len(counters) == 0 {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	last := make([]int64, len(counters))
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		attrs := []any{}
+		moved := false
+		for i, c := range counters {
+			v := c.read()
+			if v > last[i] {
+				moved = true
+			}
+			last[i] = v
+			if v > 0 {
+				attrs = append(attrs, slog.Int64(c.name, v))
+			}
+		}
+		if moved {
+			log.Warn("engine: DEGRADED — enforcement is being suppressed or fleet control is arriving. "+
+				"Detection continues; some of what you expect to be blocked is not.", attrs...)
+		}
+	}
+}

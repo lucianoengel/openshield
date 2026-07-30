@@ -72,12 +72,14 @@ type Gateway struct {
 	// means none was installed and enforcement behaves exactly as before: a component never given a
 	// switch must enforce normally rather than silently do nothing.
 	KillSwitch *core.KillSwitch
-	classifier classifier
-	policy     core.Stage
-	ledger     core.Ledger
-	deadline   time.Duration
-	logger     *slog.Logger
-	now        func() time.Time
+	// fleetControl is kept so its counters can be reported; see FleetControlCounts.
+	fleetControl *intent.FleetControlSubscriber
+	classifier   classifier
+	policy       core.Stage
+	ledger       core.Ledger
+	deadline     time.Duration
+	logger       *slog.Logger
+	now          func() time.Time
 
 	// maxBytes caps how much of a body the worker parses (decompression-bomb
 	// ceiling, D13). Zero lets the worker apply its own default.

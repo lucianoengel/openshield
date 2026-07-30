@@ -142,10 +142,12 @@ type Engine struct {
 	// means none was installed and enforcement behaves exactly as before: a component never given a
 	// switch must enforce normally rather than silently do nothing.
 	KillSwitch *core.KillSwitch
-	disp       *core.Dispatcher
-	ledger     core.Ledger
-	now        func() time.Time
-	logger     *slog.Logger
+	// fleetControl is kept so its counters can be reported; see FleetControlCounts.
+	fleetControl *intent.FleetControlSubscriber
+	disp         *core.Dispatcher
+	ledger       core.Ledger
+	now          func() time.Time
+	logger       *slog.Logger
 
 	// enforceAuditDropped counts enforcement-audit appends that failed (R34-7) — a
 	// silently-dropped ledger append for an automated action would be a hole in the
@@ -410,5 +412,19 @@ func (e *Engine) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey) (
 		return nil, errors.New("engine: no kill switch installed; refusing to accept fleet control that " +
 			"would have nothing to act on")
 	}
-	return intent.NewFleetControlSubscriber(key, e.KillSwitch).Subscribe(conn)
+	sub := intent.NewFleetControlSubscriber(key, e.KillSwitch)
+	e.fleetControl = sub
+	return sub.Subscribe(conn)
+}
+
+// FleetControlCounts reports controls APPLIED and REJECTED by the fleet-control channel.
+//
+// The subscriber used to be constructed and discarded on the line above, so its counters — including
+// Rejected, whose comment says "a forged-control flood must be observable, not silent" — were unreachable
+// from anywhere (D418). Zero when no fleet control is subscribed.
+func (e *Engine) FleetControlCounts() (applied, rejected int64) {
+	if e.fleetControl == nil {
+		return 0, 0
+	}
+	return e.fleetControl.Applied.Load(), e.fleetControl.Rejected.Load()
 }

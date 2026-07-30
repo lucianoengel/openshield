@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// testMsg stands in for the production message; this function takes it as a parameter now, so the
+// tests assert the reporting DISCIPLINE rather than any particular wording.
+const testMsg = "gateway: TEST CHANNEL REJECTED"
+
 type safeBuf struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -37,12 +41,15 @@ func TestAQuietGatewayReportsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
-	go func() { defer close(done); reportRejections(ctx, log, 20*time.Millisecond, rejectionCounter{"risk_rejected", risk.Load}) }()
+	go func() {
+		defer close(done)
+		reportRejections(ctx, log, testMsg, 20*time.Millisecond, rejectionCounter{"risk_rejected", risk.Load})
+	}()
 	time.Sleep(120 * time.Millisecond)
 	cancel()
 	<-done
 
-	if strings.Contains(out.String(), "SIGNED-CHANNEL INPUT REJECTED") {
+	if strings.Contains(out.String(), testMsg) {
 		t.Fatalf("a gateway rejecting nothing produced a warning:\n%s", out.String())
 	}
 }
@@ -57,7 +64,7 @@ func TestARejectionIsReportedAndNamesItsChannel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		reportRejections(ctx, log, 20*time.Millisecond,
+		reportRejections(ctx, log, testMsg, 20*time.Millisecond,
 			rejectionCounter{"risk_rejected", risk.Load},
 			rejectionCounter{"posture_rejected", posture.Load})
 	}()
@@ -68,7 +75,7 @@ func TestARejectionIsReportedAndNamesItsChannel(t *testing.T) {
 	<-done
 
 	got := out.String()
-	if !strings.Contains(got, "SIGNED-CHANNEL INPUT REJECTED") {
+	if !strings.Contains(got, testMsg) {
 		t.Fatalf("forged risk updates produced no report:\n%s", got)
 	}
 	if !strings.Contains(got, "risk_rejected=3") {
@@ -89,10 +96,13 @@ func TestItGoesQuietWhenTheRejectionsStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
-	go func() { defer close(done); reportRejections(ctx, log, 20*time.Millisecond, rejectionCounter{"risk_rejected", risk.Load}) }()
+	go func() {
+		defer close(done)
+		reportRejections(ctx, log, testMsg, 20*time.Millisecond, rejectionCounter{"risk_rejected", risk.Load})
+	}()
 	risk.Add(1)
 	time.Sleep(100 * time.Millisecond)
-	first := strings.Count(out.String(), "SIGNED-CHANNEL INPUT REJECTED")
+	first := strings.Count(out.String(), testMsg)
 	if first == 0 {
 		t.Fatal("the rejection was never reported")
 	}
@@ -100,7 +110,7 @@ func TestItGoesQuietWhenTheRejectionsStop(t *testing.T) {
 	cancel()
 	<-done
 
-	if got := strings.Count(out.String(), "SIGNED-CHANNEL INPUT REJECTED"); got != first {
+	if got := strings.Count(out.String(), testMsg); got != first {
 		t.Fatalf("it kept warning after the rejections stopped (%d -> %d)", first, got)
 	}
 }
@@ -110,7 +120,7 @@ func TestNoCountersReturnsImmediately(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		reportRejections(context.Background(), slog.New(slog.NewTextHandler(&safeBuf{}, nil)), time.Millisecond)
+		reportRejections(context.Background(), slog.New(slog.NewTextHandler(&safeBuf{}, nil)), testMsg, time.Millisecond)
 	}()
 	select {
 	case <-done:

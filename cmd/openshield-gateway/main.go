@@ -581,9 +581,33 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		// Report what the signed channels REFUSED. Only when a count moves, so a healthy gateway is
 		// silent and one being probed says so every interval until it stops (D348's discipline).
 		if len(rejections) > 0 {
-			go reportRejections(ctx, log, envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
+			go reportRejections(ctx,
+				log,
+				"gateway: SIGNED-CHANNEL INPUT REJECTED — a rising count here is someone presenting "+
+					"material this gateway will not accept (a forged or stale signature, an unenrolled "+
+					"agent, an unknown version). None of it was applied.",
+				envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
 				rejections...)
 		}
+
+		// DEGRADED OPERATION, reported on the same discipline but meaning something else: this gateway is
+		// running with less than its full function. Enforcement suppressed by the kill switch is the
+		// number D418 found unreachable — "an operator asking what was not blocked needs a number, not a
+		// state" — and a failed device⋈user link is a join the entity graph cannot make later.
+		degraded := []rejectionCounter{
+			{"fleet_control_applied", func() int64 { a, _ := gw.FleetControlCounts(); return a }},
+			{"fleet_control_rejected", func() int64 { _, r := gw.FleetControlCounts(); return r }},
+			{"entity_link_failures", ap.EntityLinkFailures.Load},
+		}
+		if gw.KillSwitch != nil {
+			degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})
+		}
+		go reportRejections(ctx,
+			log,
+			"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+
+				"links are failing. Detection continues; some of what you expect to be blocked is not.",
+			envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
+			degraded...)
 	}
 
 	srv := &http.Server{

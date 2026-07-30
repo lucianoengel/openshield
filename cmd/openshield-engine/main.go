@@ -833,6 +833,16 @@ func main() {
 	go reportPipelineOutcomes(ctx, log, eng.PipelineMetrics(),
 		envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute))
 
+	// The counters that say this endpoint is running degraded (D418).
+	degraded := []discardCounter{
+		{"fleet_control_applied", func() int64 { a, _ := eng.FleetControlCounts(); return a }},
+		{"fleet_control_rejected", func() int64 { _, r := eng.FleetControlCounts(); return r }},
+	}
+	if eng.KillSwitch != nil {
+		degraded = append(degraded, discardCounter{"enforcement_suppressed", eng.KillSwitch.Suppressions.Load})
+	}
+	go reportDegraded(ctx, log, envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute), degraded...)
+
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
 	for {
 		select {

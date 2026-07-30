@@ -24,5 +24,16 @@ func (g *Gateway) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey) 
 		return nil, errors.New("gateway: no kill switch installed; refusing to accept fleet control that " +
 			"would have nothing to act on")
 	}
-	return intent.NewFleetControlSubscriber(key, g.KillSwitch).Subscribe(conn)
+	sub := intent.NewFleetControlSubscriber(key, g.KillSwitch)
+	g.fleetControl = sub
+	return sub.Subscribe(conn)
+}
+
+// FleetControlCounts reports controls APPLIED and REJECTED by the fleet-control channel. The subscriber
+// used to be constructed and discarded above, so its counters were unreachable (D418).
+func (g *Gateway) FleetControlCounts() (applied, rejected int64) {
+	if g.fleetControl == nil {
+		return 0, 0
+	}
+	return g.fleetControl.Applied.Load(), g.fleetControl.Rejected.Load()
 }

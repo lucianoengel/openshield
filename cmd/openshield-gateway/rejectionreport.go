@@ -38,7 +38,10 @@ type rejectionCounter struct {
 	read func() int64
 }
 
-func reportRejections(ctx context.Context, log *slog.Logger, interval time.Duration, counters ...rejectionCounter) {
+// msg is passed in because two groups share this discipline with different meanings: signed-channel
+// REJECTIONS (someone presenting forged material) and DEGRADED operation (enforcement suppressed by the
+// kill switch, entity links that failed). Same "only when it moves" rule; different thing to say.
+func reportRejections(ctx context.Context, log *slog.Logger, msg string, interval time.Duration, counters ...rejectionCounter) {
 	if len(counters) == 0 {
 		return
 	}
@@ -69,9 +72,7 @@ func reportRejections(ctx context.Context, log *slog.Logger, interval time.Durat
 			}
 		}
 		if moved {
-			log.Warn("gateway: SIGNED-CHANNEL INPUT REJECTED — a rising count here is someone presenting "+
-				"material this gateway will not accept (a forged or stale signature, an unenrolled agent, "+
-				"an unknown version). None of it was applied.", attrs...)
+			log.Warn(msg, attrs...)
 		}
 	}
 }
