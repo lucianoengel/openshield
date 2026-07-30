@@ -199,3 +199,71 @@ func TestAnOutageLongerThanTheReconnectBudgetStillRecovers(t *testing.T) {
 		func() bool { return rows() >= want })
 	t.Logf("recovered after a 200s outage: %d row(s) stored (held %d)", rows(), held)
 }
+
+// TestABrokerThatComesBackEmptyDoesNotWedgeTheFleet is PLAT-10.
+//
+// The distinction this rests on: a broker RESTARTED with its JetStream store recovers on its own, and a
+// broker that comes back with an EMPTY store did not. `natsx.EnsureTelemetryStream` was called from exactly
+// two places — controlplane.Run and the producers' UseJetStream — both at process start, so nothing
+// recreated a missing stream. Measured before the fix: rows frozen for 30s+ while the agent published every
+// 500ms, every publish refused with `no response from stream`, and THE CONTROL PLANE SAID NOTHING AT ALL
+// while each agent's spool grew toward its ceiling and began dropping the oldest records.
+//
+// Ordinary ops produces it: `podman rm` and recreate the broker, or an orchestrator moving it onto fresh
+// storage.
+//
+// The recovery here is slower than the plain drain scenario by design — the healer polls, so the assertion
+// has to allow a poll interval plus a reconnect plus a drain.
+func TestABrokerThatComesBackEmptyDoesNotWedgeTheFleet(t *testing.T) {
+	stack := StartStack(t)
+	_, enrollURL := startServer(t, stack)
+	pool := openPool(t, stack.DSN)
+	work := t.TempDir()
+	spool := filepath.Join(work, "spool")
+
+	const agentID = "agent-empty-broker"
+	token := issueToken(t, stack, agentID)
+	agent := Start(t, "openshield-fleet-agent", []string{
+		"OPENSHIELD_AGENT_ID=" + agentID,
+		"OPENSHIELD_ENROLL_URL=" + enrollURL,
+		"OPENSHIELD_ENROLL_TOKEN=" + token,
+		"OPENSHIELD_NATS_URL=" + stack.NATSURL,
+		"OPENSHIELD_QUEUE_DIR=" + spool,
+		"OPENSHIELD_SEQ_FILE=" + filepath.Join(work, "seq"),
+		"OPENSHIELD_HEARTBEAT=500ms",
+	})
+	agent.WaitForOutput("enrolled", 90*time.Second)
+
+	rows := func() int {
+		var n int
+		if err := pool.QueryRow(Ctx(t),
+			`SELECT count(*) FROM fleet_telemetry WHERE agent_id = $1`, agentID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	Eventually(t, 90*time.Second, "the agent's first telemetry", func() bool { return rows() > 0 })
+
+	stack.StopBroker(t)
+	Eventually(t, 60*time.Second, "records to accumulate on the spool", func() bool {
+		return spoolFiles(t, spool) > 0
+	})
+	time.Sleep(5 * time.Second)
+	held := spoolFiles(t, spool)
+	before := rows()
+	t.Logf("outage: %d record(s) held, %d row(s) stored", held, before)
+
+	// THE BROKER RETURNS WITH NOTHING. Same port, so the agent and the server both reconnect — and the
+	// stream they need is not there.
+	stack.RestoreBrokerEmpty(t)
+
+	// The healer has to notice the consumer is gone, recreate the stream, and resubscribe. Only then can the
+	// agent's spool drain. Generous, because it is a poll interval plus a reconnect plus a drain.
+	Eventually(t, 180*time.Second, "the spool to drain after the broker came back EMPTY", func() bool {
+		return spoolFiles(t, spool) == 0
+	})
+	want := before + held
+	Eventually(t, 120*time.Second, "the held records to be STORED after an empty-broker recovery",
+		func() bool { return rows() >= want })
+	t.Logf("recovered from an EMPTY broker: %d row(s) stored (held %d)", rows(), held)
+}

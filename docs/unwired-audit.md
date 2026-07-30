@@ -2691,3 +2691,65 @@ the enterprise gap assessment named. Partition and offline-queue drain are now c
 
 And this partitions ONE endpoint. A whole segment partitioning and reconnecting together is not exercised;
 the reconnect jitter added in Round 48 is the mitigation for that and remains untested at scale.
+
+---
+
+## Round 50 (D370): PLAT-10 — the stream was created once, at startup, and never again
+
+D367 reproduced this and deliberately left it. The reasoning then still holds and is why it took its own
+change: the tempting one-line fix — re-ensure the stream from the agent on reconnect — would have recreated
+the stream while the control plane's consumer stayed dead, so publishes would succeed and still no row would
+appear. Fixed-looking and harder to diagnose than the original.
+
+`natsx.EnsureTelemetryStream` was called from exactly two places, `controlplane.Run` and the producers'
+`UseJetStream`, **both at process start**. A broker that came back without the stream stayed without it:
+every publish refused with `no response from stream`, the durable consumer deleted along with the stream,
+**the control plane silent**, and every agent's spool growing to its ceiling and dropping the OLDEST records.
+
+### The obvious hook would have shipped a fix with a hole in it
+
+`nats.ReconnectHandler` is where this belongs on first reading. But the failure is *"the stream is not
+there"*, and that has causes with no disconnect attached: an operator running `nats stream rm`, a retention
+change, a cluster losing the asset without dropping TCP. The connection stays healthy, no handler fires, and
+ingest is down silently — the original bug with extra steps.
+
+A `ConsumerInfo` on a 15s timer observes the **state** rather than an event about the state, so it catches
+the causes nobody enumerated. That is the whole design decision.
+
+### The repair is narrow, and that is also deliberate
+
+Only `ErrConsumerNotFound` / `ErrStreamNotFound` trigger a rebuild. "If the check errored, rebuild" would
+tear down and recreate a *working* durable consumer on every transient timeout — churning the thing
+currently delivering telemetry, on the schedule of the network's worst moments. A false negative costs one
+poll interval; a false positive costs a working subscription.
+
+It also **announces before repairing**, so the log shows ingest went down even when the repair then fails.
+A message emitted only on success documents the recoveries and hides the outages. Repairs and repair
+failures are counted separately.
+
+### What is NOT claimed
+
+Records published while the stream was absent are gone — **refused** by the broker, not buffered by it. They
+return only as producers drain their offline spools (D40/D67). This heals the channel, not its contents, and
+the restore log says exactly that rather than implying a clean recovery.
+
+The stream config is a constant, so a repair recreates it with the ORIGINAL settings — an operator's
+deliberate tuning would be overwritten. Recorded rather than guarded, because the alternative is refusing to
+heal, which is where this started.
+
+### A check of mine lied, and it was the anti-lying check
+
+The mutation (healing disabled) failed the scenario correctly — 198s against a 37s pass. But the guard I ran
+first to make sure the mutant was real reported `MUTANT_COMPILES=no`, and it was wrong: an early `return`
+makes the rest of a function unreachable, which **`go vet` rejects and the compiler accepts**. `go build`
+confirms it built, and a 198-second timeout could only have come from a working binary.
+
+Worth recording because D359's whole lesson is that the check itself must not be able to lie — and here the
+check guarding against a false mutation result was measuring the wrong thing. `go vet` is not `go build`.
+
+### The four properties, closed out
+
+The enterprise gap assessment named four that a single-host fleet topology cannot prove. Two are now covered
+by real tests — **network partition and rejoin** (Round 49) and **offline-queue drain** (Round 47, and this
+round for the empty-broker variant). **Clock skew** and **per-node limits under real contention** remain
+unproven and are still the honest answer to "what does the fleet simulation not tell you".

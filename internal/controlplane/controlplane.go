@@ -54,6 +54,10 @@ type Server struct {
 	subs     []*nats.Subscription
 	conn     *nats.Conn
 	natsOpts []nats.Option
+	// sigSub is held separately from subs because it is the ONE subscription that can be rebuilt while the
+	// server runs — see healIngest (PLAT-10). Everything in subs lives for the process.
+	sigSub *nats.Subscription
+	ingest ingestHealth
 
 	// DecodeFailures counts messages that did not decode. A malformed message is
 	// dropped so it cannot stall the subscription, but it is COUNTED so the drop
@@ -532,22 +536,7 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 			return fmt.Errorf("controlplane: ensuring the telemetry stream: %w"+
 				" — enable JetStream on the broker (nats-server -js) or set OPENSHIELD_JETSTREAM=0", serr)
 		}
-		sigSub, err = js.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
-			switch s.handleSigned(context.Background(), m.Data) {
-			case ingestTransient:
-				// R34-4: redeliver with BACKOFF, not immediately — a bare Nak() hot-loops a
-				// verified message against a down/full database, spinning CPU and drowning
-				// the log. Delay grows with the redelivery count so a sustained DB outage is
-				// retried patiently (never dropped), a transient blip still recovers fast.
-				delay := nakBackoffBase
-				if md, merr := m.Metadata(); merr == nil && md != nil {
-					delay = backoffFor(md.NumDelivered)
-				}
-				_ = m.NakWithDelay(delay)
-			default: // ingestPersisted or ingestPermanent — done, do not redeliver
-				_ = m.Ack()
-			}
-		}, nats.Durable(natsx.TelemetryDurable), nats.ManualAck(), nats.AckExplicit())
+		sigSub, err = s.subscribeSignedDurable(js)
 	} else {
 		sigSub, err = s.subscribeCounted(conn, natsx.SubjectSigned, func(m *nats.Msg) {
 			s.handleSigned(context.Background(), m.Data)
@@ -557,11 +546,55 @@ func (s *Server) Run(ctx context.Context, natsURL string) error {
 		return fmt.Errorf("controlplane: subscribing signed telemetry: %w", err)
 	}
 	s.mu.Lock()
-	s.subs = append(s.subs, sigSub)
+	s.sigSub = sigSub
 	s.mu.Unlock()
+
+	// PLAT-10: keep the durable consumer alive. Without this, a broker that returns with empty JetStream
+	// state leaves the fleet's ingest permanently dead and silent — the stream was only ever created here,
+	// at startup.
+	if natsx.JetStreamEnabled() {
+		go s.healIngest(ctx, conn, func(js nats.JetStreamContext) error {
+			sub, serr := s.subscribeSignedDurable(js)
+			if serr != nil {
+				return serr
+			}
+			s.mu.Lock()
+			old := s.sigSub
+			s.sigSub = sub
+			s.mu.Unlock()
+			if old != nil {
+				// Best-effort: the old subscription's consumer is already gone, so this normally errors.
+				// Dropping it anyway rather than leaking the client-side object.
+				_ = old.Unsubscribe()
+			}
+			return nil
+		})
+	}
 
 	<-ctx.Done()
 	return s.Close()
+}
+
+// subscribeSignedDurable creates the durable explicit-ack subscription for signed telemetry. Extracted from
+// Run so healIngest can rebuild it: the config has to be identical on a repair, and two copies of it would
+// drift the moment one is edited.
+func (s *Server) subscribeSignedDurable(js nats.JetStreamContext) (*nats.Subscription, error) {
+	return js.Subscribe(natsx.SubjectSigned, func(m *nats.Msg) {
+		switch s.handleSigned(context.Background(), m.Data) {
+		case ingestTransient:
+			// R34-4: redeliver with BACKOFF, not immediately — a bare Nak() hot-loops a
+			// verified message against a down/full database, spinning CPU and drowning
+			// the log. Delay grows with the redelivery count so a sustained DB outage is
+			// retried patiently (never dropped), a transient blip still recovers fast.
+			delay := nakBackoffBase
+			if md, merr := m.Metadata(); merr == nil && md != nil {
+				delay = backoffFor(md.NumDelivered)
+			}
+			_ = m.NakWithDelay(delay)
+		default: // ingestPersisted or ingestPermanent — done, do not redeliver
+			_ = m.Ack()
+		}
+	}, nats.Durable(natsx.TelemetryDurable), nats.ManualAck(), nats.AckExplicit())
 }
 
 // handle decodes a message for its index fields and persists the raw payload.
@@ -681,6 +714,10 @@ func (s *Server) Close() error {
 		_ = sub.Unsubscribe()
 	}
 	s.subs = nil
+	if s.sigSub != nil {
+		_ = s.sigSub.Unsubscribe()
+		s.sigSub = nil
+	}
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil

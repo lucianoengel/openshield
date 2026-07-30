@@ -400,7 +400,7 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   gives infinite reconnect + jitter + disconnect/reconnect logging to the agent, engine, gateway and
   `controlplane.Run` (NOT `Connect`, which is for one-shot operator subcommands). *Residual:* "the agent is
   running" no longer implies "connected" — the log line and the dead-man's-switch are what cover that.
-- **PLAT-10 · A broker that returns with empty JetStream state wedges the fleet, silently** — new work · M.
+- **PLAT-10 · A broker that returns with empty JetStream state wedges the fleet, silently** — ✅ **DONE (D370)**. `Server.healIngest` polls the durable consumer every 15s and, on finding it or its stream gone, announces that ingest is DOWN, recreates the stream and resubscribes; repairs and repair failures counted separately. A POLL rather than a reconnect handler, because a stream can be deleted while the connection stays healthy and no handler would fire. Repair is narrow (only a missing consumer/stream) so a transient error never churns a working subscription. *Residual:* records published into the gap were REFUSED by the broker, not buffered — they return only as producers drain their spools; and a repair recreates the stream with its ORIGINAL config, overwriting any deliberate operator tuning. Original finding below.
   **Reproduced, not theorised** (`Stack.RestoreBrokerEmpty` exists for it): stop the broker, bring one back
   on the same port with a fresh JetStream store, and telemetry never resumes. Measured: rows frozen for
   30s+ while the agent publishes every 500ms, and **the control plane logs nothing at all**. A
