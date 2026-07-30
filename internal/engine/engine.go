@@ -367,6 +367,23 @@ func (e *Engine) recordEnforcement(ctx context.Context, dec *corev1.Decision, en
 // non-zero value means some automated-action outcomes are missing from the trail.
 func (e *Engine) EnforceAuditDropped() int64 { return e.enforceAuditDropped.Load() }
 
+// PipelineMetrics exposes the dispatcher's outcome counters so something can actually report them.
+//
+// core.Metrics has counted Dispatched/Decided/Failed/TimedOut since the pipeline was written, and its
+// comment states why the split matters: "Timeouts are counted separately from failures because a rising
+// timeout rate is its own signal: it is the cheapest way to detect an adversary manufacturing fail-open
+// bypasses (D17)."
+//
+// Nothing read them. The dispatcher is held in an unexported field, so the numbers were unreachable from
+// outside this package — the detection D17 describes as cheapest was not available at any price. This is
+// the accessor that makes it reachable; cmd/openshield-engine does the reporting.
+func (e *Engine) PipelineMetrics() *core.Metrics {
+	if e.disp == nil {
+		return nil
+	}
+	return &e.disp.Metrics
+}
+
 // NewFromWorker is the production constructor: it takes a started *privileged.Worker.
 func NewFromWorker(w *privileged.Worker, policy core.Stage, ledger core.Ledger, logger *slog.Logger, stageDeadline time.Duration) *Engine {
 	return New(w, policy, ledger, logger, stageDeadline)

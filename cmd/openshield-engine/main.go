@@ -828,6 +828,11 @@ func main() {
 
 	go func() { wg.Wait(); close(events) }()
 
+	// The pipeline's own outcome counters, which nothing read until now. Deliberately NOT part of the
+	// wg/events group: this only observes, so it must not hold `events` open, and it ends with ctx.
+	go reportPipelineOutcomes(ctx, log, eng.PipelineMetrics(),
+		envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute))
+
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
 	for {
 		select {
