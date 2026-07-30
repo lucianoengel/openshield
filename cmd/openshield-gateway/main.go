@@ -589,27 +589,35 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 				envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
 				rejections...)
 		}
-
-		// DEGRADED OPERATION, reported on the same discipline but meaning something else: this gateway is
-		// running with less than its full function. Enforcement suppressed by the kill switch is the
-		// number D418 found unreachable — "an operator asking what was not blocked needs a number, not a
-		// state" — and a failed device⋈user link is a join the entity graph cannot make later.
-		degraded := []rejectionCounter{
-			{"fleet_control_applied", func() int64 { a, _ := gw.FleetControlCounts(); return a }},
-			{"fleet_control_rejected", func() int64 { _, r := gw.FleetControlCounts(); return r }},
-			{"entity_link_failures", ap.EntityLinkFailures.Load},
-			{"enforcement_audit_dropped", gw.EnforceAuditDropped},
-		}
-		if gw.KillSwitch != nil {
-			degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})
-		}
-		go reportRejections(ctx,
-			log,
-			"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+
-				"links are failing. Detection continues; some of what you expect to be blocked is not.",
-			envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
-			degraded...)
 	}
+
+	// DEGRADED OPERATION, reported on the same discipline as the rejections above but meaning something
+	// else: this gateway is running with less than its full function.
+	//
+	// OUTSIDE THE NATS BLOCK, deliberately. The first version of this sat inside `if OPENSHIELD_NATS_URL
+	// != ""` alongside the signed-channel counters, which was wrong: the signed SUBSCRIBERS only exist
+	// with a broker, but the kill switch, the enforcement-audit trail and the entity graph do not. A
+	// gateway deployed without NATS still enforces, can still have enforcement suppressed, and can still
+	// drop an audit append — and would have reported none of it. That is the same defect this whole
+	// thread is about, reintroduced one commit after fixing it (D421).
+	//
+	// FleetControlCounts returns (0, 0) when no subscriber exists, so those two read zero rather than
+	// needing their own conditional.
+	degraded := []rejectionCounter{
+		{"fleet_control_applied", func() int64 { a, _ := gw.FleetControlCounts(); return a }},
+		{"fleet_control_rejected", func() int64 { _, r := gw.FleetControlCounts(); return r }},
+		{"entity_link_failures", ap.EntityLinkFailures.Load},
+		{"enforcement_audit_dropped", gw.EnforceAuditDropped},
+	}
+	if gw.KillSwitch != nil {
+		degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})
+	}
+	go reportRejections(ctx,
+		log,
+		"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+
+			"links are failing. Detection continues; some of what you expect to be blocked is not.",
+		envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
+		degraded...)
 
 	srv := &http.Server{
 		Addr: listen, Handler: ap, ReadHeaderTimeout: 10 * time.Second,
