@@ -31,6 +31,10 @@ in a runbook is read as a commitment.
 | `openshieldctl` | operator workstation | Verify the ledger, verify a restore, verify a release, read timelines. |
 | `openshield-anchor` | operator/witness | Exports and witnesses external anchors. |
 | `openshield-provision` | operator | Enrollment and provisioning. |
+| `openshield-ztna-client` | endpoint (unprivileged) | Zero-Trust access broker. Applications point at it with the ordinary `HTTP_PROXY` convention; it presents the DEVICE certificate. Loopback-only, no root. It brokers — it does not stop an application taking a direct route. |
+| `openshield-print-filter` | endpoint (CUPS filter chain) | Print DLP. A non-zero exit aborts the job, so it is prevention; it parses nothing, and it **fails open** if the engine is unreachable. Installing it is a root step. |
+| `openshield-dlp-index` | operator | Builds and **signs** the EDM/IDM indexes the worker loads. An index whose signature does not verify stops the worker rather than silently matching nothing. |
+| `openshield-fim-baseline` | operator/endpoint | Produces the signed known-good manifest file-integrity monitoring compares against. |
 <!-- b2-guidance -->
 
 **Before enabling the file-open gate (B2)**, know what it costs. The inline decision classifies a

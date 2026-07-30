@@ -11,6 +11,29 @@
 > but nothing runs). This file adds the axis neither of those has: **what a competitor ships that
 > we do not have at all.**
 
+> ### ⚠️ Status since this assessment was written (D365) — read this first
+>
+> The assessment below is **kept as written**, because it is the record of what an evaluation found
+> and rewriting it would destroy that. Two of its four gate items have since closed, and both of its
+> top two recommendations shipped:
+>
+> - **Gap 2 — operator SSO, SCIM, and the role-in-certificate defect: CLOSED (ZT-7, D372-D380).**
+>   The RBAC tier moved out of the certificate into `operator_roles`, resolved server-side per request
+>   and revocable as a row; OIDC SSO landed with the token's claims deliberately *not* deciding the
+>   role; DPoP sender-constraining and SCIM deactivation followed. *Still open:* SAML (ZT-6), JIT
+>   provisioning, and a SCIM subset never tested against a real IdP — so the checkbox is answerable
+>   but not yet proven against a live provider.
+> - **Gap 4 — data-at-rest discovery: PARTIALLY CLOSED (DSPM-1, D371).** An object-store connector
+>   sweeps an S3-compatible bucket and feeds the existing classifier, so the product can now begin to
+>   answer "where is my sensitive data". *Still open, and it is half of what buyers mean:* no **access
+>   context** (who can reach the bucket), one store family only, and no remediation.
+> - **Gap 1 — Linux only: STILL OPEN.** Cross-platform is PLAT-7, and it is enrichment, not MVP.
+> - **Gap 3 — zero tenant scoping: STILL OPEN,** and deliberate per D21.
+>
+> The other three recommendations also have homes: the four unproven distributed properties are now
+> closed (partition D369, offline-queue drain D367/D370, clock skew D377 narrowly, per-node limits
+> D378); a Windows agent is PLAT-7; and positioning remains an owner/README task.
+
 ## Method, and its limits
 
 Every OpenShield-side claim below was checked against the tree at `HEAD` — grep/read of the actual

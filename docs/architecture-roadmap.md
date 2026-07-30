@@ -4,10 +4,15 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D255.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D419.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
+>
+> Architectural decisions are registered in [`decisions.md`](decisions.md); from D305 most `D<n>`
+> handles are commit handles whose detail is the commit body. The assurance narrative — coverage
+> rounds, and the running log of things that looked finished and were not — is
+> [`unwired-audit.md`](unwired-audit.md).
 
 ---
 
@@ -32,17 +37,21 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D255)
+## What OpenShield is (status at a glance, through D419)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
 correlation, case/incident workflow, and a tamper-evident hash-chained evidence ledger above it. DLP is
 one detection domain, not the center of gravity. The per-domain detection planes are now broadly real
 and deep in several domains (hardware attestation, EDM/IDM, threat-intel + content-signature IPS, the
-full HIPS-4 endpoint-behavioral suite, transparent inline network prevention). **The remaining frontier —
-and the whole of the MVP queue below — is cross-domain correlation depth, SOAR orchestration + live
-response, a ZTNA client, and packaging: turning a set of strong detectors into one coherent,
-deployable, correlated product. The UI comes after all of that is built and tested.**
+full HIPS-4 endpoint-behavioral suite, transparent inline network prevention). **The MVP infrastructure
+queue below is now COMPLETE.** Cross-domain correlation, SOAR orchestration with live coordinated
+response, the ZTNA client, the endpoint exfil channels, durable ingest, typed configuration, signed
+reproducible releases and the operational lifecycle have all shipped and are tested. The only 🟡 left in
+the queue is PLAT-6's remaining distribution work (Sigstore/cosign, `.deb`/`.rpm`, macOS notarization),
+and each of those is a separate trust-or-distribution decision rather than leftover engineering.
+**So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
+built over a proven, tested, stable backend; that condition is now met.
 
 **Why OpenShield, in one sentence (a thesis the MVP must *earn* — not yet a proven claim):** *every
 security decision — detection, correlation, and response — is explainable, reproducible, and
@@ -53,7 +62,7 @@ NOT an infra ticket and not part of the queues below.
 
 | Category | Maturity | One-line reality |
 |---|---|---|
-| **XDR** (umbrella) | ~80% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). **MVP gap:** coordinated response (XDR-6, needs SOAR-7 + HIPS-3 inc 2), per-entity risk aggregation (XDR-7). |
+| **XDR** (umbrella) | ~80% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). Coordinated cross-domain response (XDR-6, D254) and per-entity risk aggregation (XDR-7, D255) both landed — **Lane A is complete.** **Remaining gap is the operator surface:** there is no analyst UI to read a timeline in, and the CLI/API are the interface (PLAT-1, parked and deliberately last). |
 | Zero Trust (ZTNA) | ~85% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. The endpoint half now exists: an agent-brokered client presents the DEVICE certificate to the access proxy, refuses to start without an identity, binds loopback only and never falls back (ZT-4, D249). **Residual:** it brokers access but does not yet PREVENT bypass (routing/firewall enforcement over the NIPS-1 plane is a separate ticket); HTTP(S) only, no CONNECT/SOCKS, no split DNS. |
 | DLP | ~78% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. Clipboard is now MEDIATED on X11 — the engine owns the selection and DECIDES each paste per destination (source→destination, enforced, VM-proven with a real cross-process paste refused), with password-manager exclusions applied before the read (D246/D247). Wayland stays observe-only: its protocol cannot identify a paste's destination. PRINT is intercepted in the CUPS filter chain and a sensitive job is ABORTED before it prints (DLP-2b, D248, proven on a real spooler). **Lane E DLP work is complete for the MVP.** **Enrichment:** OCR, screenshot, CASB refinements. |
 | NIPS / NTPS | ~60% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
@@ -96,11 +105,18 @@ opportunistically or after the UI.
 
 ---
 
-## 🔴 MVP infrastructure — the required queue
+## ✅ MVP infrastructure — the required queue (COMPLETE)
 
-Work the five lanes below. Within a lane, top-to-bottom. Lanes can interleave where dependencies allow.
+**Every ticket in the five lanes below has shipped.** Lanes A (XDR), B (SOAR), C (Zero Trust), D
+(Platform) and E (Endpoint) are closed; the sole remaining 🟡 is PLAT-6's distribution work, which is a
+set of named trust/distribution decisions, not engineering left undone. The section is kept — rather than
+collapsed into the Done ledger — because each entry states the **residuals** its ticket deliberately did
+not close, and those residuals are the honest boundary of what the MVP claims.
+
+**Do not re-propose anything here. The next work is PLAT-1 (the UI), plus enrichment.**
+
 Each ticket names the ADR it implements where one applies, and its `Accept` is the real-path test that
-closes it.
+closed it.
 
 ### Lane A · XDR — cross-domain correlation & coordinated response
 
@@ -266,7 +282,7 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   notarization — each a separate trust or distribution decision rather than leftover work. **goreleaser and Helm are REFUSED, not deferred** (D276):
   goreleaser would replace working tested code with a toolchain for conveniences not needed, and a Helm
   chart would contradict the compose/systemd footprint this project documents.
-- **PLAT-9 · Operational lifecycle & recovery** — 🟡 **emergency disable (D265), verified restore (D266)
+- **PLAT-9 · Operational lifecycle & recovery** — ✅ **DONE.** **emergency disable (D265), verified restore (D266)
   schema-skew reporting (D267), the RUNBOOK + footprint (D268), the ENDPOINT fleet-wide disable (D269),
   fleet acknowledgement (D270/D271), the wire-version contract + upgrade ORDER (D275) and the
   backup/restore DRILL + node-recovery table (D277) all DONE, and the drill is now RUN end-to-end against
@@ -293,15 +309,18 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   either by a local break-glass file or by a dynamic setting that propagates fleet-wide via PLAT-5b's
   watcher. *Residual, named:* the fleet path reaches only components that read the config store —
   **endpoint agents do not**, so their fleet-wide disable needs the signed channel (increment 2).
-  **Still to do:** the question a CISO asks first — *how do I run
-  this?* — and today the roadmap answers only "packaging." Deliver: rolling agent + server upgrade with
-  version-skew tolerance and **rollback**; a fleet-wide **emergency disable** ("stop enforcing now") that
-  fails safe and is itself ledgered; **backup + verified restore** of the Postgres system-of-record and the
-  per-agent ledger (restore must re-verify the hash chain + anchors, not just the bytes); node/DB recovery
-  + a basic DR runbook; and a documented **deployment footprint** (this is a compose/systemd/single-Helm-
-  release product, not a 50-node cluster — state it, so operators can size it). *Accept: an upgrade rolls
-  forward and back with no ledger gap; a restored backup re-verifies its chain + anchors; emergency-disable
-  flips the fleet to observe-only within one interval and writes a ledger entry.*
+  **The original scope — and every part of it is now delivered**, kept here as the record of what the
+  ticket promised: the question a CISO asks first is *how do I run this?*, and the roadmap once answered
+  only "packaging." Delivered: rolling agent + server upgrade with version-skew tolerance and **rollback**
+  (D275, and migrations are forward-only — rolling the BINARY back is supported, rolling the SCHEMA back
+  is not); a fleet-wide **emergency disable** that fails toward enforcing and is itself ledgered (D265,
+  D269); **backup + verified restore** of the Postgres system-of-record and the per-agent ledger, with the
+  restore re-verifying the hash chain and anchors rather than only the bytes (D266, D277, D278); node/DB
+  recovery and a DR runbook; and a documented **deployment footprint** — a compose/systemd product, not a
+  50-node cluster, stated so operators can size it, and publishing **no** throughput figures because no
+  load exercise has been run (D268, [`runbook.md`](runbook.md)). *Accept, met: an upgrade rolls forward
+  and back with no ledger gap; a restored backup re-verifies its chain + anchors; emergency-disable flips
+  the fleet to observe-only within one interval and writes a ledger entry.*
 
 *(Cross-platform Windows/macOS observe is **enrichment**, not MVP — MVP is Linux-first; see the
 enrichment backlog. Enforcement everywhere stays owner-gated per ADR-11.)*
@@ -334,6 +353,24 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   omits the title deliberately. Real-spooler proven. *Residual:* chain placement determines detection
   quality (text vs raster), only the head of a huge job is classified, no CUPS-bypassing paths, no
   watermark/redact, install is a root step.
+*(Lane E's MVP items — HIPS-3 inc 2a/2b, DLP-2a, DLP-2b — are all ✅ above. **Lane E is complete**, and
+with it the MVP queue.)*
+
+---
+
+## 🟢 Enrichment backlog — post-MVP, none of it gating
+
+**Everything below this line is enrichment**: additive producers, classify plugins and typed context that
+land on the frozen core without gating the MVP. The intro promises this section by name; until now it had
+no header and its items sat as subsections of the MVP queue, which read as though they were required.
+They are not. Pull from here opportunistically, or after the UI (PLAT-1).
+
+Several entries below are marked ✅ **DONE** — KERNEL-1, the broker-lifecycle work, DSPM-1, ZT-7. They
+are kept in place rather than moved to the Done ledger because each records the **residuals** its ticket
+did not close and the reasoning that found it, which is the part worth re-reading before proposing
+adjacent work.
+
+### DLP
 - **DLP-2 · Remaining exfil surface** — P, per-OS · L. Screenshot capture (display/OS-gated) + CASB
   refinements (multipart/path upload heuristics, download/share, shadow-IT discovery, runtime mount-table
   resolution). *(Clipboard + print producers are MVP — Lane E; file + cloud-sync + CASB already ship.)*
@@ -397,8 +434,15 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   entry can match — rather than flushing, which needs the `conntrack` tool a contributor may not have.
   Four consecutive clean package runs under real root, where it previously failed two in three, and it is
   now in the CI kernel job.
+  **The same shape was then found in the gateway (D389)** and closed: `internal/gateway` ships four
+  `*_kernel_test.go` files covering TPROXY redirect, SNI blocking, rule lifecycle and re-arm, and the
+  kernel job ran none of them — *"`internal/gateway` has kernel tests"* and *"CI runs `internal/gateway`'s
+  kernel tests"* look identical from the outside, which is why it survived as long as it did. Unlike the
+  DNS redirect, these were not broken when finally run: all five passed first time on a real kernel.
+  The job now builds and runs the open gate, `internal/dnsredirect` and `internal/gateway` under real root.
   *Still outside that job:* `internal/dnssink`'s VM tests, and `internal/clipboard/x11` — which needs only
-  `xvfb-run`, not root, so it is gated on a display rather than on privilege.
+  `xvfb-run`, not root, so it is gated on a display rather than on privilege (and whose tests leaked
+  children that pinned two cores for an hour until D393).
 
 ### Broker lifecycle — found by the offline-queue recovery test (D367)
 - **Endpoint partition + ping detection: ✅ DONE (D369).** A container-based scenario removes the AGENT's
@@ -608,20 +652,36 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   fast machine the row was already counted and two tests burned their full 60s timeouts. Now its own job,
   with `podman --version` as an explicit first step because the suite *skips* without podman and the naive
   job would have reported green while running nothing.
-- **Coverage of the shipped binaries: 51.2% of statements**, 82 packages, one integration run
-  (`scripts/coverage-integration.sh`, D365). 6 packages at 0%, 10 under 25%. Four of the zeros are
-  root/display-gated and covered on the VM; one — `internal/connectors/rfc5424` — was a REAL gap now
-  closed (every syslog scenario in the suite sent CEF, so the RFC 5424 fallback could not be reached by
-  any configuration the suite produces); and one is a limit of the measurement, below. **51.2% is a work
-  list, not a grade:** statement coverage is not path coverage, and the number understates the truth by
-  an unknown amount for the reason in the next bullet.
-- **`privileged.Worker.Close` SIGKILLs the worker, so the parse path cannot be coverage-measured** — it
-  closes stdin and then immediately calls `cmd.Process.Kill()`, and a killed process flushes no coverage
-  profile. `internal/agent/worker` therefore measures 0% while `cmd/openshield-worker` measures 48.2%
-  (startup paths from workers that raced to exit on stdin EOF first). Closing stdin, waiting briefly, then
-  killing would be better shutdown hygiene *and* would make the measurement possible — but changing
-  production shutdown semantics to improve a metric needs its own reasoning, so it is a ticket, not a
-  side effect. Small; worth doing.
+- **Coverage of the shipped binaries — the D383-D417 campaign, and what it was really measuring.**
+  The 51.2% first reported here (D365) was not the tree's coverage; it was the coverage the *measurement
+  could reach*. Two defects in the measurement were fixed before the number meant anything. **(1) The
+  worker was killed before it could report (D381):** `privileged.Worker.Close` closed stdin and
+  immediately `Kill()`ed, and a killed process flushes no coverage profile, so `internal/agent/worker`
+  measured 0%. It now waits a grace period and kills only as a fallback — better shutdown hygiene *and*
+  a measurable parse path. **(2) The privileged runs were not merged (D384):** the fanotify permission
+  gate, the exec gate and the watchdog — the components whose failure wedges a machine — were understated
+  **4-7x** (`openmon` 11.2% → 85.0%, `execmon` 30.7% → 80.4%, `dnsredirect` 39.3% → 77.8%, `watchdog`
+  66.7% → 90.9%). `scripts/coverage-all.sh` now does unit + integration + privileged in one command and
+  prints a LOUD warning when the privileged set is absent, naming which packages are understated, rather
+  than quietly producing a number that defames the most careful code in the tree.
+  **Where it stands: 71.1% at D384, and the last full sweep (Round 56) read 78.1% — published as a
+  FLOOR, because it predates D397-D399 and everything after.** Do not quote it as current; re-run
+  `scripts/coverage-all.sh`. **It is a work list, not a grade:** statement coverage is not path coverage.
+  Eight of the eleven packages then under 70% were `cmd/` wiring; the honest remainder was
+  `internal/enforcers/quarantine` and `internal/agent/sandbox`. The per-package list and each round's
+  findings live in [`unwired-audit.md`](unwired-audit.md).
+  **The campaign's real yield was not the number.** Writing the first test a package had ever had found
+  product bugs, repeatedly: quarantining two files with the same base name silently DESTROYED the first
+  (D401); `openshieldctl timeline --subject --event` set the subject to the literal `"--event"` and
+  printed an empty timeline (D397); a data race in shipped print-guard code (D392); a cancelled context
+  took thirty seconds to abandon enrollment (D409); a PCR-list typo narrowed attestation silently (D413);
+  and eleven control-plane counters plus the pipeline's own timeout counter — D17's "cheapest detection" —
+  were incremented and rendered by nothing (D415/D417), which a tree-wide scan then extended to the
+  gateway's forged-signature counters, where every `Rejected` read in the tree was in a test (D418), and
+  finally to the emergency disable's own suppression count (D419). **Every atomic counter in the shipped
+  tree is now read outside its own tests and a fitness guard keeps it that way** — after five instances,
+  the durable fix is a guard, not a fifth fix.
+  **The most reliable signal in this audit is not low coverage but *no test file at all*.**
 - **`scripts/check-cmd-closure.sh` guards the unwired-feature class** (D365, in `make quick`/`make check`
   /CI, ~2s). Every package must be reachable from `./cmd/...` or carry a recorded reason; 9 are outside
   the closure today (3 test-only guards, 3 doc-only, 2 spikes, 1 `!linux`-gated). Fails on a stale entry

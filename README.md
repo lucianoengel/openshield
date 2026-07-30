@@ -276,18 +276,27 @@ upcoming and is now built, tested, and in the capability table above:
 - 🔏 **Hardware-backed device attestation** — the full TPM chain, proven end-to-end against swtpm
 - 🔐 **Zero-Trust device identity and posture binding**, composable compliance packs, the unified
   alert lifecycle, and analyst RBAC
+- 🛠️ **Operability** — durable messaging by default, active-passive high availability, typed
+  database-authoritative configuration, signed reproducible releases with an SBOM, and a
+  backup/restore drill that is not finished until the ledger re-verifies
+- 🔑 **Operator identity** — SSO, sender-constrained tokens, and SCIM deactivation, with the
+  authorization role out of the certificate and revocable server-side
+- 🗄️ **Data-at-rest discovery** — an object-store connector that answers "where is my sensitive data"
 
-**Now — the operator surface:**
-- 🖼️ **The analyst UI**, deliberately last: the platform it displays had to exist first
-- 📦 **Packaging and operability** — signed reproducible releases, backup/restore drills, and
-  configuration that can be set and read back without editing a unit file
+**Now — the operator surface.** The backend queue that had to come first is complete:
+- 🖼️ **The analyst UI**, deliberately last: the platform it displays had to exist first, and now does.
+  It is designed for investigation ergonomics — pivot, search, replay, and *explain a decision* — not
+  for display
 
 **Next — depth over breadth:**
-- ⚙️ **Scale & resilience** — durable messaging, active-passive high availability
 - 🌐 **Deeper network inspection** — Suricata-grammar rules, HTTP/2 and QUIC, JA3, SMTP *filtering*
   (today SMTP is inspected, not blocked)
-- 🖥️ **Cross-platform agents** (Windows / macOS)
+- 🖥️ **Cross-platform agents** (Windows / macOS) — the observe path already compiles and runs off
+  Linux; enforcement stays gated on platform certificates and entitlements
 - 🔍 **Endpoint depth** — eBPF/LSM hooks, per-process ransomware attribution
+- 🔎 **Detection breadth** — OCR, more national IDs, more log formats, and access context for
+  data-at-rest discovery
+- 📦 **Distribution** — Sigstore/cosign and a transparency log, `.deb`/`.rpm`, macOS notarization
 
 <sub>The detailed engineering plan and design-decision records are maintained in
 [`docs/architecture-roadmap.md`](docs/architecture-roadmap.md).</sub>
@@ -315,13 +324,17 @@ full rationale.
 
 | Doc | What's in it |
 |---|---|
-| [Architecture roadmap](docs/architecture-roadmap.md) | Live capability status, the prioritized plan, and the architecture-decision records |
-| [Design decisions](docs/decisions.md) | The architecture-decision log behind the codebase |
-| [Threat model](docs/threat-model.md) | Assets, adversaries, trust boundaries |
+| [Architecture roadmap](docs/architecture-roadmap.md) | Live capability status, the plan, and the architecture-decision records (ADRs) |
+| [Design decisions](docs/decisions.md) | The architectural decision register behind the codebase |
+| [Changelog](CHANGELOG.md) | The milestone arc in build order |
+| [Invariants](INVARIANTS.md) | The load-bearing security properties, each naming the test that fails when it regresses |
+| [Threat model](docs/threat-model.md) | Assets, adversaries, and eight trust boundaries — each with its guard, its proof, and its limit |
+| [Operator runbook](docs/runbook.md) | Running the stack: deployment footprint, costs, backup drills, verification, recovery |
+| [Enterprise gap assessment](docs/enterprise-gap-assessment.md) | OpenShield measured against a top-tier commercial stack, with every claim verified against the tree |
+| [Unwired-feature audit](docs/unwired-audit.md) | A running log of code that was built, tested, and reachable by nothing — and the ways a green test can mean nothing |
 | [Architecture proposal](docs/architecture-proposal.md) | The original pipeline thesis |
 | [DPIA template](docs/dpia-template.md) | Data-protection impact assessment scaffold |
-| [Operator runbook](docs/runbook.md) | Running the stack: deployment, backup drills, verification |
-| [Unwired-feature audit](docs/unwired-audit.md) | A running log of code that was built, tested, and reachable by nothing — and the ways a green test can mean nothing |
+| [Contributing](CONTRIBUTING.md) | House rules, the testing discipline, and how capability is expected to land |
 
 ## 🤝 Contributing
 

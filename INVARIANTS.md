@@ -116,6 +116,16 @@ unenrolled agent and asserted no verified rows appeared, which passed because th
 nothing at all. An attacker does not use our binary. The test now publishes forged telemetry directly
 onto the broker and asserts arrival FIRST — a negative test must prove the negated thing was attempted.
 
+**Honest limit — verified is not the same as valid, and D350 is what that cost.** This invariant bounds
+*who* may contribute evidence; it says nothing about whether what they contribute is well-formed. The
+contract check that would have said so, `core.ValidateDecision`, **had no caller**: Decisions arriving as
+telemetry were unmarshalled, stored and projected into `unified_alerts` unchecked. Because
+`severityForDecision` maps confidence to severity and confidence was never range-checked on ingest, an
+enrolled agent — compromised, or merely version-skewed — could send `confidence: 999` and **manufacture
+CRITICAL alerts at will**. Signature verification was working exactly as this invariant claims, and that
+was not enough. The rule it establishes: **a contract check is owed at every trust boundary the contract
+crosses, not only where the value is created.** Now enforced on ingest.
+
 ---
 
 ## INV-5 · Enforcement can be stopped without stopping detection
