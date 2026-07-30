@@ -154,3 +154,106 @@ func TestOIDCClockSkewLeeway(t *testing.T) {
 		t.Errorf("a token not-yet-valid by 10s was rejected despite a 30s leeway: %v", err)
 	}
 }
+
+// TestOperatorSenderConstraintAgainstTheRealVerifier is the operator path's version of
+// TestDPoPSenderConstraint (ZT-7), and it exists because the control-plane tests could not do this job.
+//
+// Those drive a STUB verifier. They prove the wiring — that the DPoP header is read and passed through —
+// and a mutation of the real validation left them passing, which is exactly what a stub cannot catch. So
+// the semantics are asserted here, against the real verifier, where a mutation bites.
+//
+// The operator differences from the ZTNA path are asserted too: the RAW subject comes back rather than a
+// pseudonym (an operator's actions must be attributable by name), and no role claim is required or read.
+func TestOperatorSenderConstraintAgainstTheRealVerifier(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
+	keys := map[string]crypto.PublicKey{"ed1": edPub}
+	dpopPub, dpopPriv, _ := ed25519.GenerateKey(rand.Reader)
+	jkt := ed25519Thumbprint(dpopPub)
+
+	newV := func() *identity.OIDCVerifier {
+		// NO ROLE CLAIM — the operator constructor does not take one, because the role comes from the
+		// server-side record and never from the token.
+		v, err := identity.NewOperatorVerifier("https://issuer.example", "openshield-gateway", keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.WithClock(func() time.Time { return now }).EnableDPoP(1024)
+	}
+
+	const method, htu = "GET", "https://cp.example/alerts"
+
+	bound := baseClaims(now)
+	bound["cnf"] = map[string]string{"jkt": jkt}
+	boundTok := signJWT(t, "EdDSA", "ed1", edPriv, bound)
+
+	// A valid proof from the bound key → accepted, and the RAW subject comes back.
+	proof := signDPoP(t, dpopPriv, method, htu, "op-jti-1", now)
+	sub, err := newV().VerifySubjectWithProof(boundTok, proof, method, htu, false)
+	if err != nil {
+		t.Fatalf("a valid DPoP-bound operator request was rejected: %v", err)
+	}
+	if sub != bound["sub"] {
+		t.Errorf("subject = %q, want the RAW %q — an operator's actions have to be attributable by name, "+
+			"so this path must not pseudonymise the way the ZTNA one does", sub, bound["sub"])
+	}
+
+	// THE STOLEN TOKEN ALONE → refused. This is the whole point: capturing the token is not enough.
+	if _, err := newV().VerifySubjectWithProof(boundTok, "", method, htu, false); err == nil {
+		t.Fatal("a sender-constrained operator token was accepted with NO proof — that is a plain bearer " +
+			"token with extra steps")
+	}
+
+	// A proof under an attacker's key → refused.
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
+	if _, err := newV().VerifySubjectWithProof(boundTok,
+		signDPoP(t, otherPriv, method, htu, "op-jti-2", now), method, htu, false); err == nil {
+		t.Fatal("a proof under a non-bound key was accepted — cnf.jkt not enforced")
+	}
+
+	// A proof lifted onto a different request → refused.
+	if _, err := newV().VerifySubjectWithProof(boundTok,
+		signDPoP(t, dpopPriv, "POST", "https://cp.example/alerts/ack", "op-jti-3", now), method, htu, false); err == nil {
+		t.Fatal("a proof for a different method/URI was accepted — htm/htu not enforced")
+	}
+
+	// AN UNBOUND TOKEN: accepted by default, refused when the deployment requires binding.
+	//
+	// The default is the compatible one — refusing before the issuer binds tokens locks every operator out.
+	// The switch is what stops an issuer misconfiguration silently returning everyone to a stealable
+	// credential.
+	plain := signJWT(t, "EdDSA", "ed1", edPriv, baseClaims(now))
+	if _, err := newV().VerifySubjectWithProof(plain, "", method, htu, false); err != nil {
+		t.Fatalf("an unbound token was refused with the requirement off: %v", err)
+	}
+	if _, err := newV().VerifySubjectWithProof(plain, "", method, htu, true); err == nil {
+		t.Fatal("an unbound token was accepted with the requirement ON — an issuer that stops binding would " +
+			"silently downgrade every operator to a token anyone who captures it can use")
+	}
+}
+
+// TestABoundOperatorTokenIsRefusedWhenProofsCannotBeChecked.
+//
+// A verifier without DPoP enabled cannot validate a proof. Honouring a token that says it is
+// sender-constrained would DISCARD exactly the protection the issuer asked for, silently — so it is a
+// refusal, not a downgrade.
+func TestABoundOperatorTokenIsRefusedWhenProofsCannotBeChecked(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
+	dpopPub, _, _ := ed25519.GenerateKey(rand.Reader)
+
+	v, err := identity.NewOperatorVerifier("https://issuer.example", "openshield-gateway",
+		map[string]crypto.PublicKey{"ed1": edPub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = v.WithClock(func() time.Time { return now }) // DPoP deliberately NOT enabled
+
+	claims := baseClaims(now)
+	claims["cnf"] = map[string]string{"jkt": ed25519Thumbprint(dpopPub)}
+	if _, err := v.VerifySubjectWithProof(signJWT(t, "EdDSA", "ed1", edPriv, claims), "", "GET",
+		"https://cp.example/alerts", false); err == nil {
+		t.Fatal("a sender-constrained token was honoured by a verifier that cannot check proofs — the " +
+			"binding the issuer asked for was discarded silently")
+	}
+}

@@ -182,11 +182,25 @@ func TestAnAgentCertificateCannotBeGrantedAnOperatorTier(t *testing.T) {
 type stubVerifier struct {
 	token   string
 	subject string
+	// proof, when set, makes this token sender-constrained: it verifies only when the matching proof is
+	// presented.
+	proof string
 }
 
-func (s stubVerifier) VerifySubject(tok string) (string, error) {
+// bound simulates a sender-constrained token: it needs a matching proof.
+func (s stubVerifier) VerifySubjectWithProof(tok, proof, _, _ string, requireBound bool) (string, error) {
 	if tok != s.token {
 		return "", errors.New("bad token")
+	}
+	if s.proof == "" {
+		// An unbound token. Refused only when the deployment requires binding.
+		if requireBound {
+			return "", errors.New("token is not sender-constrained")
+		}
+		return s.subject, nil
+	}
+	if proof != s.proof {
+		return "", errors.New("missing or wrong DPoP proof")
 	}
 	return s.subject, nil
 }
@@ -285,5 +299,71 @@ func TestSsoIsOffUnlessConfigured(t *testing.T) {
 	gate := controlplane.RequireTierForTest(s, "analyst")
 	if code := serveReq(gate, bearerReq(t, "anything")); code != http.StatusUnauthorized {
 		t.Fatalf("a bearer token was considered with no verifier configured: %d", code)
+	}
+}
+
+// TestAStolenSenderConstrainedOperatorTokenIsUseless is the point of DPoP (ZT-7 residual).
+//
+// A plain bearer token is a password that happens to expire: whoever holds it is the operator. Binding it
+// to a key means the token alone proves nothing, so capturing it — from a log, a proxy, a browser history —
+// does not hand over the console.
+func TestAStolenSenderConstrainedOperatorTokenIsUseless(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+	const who = "erin@corp.example"
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+		t.Fatal(err)
+	}
+	s.SetOperatorOIDC(stubVerifier{token: "bound-token", subject: who, proof: "the-proof"})
+	gate := controlplane.RequireTierForTest(s, "analyst")
+
+	// WITH the proof: authorized.
+	req := bearerReq(t, "bound-token")
+	req.Header.Set("DPoP", "the-proof")
+	if code := serveReq(gate, req); code != http.StatusOK {
+		t.Fatalf("a bound token WITH its proof was refused: %d", code)
+	}
+
+	// THE TOKEN ALONE — exactly what an attacker who captured it would have.
+	if code := serveReq(gate, bearerReq(t, "bound-token")); code != http.StatusUnauthorized {
+		t.Fatalf("a sender-constrained token was accepted WITHOUT its proof (%d). That is a plain bearer "+
+			"token with extra steps, and the whole reason to bind it is that capturing it should not be "+
+			"enough", code)
+	}
+
+	// A proof under the wrong key is not better than none.
+	wrong := bearerReq(t, "bound-token")
+	wrong.Header.Set("DPoP", "some-other-proof")
+	if code := serveReq(gate, wrong); code != http.StatusUnauthorized {
+		t.Errorf("a token was accepted with a proof it was not bound to: %d", code)
+	}
+}
+
+// TestRequiringDpopRefusesAnUnboundToken is the hardening switch.
+//
+// Without it, an identity provider that stops binding tokens — a misconfiguration, a downgrade, a
+// migration — silently returns every operator to a stealable bearer credential, and nothing says so.
+func TestRequiringDpopRefusesAnUnboundToken(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+	const who = "frank@corp.example"
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+		t.Fatal(err)
+	}
+	s.SetOperatorOIDC(stubVerifier{token: "plain-token", subject: who}) // no proof: unbound
+	gate := controlplane.RequireTierForTest(s, "analyst")
+
+	// Default: an unbound token still works, because refusing before the issuer binds locks everyone out.
+	if code := serveReq(gate, bearerReq(t, "plain-token")); code != http.StatusOK {
+		t.Fatalf("an unbound token was refused with the requirement OFF: %d", code)
+	}
+
+	t.Setenv("OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP", "1")
+	if code := serveReq(gate, bearerReq(t, "plain-token")); code != http.StatusUnauthorized {
+		t.Fatalf("an unbound token was accepted with the requirement ON: %d", code)
 	}
 }

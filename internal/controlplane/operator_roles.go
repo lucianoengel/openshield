@@ -230,8 +230,27 @@ func (s *Server) ListOperatorRoles(ctx context.Context) ([]OperatorRoleRow, erro
 
 // operatorTokenVerifier is the slice of the OIDC verifier this needs, as an interface so the control plane
 // does not depend on the gateway's package and so a test can supply a stub.
+//
+// The proof-aware signature is the ONLY one, deliberately. Keeping a plain VerifySubject alongside it would
+// leave a path that ignores sender-constraining, and the whole value of DPoP is that there is no such path.
 type operatorTokenVerifier interface {
-	VerifySubject(token string) (string, error)
+	VerifySubjectWithProof(token, dpopProof, method, requestURI string, requireBound bool) (string, error)
+}
+
+// requireBoundOperatorTokens reports whether an operator token that is NOT sender-constrained is refused.
+//
+// Off by default and documented as the hardened end state, the same shape as OPENSHIELD_OPERATOR_ROLES_STRICT:
+// turning it on before the identity provider issues bound tokens locks every operator out.
+func requireBoundOperatorTokens() bool {
+	return strings.TrimSpace(os.Getenv("OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP")) == "1"
+}
+
+// requestURI reconstructs the absolute URI a DPoP proof must be bound to (htu).
+//
+// Scheme is https unconditionally: the operator surface is served over TLS, and deriving it from a header a
+// client controls would let that client choose what its own proof has to match.
+func requestURI(r *http.Request) string {
+	return "https://" + r.Host + r.URL.Path
 }
 
 // SetOperatorOIDC installs the verifier for operator bearer tokens. Nil disables SSO, which is the default:
@@ -285,7 +304,8 @@ func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
 	if tok == "" {
 		return operatorAuth{}
 	}
-	sub, err := v.VerifySubject(tok)
+	sub, err := v.VerifySubjectWithProof(tok, r.Header.Get("DPoP"), r.Method, requestURI(r),
+		requireBoundOperatorTokens())
 	if err != nil || sub == "" {
 		// A token that does not verify is NOT an identity. No partial credit, no defaulting to anonymous
 		// with a lower tier — every check in the verifier is fail-closed and so is this.

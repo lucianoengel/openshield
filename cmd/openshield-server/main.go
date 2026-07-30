@@ -100,6 +100,11 @@ func main() {
 		if verr != nil {
 			fatal("operator SSO: %v", verr)
 		}
+		// SENDER-CONSTRAINING IS ALWAYS AVAILABLE, so a token the issuer bound is always checked. Whether an
+		// UNBOUND token is refused is the separate hardening switch OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP —
+		// enabling proof validation costs nothing and refusing plain bearers would lock out a deployment
+		// whose issuer does not bind yet.
+		v.EnableDPoP(envInt("OPENSHIELD_OPERATOR_OIDC_DPOP_REPLAY_CACHE", 4096))
 		srv.SetOperatorOIDC(v)
 		operatorSSOEnabled = true
 		fmt.Fprintf(os.Stderr, "openshield-server: operator SSO ACTIVE (issuer %s). Tokens AUTHENTICATE; "+

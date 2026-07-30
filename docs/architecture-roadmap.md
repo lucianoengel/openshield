@@ -507,8 +507,7 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   have no reason to fail.
   **STILL OPEN:** **SCIM** — deprovisioning is a manual `operator-role revoke`, so an IdP deactivating a
   user bounds exposure to a token lifetime rather than removing authority; **no JIT provisioning**, so a
-  first-time SSO operator has no access until an admin grants it; **no DPoP on the operator path**, so a
-  stolen token is usable until expiry (the ZTNA path has sender-constraining, this does not); four-eyes on a
+  first-time SSO operator has no access until an admin grants it; **DPoP on the operator path: ✅ DONE (D379)** — a token carrying `cnf.jkt` needs a proof of possession bound to the method and URI, single-use and fresh; a bound token reaching a verifier that cannot check proofs is REFUSED rather than downgraded; `OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP` refuses UNBOUND tokens (off by default — on before the issuer binds locks everyone out). *Residual:* `htu` is built from the Host header, so a proxy that rewrites it breaks proofs; replay rejection is bounded by a cache; four-eyes on a
   grant; and certificate revocation proper — revoking authorization leaves the identity able to
   authenticate, just unable to do anything. Two things, and the
   second is a DEFECT rather than a missing integration. Operator identity today is mTLS client certs only

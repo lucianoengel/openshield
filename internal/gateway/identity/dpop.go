@@ -210,3 +210,43 @@ func splitCompact(s string) []string {
 	}
 	return parts[:]
 }
+
+// VerifySubjectWithProof is the OPERATOR path's sender-constrained verification (ZT-7).
+//
+// Same relationship to VerifySubject that VerifyWithProof has to Verify: it returns the RAW subject rather
+// than a pseudonymised identity, and never reads a role from the token. What it adds is that a token
+// carrying a `cnf.jkt` must be accompanied by a DPoP proof under that key, so a stolen operator token is
+// useless without the private key it was bound to.
+//
+// requireBound is the hardening switch a deployment can turn on. Without it, a token with NO cnf.jkt
+// verifies as a plain bearer — which is RFC-shaped (the issuer decides whether to bind) and is also how an
+// identity-provider misconfiguration silently downgrades every operator to an unbound token. With it, an
+// unbound token is refused, so the downgrade cannot happen quietly.
+func (v *OIDCVerifier) VerifySubjectWithProof(token, dpopProof, method, requestURI string, requireBound bool) (string, error) {
+	claims, _, err := v.verifyCore(token)
+	if err != nil {
+		return "", err
+	}
+	jkt, bound := claims.confirmationKey()
+	if !bound {
+		if requireBound {
+			return "", fmt.Errorf("identity: operator token is not sender-constrained (no cnf.jkt) and this " +
+				"deployment requires DPoP-bound operator tokens")
+		}
+		return claims.Sub, nil
+	}
+	// BOUND BUT UNCHECKABLE IS A REFUSAL, not a downgrade. If the token says it is sender-constrained and
+	// this verifier cannot validate proofs, honouring it as a plain bearer would discard exactly the
+	// protection the issuer asked for — and would do it silently.
+	if v.dpopReplay == nil {
+		return "", fmt.Errorf("identity: operator token is sender-constrained but DPoP validation is not " +
+			"enabled on this verifier")
+	}
+	if dpopProof == "" {
+		return "", fmt.Errorf("identity: operator token is sender-constrained (cnf.jkt) but no DPoP proof was presented")
+	}
+	if err := v.validateDPoP(dpopProof, jkt, method, requestURI); err != nil {
+		return "", err
+	}
+	return claims.Sub, nil
+}
