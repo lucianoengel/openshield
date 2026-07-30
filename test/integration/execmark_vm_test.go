@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +38,18 @@ type markProbe struct {
 	stop   chan struct{}
 }
 
-func newMarkProbe(t *testing.T, flags uint, path string) *markProbe {
+// newMarkProbe separates the two ways this can fail, because they mean opposite things.
+//
+// A failing fanotify_init is "we could not measure" — no CAP_SYS_ADMIN — and is a SKIP. Under the CI kernel
+// job that runs as root it must never happen, and the job greps its own output for `--- SKIP` precisely to
+// catch it.
+//
+// A REFUSED MARK IS A RESULT, not a failure to measure. This test exists to report which mark types deliver
+// an exec event; a kernel answering EINVAL for `FAN_MARK_ONLYDIR|FAN_EVENT_ON_CHILD` with
+// `FAN_OPEN_EXEC_PERM` has told us the thing we came to find out. Reporting that as a skip conflated the
+// two, and it cost a red CI run: the job's skip guard fired on a sub-test that had measured exactly what it
+// set out to. So the error is returned and the caller records it alongside the other rows.
+func newMarkProbe(t *testing.T, flags uint, path string) (*markProbe, error) {
 	t.Helper()
 	fd, err := unix.FanotifyInit(unix.FAN_CLASS_CONTENT|unix.FAN_CLOEXEC|unix.FAN_NONBLOCK, unix.O_RDONLY|unix.O_CLOEXEC)
 	if err != nil {
@@ -45,11 +57,11 @@ func newMarkProbe(t *testing.T, flags uint, path string) *markProbe {
 	}
 	if err := unix.FanotifyMark(fd, unix.FAN_MARK_ADD|flags, unix.FAN_OPEN_EXEC_PERM, unix.AT_FDCWD, path); err != nil {
 		unix.Close(fd)
-		t.Skipf("marking %s with flags %#x: %v", path, flags, err)
+		return nil, fmt.Errorf("marking %s with flags %#x: %w", path, flags, err)
 	}
 	p := &markProbe{fd: fd, events: make(chan string, 64), stop: make(chan struct{})}
 	go p.run()
-	return p
+	return p, nil
 }
 
 // run reads events and ALLOWS every one immediately. Answering is not optional: an unanswered
@@ -162,7 +174,12 @@ func TestWhichFanotifyMarkDeliversAnExecEvent(t *testing.T) {
 			if c.name == "directory mark + FAN_EVENT_ON_CHILD" {
 				flags |= unix.FAN_EVENT_ON_CHILD
 			}
-			p := newMarkProbe(t, flags, c.mark)
+			p, err := newMarkProbe(t, flags, c.mark)
+			if err != nil {
+				// The kernel refusing this combination IS this row's answer.
+				t.Logf("RESULT %-38s UNSUPPORTED by this kernel: %v", c.name, err)
+				return
+			}
 			defer p.close()
 			time.Sleep(300 * time.Millisecond)
 
