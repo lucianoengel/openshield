@@ -3054,3 +3054,78 @@ these steps: D385 shipped a job whose `go build -o DIR` had never been executed 
 a guard that fired on a legitimate result. So: the tests were run under root (5 PASS, no skips), and then
 **the step body itself** was run verbatim on the VM (`5`, exit 0). Verifying the tests and verifying the job
 are different acts.
+
+## Round 56 (D394–D400): the corrected measurement, and what it says is left
+
+The work list published in Round 52 was taken with the database down and named `internal/controlplane`, the
+largest package in the tree, as one of two "with no excuse". Round 53 corrected the headline. This is the
+re-measurement, on a tree with a database up, merged across unit + integration + privileged:
+
+| | Round 52 (wrong) | Round 53 (corrected) | now |
+| --- | --- | --- | --- |
+| overall | 71.1% | 77.2% | **78.1%** |
+| packages under 50% | 3 | 2 | **1** |
+| packages at 85%+ | 46 | 47 | **49** |
+
+**The single package under 50% is `test/integration` at 14.8% — the harness measuring itself.** There is no
+longer a hand-written package in the tree below half covered.
+
+**78.1% is a FLOOR, not the current figure.** D397, D398 and D399 were committed at 16:46, 16:48 and 16:51;
+the sweep launched at 16:37 and compiles each package as it reaches it, so those three commits' tests are
+not in this number. Saying "78.1%" without that caveat would repeat Round 52's mistake in a smaller way —
+publishing a measurement as though it described a tree it did not.
+
+### What the remaining list actually is
+
+| | | |
+| --- | --- | --- |
+| `test/integration` | 14.8% | the harness; not meaningful |
+| `cmd/openshield-agent` | 51.7% | wiring + root-gated paths |
+| `cmd/openshield-gateway` | 61.2% | wiring |
+| `cmd/openshieldctl` | 61.7% | improved by D397, not counted here |
+| `internal/enforcers/quarantine` | 63.6% | real |
+| `cmd/openshield-print-filter` | 63.8% | wiring |
+| `internal/agent/sandbox` | 66.7% | real |
+| `internal/clipboard/x11` | 66.7% | VM-only; red on the workstation by D393 |
+
+Eight of the eleven entries under 70% are `cmd/` packages — `main()` wiring, flag plumbing and startup
+paths that integration tests exercise as binaries rather than as functions. That is a different kind of gap
+from a decoder with no tests, and worth naming rather than driving to a number: the honest remainder is
+`internal/enforcers/quarantine` and `internal/agent/sandbox`.
+
+### The generated-code separation, working
+
+`internal/core/corev1` now appears under its own heading — *"generated code, reported but NOT a work list"*
+— at 57.2%, instead of sitting on the work list between two packages that genuinely needed tests. Exactly
+one package in the tree matches the rule (`.pb.go` files and no hand-written `.go`), which is the right
+number.
+
+### What the seven commits found, and the pattern in it
+
+D394 the offline spool carried three payload kinds and the package's own test double DISCARDED two of them.
+D395 the default notifier and the cause inside a permanent error. D396 the EK-certificate arc check, where
+the two classic prefix-test failures land in opposite directions. **D397 a real bug**: `openshieldctl
+timeline --subject --event` set the subject to the literal string `"--event"` and returned no error,
+printing an empty timeline — which from an audit tool reads as "this subject did nothing". D398 the
+enrollment merge behind "capturing one device never unenrolls the others". D399 the open gate's refusal to
+start without an engine socket. D400 mediation reporting success after failing to open the display.
+
+Three of these were found by writing the FIRST test a package had ever had (`openshieldctl` had none for
+697 lines; `printguard` had none for 332). That is now the most reliable signal in this audit: not low
+coverage, but *no test file at all*.
+
+And twice the tests were wrong in ways worth recording, because both are this project's own recurring
+failure seen from the inside:
+
+- D396: I asserted that reading an undeclared config key returns a zero value. It panics, deliberately —
+  the config UI's schema is derived from the declared field set, so a field read by code and declared
+  nowhere would be invisible and unsettable. **The code was right and the test was wrong.**
+- D399: I asserted the open gate refuses a whitespace-only socket path, checking only that *some* error came
+  back. It passed against a mutant with `TrimSpace` removed, because the gate then got past the config check
+  and died at `fanotify_init: operation not permitted`. **It was passing for lack of privilege**, and on the
+  rooted VM it would have failed for a third unrelated reason. A test whose verdict depends on which machine
+  it runs on is not testing the code.
+
+Three of my own MUTATIONS also had to be fixed rather than the tests strengthened — two did not compile, one
+added an inert case that changed no behaviour. A mutation that cannot fail proves exactly as little as a
+test that cannot.
