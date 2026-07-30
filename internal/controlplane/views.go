@@ -131,13 +131,16 @@ func requireRole(role string, h http.Handler) http.Handler {
 func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
 	min := roleRank(minRole)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-			http.Error(w, "client certificate required", http.StatusUnauthorized)
+		// AUTHENTICATE, then authorize. A client certificate or an OIDC bearer token (ZT-7); both converge
+		// on the same server-side role.
+		auth := s.authenticateOperator(r)
+		if !auth.ok {
+			http.Error(w, "client certificate or bearer token required", http.StatusUnauthorized)
 			return
 		}
-		role, src := s.resolveOperatorRole(r.Context(), r.TLS)
+		role, src := s.resolveOperatorRole(r.Context(), auth)
 		if src == roleFromCertificate && role != "" {
-			s.warnLegacyRole(certIdentity(r.TLS), role)
+			s.warnLegacyRole(auth.identity, role)
 		}
 		if roleRank(role) < min {
 			// The message distinguishes a REVOCATION from merely ranking too low, because those send an

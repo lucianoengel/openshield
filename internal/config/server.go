@@ -133,4 +133,16 @@ var ServerFields = []Field{
 		Description: "Directory polled for CloudTrail records (SIEM-4)."},
 	{Key: "OPENSHIELD_WEF_DIR", Scope: ScopeDynamic, Kind: KindString, Default: "",
 		Description: "Directory polled for Windows Event Forwarding records (SIEM-4)."},
+	// ZT-7: operator SSO. The token AUTHENTICATES; the role still comes from the operator record, so a
+	// demotion applies to a token already issued. An issuer without an audience and a JWKS URL is a hard
+	// failure rather than a silent fallback to certificates-only — an operator team that believes SSO is on
+	// should not learn otherwise from a support ticket.
+	{Key: "OPENSHIELD_OPERATOR_OIDC_ISSUER", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "OIDC issuer for OPERATOR login (ZT-7). Empty disables SSO; operators then authenticate with client certificates only."},
+	{Key: "OPENSHIELD_OPERATOR_OIDC_AUDIENCE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Audience an operator token must carry. Required when an issuer is set."},
+	{Key: "OPENSHIELD_OPERATOR_OIDC_JWKS_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "JWKS endpoint for the operator issuer's signing keys. Required when an issuer is set."},
+	{Key: "OPENSHIELD_OPERATOR_OIDC_JWKS_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "5m",
+		Description: "How often to refresh the operator issuer's JWKS, so an IdP key rotation needs no restart."},
 }

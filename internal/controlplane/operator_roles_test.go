@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -166,5 +167,123 @@ func TestAnAgentCertificateCannotBeGrantedAnOperatorTier(t *testing.T) {
 	}
 	if err := s.SetOperatorRole(ctx, "someone", "superuser", "test"); err == nil {
 		t.Fatal("an unknown role was accepted; the operator role set is closed")
+	}
+}
+
+// ZT-7 SECOND HALF: OPERATOR SSO.
+//
+// The property that matters is not "a token works" — it is that a token authenticates and does NOT
+// authorize. Mapping an IdP group claim to a tier is the conventional shape and it reintroduces the exact
+// defect the first half removed, with a shorter fuse: a token issued before a demotion still asserts the
+// old group until it expires.
+
+// stubVerifier accepts one token and maps it to a subject, so these cases are about the authorization
+// wiring rather than about JWT validation — which is tested against real signatures in the gateway package.
+type stubVerifier struct {
+	token   string
+	subject string
+}
+
+func (s stubVerifier) VerifySubject(tok string) (string, error) {
+	if tok != s.token {
+		return "", errors.New("bad token")
+	}
+	return s.subject, nil
+}
+
+func bearerReq(t *testing.T, token string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/alerts", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req
+}
+
+func serveReq(h http.Handler, req *http.Request) int {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func TestAnSsoOperatorIsAuthorizedByTheServerNotTheToken(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+	const who = "alice@corp.example"
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	s.SetOperatorOIDC(stubVerifier{token: "good", subject: who})
+
+	gate := controlplane.RequireTierForTest(s, "responder")
+
+	// A VALID TOKEN AND NO RECORD IS NOT ACCESS. An SSO operator has no certificate, so there is no
+	// embedded role to fall back to — they are strict by construction.
+	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusForbidden {
+		t.Fatalf("a verified token with no operator record got %d, want 403. If a token alone grants access, "+
+			"the IdP is deciding authorization and a demotion does not take effect until it expires", code)
+	}
+
+	if err := s.SetOperatorRole(ctx, who, "responder", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusOK {
+		t.Fatalf("a granted SSO operator was refused: %d", code)
+	}
+
+	// AND THE DEMOTION APPLIES TO THE TOKEN ALREADY ISSUED — the same property the certificate half has.
+	if err := s.SetOperatorRole(ctx, who, "analyst", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusForbidden {
+		t.Fatalf("after demotion the SAME token still opened a responder route: %d", code)
+	}
+}
+
+func TestRevokingAnSsoOperatorTakesEffectOnTheTokenTheyHold(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+	const who = "bob@corp.example"
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	s.SetOperatorOIDC(stubVerifier{token: "good", subject: who})
+	gate := controlplane.RequireTierForTest(s, "analyst")
+
+	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusOK {
+		t.Fatalf("an SSO admin was refused: %d", code)
+	}
+	if err := s.RevokeOperator(ctx, who, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusForbidden {
+		t.Fatalf("a revoked SSO operator still had access with the token they already held: %d. Revocation "+
+			"that waits for a token to expire is not revocation", code)
+	}
+}
+
+func TestAnUnverifiableTokenIsNotAnIdentity(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	s.SetOperatorOIDC(stubVerifier{token: "good", subject: "carol@corp.example"})
+	gate := controlplane.RequireTierForTest(s, "analyst")
+
+	for _, tok := range []string{"", "wrong", "Bearer-ish"} {
+		if code := serveReq(gate, bearerReq(t, tok)); code != http.StatusUnauthorized {
+			t.Errorf("token %q got %d, want 401 — a token that does not verify is not a weaker identity, "+
+				"it is no identity", tok, code)
+		}
+	}
+}
+
+func TestSsoIsOffUnlessConfigured(t *testing.T) {
+	// A deployment that has not enabled SSO must not accept bearer tokens at all, or enabling an IdP would
+	// be something that happens by accident.
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	gate := controlplane.RequireTierForTest(s, "analyst")
+	if code := serveReq(gate, bearerReq(t, "anything")); code != http.StatusUnauthorized {
+		t.Fatalf("a bearer token was considered with no verifier configured: %d", code)
 	}
 }

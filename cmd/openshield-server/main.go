@@ -26,6 +26,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/controlplane"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/notify"
 	"github.com/lucianoengel/openshield/internal/retain"
@@ -54,6 +55,37 @@ func main() {
 		case "operator-role":
 			os.Exit(operatorRole(dsn, os.Args[2:]))
 		}
+	}
+	// ZT-7: operator SSO. Off unless an issuer is configured — enabling an IdP must not happen by accident.
+	// The token AUTHENTICATES; the role still comes from the operator record, so a demotion applies to a
+	// token already issued (see internal/controlplane/operator_roles.go).
+	setUpOperatorSSO := func(srv *controlplane.Server, ctx context.Context) {
+		issuer := os.Getenv("OPENSHIELD_OPERATOR_OIDC_ISSUER")
+		audience := os.Getenv("OPENSHIELD_OPERATOR_OIDC_AUDIENCE")
+		jwksURL := os.Getenv("OPENSHIELD_OPERATOR_OIDC_JWKS_URL")
+		if issuer == "" {
+			return
+		}
+		if audience == "" || jwksURL == "" {
+			// A half-configured IdP must not silently mean "certificates only": an operator team that
+			// believes SSO is on would find out from a support ticket.
+			fatal("operator SSO: OPENSHIELD_OPERATOR_OIDC_ISSUER is set but AUDIENCE or JWKS_URL is not")
+		}
+		ref, err := identitypkg.NewJWKSRefresher(jwksURL, envDuration("OPENSHIELD_OPERATOR_OIDC_JWKS_INTERVAL", 5*time.Minute))
+		if err != nil {
+			fatal("operator SSO: %v", err)
+		}
+		ref.Start(ctx)
+		// EMPTY ROLE CLAIM, deliberately: this verifier is used only through VerifySubject, and reading a
+		// role out of the token is the defect ZT-7 removed from certificates.
+		v, err := identitypkg.NewOIDCVerifierWithSource(issuer, audience, "", ref.KeyFor)
+		if err != nil {
+			fatal("operator SSO: %v", err)
+		}
+		srv.SetOperatorOIDC(v)
+		fmt.Fprintf(os.Stderr, "openshield-server: operator SSO ACTIVE (issuer %s). Tokens AUTHENTICATE; "+
+			"authorization still comes from `operator-role set`, so an SSO operator with no record has no "+
+			"access whatever their token claims.\n", issuer)
 	}
 	// PLAT-5: validate EVERY declared field before doing anything. A malformed value now fails the boot
 	// with a precise, field-scoped error instead of silently falling back to a default — which is how a
@@ -102,6 +134,7 @@ func main() {
 	// SYNCHRONOUSLY first: everything below decides what to START from these values, so the first read
 	// must not race the watcher's initial load.
 	srv.LoadSettings(ctx, settings)
+	setUpOperatorSSO(srv, ctx)
 	go srv.WatchSettings(ctx, settings, envDuration("OPENSHIELD_CONFIG_POLL", 15*time.Second))
 	// D292: the configuration surface reports and validates against THIS process's resolver, so what an
 	// operator reads is what this binary is honouring — not a fresh one built inside a handler, which

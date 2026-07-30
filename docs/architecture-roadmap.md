@@ -462,8 +462,8 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
 
 ### Zero Trust
 - **ZT-5 · Policy admin + session recording** — new work · L. Ties to the UI (PLAT-1).
-- **ZT-7 · Operator SSO, and the role must leave the certificate** — 🟡 **HALF DONE (D372)**: the DEFECT is
-  fixed, the SSO checkbox is not. The role now lives in `operator_roles` and is resolved server-side per
+- **ZT-7 · Operator SSO, and the role must leave the certificate** — ✅ **DONE (D372 + D373)**: the DEFECT is
+  fixed (D372) and operator SSO ships (D373). The role now lives in `operator_roles` and is resolved server-side per
   request, so a demotion or a revocation takes effect on the operator's next request instead of when their
   certificate expires — there was previously no way to remove an operator's access at all. Revocation is a
   ROW, not a delete (a delete would fall back to the certificate and RESTORE the embedded role); a database
@@ -473,9 +473,21 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   set|revoke|list` is operator-local (D51). Migration path: no row → the certificate still decides and the
   server says so once with the fixing command; `OPENSHIELD_OPERATOR_ROLES_STRICT=1` refuses that, and is the
   intended end state.
-  **STILL OPEN, and it is the procurement gate:** OIDC login for operators and SCIM deprovisioning. Also not
-  done: four-eyes on a grant (SOAR has it; this does not), and certificate revocation proper — revoking
-  authorization leaves the identity able to authenticate, just unable to do anything. Two things, and the
+  **D373 — SSO, and the decision it rests on:** an operator may present an OIDC bearer token instead of a
+  certificate, and **the token's claims do NOT decide the role**. Mapping an IdP group to a tier is the
+  conventional design and it reintroduces exactly what D372 removed, with a shorter fuse — a token issued
+  before a demotion still asserts the old group until it expires. The IdP says who you are; the product says
+  what you may do. Consequence: an SSO operator has no certificate and therefore no embedded role to fall
+  back to, so they are **strict by construction** while certificate holders migrate. `verifyCore` is
+  extracted so the operator path shares every fail-closed JWT check with the ZTNA path rather than
+  duplicating six of them; the subject is raw rather than pseudonymised, because an operator is not the
+  monitored population and an unattributable action is not evidence.
+  **STILL OPEN:** **SCIM** — deprovisioning is a manual `operator-role revoke`, so an IdP deactivating a
+  user bounds exposure to a token lifetime rather than removing authority; **no JIT provisioning**, so a
+  first-time SSO operator has no access until an admin grants it; **no DPoP on the operator path**, so a
+  stolen token is usable until expiry (the ZTNA path has sender-constraining, this does not); four-eyes on a
+  grant; and certificate revocation proper — revoking authorization leaves the identity able to
+  authenticate, just unable to do anything. Two things, and the
   second is a DEFECT rather than a missing integration. Operator identity today is mTLS client certs only
   (`tlsconf` sets `RequireAndVerifyClientCert`) with the RBAC tier carried IN the issued certificate
   (`internal/provision/provision.go` — `RoleAnalyst`/`RoleResponder`/`RoleAdmin`, ordered by

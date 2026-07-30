@@ -58,6 +58,8 @@ type Server struct {
 	// server runs — see healIngest (PLAT-10). Everything in subs lives for the process.
 	sigSub *nats.Subscription
 	ingest ingestHealth
+	// operatorOIDC verifies operator bearer tokens (ZT-7). Nil means certificate-only, the default.
+	operatorOIDC operatorTokenVerifier
 
 	// DecodeFailures counts messages that did not decode. A malformed message is
 	// dropped so it cannot stall the subscription, but it is COUNTED so the drop

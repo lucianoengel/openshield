@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -74,11 +75,11 @@ func certIdentity(state *tls.ConnectionState) string {
 //
 // The order is the whole point: the DATABASE decides, and the certificate is consulted only when the
 // database has nothing to say about this identity.
-func (s *Server) resolveOperatorRole(ctx context.Context, state *tls.ConnectionState) (string, operatorRoleSource) {
-	identity := certIdentity(state)
-	if identity == "" {
+func (s *Server) resolveOperatorRole(ctx context.Context, auth operatorAuth) (string, operatorRoleSource) {
+	if !auth.ok || auth.identity == "" {
 		return "", roleAbsent
 	}
+	identity := auth.identity
 	role, revoked, err := s.lookupOperatorRole(ctx, identity)
 	switch {
 	case err == nil && revoked:
@@ -96,7 +97,13 @@ func (s *Server) resolveOperatorRole(ctx context.Context, state *tls.ConnectionS
 	if strictOperatorRoles() {
 		return "", roleAbsent
 	}
-	return certRole(state), roleFromCertificate
+	// NO CERTIFICATE MEANS NO FALLBACK. An SSO operator has no embedded role to fall back TO, so they are
+	// strict by construction: no record, no access, whatever the token asserts. The fallback exists to keep
+	// existing certificate holders working through the migration and for nothing else.
+	if auth.certState == nil {
+		return "", roleAbsent
+	}
+	return certRole(auth.certState), roleFromCertificate
 }
 
 // lookupOperatorRole reads one identity's row.
@@ -205,4 +212,84 @@ func (s *Server) ListOperatorRoles(ctx context.Context) ([]OperatorRoleRow, erro
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ZT-7 (second half): OPERATOR SSO.
+//
+// An operator may authenticate with an OIDC bearer token instead of a client certificate. Both paths
+// converge on the SAME authorization: the credential says who, `operator_roles` says what they may do.
+//
+// THE TOKEN'S CLAIMS DO NOT DECIDE THE ROLE, and that is the whole design. Mapping an IdP group claim to a
+// tier is the conventional shape and it reintroduces the defect the first half of ZT-7 removed — a token
+// issued before a demotion still asserts the old group until it expires. Shorter fuse than a certificate,
+// same failure. So the IdP is an identity provider here and nothing more.
+//
+// A CONSEQUENCE WORTH NAMING: an SSO operator has no certificate, so there is no embedded role to fall back
+// to. They are STRICT by construction — no record means no access, whatever the token says. The legacy
+// fallback exists only for certificate holders, and only until a deployment sets strict mode.
+
+// operatorTokenVerifier is the slice of the OIDC verifier this needs, as an interface so the control plane
+// does not depend on the gateway's package and so a test can supply a stub.
+type operatorTokenVerifier interface {
+	VerifySubject(token string) (string, error)
+}
+
+// SetOperatorOIDC installs the verifier for operator bearer tokens. Nil disables SSO, which is the default:
+// an unconfigured deployment accepts client certificates only.
+func (s *Server) SetOperatorOIDC(v operatorTokenVerifier) {
+	s.mu.Lock()
+	s.operatorOIDC = v
+	s.mu.Unlock()
+}
+
+func (s *Server) operatorOIDCVerifier() operatorTokenVerifier {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.operatorOIDC
+}
+
+// bearerToken extracts a bearer credential, case-insensitively per RFC 7235.
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if len(h) < 7 || !strings.EqualFold(h[:7], "bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(h[7:])
+}
+
+// operatorAuth is the result of authenticating a request, before any authorization decision.
+type operatorAuth struct {
+	identity string
+	// certState is non-nil only for a certificate-authenticated operator; it is what the legacy fallback
+	// reads. A bearer-authenticated operator has none, and therefore no fallback.
+	certState *tls.ConnectionState
+	ok        bool
+}
+
+// authenticateOperator resolves WHO is calling, from a client certificate or a bearer token.
+//
+// THE CERTIFICATE WINS when both are present. A request carrying both is ambiguous, and resolving ambiguity
+// toward the credential that was verified by the TLS stack — rather than one parsed from a header — is the
+// conservative direction.
+func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		if id := certIdentity(r.TLS); id != "" {
+			return operatorAuth{identity: id, certState: r.TLS, ok: true}
+		}
+	}
+	v := s.operatorOIDCVerifier()
+	if v == nil {
+		return operatorAuth{}
+	}
+	tok := bearerToken(r)
+	if tok == "" {
+		return operatorAuth{}
+	}
+	sub, err := v.VerifySubject(tok)
+	if err != nil || sub == "" {
+		// A token that does not verify is NOT an identity. No partial credit, no defaulting to anonymous
+		// with a lower tier — every check in the verifier is fail-closed and so is this.
+		return operatorAuth{}
+	}
+	return operatorAuth{identity: sub, ok: true}
 }

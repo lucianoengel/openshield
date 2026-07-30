@@ -79,9 +79,12 @@ func NewOIDCVerifier(issuer, audience, roleClaim string, keys map[string]crypto.
 // live JWKS refresher, ZT-2b) rather than a static map — for a provider whose keys rotate. The source's
 // keyFor MUST NOT block on the network (the verify path is HTTP-free). issuer/audience/roleClaim are
 // required exactly as in NewOIDCVerifier; a nil source is a configuration error.
+// A roleClaim is REQUIRED for the ZTNA path (Verify) and may be empty for a verifier used only for
+// operator authentication (VerifySubject), where the role comes from the server-side record rather than the
+// token — see VerifySubject.
 func NewOIDCVerifierWithSource(issuer, audience, roleClaim string, keyFor func(kid string) (crypto.PublicKey, bool)) (*OIDCVerifier, error) {
-	if issuer == "" || audience == "" || roleClaim == "" {
-		return nil, fmt.Errorf("identity: OIDC verifier needs issuer, audience, and role claim")
+	if issuer == "" || audience == "" {
+		return nil, fmt.Errorf("identity: OIDC verifier needs an issuer and an audience")
 	}
 	if keyFor == nil {
 		return nil, fmt.Errorf("identity: OIDC verifier needs a key source")
@@ -160,24 +163,61 @@ func (v *OIDCVerifier) Verify(token string) (*Identity, error) {
 // verify is the shared core returning the resolved identity AND the decoded claims, so the
 // sender-constrained path (VerifyWithProof) can read the `cnf` confirmation without re-parsing.
 func (v *OIDCVerifier) verify(token string) (*Identity, jwtClaims, error) {
-	h, claims, signing, sig, err := splitJWT(token)
+	claims, signing, err := v.verifyCore(token)
 	if err != nil {
 		return nil, claims, err
+	}
+	role, err := roleFromClaim(signing, v.roleClaim)
+	if err != nil {
+		return nil, claims, err
+	}
+	return &Identity{Subject: pseudonym(claims.Sub), Role: role}, claims, nil
+}
+
+// VerifySubject validates a token exactly as Verify does and returns its RAW subject, without requiring a
+// role claim and without pseudonymising (ZT-7).
+//
+// TWO DELIBERATE DIFFERENCES FROM Verify, both because this authenticates an OPERATOR rather than a
+// surveilled ZTNA subject:
+//
+//   - NOT PSEUDONYMISED. D23 hashes a subject because the pipeline must not carry who a monitored person
+//     is. An operator is not the monitored population — they are staff acting on the system, and their
+//     actions have to be attributable BY NAME or the audit trail is not evidence. Hashing here would make
+//     "who revoked this agent" unanswerable.
+//   - NO ROLE FROM THE TOKEN. The role comes from the server-side operator record (D372), not from an IdP
+//     claim. Reading authorization out of the credential is the defect ZT-7 just removed from
+//     certificates, and a group claim would reintroduce it with a shorter fuse — the token still lives
+//     minutes to hours after a demotion. The IdP says who you are; this product says what you may do.
+func (v *OIDCVerifier) VerifySubject(token string) (string, error) {
+	claims, _, err := v.verifyCore(token)
+	if err != nil {
+		return "", err
+	}
+	return claims.Sub, nil
+}
+
+// verifyCore runs every check that does not concern the role claim: signature, issuer, audience, expiry,
+// not-before and a present subject. Shared so the operator path cannot drift from the ZTNA path on any of
+// them — a second copy of JWT validation is a second place for a check to go missing.
+func (v *OIDCVerifier) verifyCore(token string) (jwtClaims, []byte, error) {
+	h, claims, signing, sig, err := splitJWT(token)
+	if err != nil {
+		return claims, nil, err
 	}
 
 	key, ok := v.keyFor(h.Kid)
 	if !ok {
-		return nil, claims, fmt.Errorf("identity: OIDC token signed by unknown key id %q", h.Kid)
+		return claims, nil, fmt.Errorf("identity: OIDC token signed by unknown key id %q", h.Kid)
 	}
 	if err := verifySignature(h.Alg, key, signing, sig); err != nil {
-		return nil, claims, err
+		return claims, nil, err
 	}
 
 	if claims.Iss != v.issuer {
-		return nil, claims, fmt.Errorf("identity: OIDC token issuer %q != expected %q", claims.Iss, v.issuer)
+		return claims, nil, fmt.Errorf("identity: OIDC token issuer %q != expected %q", claims.Iss, v.issuer)
 	}
 	if !audienceContains(claims.Aud, v.audience) {
-		return nil, claims, fmt.Errorf("identity: OIDC token audience does not include %q", v.audience)
+		return claims, nil, fmt.Errorf("identity: OIDC token audience does not include %q", v.audience)
 	}
 	now := v.now()
 	leeway := v.leeway
@@ -187,20 +227,15 @@ func (v *OIDCVerifier) verify(token string) (*Identity, jwtClaims, error) {
 	// R34-10: apply the clock-skew leeway so sub-minute drift between the gateway and the IdP does
 	// not spuriously reject a valid token (or reject one issued "just now" with nbf==iat).
 	if claims.Exp == 0 || now.After(time.Unix(claims.Exp, 0).Add(leeway)) {
-		return nil, claims, fmt.Errorf("identity: OIDC token is expired or has no expiry")
+		return claims, nil, fmt.Errorf("identity: OIDC token is expired or has no expiry")
 	}
 	if claims.Nbf != 0 && now.Before(time.Unix(claims.Nbf, 0).Add(-leeway)) {
-		return nil, claims, fmt.Errorf("identity: OIDC token is not yet valid (nbf)")
+		return claims, nil, fmt.Errorf("identity: OIDC token is not yet valid (nbf)")
 	}
 	if claims.Sub == "" {
-		return nil, claims, fmt.Errorf("identity: OIDC token has no subject")
+		return claims, nil, fmt.Errorf("identity: OIDC token has no subject")
 	}
-
-	role, err := roleFromClaim(signing, v.roleClaim)
-	if err != nil {
-		return nil, claims, err
-	}
-	return &Identity{Subject: pseudonym(claims.Sub), Role: role}, claims, nil
+	return claims, signing, nil
 }
 
 // confirmationKey returns the token's DPoP-bound key thumbprint (cnf.jkt) and whether it is present.
