@@ -3027,3 +3027,30 @@ agent"*, surfacing as "the fleet lost its posture signal after we added a laptop
 exercised it. Four of the eight kills land there, including the one that matters most operationally: a
 malformed roster is refused **and the file is left byte-for-byte untouched**, so a tool that cannot safely
 rewrite the file does not rewrite it at all.
+
+## Round 55 (D389): the same hole, one package over — the transparent inline plane
+
+Chasing percentages on `cmd/*` wiring would have missed this. The better question was *which functions are
+still at 0%*, which is how `scim.go` surfaced, and it put `internal/gateway` at the top with thirteen —
+**eight of them the TPROXY lifecycle**: `RunTProxyWithRules`, `InstallTProxyRules`, `RemoveTProxyRules`,
+`SuperviseTProxy`, `ListenTransparent`, `Serve`, `runAll`, `bestEffort`.
+
+The package ships **four `*_kernel_test.go` files** covering exactly that code: TPROXY redirect, SNI
+blocking, the self-installed nft rules, and the supervisor re-arming after a listener death. All are gated
+on root for `CAP_NET_ADMIN`. None of them ran in any automated gate — the kernel job compiled `openmon`,
+`dnsredirect` and the integration suite, and stopped there.
+
+This is inline **prevention**: the plane that drops a flow rather than reporting it.
+
+The finding is the same shape as Round 52's, and it survived for the same reason: *"internal/gateway has
+kernel tests"* and *"CI runs internal/gateway's kernel tests"* look identical from outside. The only way to
+tell them apart is to read the job.
+
+Unlike `dnsredirect` — which turned out to be broken the first time it was actually executed — these were
+fine. All five passed on the first run under real root on the VM. They were simply never run.
+
+Both halves were verified before wiring, because the two most recent CI failures came from skipping exactly
+these steps: D385 shipped a job whose `go build -o DIR` had never been executed as written, and D388 shipped
+a guard that fired on a legitimate result. So: the tests were run under root (5 PASS, no skips), and then
+**the step body itself** was run verbatim on the VM (`5`, exit 0). Verifying the tests and verifying the job
+are different acts.

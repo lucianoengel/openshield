@@ -397,6 +397,7 @@ jobs:
           mkdir -p /tmp/osbin
           go test -c -o /tmp/openmon.test ./internal/agent/openmon/
           go test -c -o /tmp/dnsredirect.test ./internal/dnsredirect/
+          go test -c -o /tmp/gateway.test ./internal/gateway/
           go build -o /tmp/osbin ./cmd/...
           go test -tags integration -c -o /tmp/integration.test ./test/integration/
       # THE OUTPUT IS CHECKED FOR SKIPS, not just for a zero exit. A root-gated test that skips reports
@@ -419,6 +420,28 @@ jobs:
             exit 1
           fi
           grep -c -- "--- PASS" /tmp/dnsr.out
+      # THE TRANSPARENT INLINE PLANE — the same hole as the DNS redirect, one package over.
+      #
+      # internal/gateway ships four *_kernel_test.go files covering TPROXY redirect, SNI blocking, the
+      # self-installed nft rules and the supervisor's re-arm after a listener death. Every one is gated on
+      # root for CAP_NET_ADMIN (IP_TRANSPARENT + TPROXY), and NONE of them ran in any automated gate — the
+      # job compiled openmon, dnsredirect and the integration suite and stopped there.
+      #
+      # This is inline PREVENTION: the plane that drops a flow rather than reporting it. Unlike the DNS
+      # redirect, these tests were not broken when finally run — all five passed first time on a real kernel.
+      # They were simply never executed, which is the failure mode this whole job exists to end, and it
+      # survived here for as long as it did because "internal/gateway has kernel tests" and "CI runs
+      # internal/gateway's kernel tests" look identical from the outside.
+      - name: transparent inline plane on a real kernel (TPROXY redirect, SNI block, rule lifecycle, re-arm)
+        run: |
+          sudo /tmp/gateway.test -test.v -test.timeout 10m \
+            -test.run 'TestTProxyKernelRedirect|TestTProxyKernelBlocksBySNI|TestTProxySelfInstalledRules|TestRuleLifecycleRemovesRulesWhenServerDies|TestSuperviseSelfHealsAfterListenerDeath' 2>&1 | tee /tmp/gw.out
+          if grep -q -- "--- SKIP" /tmp/gw.out; then
+            echo "a privileged tproxy test SKIPPED under root:"
+            grep -- "--- SKIP" /tmp/gw.out
+            exit 1
+          fi
+          grep -c -- "--- PASS" /tmp/gw.out
       - name: privileged agent end to end (inline DENY_EXEC, whitelisting, mark semantics)
         env:
           OPENSHIELD_INTEGRATION_BIN_DIR: /tmp/osbin
