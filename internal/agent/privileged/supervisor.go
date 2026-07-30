@@ -58,6 +58,19 @@ func StartWorker(ctx context.Context, workerPath string, args ...string) (*Worke
 	if err != nil {
 		return nil, err
 	}
+	// CONTEXT CANCELLATION CLOSES STDIN RATHER THAN SIGKILLING, which is what CommandContext does by
+	// default — and that default silently pre-empted Close's graceful path entirely. On shutdown the
+	// context is cancelled first, so the parser was killed mid-work no matter how politely Close asked.
+	//
+	// The worker's shutdown signal IS end-of-stdin: its loop returns on EOF. So cancellation closes the
+	// pipe and WaitDelay bounds how long a worker that ignores it may hold shutdown open, after which the
+	// runtime kills it. Same guarantee as before, reached the right way round.
+	//
+	// This is also what made the worker invisible to coverage — a SIGKILLed process flushes no profile, so
+	// the parse path the entire privilege split exists for measured 0%. That was recorded as "unmeasurable"
+	// when it was really "we kill it too fast".
+	cmd.Cancel = func() error { return in.Close() }
+	cmd.WaitDelay = closeGrace
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrWorkerUnavailable, err)
 	}
@@ -107,15 +120,41 @@ func (w *Worker) Classify(ctx context.Context, req *corev1.ClassifyRequest) (*co
 	}
 }
 
-// Close stops the worker.
+// closeGrace is how long a worker is given to exit on its own after its stdin closes. Short, because this
+// runs on the shutdown path and an agent that takes seconds to stop is one an operator learns to SIGKILL.
+const closeGrace = 2 * time.Second
+
+// Close stops the worker: close its stdin, let it exit, and kill it only if it does not.
+//
+// IT USED TO CLOSE STDIN AND KILL IMMEDIATELY, which is wrong twice.
+//
+// A parser killed mid-work leaves whatever it was holding — a decompression scratch file, a partially
+// written temp — and this is the process whose whole job is opening attacker-supplied archives. Giving it
+// the moment it needs to unwind is ordinary hygiene, and the grace is bounded so a wedged worker still dies.
+//
+// And it made the worker UNMEASURABLE: a SIGKILLed process flushes no coverage profile, so
+// internal/agent/worker read 0% while cmd/openshield-worker read 48% — the parse path the entire privilege
+// split exists for was invisible to the coverage run. That was recorded as "unmeasurable" and it was
+// really "we kill it too fast", which is a different thing and a fixable one.
+//
+// The kill is kept for the case that matters: a worker that ignores EOF must not hold shutdown open.
 func (w *Worker) Close() error {
 	var err error
 	w.once.Do(func() {
 		_ = w.in.Close()
-		if w.cmd.Process != nil {
-			_ = w.cmd.Process.Kill()
+		if w.cmd.Process == nil {
+			_ = w.cmd.Wait()
+			return
 		}
-		_ = w.cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- w.cmd.Wait() }()
+		select {
+		case <-done:
+			// Exited on EOF, as a well-behaved worker does.
+		case <-time.After(closeGrace):
+			_ = w.cmd.Process.Kill()
+			<-done
+		}
 	})
 	return err
 }

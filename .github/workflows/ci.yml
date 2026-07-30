@@ -355,6 +355,57 @@ jobs:
           OPENSHIELD_REQUIRE_POSTGRES: '1'
         run: go test -tags integration -count=1 -timeout 40m ./test/integration/...
 
+  kernel-enforcement:
+    # THE TWELVE MOST SECURITY-CRITICAL TESTS IN THE PRODUCT RAN IN NO AUTOMATED GATE.
+    #
+    # Inline DENY_EXEC, the open gate returning EPERM to the opener, fail-open when the engine is
+    # unreachable, fail-open within the budget on a slow verdict, application whitelisting, mount-scope
+    # refusal, concurrent opens not serialising, and the async submission cycle terminating. Every one of
+    # them proves a claim that cannot be proven any other way — a process in a fanotify permission window is
+    # UNINTERRUPTIBLE, so "the gate answers correctly" is the difference between a product and a wedged
+    # machine.
+    #
+    # They are gated on os.Geteuid() == 0 because FAN_OPEN_PERM needs CAP_SYS_ADMIN, and the comment on each
+    # says "run this on the VM". So they ran when somebody remembered to, which is the same shape as the
+    # integration suite before it got a job (D365) and worse in consequence.
+    #
+    # GitHub's ubuntu runners are full VMs with passwordless sudo, so real root and a real kernel are
+    # available here — the gating was never about CI being unable, only about nobody having wired it.
+    #
+    # COMPILED AS THE NORMAL USER, RUN AS ROOT. `sudo go test` would need root to reach the module cache and
+    # the build cache; `go test -c` then `sudo ./the.test` is the same split the VM workflow already uses.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: the kernel must actually support fanotify permission mode
+        run: |
+          test "$(sudo id -u)" = "0" || { echo "no root; this job cannot prove what it exists to prove"; exit 1; }
+          uname -r
+      - name: compile the privileged test binaries as the build user
+        run: |
+          go test -c -o /tmp/openmon.test ./internal/agent/openmon/
+          go build -o /tmp/osbin ./cmd/...
+          go test -tags integration -c -o /tmp/integration.test ./test/integration/
+      # THE OUTPUT IS CHECKED FOR SKIPS, not just for a zero exit. A root-gated test that skips reports
+      # success, and a job that passes having run nothing is the exact failure this is here to end — the
+      # same hole `podman --version` left in the integration job.
+      - name: open gate on a real kernel (FAN_OPEN_PERM allow/deny/fail-open/concurrency)
+        run: |
+          sudo /tmp/openmon.test -test.v -test.timeout 10m 2>&1 | tee /tmp/openmon.out
+          grep -q -- "--- SKIP" /tmp/openmon.out && { echo "a privileged test SKIPPED under root — it is not running what it claims"; exit 1; } || true
+          grep -c -- "--- PASS" /tmp/openmon.out
+      - name: privileged agent end to end (inline DENY_EXEC, whitelisting, mark semantics)
+        env:
+          OPENSHIELD_INTEGRATION_BIN_DIR: /tmp/osbin
+        run: |
+          sudo -E /tmp/integration.test -test.v -test.timeout 15m \
+            -test.run 'TestThePrivilegedAgentDeniesAnExecInline|TestWhichFanotifyMarkDeliversAnExecEvent|TestApplicationWhitelistingRefusesEverythingNotListed|TestASlowVerdictFailsOpenWithinTheBudget|TestABinaryCreatedAfterStartupIsStillRefused|TestAMovedInBinaryIsStillRefused' 2>&1 | tee /tmp/vm.out
+          grep -q -- "--- SKIP" /tmp/vm.out && { echo "a privileged scenario SKIPPED under root"; exit 1; } || true
+          grep -c -- "--- PASS" /tmp/vm.out
+
   # Still to come, each its own ticket:
   #
   # These substitute for the line-level review depth a non-coding maintainer
