@@ -25,7 +25,18 @@ func Enroll(ctx context.Context, client *http.Client, url, agentID, token string
 	})
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		// CANCELLATION IS CHECKED FIRST, and it was not checked at all. The loop only ever asked whether
+		// its own 30-second deadline had passed, so a cancelled context made client.Do fail immediately,
+		// fall through to an unconditional time.Sleep, and try again — for the full thirty seconds. An
+		// agent shutting down blocked here for half a minute, and on a fleet that is half a minute added
+		// to every stop and every restart.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("enrollment abandoned: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("building the enrollment request: %w", err)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err == nil {
@@ -39,6 +50,12 @@ func Enroll(ctx context.Context, client *http.Client, url, agentID, token string
 		} else if time.Now().After(deadline) {
 			return err
 		}
-		time.Sleep(500 * time.Millisecond)
+		// The backoff waits on the context too, so a cancellation during the pause returns promptly
+		// instead of sleeping out the remainder.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("enrollment abandoned: %w", ctx.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }
