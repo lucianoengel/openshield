@@ -226,6 +226,10 @@ jobs:
             # where a crash is a failed print job. Same shape as openipc, same budget.
             go test -run '^$' -fuzz "^${t}$" -fuzztime=100000x ./internal/printguard/
           done
+          # internal/agent/ipc was the ONE framing decoder in the agent without a fuzzer, and it is the one
+          # on the CAP_SYS_ADMIN boundary: its reader is the privileged process, and its peer is the worker
+          # that just parsed an attacker's file.
+          go test -run '^$' -fuzz '^FuzzReadFrame$' -fuzztime=100000x ./internal/agent/ipc/
 
   ledger:
     # The audit ledger's storage layer is tested against a REAL PostgreSQL.
