@@ -31,6 +31,7 @@ quick: vet
 	./scripts/check-agent-deps.sh
 	./scripts/check-no-binaries.sh
 	./scripts/check-ci-pins.sh
+	./scripts/check-cmd-closure.sh
 
 build:
 	$(GO) build ./...
@@ -69,6 +70,7 @@ integration:
 check:
 	./scripts/check-core-deps.sh
 	./scripts/check-agent-deps.sh
+	./scripts/check-cmd-closure.sh
 
 # Regenerate Go types from the proto sources. Generated output is committed so
 # a plain `go build` works without a protoc toolchain; `proto-check` guards

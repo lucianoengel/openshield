@@ -2294,3 +2294,132 @@ Shipping a sandbox that looks applied and is not is a worse outcome than a platf
 The decision is an owner-level one: either support 32-bit x86 (port the policy and prove enforcement on
 that architecture) or state that only 64-bit is supported and stop cross-compiling as though it were.
 Recorded on the roadmap as an open item rather than guessed at.
+
+---
+
+## Round 46 (D365): what the integration suite actually executes, measured
+
+The owner's question: *"make sure every code path is covered and executed in integration tests, so we
+know everything is wired, there's no gaps and works as it should."* It had never been answered with a
+number. The suite's evidence of value was that it keeps finding real defects, which is not the same
+claim.
+
+Measured across the **real shipped binaries** — `go build -cover -coverpkg=./...`, the suite pointed at
+them through the harness's existing `OPENSHIELD_INTEGRATION_BIN_DIR` seam with `GOCOVERDIR` set:
+
+| | |
+| --- | --- |
+| statement coverage, whole module, one integration run | **51.2%** |
+| packages measured | 82 |
+| at 0% | 6 |
+| under 25% | 10 |
+| under 50% | 23 |
+| packages reachable from no `cmd/` binary | 9, all explained |
+
+Reproducible as `scripts/coverage-integration.sh` rather than as a number in a document.
+
+### The finding that mattered was not the number
+
+**No CI job runs the integration suite. None. It never has.**
+
+The `ledger` job in `ci.yml` runs *package* tests against a real Postgres — valuable, and not this.
+`test/integration/` is the only place the built commands run as real processes, which makes it the only
+place the wiring in `cmd/` is exercised. Grep the workflows for `-tags integration`, `test/integration`,
+`make integration` or `make all`: no matches. It was reachable only by running `make integration` on a
+developer's machine — and the standing local discipline is to run *targeted* tests, precisely because the
+full gate is slow.
+
+So the thing that proves the product is wired ran in no automated gate, while a guard existed for
+overclaiming in the README.
+
+### And it had already let something through
+
+`seedTimeline` in `test/integration/timeline_test.go` snapshotted its ledger baseline **after** writing
+the file it was then waiting for:
+
+```go
+os.WriteFile(...)       // the engine records a row ~90ms later
+before := count()       // ...which this may already include
+Eventually(60s, func() bool { return count() > before })
+```
+
+On a machine fast enough, `before` already contains the row and the loop waits out its full 60 seconds
+for a second row that is never coming. Two tests, failing deterministically here, in both the
+instrumented and the ordinary run. Every sibling in the suite that uses this pattern —
+`execaudit_test.go`, `clipboard_x11_test.go`, `smtp_test.go`, `durability_test.go`,
+`cefsyslog_test.go` — snapshots before the trigger. `timeline_test.go` was the only one that did not.
+
+**An earlier pass in this session called these two failures "probable instrumentation overhead" and that
+was wrong.** They fail without instrumentation. The lesson is narrow and worth keeping: a plausible
+explanation for a test failure is not a diagnosis, and "it's the measurement's fault" is the most
+seductive of the plausible ones because it requires no further work.
+
+Both are now green in 4.4s, down from 122s of timeouts. The suite is wired into CI as its own job, with
+`podman --version` as an explicit first step — because the suite *skips* without podman, so the naive
+version of that job would have reported green while running nothing.
+
+### A zero that was a real gap: RFC 5424 ingest
+
+`internal/connectors/rfc5424` measured **0.0%** across the whole run while `internal/connectors/cef`
+measured well. The cause is exact: `Server.cefSink` tries CEF first and falls back to RFC 5424 only when
+that parse fails — and **every** syslog scenario in the suite sends a CEF payload. `cefsyslog_test.go`,
+`syslogstream_test.go`, `metrics_test.go`: all CEF. The fallback could not be reached by any
+configuration the suite produces.
+
+Listener, parser and persistence were all real and all wired. The end-to-end path simply had no test
+that could take it — which reads identically to working, right up until an operator points a non-CEF
+device at the port.
+
+`TestAPlainRfc5424LineIsStoredWithItsStructuredData` closes it, and asserts on the **structured data**
+rather than on a stored row: an SD element landing in the same `fields` JSONB as a CEF extension is the
+whole reason this connector exists over the BSD-syslog one, and a row-count assertion would pass against
+a parser that dropped every `[id key="value"]`. Mutation-verified in both directions — disabling the
+fallback fails it (93s, at the store assertion), and mapping `Fields: nil` fails it at the JSONB query.
+
+### The other five zeros are gated, and one is a limit of the measurement
+
+| Package | Why 0% |
+| --- | --- |
+| `internal/agent/watchdog` | fanotify permission mode needs root; covered on the rooted VM |
+| `internal/dnsredirect` | `CAP_NET_ADMIN` + nft; VM-gated |
+| `internal/dnssink` | reached only by `network_vm_test.go`, which skips without root |
+| `internal/clipboard/x11` | needs an X display |
+| `internal/agent/worker` | **not gated — unmeasurable.** See below. |
+
+`internal/agent/worker` at 0% alongside `cmd/openshield-worker` at 48.2% is contradictory, and the cause
+is `privileged.Worker.Close`: it closes the worker's stdin and then immediately calls
+`cmd.Process.Kill()`. **A SIGKILLed process flushes no coverage profile.** The 48.2% on the binary comes
+from workers that happened to exit on stdin EOF before the kill landed — startup paths, not request
+handling. So the parse path that is the entire reason the privilege split exists is invisible to this
+measurement, and **51.2% understates the truth by an unknown amount**.
+
+Deliberately not changed here. Closing stdin, waiting briefly, then killing would be better shutdown
+hygiene *and* would make the measurement possible — but changing production shutdown semantics to
+improve a metric is the tail wagging the dog, and it belongs in its own ticket with its own reasoning.
+Recorded on the roadmap.
+
+### The static half needed no run, and is a stronger statement
+
+`go list -deps ./cmd/...` gives everything a shipped binary can reach. The complement is not "0%
+covered" — it is **cannot execute in any deployment however configured**. Nine packages, every one
+explained: three test-only CI guards (`doccheck`, `fitness`, `packaging` — the last has *no
+implementation file at all*), three doc-only parent packages, two spikes kept as the record behind D19
+and T-005, and one platform-gated (`internal/connectors/filewatch`, imported by the `!linux`-tagged
+`cmd/openshield-engine/watcher_other.go`).
+
+That is now `scripts/check-cmd-closure.sh`, in `make quick`, `make check` and CI — ~2s, so it can gate
+where the coverage run cannot. It fails in both directions: an unexplained package outside the closure,
+**and** a stale entry that has become wired. Without the second the list accumulates until nobody reads
+it, and becomes the hiding place it was built to prevent. Mutation-verified both ways.
+
+The allowlist requiring a *reason* per entry is the mechanism, not decoration. `internal/connectors/smtp`
+— parser, capture listener with per-session ceilings, idle timeouts, a concurrency cap, an event
+producer, full tests, imported by nothing while the README described live SMTP inspection — is what an
+unexplained line in that list looks like before anyone notices.
+
+### What this does not close
+
+A package can be imported by a binary and still be unreachable at runtime because no setting turns it
+on. The closure check raises the floor; it does not close the class. And statement coverage is not path
+coverage — every line of a function can run without its error branch ever being taken, which is exactly
+why the 51.2% is a work list and not a grade.

@@ -107,6 +107,14 @@ jobs:
         run: ./scripts/check-opencore-boundary.sh check && ./scripts/check-opencore-boundary.sh --selftest
       - name: privileged agent has no parser dependency
         run: ./scripts/check-agent-deps.sh
+      # UNWIRED FEATURES are this repository's most frequent defect — a complete, unit-tested,
+      # documented package that no binary imports, and therefore cannot run in any deployment however
+      # configured. internal/connectors/smtp was exactly that while the README described live SMTP
+      # inspection. Unit tests cannot catch it (a package's own tests import it, so they pass either
+      # way) and neither can `go build ./...` (it happily compiles a library nothing links). The import
+      # closure of ./cmd/... is the only cheap signal, so it runs here and not only in `make quick`.
+      - name: every package is reachable from a shipped binary
+        run: ./scripts/check-cmd-closure.sh
       # KNOWN-VULNERABLE DEPENDENCIES, and this was missing while the sophisticated half shipped.
       # PLAT-6 builds reproducibly, signs a manifest and signs an SBOM — it attests in detail to WHAT
       # went into a release and never asked whether any of it had a published advisory. When this step
@@ -263,6 +271,43 @@ jobs:
         run: go test -race -count=1 -v ./internal/attest/
       - name: gateway attestation — verifier, access, transport, enrollment, re-attestation, network-enroll (real swtpm)
         run: go test -race -count=1 -run 'Attestation|Enrollment|Reattest|NetworkEnrollment|ActivateWithout' -v ./internal/gateway/
+
+  integration-suite:
+    # THE SUITE THAT TESTS THE SHIPPED BINARIES RAN IN NO AUTOMATED GATE AT ALL.
+    #
+    # The `ledger` job above runs PACKAGE tests against a real Postgres, which is valuable and is
+    # not this. `test/integration/` is the only place the built commands run as REAL PROCESSES — the
+    # only place the wiring in cmd/ is exercised, which is precisely where a defect survives to a
+    # deployment because every unit involved passes alone. It was reachable only through
+    # `make integration` on a developer's machine.
+    #
+    # What that cost, concretely: seedTimeline in test/integration/timeline_test.go snapshotted its
+    # ledger baseline AFTER writing the file it was waiting for. The engine records the row ~90ms
+    # later, so on a fast machine the baseline already contained it and the test waited out its full
+    # 60s timeout for a second row that was never coming. Two tests, deterministically failing here,
+    # and nothing automated was looking.
+    #
+    # THE SKIP IS THE TRAP. The suite calls t.Skip when podman is absent, so the naive version of this
+    # job passes green while running nothing — the same "manufactures confidence" failure the ledger
+    # job's own comment names. `podman --version` runs as its own step first, so a runner without it
+    # fails the job instead of quietly skipping every scenario. OPENSHIELD_REQUIRE_POSTGRES=1 closes
+    # the other half.
+    #
+    # Root/VM-gated scenarios (fanotify permission mode, tproxy, the exec gate) still skip here and are
+    # covered on the rooted VM instead — a genuine and recorded limit, not a silent one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: podman must be present, or the suite would skip and report ok
+        run: podman --version
+      - name: the shipped binaries, as real processes against real infrastructure
+        env:
+          OPENSHIELD_REQUIRE_POSTGRES: '1'
+        run: go test -tags integration -count=1 -timeout 40m ./test/integration/...
 
   # Still to come, each its own ticket:
   #

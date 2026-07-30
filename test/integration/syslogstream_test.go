@@ -199,3 +199,95 @@ func TestOverTlsAnUnauthenticatedSenderIsRefused(t *testing.T) {
 			"ingested them anyway", injected)
 	}
 }
+
+// TestAPlainRfc5424LineIsStoredWithItsStructuredData covers the SIEM-9 fallback, which the suite had
+// never reached.
+//
+// FOUND BY COVERAGE, and the shape of the miss is worth recording. `internal/connectors/rfc5424`
+// measured 0.0% across an entire integration run, while `internal/connectors/cef` measured well — and
+// the reason is that EVERY syslog scenario in this suite sends a CEF payload. `Server.cefSink` tries CEF
+// first and only falls back to RFC 5424 when that parse fails, so a suite whose every line is CEF
+// exercises the CEF branch repeatedly and the fallback never once. The listener, the parser and the
+// persistence were all real and all wired; the end-to-end path simply had no test that could take it.
+//
+// That is the failure a 51% coverage number is for: not "this package is untested" (rfc5424 has good
+// unit tests) but "no configuration this suite produces can reach it", which reads identically to
+// working until an operator points a non-CEF device at the port.
+//
+// The assertion is on STRUCTURED DATA, not merely on a stored row. Structured data is the whole reason
+// this connector exists over the BSD-syslog one — an SD element and a CEF extension land in the same
+// `fields` JSONB so an analyst hunts once across both. A test that only counted rows would pass against
+// a parser that dropped every `[id key="value"]` element, which would leave the format onboarded in name
+// and unhuntable in practice.
+func TestAPlainRfc5424LineIsStoredWithItsStructuredData(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	addr := "127.0.0.1:" + freePort(t)
+	setDynamic(t, stack, "OPENSHIELD_SYSLOG_TCP_LISTEN", addr)
+
+	srv := Start(t, "openshield-server", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_NATS_URL=" + stack.NATSURL,
+	})
+	srv.WaitForOutput("syslog STREAM ingest on", 90*time.Second)
+	waitTCP(t, addr, 60*time.Second)
+
+	// NO `CEF:` ANYWHERE IN IT — that is the point. app-name `sshd`, a msgid, one SD element, free text.
+	const rfcLine = `<86>1 2026-07-28T11:22:33Z host9 sshd 4242 SESSION [auth@32473 user="operator" method="publickey"] Accepted publickey for operator`
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		t.Fatalf("dialing the stream listener: %v\n%s", err, srv.Output())
+	}
+	if _, err := fmt.Fprintf(conn, "%s\n", rfcLine); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	pool := openPool(t, stack.DSN)
+	Eventually(t, 90*time.Second, "the non-CEF line to be STORED via the RFC 5424 fallback", func() bool {
+		var n int
+		_ = pool.QueryRow(Ctx(t),
+			`SELECT count(*) FROM external_logs WHERE product = 'sshd'`).Scan(&n)
+		return n > 0
+	})
+
+	// The mapped columns. Vendor is the literal "syslog" rather than an invented one, deliberately: RFC
+	// 5424 has no vendor concept and guessing would make a cross-source filter quietly wrong.
+	var vendor, host, sigID, severity, message string
+	if err := pool.QueryRow(Ctx(t),
+		`SELECT vendor, source_host, signature_id, severity, message
+		   FROM external_logs WHERE product = 'sshd' LIMIT 1`).
+		Scan(&vendor, &host, &sigID, &severity, &message); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ field, got, want string }{
+		{"vendor", vendor, "syslog"},
+		{"source_host", host, "host9"},
+		{"signature_id", sigID, "SESSION"},
+		// PRI 86 = facility 10 (authpriv), severity 6 — the short label operators use, not "informational".
+		{"severity", severity, "info"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q — the RFC 5424 mapping is wrong, so this format is stored but "+
+				"does not line up with CEF rows in a cross-source query", c.field, c.got, c.want)
+		}
+	}
+	if !contains(message, "Accepted publickey for operator") {
+		t.Errorf("message = %q, want the line's free text. The structured data must be lifted OUT of the "+
+			"message and the remainder kept — a message field still carrying the raw SD element means the "+
+			"parse degraded to passing the line through", message)
+	}
+
+	// THE STRUCTURED DATA, hunted per field exactly as a CEF extension is. Flattened `sdid.key`.
+	var user string
+	if err := pool.QueryRow(Ctx(t),
+		`SELECT fields->>'auth@32473.user' FROM external_logs WHERE product = 'sshd' LIMIT 1`).
+		Scan(&user); err != nil {
+		t.Fatalf("querying the structured-data field: %v", err)
+	}
+	if user != "operator" {
+		t.Fatalf("fields->>'auth@32473.user' = %q, want \"operator\". The SD element did not reach the "+
+			"huntable JSONB, which is the only reason this connector exists over the BSD-syslog one — the "+
+			"format would be onboarded in name and unsearchable in practice", user)
+	}
+}

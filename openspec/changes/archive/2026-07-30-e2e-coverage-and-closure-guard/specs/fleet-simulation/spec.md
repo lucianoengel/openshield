@@ -1,9 +1,7 @@
-# fleet-simulation Specification
+## MODIFIED Requirements
 
-## Purpose
-A one-command multi-agent fleet simulation: multiple agent PROCESSES enroll with their own identities and publish verified telemetry, against podman-hosted Postgres and NATS, and it asserts the fleet properties (verified+attributed telemetry, liveness, the dead-man's-switch on a killed agent, revocation rejecting telemetry). Run by `make integration` (D296 replaced the shell script it began as); token issuance is an operator-local command; fanotify permission mode is not simulable in rootless podman.
-## Requirements
 ### Requirement: A multi-agent fleet is demonstrable in podman
+
 There MUST be a one-command simulation that brings up the control plane and multiple agents, each
 enrolling with its own identity and publishing verified telemetry, and ASSERTS the fleet properties:
 telemetry is verified and attributed per agent, each agent is seen, a killed agent becomes overdue,
@@ -28,6 +26,8 @@ because a spec claiming containers describes coverage the suite does not have.
   telemetry is rejected
 - **AND** the simulation asserts these and exits non-zero if any fails
 
+## ADDED Requirements
+
 ### Requirement: The properties that need separate machines are named as unproven
 
 The simulation's limits SHALL be recorded rather than implied. Running agents as processes on one
@@ -43,10 +43,3 @@ leaving them implied is the expensive option.
 - **WHEN** the fleet simulation's coverage is described
 - **THEN** the four properties above are named as not exercised, and the reason is the topology
   rather than an oversight
-
-#### Scenario: Token issuance is an operator command, not a network route
-- **WHEN** the simulation mints tokens for its agents
-- **THEN** it does so via an operator-local command run inside the control-plane container, not a
-  network endpoint
-- **AND** the simulation restores the dev database on any exit
-

@@ -449,6 +449,53 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   signature is checked); **property tests** for the ledger and the policy lattice; and **golden-trace /
   replay** tests (a recorded event stream must reproduce identical decisions + ledger rows). (The
   latency-budget benchmark is gating — see above.)
+- **The integration suite now runs in CI, and until D365 it ran in NO automated gate at all.** The
+  `ledger` job runs *package* tests against a real Postgres; `test/integration/` — the only place the
+  built commands run as real processes, and therefore the only place `cmd/` wiring is exercised — was
+  reachable only via `make integration` on a developer's machine. It had already let a real defect
+  through: `seedTimeline` snapshotted its ledger baseline AFTER writing the file it waited for, so on a
+  fast machine the row was already counted and two tests burned their full 60s timeouts. Now its own job,
+  with `podman --version` as an explicit first step because the suite *skips* without podman and the naive
+  job would have reported green while running nothing.
+- **Coverage of the shipped binaries: 51.2% of statements**, 82 packages, one integration run
+  (`scripts/coverage-integration.sh`, D365). 6 packages at 0%, 10 under 25%. Four of the zeros are
+  root/display-gated and covered on the VM; one — `internal/connectors/rfc5424` — was a REAL gap now
+  closed (every syslog scenario in the suite sent CEF, so the RFC 5424 fallback could not be reached by
+  any configuration the suite produces); and one is a limit of the measurement, below. **51.2% is a work
+  list, not a grade:** statement coverage is not path coverage, and the number understates the truth by
+  an unknown amount for the reason in the next bullet.
+- **`privileged.Worker.Close` SIGKILLs the worker, so the parse path cannot be coverage-measured** — it
+  closes stdin and then immediately calls `cmd.Process.Kill()`, and a killed process flushes no coverage
+  profile. `internal/agent/worker` therefore measures 0% while `cmd/openshield-worker` measures 48.2%
+  (startup paths from workers that raced to exit on stdin EOF first). Closing stdin, waiting briefly, then
+  killing would be better shutdown hygiene *and* would make the measurement possible — but changing
+  production shutdown semantics to improve a metric needs its own reasoning, so it is a ticket, not a
+  side effect. Small; worth doing.
+- **`scripts/check-cmd-closure.sh` guards the unwired-feature class** (D365, in `make quick`/`make check`
+  /CI, ~2s). Every package must be reachable from `./cmd/...` or carry a recorded reason; 9 are outside
+  the closure today (3 test-only guards, 3 doc-only, 2 spikes, 1 `!linux`-gated). Fails on a stale entry
+  too, so the allowlist cannot grow into a hiding place. **What it does not close:** a package can be
+  imported by a binary and still be unreachable at runtime because no setting turns it on.
+- **The fleet simulation's four unproven distributed properties** — the `fleet-simulation` spec claimed
+  "N agent **containers**"; the reality is N agent **processes** on one host with podman hosting only
+  Postgres and NATS, largest fleet anywhere **six** (`test/integration/analytics_test.go`). Spec corrected
+  (D365). The fleet *properties* are genuinely tested; what a single-host topology cannot exercise is
+  **network partition and rejoin**, **clock skew**, **per-node limits under contention**, and
+  **offline-queue drain after a real disconnection**. Not "N=20 for its own sake" — each of those four
+  needs a test whose failure mode is a partition or a skew, and a container topology is the cheapest way
+  to get one. These are the failures an enterprise pilot finds first.
+- **Enterprise feature-gap assessment: [`enterprise-gap-assessment.md`](enterprise-gap-assessment.md)**
+  (D365) — OpenShield at `HEAD` against a composite top-tier enterprise stack, every OpenShield-side
+  claim verified against the tree. Four gate items that end an evaluation regardless of detection depth:
+  **Linux only** (every non-Linux file is a refusal stub; the one portable observation surface,
+  `internal/connectors/filewatch`, has its behaviour proven exclusively on Linux because the Windows CI
+  job runs build+vet and no tests); **operator auth is mTLS certs only** — no SSO/SCIM, and because the
+  role lives IN the certificate a demotion is not effective until it expires, which is a real defect
+  rather than a missing integration; **zero tenant scoping** (deliberate per D21, still a limit on what
+  the open product can do); and **no data-at-rest discovery** — the AWS surface is CloudTrail log ingest
+  only, so the product cannot answer "where is my sensitive data", which is the first question asked of a
+  Data Security Platform. The recommendation ordering is in that file; the top item is one object-store
+  discovery connector, which is also the strongest available test of the D26/D69 fitness claim.
 - **Contributor onboarding** — the codebase is genuinely hard to enter cold. Deliverables: an architecture
   tour; **diagrams** (agent lifecycle, event flow, playbook execution, intent publication, attestation,
   entity graph, risk flow); a "how to add a producer / classify plugin / playbook step" tutorial with one

@@ -47,12 +47,19 @@ func seedTimeline(t *testing.T, stack *Stack, work string, files map[string]stri
 		return n
 	}
 	for name, body := range files {
+		// THE BASELINE IS TAKEN BEFORE THE WRITE, and it used to be taken after it. That ordering is a
+		// race the ENGINE WINS on any machine fast enough: the row lands ~90ms after the file appears,
+		// `count()` then already includes it, and the loop waits out its full 60s for a second row that
+		// is never coming. It fails deterministically here and would have been intermittent on slower
+		// hardware — the worst version of the bug, because a test that fails only sometimes gets retried
+		// rather than read.
+		//
+		// One file at a time, so the ledger's ORDER reflects the order things happened — which is the
+		// property the timeline exists to present and cannot be asserted on a racing batch.
+		before := count()
 		if err := os.WriteFile(filepath.Join(watch, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		// One at a time, so the ledger's ORDER reflects the order things happened — which is the
-		// property the timeline exists to present and cannot be asserted on a racing batch.
-		before := count()
 		Eventually(t, 60*time.Second, "the decision for "+name+" to be recorded", func() bool {
 			return count() > before
 		})
