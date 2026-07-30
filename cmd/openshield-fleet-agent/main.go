@@ -227,18 +227,35 @@ func main() {
 	}
 }
 
-// parsePCRs parses a comma-separated PCR list ("16,23") into indices; malformed or
-// empty entries are skipped, an empty/absent value disables attestation.
+// parsePCRs parses a comma-separated PCR list ("16,23") into indices. An empty or absent value disables
+// attestation; a malformed entry is skipped but SAID OUT LOUD.
+//
+// The warning is the fix, and the divergence it covers is worth naming. openshield-provision's
+// parsePCRList REFUSES a malformed index outright, on the stated grounds that an empty baseline "attests
+// to nothing". This one skips, which is right for a simulation agent that should keep running — but
+// skipping SILENTLY meant `OPENSHIELD_ATTEST_PCRS=0,seven` enrolled a baseline over PCR 0 alone while the
+// operator had asked for two. Downstream validation cannot catch that: [0] is a perfectly valid non-empty
+// baseline. The result is an agent attesting to less than was asked, with nothing to indicate it (D31 — a
+// gap must never be silent).
 func parsePCRs(s string) []int {
 	var pcrs []int
+	var skipped []string
 	for _, f := range strings.Split(s, ",") {
 		f = strings.TrimSpace(f)
 		if f == "" {
 			continue
 		}
-		if n, err := strconv.Atoi(f); err == nil {
-			pcrs = append(pcrs, n)
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			skipped = append(skipped, f)
+			continue
 		}
+		pcrs = append(pcrs, n)
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(os.Stderr, "fleet-agent: OPENSHIELD_ATTEST_PCRS %q — ignoring %d unparseable entry/ies "+
+			"(%s); attesting over %v only. A typo here NARROWS the baseline silently, which is why this "+
+			"says so.\n", s, len(skipped), strings.Join(skipped, ", "), pcrs)
 	}
 	return pcrs
 }
