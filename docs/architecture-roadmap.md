@@ -382,6 +382,25 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   attribution; content-hash application whitelisting.
   *(Full-pipeline inline `DENY_EXEC` is MVP — Lane E, HIPS-3 inc 2.)*
 
+### Privileged tests — found by asking why coverage stalled at 52.7% (D381)
+- **KERNEL-1 · The dnsredirect kernel tests are FLAKY under real root, and ran nowhere** — new work · S.
+  Root-gated tests skip on every developer machine and in CI, so `internal/dnsredirect`'s kernel suite was
+  executed only when somebody remembered to run it on the VM. Run there now: **it passes test-by-test and
+  fails as a package, with a DIFFERENT test failing each run** — `TestForwardedRedirectSinkholesGatewayClient`
+  and `TestTransparentRedirectSinkholesUnconfiguredClient` on one run, `TestWithoutMarkExemptionResolutionBreaks`
+  and `TestWatchdogBypassesAWedgedResolver` on the next, with `connection refused` against the canned
+  `127.0.0.2:53` upstream. Not a stale environment: the VM has no leftover openshield rules and
+  systemd-resolved does not hold that address.
+  These tests install REAL nft/iptables rules and bind a fixed address, so they share global kernel state
+  with each other; `Install` already removes-before-adding on its own chain, which is why the OUTPUT path is
+  not the whole story (the forwarded PREROUTING chain is a second one). The fix is deterministic
+  per-test isolation — clear both chains and the fixed address before each test, not only after — and
+  **the CI kernel job deliberately does NOT yet run this package**, because wiring a knowingly-flaky suite
+  into a gate teaches people to ignore the gate.
+  *Also still outside that job and worth adding once this is fixed:* `internal/dnssink`'s VM tests, and
+  `internal/clipboard/x11` (which needs only `xvfb-run`, not root — it is gated on a display, not on
+  privilege, and that is a softer excuse than it looked).
+
 ### Broker lifecycle — found by the offline-queue recovery test (D367)
 - **Endpoint partition + ping detection: ✅ DONE (D369).** A container-based scenario removes the AGENT's
   interface and rejoins it on a different IP. It found a second defect D368 could not help with: an endpoint
