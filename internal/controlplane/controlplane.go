@@ -458,8 +458,17 @@ func (s *Server) Connect(natsURL string) error {
 func (s *Server) Run(ctx context.Context, natsURL string) error {
 	// SEC-4: install an async ErrorHandler so a SlowConsumer drop is counted + logged, not
 	// silent. Appended to any caller-supplied options (mTLS, D55).
+	//
+	// AND RETRY FOREVER. The default policy gives up after ~2 minutes, and for THIS process that is not
+	// one endpoint going quiet — it is the whole fleet's ingest stopping, permanently, with the server
+	// still running and reporting nothing wrong. Deliberately NOT applied in Connect() above: that path
+	// exists for operator subcommands that publish one message and exit, where giving up promptly is the
+	// correct behaviour and retrying forever would hang a CLI.
 	opts := append([]nats.Option{}, s.natsOpts...)
 	opts = append(opts, nats.ErrorHandler(s.natsErrorHandler))
+	opts = append(opts, natsx.ResilienceOptions(func(msg string) {
+		fmt.Fprintf(os.Stderr, "openshield-server: nats: %s\n", msg)
+	})...)
 	conn, err := nats.Connect(natsURL, opts...)
 	if err != nil {
 		return fmt.Errorf("controlplane: connecting to NATS: %w", err)

@@ -2508,3 +2508,93 @@ rediscoverable.
   up permanently and its spool never drains — a laptop closed for lunch is the normal case, not an edge
   case. This scenario's outage is far shorter and so neither proves nor disproves it. Next to measure.
 - Clock skew, and per-node limits under real contention.
+
+---
+
+## Round 48 (D368): every long-lived process gave up on the broker after two minutes
+
+Round 47 ended by naming the reconnect budget as the next thing to measure rather than assuming it either
+way. Measured: it is a real defect, in every long-lived process in the product.
+
+nats.go defaults to `MaxReconnects=60` with `ReconnectWait=2s` — roughly **two minutes**, after which the
+client closes permanently and the process keeps running while never publishing or receiving again.
+**Nothing passed a single reconnect option.**
+
+| Outage (same broker, same port, state intact) | Result |
+| --- | --- |
+| 4 seconds | recovers fully — 2 → 120 rows |
+| 150 seconds | **never recovers** — still 2 rows thirty seconds after it is back |
+
+### The agent case is the one that matters, because the feature defeats itself
+
+The spool exists so an outage causes a gap rather than silent loss (D40/D67). After the budget expires the
+agent keeps producing into a spool **it can never drain** — so the spool fills to `OPENSHIELD_QUEUE_MAX`
+and begins dropping the OLDEST records. A bounded outage silently becomes unbounded evidence loss, by way
+of the mechanism built to prevent exactly that.
+
+For the control plane the same default meant the whole fleet's ingest stopping permanently with the server
+still running and reporting nothing wrong. For the engine and gateway: enforcement continues, the record
+of it stops.
+
+Two minutes is not a long outage. A laptop closed over lunch, a switch reboot, a VPN drop, a broker upgrade.
+
+### Where it hid
+
+The engine and gateway had a `natsOptions(log)` helper that looks like it exists to hold precisely this:
+
+```go
+if cfg == nil {
+    return nil            // ← the common path: no options at all
+}
+return []nats.Option{nats.Secure(cfg.ClientConfig())}
+```
+
+The resilience of the connection depended on whether mTLS happened to be configured. Nothing in the name
+or shape of that function hints at it.
+
+### The test could not fail, and only the mutation said so
+
+First version: a 135-second outage, on the arithmetic that 60 × 2s = 120s. Reverting `MaxReconnects` to 60
+left it **passing** — because the jitter the same change adds makes the real budget 120–180s, so 135s never
+exhausted it. The scenario was quietly re-proving what Round 47's drain scenario already covered.
+
+**The fix had widened the very budget the test was sized against.** That is worth keeping as a pattern:
+any threshold derived from the code under test must be re-derived after changing that code, and a mutation
+is the only thing that catches it. Window now 200s; mutant fails on the spool never draining (383s), fixed
+version passes with 80 records recovered (209s).
+
+### No ClosedHandler, deliberately
+
+The obvious addition logs "closed permanently — this process will never publish again" at maximum severity.
+nats.go invokes `ClosedHandler` on an explicit `Close()` too, so that line would appear on **every clean
+shutdown** — a maximum-severity warning in the log of every correctly-stopped machine is the one an
+operator learns to scroll past. And with `MaxReconnects(-1)` the condition cannot arise: a permanent close
+is only ever deliberate. All cost, no signal.
+
+### A CI guard of mine had the same hole it was built to close
+
+The `integration-suite` job added in Round 46 ran `podman --version` as its first step, on the reasoning
+that the suite `t.Skip`s without podman and would otherwise report green having run nothing.
+
+A runner then shipped a podman whose OCI runtime could not start anything —
+`Error: OCI runtime error: crun: unknown version specified`, reproducible on that runner and absent on
+another in the same fleet. **`podman --version` succeeds there.** So the guard would have passed while
+every scenario skipped: exactly the failure it was written to prevent, one layer down. It now runs
+`podman run --rm alpine:3 true`.
+
+The same runner surfaced it through `TestRestoreDrillRunsEndToEnd`, which reported `pg_dump: exit status
+126` — reading as a defect in the ledger's backup story when nothing had run at all. That test now skips
+when the container **cannot start**, matched on the runtime's own error text rather than an exit code
+(podman also returns the container's status, so a tool that genuinely exits 126 would be
+indistinguishable). Kept narrow on purpose: a tool that ran and then failed still fails the test, because
+that is the drill actually being broken.
+
+### What this does NOT fix
+
+**PLAT-10 is untouched.** A broker returning with empty JetStream state still wedges the fleet — the client
+now reconnects forever, and the stream it needs is still not there. Reconnecting forever is necessary and
+not sufficient.
+
+And infinite retry is a policy choice with a cost worth stating: "the agent is running" no longer implies
+"the agent is connected". The new disconnect log line is what makes that visible, and the fleet-side
+dead-man's-switch is what makes it actionable.

@@ -973,8 +973,12 @@ func natsOptions(log *slog.Logger) []nats.Option {
 	if err != nil {
 		fatal(log, "TLS configuration", err)
 	}
+	// THE RECONNECT POLICY IS NOT OPTIONAL and this function used to return `nil` when TLS was absent —
+	// i.e. the common case ran on nats.go's defaults, which give up permanently after ~2 minutes. See
+	// natsx.ResilienceOptions.
+	opts := natsx.ResilienceOptions(func(msg string) { log.Warn("nats: " + msg) })
 	if cfg == nil {
-		return nil
+		return opts
 	}
-	return []nats.Option{nats.Secure(cfg.ClientConfig())}
+	return append(opts, nats.Secure(cfg.ClientConfig()))
 }

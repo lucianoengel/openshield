@@ -110,3 +110,92 @@ func TestASpooledOutageDrainsWhenTheBrokerReturns(t *testing.T) {
 		func() bool { return rows() >= want })
 	t.Logf("recovered: %d row(s) stored (held %d, %d before the outage)", rows(), held, before)
 }
+
+// TestAnOutageLongerThanTheReconnectBudgetStillRecovers is the defect that the drain scenario above could
+// not see, because its outage was seconds long.
+//
+// nats.go defaults to MaxReconnects=60 with ReconnectWait=2s — a budget of roughly TWO MINUTES, after
+// which the client closes the connection permanently. No process in this product passed any reconnect
+// option, so every one of them inherited that. Measured before the fix: a 4-second outage recovered fully
+// (2 -> 120 rows), a 150-second one never recovered at all, and thirty seconds after the broker was back
+// on the same port with its state intact the row count was still 2.
+//
+// For the agent that is worse than losing the outage window. It keeps producing into the disk spool that
+// exists so an outage causes a gap rather than silent loss (D40/D67), and it will now never drain it —
+// so the spool fills to OPENSHIELD_QUEUE_MAX and begins DROPPING THE OLDEST records. A bounded outage
+// silently becomes unbounded evidence loss. For the control plane the same default meant the whole
+// fleet's ingest stopping permanently while the server still ran and reported nothing wrong.
+//
+// TWO MINUTES IS NOT A LONG OUTAGE: a laptop closed over lunch, a switch reboot, a VPN drop, a broker
+// upgrade.
+//
+// WHY THIS TEST IS SLOW AND CANNOT BE MADE FAST. The boundary being crossed belongs to the code being
+// tested, so the outage has to outlast it for the scenario to be capable of failing. Shortening it, or
+// making the budget configurable and setting it small, would exercise the configured path instead of the
+// default and would pass against the very bug this exists for.
+//
+// THE FIRST VERSION USED 135s AND COULD NOT FAIL. Reverting MaxReconnects to 60 left it PASSING, because
+// 60 attempts at ReconnectWait(2s) plus up to 1s of jitter is a budget of 120-180s, not the flat 120s the
+// arithmetic suggested — so a 135s outage never exhausted it and the scenario was quietly re-proving what
+// the drain scenario above already covers. The mutation is what exposed that; the window now exceeds the
+// jittered worst case.
+func TestAnOutageLongerThanTheReconnectBudgetStillRecovers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("crosses the ~2 minute default reconnect budget by construction")
+	}
+	stack := StartStack(t)
+	_, enrollURL := startServer(t, stack)
+	pool := openPool(t, stack.DSN)
+	work := t.TempDir()
+	spool := filepath.Join(work, "spool")
+
+	const agentID = "agent-long-outage"
+	token := issueToken(t, stack, agentID)
+	agent := Start(t, "openshield-fleet-agent", []string{
+		"OPENSHIELD_AGENT_ID=" + agentID,
+		"OPENSHIELD_ENROLL_URL=" + enrollURL,
+		"OPENSHIELD_ENROLL_TOKEN=" + token,
+		"OPENSHIELD_NATS_URL=" + stack.NATSURL,
+		"OPENSHIELD_QUEUE_DIR=" + spool,
+		"OPENSHIELD_SEQ_FILE=" + filepath.Join(work, "seq"),
+		"OPENSHIELD_HEARTBEAT=500ms",
+	})
+	agent.WaitForOutput("enrolled", 90*time.Second)
+
+	rows := func() int {
+		var n int
+		if err := pool.QueryRow(Ctx(t),
+			`SELECT count(*) FROM fleet_telemetry WHERE agent_id = $1`, agentID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	Eventually(t, 90*time.Second, "the agent's first telemetry before the outage", func() bool {
+		return rows() > 0
+	})
+
+	stack.StopBroker(t)
+	// PAST THE WORST-CASE BUDGET. 60 attempts x (2s + up to 1s jitter) is at most 180s, so the outage has
+	// to be longer than that — not longer than the 120s the base interval alone implies.
+	t.Log("broker down; waiting past the ~180s worst-case default reconnect budget")
+	time.Sleep(200 * time.Second)
+
+	held := spoolFiles(t, spool)
+	before := rows()
+	if held == 0 {
+		t.Fatalf("nothing was spooled across a 200s outage\n%s", agent.Output())
+	}
+	t.Logf("after 200s down: %d record(s) held, %d row(s) stored", held, before)
+
+	stack.RestoreBroker(t)
+
+	// THE ASSERTION. On the unfixed code the client has already closed permanently, so the spool never
+	// empties however long this waits.
+	Eventually(t, 180*time.Second, "the spool to drain after an outage longer than the reconnect budget",
+		func() bool { return spoolFiles(t, spool) == 0 })
+
+	want := before + held
+	Eventually(t, 120*time.Second, "the records held across the long outage to be STORED",
+		func() bool { return rows() >= want })
+	t.Logf("recovered after a 200s outage: %d row(s) stored (held %d)", rows(), held)
+}

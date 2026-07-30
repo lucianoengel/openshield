@@ -332,8 +332,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: podman must be present, or the suite would skip and report ok
-        run: podman --version
+      # A FUNCTIONAL PROBE, not `podman --version`, which was the first version of this step and is not
+      # enough. A runner can ship a podman whose OCI runtime cannot start anything — observed on this
+      # project: `Error: OCI runtime error: crun: unknown version specified`, reproducible on one runner
+      # while another in the same fleet was fine. `podman --version` succeeds there, every scenario
+      # t.Skips, and the job reports green having run nothing. That is the exact failure this step exists
+      # to prevent, so it has to prove a container actually RUNS.
+      - name: podman must actually run a container, or the suite would skip and report ok
+        run: podman run --rm docker.io/library/alpine:3 true
       - name: the shipped binaries, as real processes against real infrastructure
         env:
           OPENSHIELD_REQUIRE_POSTGRES: '1'

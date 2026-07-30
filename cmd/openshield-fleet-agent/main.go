@@ -85,7 +85,13 @@ func main() {
 		fatal("TLS configuration: %v", err)
 	}
 	httpClient := http.DefaultClient
-	var natsOpts []nats.Option
+	// RETRY FOREVER. Without this the agent ran on nats.go's defaults — 60 attempts at 2s, then the
+	// connection closes for good and this process spools telemetry to a disk queue it will never drain,
+	// until the queue hits its ceiling and starts dropping the OLDEST records. See
+	// natsx.ResilienceOptions; measured, a 150-second outage was permanent.
+	natsOpts := natsx.ResilienceOptions(func(msg string) {
+		fmt.Fprintf(os.Stderr, "fleet-agent %s: nats: %s\n", agentID, msg)
+	})
 	if tlsConf != nil {
 		httpClient = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf.ClientConfig()}}
 		natsOpts = append(natsOpts, nats.Secure(tlsConf.ClientConfig()))

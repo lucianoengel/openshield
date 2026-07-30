@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,6 +33,16 @@ type pgWork struct{ dir string }
 
 // run executes a Postgres client tool from a container. It SKIPS (never fails) without podman, so
 // `make all` stays green on a machine that lacks it — the same shape as the other environment-gated tests.
+//
+// AND IT SKIPS WHEN PODMAN IS PRESENT BUT CANNOT RUN ANYTHING, which the LookPath check alone does not
+// cover and which cost a red build to diagnose. A GitHub runner shipped a podman whose OCI runtime was
+// broken — `Error: OCI runtime error: crun: unknown version specified`, reproducible on that runner and
+// absent on another in the same fleet — and this test reported `pg_dump: exit status 126`. That reads as a
+// dump failure, i.e. as a defect in the ledger's backup story, when nothing had run at all.
+//
+// The distinction is kept narrow ON PURPOSE. Only a failure to START the container is an environment skip;
+// a tool that ran and then failed still fails the test, because that is the drill actually being broken.
+// Widening this to "any error is an environment problem" would delete the gate.
 func (w pgWork) run(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
 	if _, err := exec.LookPath("podman"); err != nil {
@@ -39,7 +50,31 @@ func (w pgWork) run(t *testing.T, args ...string) ([]byte, error) {
 	}
 	full := append([]string{"run", "--rm", "--network=host",
 		"-v", w.dir + ":/work:z", "docker.io/library/postgres:16"}, args...)
-	return exec.Command("podman", full...).CombinedOutput()
+	out, err := exec.Command("podman", full...).CombinedOutput()
+	if err != nil && containerDidNotStart(out) {
+		t.Skipf("the container runtime cannot start a container, so the Postgres client tools are "+
+			"unreachable — this is the environment, NOT the restore drill:\n%s", out)
+	}
+	return out, err
+}
+
+// containerDidNotStart reports whether podman failed before the tool ever ran. Matched on the runtime's
+// own error text rather than on an exit code: 125/126/127 are suggestive but podman also returns the
+// CONTAINER's status, so a tool that genuinely exits 126 would be indistinguishable from a runtime that
+// could not exec it.
+func containerDidNotStart(out []byte) bool {
+	s := string(out)
+	for _, marker := range []string{
+		"OCI runtime error",
+		"error creating container",
+		"cannot set up namespace",
+		"failed to mount",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func drillDSN(db string) string {

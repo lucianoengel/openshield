@@ -383,6 +383,14 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   *(Full-pipeline inline `DENY_EXEC` is MVP — Lane E, HIPS-3 inc 2.)*
 
 ### Broker lifecycle — found by the offline-queue recovery test (D367)
+- **Reconnect forever: ✅ DONE (D368).** Every long-lived process ran on nats.go's defaults
+  (`MaxReconnects=60` x `ReconnectWait=2s` ~= two minutes, then a permanent close with the process still
+  running). Measured: a 4s outage recovered fully, a 150s one never did. The agent case is the one that
+  matters — it kept producing into the spool that exists to prevent silent loss and could never drain it,
+  so the spool filled to its ceiling and began dropping the OLDEST records. `natsx.ResilienceOptions` now
+  gives infinite reconnect + jitter + disconnect/reconnect logging to the agent, engine, gateway and
+  `controlplane.Run` (NOT `Connect`, which is for one-shot operator subcommands). *Residual:* "the agent is
+  running" no longer implies "connected" — the log line and the dead-man's-switch are what cover that.
 - **PLAT-10 · A broker that returns with empty JetStream state wedges the fleet, silently** — new work · M.
   **Reproduced, not theorised** (`Stack.RestoreBrokerEmpty` exists for it): stop the broker, bring one back
   on the same port with a fresh JetStream store, and telemetry never resumes. Measured: rows frozen for
