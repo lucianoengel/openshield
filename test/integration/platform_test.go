@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -245,4 +246,78 @@ func replaceCredentials(dsn, user, pass string) string {
 	at := strings.Index(dsn, "@")
 	scheme := strings.Index(dsn, "://")
 	return dsn[:scheme+3] + user + ":" + pass + dsn[at:]
+}
+
+// TestARansomwareDetectionNamesTheProcessResponsible (HIPS-8).
+//
+// The mass-change signal above tells an operator that something is encrypting a tree. That is true and
+// unactionable: without a process, the only response available is taking the whole machine off the
+// network, a containment that routinely costs more than the incident.
+//
+// The scenario is the real one. A process holds the canaries open — as one walking a tree encrypting it
+// does — the detection fires, and the engine must name THAT pid, not its own. Naming its own is the
+// failure mode most available to this design, because the engine reads the canaries itself to measure
+// their entropy.
+func TestARansomwareDetectionNamesTheProcessResponsible(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work, canaryDir := t.TempDir(), t.TempDir()
+
+	eng := Start(t, "openshield-engine", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_WATCH_DIRS=" + t.TempDir(),
+		"OPENSHIELD_CANARY_DIRS=" + canaryDir,
+		"OPENSHIELD_CANARY_COUNT=8",
+		"OPENSHIELD_CANARY_THRESHOLD=3",
+		"OPENSHIELD_CANARY_INTERVAL=500ms",
+		"OPENSHIELD_CANARY_WINDOW=30s",
+	})
+	eng.WaitForOutput("engine observing", 90*time.Second)
+
+	var planted []string
+	Eventually(t, 60*time.Second, "the canaries to be planted", func() bool {
+		entries, err := os.ReadDir(canaryDir)
+		if err != nil {
+			return false
+		}
+		planted = planted[:0]
+		for _, e := range entries {
+			if !e.IsDir() {
+				planted = append(planted, filepath.Join(canaryDir, e.Name()))
+			}
+		}
+		return len(planted) >= 8
+	})
+
+	// A process holding the canaries open, exactly as one walking the tree encrypting them would be at
+	// the moment the detection fires. `tail -f` needs nothing but coreutils and does not exit.
+	holder := exec.Command("tail", append([]string{"-f"}, planted...)...)
+	if err := holder.Start(); err != nil {
+		t.Skipf("cannot start the fixture process: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = holder.Process.Kill()
+		_, _ = holder.Process.Wait()
+	})
+
+	for i := 0; i < 6; i++ {
+		if err := os.WriteFile(planted[i], []byte(fmt.Sprintf("encrypted-%d", i)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wantPID := fmt.Sprintf("pid=%d", holder.Process.Pid)
+	Eventually(t, 90*time.Second, "the detection to NAME the process holding the canaries open", func() bool {
+		out := eng.Output()
+		return contains(out, "RANSOMWARE SUSPECT") && contains(out, wantPID)
+	})
+
+	// AND NOT ITSELF. The engine reads the canaries to measure entropy, so it is always a candidate;
+	// naming it would send an operator to kill their own agent.
+	selfPID := fmt.Sprintf("pid=%d", eng.Cmd.Process.Pid)
+	if contains(eng.Output(), "RANSOMWARE SUSPECT") && contains(eng.Output(), selfPID) {
+		t.Fatalf("the engine named ITSELF as a ransomware suspect (%s)\n%s", selfPID, eng.Output())
+	}
 }
