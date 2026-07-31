@@ -828,6 +828,7 @@ Legend: ✅ specified · 🟡 partial · ❌ no surface.
 | Domain | Operate / investigate | Configure / author | Tune |
 |---|---|---|---|
 | **XDR** correlation, entities, timeline | ✅ §6.2, §6.4 | 🟡 correlation params in Settings | ✅ §6.6 |
+| **UEBA** baselines, peer deviation, warm-up | ❌ **`CONSOLE-53`** — no surface at all | ❌ **`UEBA-1`** — no maturity concept EXISTS to surface | 🟡 threshold only |
 | **SOAR** playbooks, intents, approvals, routing | ✅ §6.2 response column, approvals | 🟡 `CONSOLE-18/-19`, read + dry-run only | ✅ §6.6 |
 | **Zero Trust** catalog, policy, sessions, posture | ✅ §6.7 | ✅ §6.7 ③ | n/a |
 | **SIEM** search, external ingest, saved views | ✅ §6.3 | 🟡 ingest endpoints in Settings | ✅ §6.6 |
