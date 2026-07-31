@@ -62,6 +62,20 @@ func (s *sink) count() int {
 	return len(s.got)
 }
 
+// details returns every delivered notification's Detail string. Kept beside kinds() because a page's
+// WORDING is a product property in its own right: two incidents that read identically get triaged
+// identically, so "this came back twenty minutes after we closed it" only counts if it arrives.
+func (s *sink) details() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.got))
+	for _, m := range s.got {
+		d, _ := m["detail"].(string)
+		out = append(out, d)
+	}
+	return out
+}
+
 func (s *sink) kinds() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

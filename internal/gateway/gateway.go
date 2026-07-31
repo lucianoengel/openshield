@@ -474,3 +474,38 @@ func (g *Gateway) recordSuppression(ctx context.Context, dec *corev1.Decision, r
 	g.recordEnforcement(ctx, dec, fmt.Errorf("enforcement SUPPRESSED by the emergency disable (%s) — "+
 		"the decision stands and is recorded; nothing was enforced", reason))
 }
+
+// TunnelFingerprintBlocked reports whether a blind CONNECT tunnel's TLS client fingerprint is on the IOC
+// feed (NIPS-9), recording the outcome either way.
+//
+// It goes through the FEED rather than the full pipeline deliberately. A blind tunnel has no body to
+// classify and no request metadata beyond the host, so running the body stages over nothing would add
+// latency to every HTTPS flow to reach the one signal that is actually available here. The threat engine
+// is the part that has an answer.
+//
+// FAIL OPEN, like every other egress decision (ADR-8/D73/D17): with no feed configured, or no
+// fingerprint, nothing is blocked. Inline prevention on the egress path degrades to a passive wire, never
+// to a network outage.
+func (g *Gateway) TunnelFingerprintBlocked(ctx context.Context, host, ja3 string) bool {
+	f := g.threatFeed.Load()
+	if f == nil || ja3 == "" {
+		return false
+	}
+	m, ok := f.MatchJA3(ja3)
+	if !ok {
+		return false
+	}
+	// The block is auditable. A dropped tunnel that left no record would be indistinguishable from the
+	// origin being down, which is the worst possible reading of a deliberate refusal.
+	entry := &core.Entry{
+		AppendedAt:   g.now().UTC(),
+		Retention:    core.RetentionStandard,
+		OutcomeKind:  "tunnel-blocked",
+		OutcomeStage: host + " (ja3 " + m.IndicatorID + ")",
+	}
+	if err := g.ledger.Append(ctx, entry); err != nil {
+		g.logger.Warn("gateway: recording a blocked tunnel failed (the block still happened, the "+
+			"evidence of it did not)", "err", err, "host", host)
+	}
+	return true
+}

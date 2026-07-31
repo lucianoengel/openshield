@@ -116,6 +116,12 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// of the analyst's incident queue and carries no evidence CONTENT (only references and closed-
 		// vocabulary metadata). Serving it records the view, so a read always leaves a trace (D20/L1).
 		mux.Handle("/incidents/timeline", s.requireTier(RoleAnalyst, opRead))
+		// SOAR-6's response report. It was registered on the inner operator mux and NEVER MOUNTED here,
+		// so it has been unreachable over the only surface an operator connects on since it shipped —
+		// the numbers were on /metrics and the JSON report answered 404 to everyone. Found by driving
+		// it from the integration suite, which is the one place a route with no mount looks different
+		// from a route that works.
+		mux.Handle("/report/response", s.requireTier(RoleAnalyst, opRead))
 		// SOAR-2b: the recurrence chain. Analyst tier alongside the timeline — it is the same
 		// drill-down question asked across incidents instead of within one, and carries the same
 		// closed-vocabulary metadata with no evidence content.

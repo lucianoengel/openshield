@@ -162,3 +162,55 @@ would break the measurement silently rather than fail.
 #### Scenario: The report names the least-exercised code first
 - **WHEN** the measurement completes
 - **THEN** per-package coverage is reported ascending, so the work list is the top of the output
+
+### Requirement: Each shipped capability is exercised as a running deployment, not only as a package
+
+Every capability that is turned on by configuration SHALL have a scenario in the integration suite that
+starts the real binaries, sets the real settings, and asserts on a side effect outside the process.
+
+The gap this covers is specific: whether the shipped binary READS the setting, STARTS the loop and REACHES
+the sink. A package test cannot see any of that, and it is precisely where a feature that is correct
+everywhere else does nothing — the escalation ladder is the sharpest case, because every rung of it can be
+right while the startup log says ACTIVE and no loop runs.
+
+Where a capability needs privileges the build host must not hold, its scenario SHALL be root-gated and
+SHALL skip visibly, naming what it needs, rather than being absent.
+
+#### Scenario: An unacknowledged incident escalates in a running deployment
+- **WHEN** a ladder file and its setting are configured and an incident goes unacknowledged
+- **THEN** an escalation of its own notification kind reaches the configured sink, exactly once
+
+#### Scenario: Returning trouble is linked, and reopening is still refused
+- **WHEN** an operator closes an incident over mutual TLS and the same trouble returns
+- **THEN** the new incident links to the closed one and the page says it is a recurrence
+- **AND** a transition back to open is refused
+
+#### Scenario: A replayed window raises incidents without paging or skewing the metrics
+- **WHEN** correlation was off while alerts arrived, and an admin replays the range
+- **THEN** the incidents exist and are marked backfilled
+- **AND** nothing was paged, and the response report counts neither them nor an exclusion for them
+
+#### Scenario: One hunt reaches every ingest path
+- **WHEN** the same principal appears in logs arriving by syslog, by CloudTrail file and by WEF file
+- **THEN** one canonical query returns all three, each carrying its canonical projection
+- **AND** a query naming a vendor's own field still matches only that vendor
+
+#### Scenario: A saved hunt outlives its author
+- **WHEN** one operator saves a hunt and another, of a lower tier, runs it
+- **THEN** the run returns what the author's query returned
+- **AND** the lower tier cannot author one
+
+#### Scenario: The broker tunnels to a catalogued non-HTTP service
+- **WHEN** an authorized identity CONNECTs to a `tcp://` catalogue entry
+- **THEN** bytes make a round trip to it
+- **AND** an unauthorized identity, an HTTP-catalogued service and an uncatalogued host are all refused
+
+#### Scenario: A known-bad client fingerprint drops a blind tunnel
+- **WHEN** the fingerprint the gateway computes for a tunnelled client is listed as an indicator
+- **THEN** the tunnel is dropped and the block is recorded, though the destination is listed nowhere
+
+#### Scenario: The agent fences the endpoint and unfences it on shutdown
+- **WHEN** the agent is configured with protected ranges and a gateway, and nothing else
+- **THEN** direct traffic to a protected address is rejected, the gateway is still reachable, and the
+  attempt is reported
+- **AND** a clean shutdown restores direct reachability

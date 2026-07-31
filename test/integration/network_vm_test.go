@@ -470,3 +470,91 @@ func tproxyRuleInstalled() bool {
 	}
 	return false
 }
+
+// THE ENDPOINT BYPASS GUARD, IN THE SHIPPED AGENT (D428).
+//
+// The package tests prove the rules and, on a real kernel, that they reject. What only the agent proves is
+// the wiring: that OPENSHIELD_ZTNA_PROTECTED reaches bypassguard.Install, that the guard survives the
+// agent having no exec or file-open gate configured, and that a CLEAN shutdown takes the rules back out.
+//
+// That last one is not tidiness. A guard whose teardown is partial leaves an endpoint that cannot reach a
+// service and an operator with no rule to point at — the worst kind of outage, because the cause has been
+// uninstalled.
+func TestTheAgentFencesTheEndpointAndUnfencesItOnShutdown(t *testing.T) {
+	requireNetAdmin(t)
+	if _, err := exec.LookPath("iptables"); err != nil {
+		t.Skip("iptables not present")
+	}
+
+	// Two loopback aliases: one stands in for the internal service, one for the ZTNA gateway.
+	protectedAddr := vmListener(t, "127.0.0.9")
+	gatewayAddr := vmListener(t, "127.0.0.8")
+
+	reach := func(addr string) bool {
+		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}
+	// Both reachable BEFORE, or the assertions below would pass against a machine where nothing worked.
+	if !reach(protectedAddr) || !reach(gatewayAddr) {
+		t.Fatal("the fixtures were unreachable before the guard was installed")
+	}
+
+	agent := Start(t, "openshield-agent", []string{
+		// The gateway sits INSIDE the protected range — the ordinary deployment, and the case the
+		// exemption ordering exists for.
+		"OPENSHIELD_ZTNA_PROTECTED=127.0.0.8/29",
+		"OPENSHIELD_ZTNA_GATEWAY_ADDR=127.0.0.8",
+		"OPENSHIELD_ZTNA_BYPASS_REPORT_INTERVAL=1s",
+	})
+	agent.WaitForOutput("ZTNA bypass guard ACTIVE", 60*time.Second)
+	// The agent has NO exec or file-open gate: a fenced endpoint with neither is a legitimate
+	// deployment, and an agent that exited here would make the guard unusable on its own.
+	agent.WaitForOutput("running with the ZTNA bypass guard alone", 30*time.Second)
+
+	if reach(protectedAddr) {
+		t.Fatalf("the protected service is still reachable DIRECTLY — the broker authenticates a device "+
+			"and a user, checks posture and risk, and none of it binds if a client can open a socket "+
+			"straight to the service\n%s", agent.Output())
+	}
+	if !reach(gatewayAddr) {
+		t.Fatalf("the GATEWAY is unreachable through the guard — the exemption must precede the reject "+
+			"that covers it, or the endpoint loses the protected services entirely and the outage looks "+
+			"exactly like the feature working\n%s", agent.Output())
+	}
+
+	// THE ATTEMPT IS REPORTED. This is the half worth more than the blocking: a rejected connection to a
+	// protected service is a person or a process going around the broker, and it happens on a
+	// connection nobody is watching.
+	agent.WaitForOutput("ZTNA BYPASS ATTEMPTS", 30*time.Second)
+
+	// A CLEAN SHUTDOWN GIVES THE MACHINE BACK.
+	agent.Stop()
+	Eventually(t, 30*time.Second, "direct reachability to be restored after shutdown", func() bool {
+		return reach(protectedAddr)
+	})
+}
+
+// vmListener starts a TCP listener on a loopback alias and returns its address.
+func vmListener(t *testing.T, host string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", host+":0")
+	if err != nil {
+		t.Fatalf("listening on %s: %v", host, err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_, _ = c.Write([]byte("ok\n"))
+			_ = c.Close()
+		}
+	}()
+	return ln.Addr().String()
+}

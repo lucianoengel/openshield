@@ -184,29 +184,60 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	p.gw.RecordTunnel(r.Context(), host, reason)
 
-	upstream, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
-	if err != nil {
-		http.Error(w, "gateway: upstream dial failed", http.StatusBadGateway)
-		return
-	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		upstream.Close()
 		http.Error(w, "gateway: cannot tunnel (no hijack support)", http.StatusInternalServerError)
 		return
 	}
 	client, _, err := hj.Hijack()
 	if err != nil {
-		upstream.Close()
 		return
 	}
 	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		client.Close()
-		upstream.Close()
+		return
+	}
+
+	// NIPS-9: FINGERPRINT THE CLIENT BEFORE RELAYING, and this is the path where it matters most.
+	//
+	// A blind tunnel is the one flow this gateway explicitly cannot inspect: the bytes are ciphertext by
+	// design (D74/D78). Everything else the IOC engine matches on describes the destination, and here the
+	// destination is often the least informative thing available — a CDN name, a domain registered
+	// yesterday, or under encrypted SNI nothing at all. The CLIENT STACK is the signal that survives
+	// that, so a tunnel the product has already conceded it cannot read is exactly where a JA3 belongs.
+	//
+	// The peek happens AFTER the 200 because the client sends its ClientHello only once it believes the
+	// tunnel is up — reading before would block until the deadline and fingerprint nothing.
+	peeked := peekInitial(client)
+	ja3, _ := ja3Of(peeked)
+	if ja3 != "" {
+		if blocked := p.gw.TunnelFingerprintBlocked(r.Context(), host, ja3); blocked {
+			// Refused AFTER the 200, by closing, because that is the only refusal available once the
+			// client is tunnelling. It is honest about what happened: the flow is recorded as blocked
+			// and the client sees a reset rather than a silent black hole.
+			p.logger.Warn("gateway: tunnel DROPPED on a known-bad client fingerprint (NIPS-9)",
+				"host", host, "ja3", ja3)
+			client.Close()
+			return
+		}
+	}
+
+	upstream, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	if err != nil {
+		client.Close()
 		return
 	}
 	p.logger.Info("gateway: tunneling HTTPS (not inspected — TLS interception is N1.3b)",
-		"host", r.Host)
+		"host", r.Host, "ja3", ja3)
+	// The peeked bytes go upstream FIRST, so the origin sees the original handshake and an allowed
+	// tunnel is byte-for-byte what it would have been.
+	if len(peeked) > 0 {
+		if _, werr := upstream.Write(peeked); werr != nil {
+			client.Close()
+			upstream.Close()
+			return
+		}
+	}
 	go relay(client, upstream)
 	go relay(upstream, client)
 }
