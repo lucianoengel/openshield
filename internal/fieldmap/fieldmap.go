@@ -66,6 +66,7 @@ var aliases = map[string][]string{
 		"userIdentityArn", // CloudTrail (the ARN is the identity; there is no bare username)
 		"SubjectUserName", // Windows EventData
 		"TargetUserName",  // Windows logon events record the authenticating principal here
+		"usrName",         // LEEF (SIEM-16)
 		"user.name",       // ECS — the convention generic JSON logs follow (SIEM-15)
 		"user",
 	},
@@ -76,7 +77,7 @@ var aliases = map[string][]string{
 		"target_user",
 	},
 	SourceIP: {
-		"src",             // CEF
+		"src",             // CEF and LEEF share this one
 		"sourceIPAddress", // CloudTrail
 		"IpAddress",       // Windows 4624/4625
 		"source.ip",       // ECS
@@ -119,6 +120,7 @@ var aliases = map[string][]string{
 	},
 	Action: {
 		"act",          // CEF
+		"cat",          // LEEF puts the event category here
 		"eventName",    // CloudTrail
 		"event.action", // ECS
 		"action",

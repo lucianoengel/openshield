@@ -143,3 +143,49 @@ log happened to carry would split one directory's contents across facets nobody 
 #### Scenario: Bad lines do not discard the good ones
 - **WHEN** a file contains a mixture of parseable and unparseable lines
 - **THEN** the parseable ones are stored and the rest are counted
+
+### Requirement: LEEF is accepted on the same listener as CEF
+
+The syslog listener SHALL parse IBM's Log Event Extended Format alongside CEF and RFC 5424, and LEEF
+records SHALL be searchable through the same store and the same canonical vocabulary.
+
+Where an ArcSight estate emits CEF, a QRadar one emits LEEF, and an estate that has bought from both
+emits both. Reading one and not the other is not covering most of an estate — it is covering whichever
+half was bought first. One listener SHALL accept them all, because making an operator run a second port
+per format is how a log source ends up not onboarded at all.
+
+THE ATTRIBUTE DELIMITER SHALL BE RESOLVED FROM THE RECORD, not assumed. LEEF 1.0 separates attributes
+with tabs; LEEF 2.0 carries a sixth header field naming a delimiter, literally or as a hex escape. A
+parser that assumes tab does not FAIL on a LEEF 2.0 record using another separator — it succeeds,
+producing one enormous key nobody will search for, and every event from that appliance is stored, counted
+as ingested, and invisible to every hunt.
+
+An UNRECOGNISED delimiter field SHALL be refused rather than defaulted. A refused line is counted as
+dropped and an operator can see it; a mis-parsed one cannot be seen at all.
+
+Header fields SHALL be split on UNESCAPED pipes only. A vendor or product name containing an escaped pipe
+is legal, and splitting naively shifts every later field — silently, and only for that vendor, so the
+estate sees one appliance's events attributed to the wrong product with nothing reporting it. The LEEF
+version, not a pipe count, SHALL distinguish 1.0 from 2.0, so a record carrying a URL is not mis-split.
+
+Severity SHALL be taken from the conventional attribute where present and left EMPTY otherwise, never
+defaulted: an invented severity is a triage signal the appliance never sent, and it sorts.
+
+The parser SHALL be fuzzed. It reads whatever an estate's appliances send, on the same ingest path as
+CEF.
+
+#### Scenario: LEEF and CEF arrive on one listener
+- **WHEN** a LEEF record and a CEF record are sent to the same syslog listener
+- **THEN** both are stored and one canonical hunt returns both
+
+#### Scenario: A custom delimiter is honoured
+- **WHEN** a LEEF 2.0 record declares a delimiter other than tab
+- **THEN** its attributes are split on that delimiter and remain individually searchable
+
+#### Scenario: An unrecognised delimiter is refused
+- **WHEN** a LEEF 2.0 record declares a delimiter field that cannot be resolved
+- **THEN** the line is refused rather than parsed with the default
+
+#### Scenario: An escaped pipe does not shift the header
+- **WHEN** a vendor name contains an escaped pipe
+- **THEN** the later header fields keep their meaning

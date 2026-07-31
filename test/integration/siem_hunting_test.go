@@ -333,3 +333,78 @@ func TestJSONLinesLogsAreIngestedAndHuntableWithEveryoneElse(t *testing.T) {
 		return err == nil
 	})
 }
+
+// TestLEEFArrivesOnTheSameListenerAsCEF (SIEM-16).
+//
+// The package tests prove the parser. What only a running deployment proves is that ONE listener accepts
+// both formats — because that is the actual operational claim. An estate that has bought from both
+// ArcSight and QRadar emits both, and making an operator run a second port per format is how a log
+// source ends up not onboarded at all.
+//
+// The LEEF 2.0 record uses a CUSTOM DELIMITER on purpose. A listener that assumed tab would not fail on
+// it: it would store one enormous key, count the event as ingested, and leave it invisible to every
+// hunt. The assertion is therefore on the FIELDS, never on the row existing.
+func TestLEEFArrivesOnTheSameListenerAsCEF(t *testing.T) {
+	p := newPKI(t)
+	cefAddr := "127.0.0.1:" + freePort(t)
+	stack, srv, base := mtlsServer(t, p, map[string]string{
+		"OPENSHIELD_CEF_SYSLOG_LISTEN":  cefAddr,
+		"OPENSHIELD_CORRELATE_INTERVAL": "0s",
+	})
+	srv.WaitForOutput("CEF-over-syslog listener on", 90*time.Second)
+	pool := openPool(t, stack.DSN)
+
+	// A LEEF 2.0 record with a caret delimiter, wrapped in syslog the way an appliance sends it.
+	leefLine := "<134>1 2026-07-27T10:30:00Z qradar-fw LEEF - - - " +
+		"LEEF:2.0|Acme|Firewall|2.1|4711|^|" +
+		"src=203.0.113.5^dst=10.0.0.5^usrName=" + oneUser + "^sev=7^msg=Blocked connection"
+	sendUntil(t, cefAddr, leefLine, "the LEEF event to be stored", func() bool {
+		var n int
+		_ = pool.QueryRow(Ctx(t), `SELECT count(*) FROM external_logs WHERE vendor='Acme'`).Scan(&n)
+		return n > 0
+	})
+
+	// A CEF record on the SAME port, so this proves coexistence rather than a listener that swapped one
+	// format for the other.
+	cefLine := "<134>1 2026-07-27T10:31:00Z arcsight-fw CEF - - - " +
+		"CEF:0|Vendor|Firewall|1.0|100|Blocked connection|5|suser=" + oneUser + " src=203.0.113.5"
+	sendUntil(t, cefAddr, cefLine, "the CEF event to be stored on the same listener", func() bool {
+		var n int
+		_ = pool.QueryRow(Ctx(t), `SELECT count(*) FROM external_logs WHERE product='Firewall' AND vendor='Vendor'`).Scan(&n)
+		return n > 0
+	})
+
+	// THE FIELDS SURVIVED THE CUSTOM DELIMITER, and the canonical hunt reaches both formats at once.
+	analyst := p.operator(t, "analyst", "carol")
+	code, body := do(t, analyst, http.MethodGet,
+		base+"/logs?field=user:"+url.QueryEscape(oneUser)+"&limit=50", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /logs = %d: %s", code, body)
+	}
+	var logs []struct {
+		Vendor     string            `json:"Vendor"`
+		Fields     map[string]string `json:"Fields"`
+		Normalized map[string]string `json:"Normalized"`
+	}
+	if err := json.Unmarshal([]byte(body), &logs); err != nil {
+		t.Fatalf("decoding /logs: %v (%s)", err, body)
+	}
+	vendors := map[string]bool{}
+	for _, l := range logs {
+		vendors[l.Vendor] = true
+		if l.Vendor == "Acme" {
+			if l.Fields["dst"] != "10.0.0.5" || l.Fields["sev"] != "7" {
+				t.Fatalf("the LEEF attributes did not survive the caret delimiter (%v) — a listener "+
+					"assuming tab would store one enormous key, count the event as ingested, and leave "+
+					"it invisible to every hunt", l.Fields)
+			}
+		}
+	}
+	for _, want := range []string{"Acme", "Vendor"} {
+		if !vendors[want] {
+			t.Fatalf("one canonical hunt reached %v, missing %q — an estate emits both formats, and a "+
+				"deployment that reads one covers whichever half was bought first",
+				keysOf(vendors), want)
+		}
+	}
+}

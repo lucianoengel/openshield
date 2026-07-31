@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/connectors/cef"
+	"github.com/lucianoengel/openshield/internal/connectors/leef"
 	"github.com/lucianoengel/openshield/internal/connectors/rfc5424"
 	"github.com/lucianoengel/openshield/internal/connectors/syslog"
 	"github.com/lucianoengel/openshield/internal/fieldmap"
@@ -282,6 +283,14 @@ func (s *Server) cefSink() func(syslog.Message) {
 	return func(m syslog.Message) {
 		msg, ok := cef.FromSyslog(m.Msg)
 		if !ok {
+			// SIEM-16: LEEF before RFC 5424, and after CEF, for the same reason CEF comes first — it is
+			// the more specific reading. An estate that has bought from both ArcSight and QRadar emits
+			// both formats, and making an operator run a second port per format is how a log source ends
+			// up not onboarded at all.
+			if lm, lok := leef.FromSyslog(m.Msg); lok {
+				s.persistExternalLog(leefToExternalLog(lm, m))
+				return
+			}
 			// SIEM-9: not CEF — try modern syslog (RFC 5424) before giving up. One listener accepting
 			// both is deliberate: an estate rarely emits one format, and making an operator run a second
 			// port per format is how log sources end up not onboarded at all.
@@ -318,6 +327,34 @@ func (s *Server) CEFListenAddr() string {
 		return v
 	}
 	return ""
+}
+
+// leefToExternalLog maps a LEEF message onto the shared external-log shape, so a QRadar-format event is
+// searchable by the SAME SearchExternalLogs — and the same canonical vocabulary — as everything else.
+//
+// LEEF carries no severity header field the way CEF does; it conventionally puts one in a `sev`
+// attribute. Read from there when present and left EMPTY otherwise, rather than defaulted to a middle
+// value: an invented severity is a triage signal the appliance never sent, and it sorts.
+func leefToExternalLog(msg leef.Message, m syslog.Message) ExternalLog {
+	name := msg.Attributes["cat"]
+	if name == "" {
+		name = msg.EventID
+	}
+	message := msg.Attributes["msg"]
+	if message == "" {
+		message = name
+	}
+	return ExternalLog{
+		SourceHost:  m.Host,
+		Vendor:      msg.Vendor,
+		Product:     msg.Product,
+		SignatureID: msg.EventID,
+		Name:        name,
+		Severity:    msg.Attributes["sev"],
+		Message:     message,
+		Raw:         leef.MarkerLine(m.Msg),
+		Fields:      msg.Attributes,
+	}
 }
 
 // extensionMessage picks a human-readable message for the row: CEF's `msg` extension if present, else

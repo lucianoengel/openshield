@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D426)
+## What OpenShield is (status at a glance, through D429)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -63,9 +63,9 @@ NOT an infra ticket and not part of the queues below.
 | Category | Maturity | One-line reality |
 |---|---|---|
 | **XDR** (umbrella) | ~80% | Entity graph WIRED and populated by real producers (device⋈user, D203); the entity-keyed `unified_alerts` stream is fed by **every** domain (D213/D241); and it is now **correlated cross-domain** — a distinct-domain window rule + an ordered domain-sequence rule grouped by `entity_id`, severity boosted per domain, materialized per entity and paging once (D242). incidents now carry a cross-domain **timeline** — contributing alerts in detection order, each linked to its evidence with an explicit resolved/unresolved/derived state, and reading one is view-audited (D243). Coordinated cross-domain response (XDR-6, D254) and per-entity risk aggregation (XDR-7, D255) both landed — **Lane A is complete.** **Remaining gap is the operator surface:** there is no analyst UI to read a timeline in, and the CLI/API are the interface (PLAT-1, parked and deliberately last). |
-| Zero Trust (ZTNA) | ~85% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. The endpoint half now exists: an agent-brokered client presents the DEVICE certificate to the access proxy, refuses to start without an identity, binds loopback only and never falls back (ZT-4, D249). **Residual:** it brokers access but does not yet PREVENT bypass (routing/firewall enforcement over the NIPS-1 plane is a separate ticket); HTTP(S) only, no CONNECT/SOCKS, no split DNS. |
+| Zero Trust (ZTNA) | ~90% | Full hardware attestation chain (ZT-1, swtpm-proven end-to-end: TPM quote → EK→AK activation → measured-boot PCR → continuous re-attestation → network self-enrollment; EK-cert anchor + pre-auth enroll token + attestation TTL + DPoP-bound tokens). Live JWKS refresher, RBAC tiers, dual-credential access proxy. The endpoint half now exists: an agent-brokered client presents the DEVICE certificate to the access proxy, refuses to start without an identity, binds loopback only and never falls back (ZT-4, D249). **D427 closed half the "HTTP(S) only" gap:** a `tcp://host:port` catalogue entry is reached by CONNECT on the SAME mutually-authenticated connection, so a database or SSH host inherits the device certificate, the OIDC user, posture and risk without a second auth path — *"a Zero-Trust gate with a VPN next to it is a VPN."* **D428 closed "does not PREVENT bypass", on the endpoint half:** the agent fences the host so traffic to protected ranges is REJECTED except to the gateway, rejections counted, proven on a real kernel. **Residual:** the NETWORK half — the protected network accepting only the gateway — lives outside the product; no SOCKS; no split DNS. |
 | DLP | ~78% | Deep content detection: EDM single/multi-cell + IDM doc-fingerprint + exfil-channel awareness + keyword-proximity + national IDs, all boundary-honored; signed indexes (ADR-9); recursive archive extraction; content-aware CASB blocks sensitive uploads to unsanctioned clouds. Clipboard is now MEDIATED on X11 — the engine owns the selection and DECIDES each paste per destination (source→destination, enforced, VM-proven with a real cross-process paste refused), with password-manager exclusions applied before the read (D246/D247). Wayland stays observe-only: its protocol cannot identify a paste's destination. PRINT is intercepted in the CUPS filter chain and a sensitive job is ABORTED before it prints (DLP-2b, D248, proven on a real spooler). **Lane E DLP work is complete for the MVP.** **Enrichment:** OCR, screenshot, CASB refinements. |
-| NIPS / NTPS | ~60% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, JA3, SMTP filtering. |
+| NIPS / NTPS | ~60% | Real inline IPS: transparent TPROXY drops/splices L4 by dst-IP/SNI/payload and self-installs + self-heals its rules (VM-proven); threat-intel IOC engine + content-signature engine (hot-reload, local file or remote URL); DNS preventive sinkhole with transparent :53 redirect (local + forwarded) + bypass watchdog (VM-proven). **D429 added JA3** — computed from the same peeked bytes as the SNI (one peek, two signals), accepted as an IOC kind, GREASE excluded (without which the same client fingerprints differently every connection and the feature looks correct while never matching), and **reported at 0.8 against a destination match's 1.0 because a JA3 identifies a TLS library shared by every program built on it — evidence, not proof.** Its parser walks attacker-controlled length fields on the hot path in a non-privilege-separated process, so it is bounds-checked and `FuzzJA3` is in CI. **Enrichment gap:** full Suricata grammar, HTTP/2/QUIC, SMTP filtering. |
 | SIEM | ~52% | Alert lifecycle unified (severity/status/dedup, ATT&CK mapping, durable notify dedup, pruned baselines); external-log ingest live (CEF-syslog + AWS CloudTrail + WEF Windows-XML) with field-level JSONB hunting via `GET /logs`. **Enrichment gap:** more formats, saved searches, cross-vendor field normalization. |
 | HIPS | ~85% | Full HIPS-4 suite shipped + inline exec PREVENTION on a live kernel: static `DENY_EXEC` (deny-list/whitelist) + `FAN_OPEN_EXEC_PERM` producer + default-deny whitelisting (VM-proven); FIM (baseline/real-time/signed/delete), ransomware canary, memory-injection detection; trusted-identity critical-process guard + pid-reuse revalidation. The exec gate now gets its verdict from the FULL PIPELINE over a parser-free IPC bridge, VM-proven (D244, inc 2a). The intent-driven half is DONE too: a `CONTAIN` Response-Intent makes the entity's next exec kernel-REFUSED via a real OPA policy, VM-proven (D253). **The endpoint half of coordinated response is complete.** **Enrichment:** eBPF/LSM real-time hooks, JIT W+X allowlist, per-process ransomware attribution. |
 | **SOAR** | ~95% | A case+notify shell with the notify gap closed (SOAR-1, D220: a materialized incident pages once, automatically). Correlation runs on a CLOCK (leader-only) and incidents carry a forward-only attributed lifecycle open→acknowledged→triaged→contained→closed (SOAR-2, D250). The control plane now ACTS: a declarative playbook over a closed, non-actuating step registry runs first response automatically and resumes across a restart without duplicating a step (SOAR-4, D256). Threat intel is real: signed feed ingest into a shared IOC store, and incidents are enriched from observables the verified events already carry (SOAR-5, D257). Response time is measured — detection latency, MTTA and MTTR, each reported with the population it excludes (SOAR-6, D258) — and notifications are ROUTED by kind/severity to named sinks, with a pending approval finally paging a human (SOAR-9, D259). An approved intent is ENACTED against an external identity provider with four-eyes re-checked by the runner (SOAR-8b, D260), and incidents sync bidirectionally with a ticketing system (SOAR-8a, D261). **LANE B IS COMPLETE.** |
@@ -277,6 +277,94 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   entry above reads as though only the gateway were outstanding.
   **BREAKING:** a dynamic field set in the environment no longer takes effect — it is reported, not
   silent (`OPENSHIELD_BREAKGLASS` is the deliberate, reported override).
+- **PLAT-5c · Configuration DELIVERY to endpoints and gateways — PLAT-5b is half-finished** — new work · L.
+  *Owner correction, 2026-07-31: "configurations SHOULD be delivered to the node, we can't assume we need
+  direct access to endpoints."* Correct, and the tree agrees more than the earlier plan admitted.
+  **Endpoint agent config has ZERO dynamic fields. So does the gateway.** Every setting on both is
+  bootstrap. Only the server got PLAT-5b's dynamic, cluster-wide scope (45 fields), and
+  `internal/intent/fleetcontrol.go:22` states the consequence in its own words: *"D265's kill switch reaches
+  server-side components through the configuration store. **ENDPOINT AGENTS DO NOT READ IT**"* — which is
+  why the endpoint half of the kill switch had to be built as a separate signed channel in the first place.
+  **This is a platform gap that predates the console; the console is only what makes it visible.**
+  **The pattern is proven five times over** — fleet-control, signed risk/posture, signed IOC feeds, signed
+  DLP indexes and response intents are all signed one-way channels to endpoints. Configuration is the one
+  thing that does not use one. So this is the sixth instance of an established shape, not new architecture:
+  signature, monotonic sequence, mandatory expiry, fail-toward-the-safe-state, with `fleetcontrol.go` as the
+  reference implementation.
+  **The first version of this ticket claimed typed `Field`s made it "a closed vocabulary by construction".
+  That was WRONG, adversarial review proved it against the code, and ADR-15 in this same file already said
+  so** — *"a configuration language is not a closed vocabulary in the INV-1 sense"* (line ~1469). The
+  vocabulary is closed over **keys**, not **values**, and several declared keys are dereferenced by the
+  consumer into things that execute:
+  - `OPENSHIELD_WORKER_BIN` (`endpoint2.go:23`, `KindPath`) is **executed** as the sandboxed worker.
+    `KindPath` validation is `os.Stat` — "the file exists".
+  - `OPENSHIELD_EXEC_IPC_SOCKET` / `OPENSHIELD_OPEN_IPC_SOCKET` (`endpoint.go:41`, `endpoint2.go:101`) name
+    the socket the **privileged, `CAP_SYS_ADMIN`, fanotify-answering agent** asks for exec and open
+    verdicts on. Repoint them and any local user answers ALLOW for every exec — **a direct INV-2 breach**.
+  - `OPENSHIELD_CONTROL_PLANE_KEY` (`endpoint2.go:35`) is the key that verifies fleet-control *and* would
+    verify this channel. Delivering a new path **re-roots trust permanently — a TTL does not undo a key
+    swap.**
+  - `OPENSHIELD_ENFORCE` (`endpoint2.go:41`, `gateway.go:48`) is a declared field meaning "set = enforce".
+    Delivering it **empty** stops enforcement fleet-wide with no four-eyes, no sequence, no TTL — and
+    because it is not the kill switch, `KillSwitch.Engaged()` stays false and the console's
+    "N enforcement suppressed" counter reads **zero**. INV-5's claim that enforcement is reachable exactly
+    two ways becomes false the day this ships.
+  **So the design is three controls, and the first two are categorical:**
+  1. **`Deliverable bool` on `Field`, default FALSE**, granted per field by explicit declaration and
+     **structurally denied** for any field dereferenced into an executable, a socket, an IPC peer, a key, a
+     CA, a roster or a URL. Enforced **in the endpoint's applier**, so a validly signed message carrying an
+     undeliverable key is still refused. Guarded by a whole-tree test in the D274 shape: walk every
+     `Deliverable` field and fail if its value reaches `exec.Command`, `net.Dial`, or a key/CA load.
+  2. **Security-relevant transitions cannot ride this channel at all.** `OPENSHIELD_ENFORCE`,
+     `OPENSHIELD_USB_ENFORCE`, `OPENSHIELD_ATTEST`, `OPENSHIELD_OPERATOR_ROLES_STRICT` are protection
+     switches; an on→off transition **is** `ENFORCEMENT_DISABLE` and may only travel the fleet-control
+     channel, which already has the four-eyes, the sequence and the mandatory TTL.
+  3. **The coverage check moves to the CONSUMER** — see `PLAT-5d`, which is the load-bearing one.
+  `Accept`: a dynamic endpoint setting changes on a live agent with no shell access; an undeclared key is
+  refused; **and a signed set containing `OPENSHIELD_WORKER_BIN` or `OPENSHIELD_ENFORCE=""` is refused by
+  the agent**. Mutations: mark a dereferenced field `Deliverable` → the whole-tree guard must fail; accept a
+  security-relevant off-transition → the refusal test must fail.
+- **PLAT-5d · The coverage check belongs on the ENDPOINT, not in the console** — PLAT-5c · L. **The
+  structural finding, and it invalidates how ADR-15 was specified.** The coverage meter recomputes in the
+  canvas and the `ENFORCEMENT_DISABLE` routing is decided by the `TOPO-3` compiler — **both in the control
+  plane. INV-1's threat model is a COMPROMISED control plane.** An attacker who owns it does not run the
+  compiler; they publish a signed change set directly. Everything fleet-control gets right, it gets right
+  **on the endpoint** (`fleetcontrol.go:79-133`: signature, sequence and expiry all checked in `apply`),
+  which is precisely why it survives control-plane compromise. ADR-15's coverage rule is currently the only
+  safety property in the design living on the wrong side of that boundary — `TOPO-2b`'s live meter is a
+  good **UX** property and was wrongly promoted to an invariant.
+  So: each endpoint and gateway computes its **own local protection level** from the fields it holds
+  (enforcers registered, monitored dirs non-empty, gate socket reachable, feed verified) and **refuses any
+  delivered set that lowers it** without an accompanying `ENFORCEMENT_DISABLE` authorization, auto-reverting
+  at that authorization's TTL. `Accept`: mutate the applier to accept a lowering set without the
+  authorization → the test must fail.
+- **PLAT-5e · Fail-safe resolution, atomicity and honest acknowledgement** — PLAT-5c · M. Four delivery
+  defects that are each independently sufficient to make the feature unsafe.
+  **(a) Fail-safe is INVERTED for endpoints.** Fleet-control fails safe because absence means enforcing.
+  Config has no safe absence: `Resolver.raw` resolves a dynamic field with no value to `f.Default`, and
+  `endpoint2.go:15` says *"almost every detection source is OFF by default"*. So an agent that is
+  partitioned, expired, or never received a set resolves to **no FIM, no canaries, no memory scanning, no
+  clipboard DLP, no exec monitoring** — an attacker who can partition an endpoint disarms it, and the
+  design would call that "failing safe". Fix: resolution is **delivered → last-good delivered → the host's
+  BOOTSTRAP value**, never the declared default; TTL expiry is a per-field revert timer to that fail-safe;
+  and a stale set makes the agent report **degraded**, rendered in the canvas state rail.
+  **(b) Change sets are not atomic across a host.** An endpoint is three processes (privileged agent,
+  engine, worker) with different field sets, and `Snapshot` swaps atomically only *within* one process. A
+  set touching `OPEN_GATE_DIRS` (agent) and `OPEN_IPC_SOCKET` (engine) applies at different moments, and the
+  intermediate state is "gate enabled, pointing at the wrong socket" — documented as fail-open. Fix: the
+  change set is the unit of atomicity across the host — stage, then commit on a barrier all three consumers
+  acknowledge, or refuse the set.
+  **(c) Silent no-ops.** Endpoint settings are read once at startup (`cmd/openshield-engine/main.go:1017`
+  registers enforcers from `os.Getenv` at boot). Flipping a field to dynamic does not make its consumer
+  re-read it, so the console would show the new value while the host runs the old one — the exact
+  console/host disagreement PLAT-5b exists to prevent. Fix: a per-field `HotAppliable` flag proven by a test
+  that the reader re-reads per tick; a non-hot-appliable field is delivered as **"pending restart"**, never
+  applied silently.
+  **(d) Acknowledgement must not be ordinary telemetry.** INV-4 says unsigned telemetry is never evidence,
+  yet a staged rollout is a control decision driven by it: forged positive acks show `51/51 applied` while
+  the fleet runs the old config *and* advance the rollout. Fix: the ack is **signed by the enrolled agent
+  key and carries the hash of the effective values**, not a revision number — and the UI renders
+  **"acked" and "verified in effect" as different states**, because an ack proves receipt, never effect.
 - **PLAT-6 · Release, packaging & deploy** — 🟡 **increment 1 DONE (D264)** — see Done ledger. `make
   release` builds every command reproducibly (`-trimpath`, `CGO_ENABLED=0`, `-buildvcs=false`) and emits a
   SHA-256 manifest signed with a detached ed25519 signature; `make verify-release` re-checks every digest,
@@ -367,104 +455,136 @@ with it the MVP queue.)*
 
 ## 🚧 Lane F · Console (PLAT-1) — the next queue
 
-Design: `docs/superpowers/specs/2026-07-31-console-plat1-design.md` (adversarially reviewed against D426).
-**PLAT-1 is roughly 40% backend**, and one part of it is a shipped defect that already breaks ZT-7 SSO.
+**Design lives in the specs, not here.** `docs/superpowers/specs/`: `2026-07-31-console-plat1-design.md`
+(architecture, auth, ADRs), `2026-07-31-console-ux-spec.md` (pages, states, workflows, settings IA,
+permission matrix), `console-mockup.html` (visual reference). Entries below are the queue: what, why in one
+or two sentences, what it depends on, and what closes it. **Read the spec before starting a ticket.**
 
-**Read this before pulling anything here.** `requireTier` (`internal/controlplane/views.go:131`)
-authenticates by client certificate **or** OIDC bearer token and then discards `auth.identity` — it never
-reaches the request context. Eight handlers re-derive identity from `operatorIdentity(r.TLS)`
-(`views.go:166`), which returns `""` without a peer certificate. **So an SSO operator today passes the tier
-gate and is then refused by `/alerts/ack`, `/incidents/ack`, `/incidents/transition`,
-`/incidents/timeline`, `/cases/*`, `/searches/save`, `/subject` and `/view`.** D373 shipped an
-authentication method that reaches almost none of the product. Same shape as D415/D417/D418.
+**Start at `CONSOLE-1`, and read this first.** `requireTier` (`internal/controlplane/views.go:131`)
+authenticates by client certificate **or** OIDC bearer and then discards `auth.identity` — it never reaches
+the request context. Eight handlers re-derive identity from `operatorIdentity(r.TLS)` (`views.go:166`),
+which returns `""` without a peer certificate. **So a ZT-7 SSO operator today passes the tier gate and is
+then refused by `/alerts/ack`, `/incidents/ack`, `/incidents/transition`, `/incidents/timeline`,
+`/cases/*`, `/searches/save`, `/subject` and `/view`.** D373 shipped an authentication method that reaches
+almost none of the product. Same shape as D415/D417/D418.
 
 And the obvious fix is a trap: a certificate mints `"operator:" + CN`, a token mints the raw `sub`, and
 four-eyes is `AND requester <> $2` (`internal/controlplane/approvals.go:119`). Thread the bearer identity
 through unchanged and **one human requests from the CLI and approves from the browser** — two-person
-control collapses on case closure, `CONTAIN` intents and fleet `ENFORCEMENT_DISABLE`. `CONSOLE-1` fixes
-both as one change or neither.
+control collapses on case closure, `CONTAIN` and fleet `ENFORCEMENT_DISABLE`. `CONSOLE-1` fixes both or
+neither.
+
+### Lane F index
+
+| ID | Ticket | Phase | Depends | Size |
+|---|---|---|---|---|
+| CONSOLE-1 | Canonical operator principal | 0 | — | L |
+| CONSOLE-2 | Toolchain, dependency budget, reproducible bundle | 0 | — | M |
+| CONSOLE-3 | Browser session auth | 0 | 1 | L |
+| CONSOLE-4 | Incidents queue + timeline detail *(slice 1)* | 1 | 1, 3 | L |
+| CONSOLE-5 | View-audit repair + `investigation_views` retention | 2 | 1 | M |
+| CONSOLE-6 | Keyset pagination | 2 | — | M |
+| CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
+| CONSOLE-8 | Fleet inventory + break-glass surface | 2 | 7 | M |
+| CONSOLE-9 | Entity surface over HTTP | 2 | — | M |
+| CONSOLE-10 | Replay + explain over HTTP | 2 | — | M |
+| CONSOLE-11 | Untrusted-render component + approval hardening | 2 | 3 | M |
+| CONSOLE-25 | Step-up re-authentication | 2 | 3, 11 | S |
+| CONSOLE-29 | Session inventory + revoke | 2 | 3 | S |
+| CONSOLE-40 | Stable `rule_id` on alerts | 2 | — | S |
+| CONSOLE-41 | Tuning: disposition → exception *(absorbs CONSOLE-27)* | 2 | 4, 40 | L |
+| CONSOLE-42 | Detector health + exception register | 2 | 41 | M |
+| CONSOLE-43 | Quiet start *(paging only)* | 2 | 41 | M |
+| CONSOLE-26 | Worklist: assignment + bulk | 2 | 4 | M |
+| CONSOLE-28 | Export from every grid | 2 | 5, 6 | S |
+| CONSOLE-12 | Hunt, Fleet, Explain + pivot spine | 2 | 6, 8, 9, 10, 11 | L |
+| CONSOLE-14 | Assurance gates *(exit criteria)* | 2 | 12 | M |
+| CONSOLE-15 | Console in the signed release *(exit criteria)* | 2 | 2 | M |
+| — | *Phase 3 groups: surfaces · detection admin · Zero Trust · enterprise · i18n* | 3 | | |
+
+**Retired IDs, recorded so they are never reused:** `CONSOLE-23` (policy & compliance packs) merged into
+`CONSOLE-49`; `CONSOLE-27` (suppression + disposition) merged into `CONSOLE-41`, which was the same ticket
+written in a later round — the disposition schema half moved to `CONSOLE-4`, where it is XS rather than a
+backfill.
+
+**Phase 2 is 19 tickets and that is still not an MVP.** It is honest to say so rather than relabel it: the
+five-verb core (`-4`, `-12`, and the read models behind them) plus the security work the console's own
+threat model forces (`-5`, `-11`, `-25`, `-29`) plus tuning, without which the queue stops being read
+(`-40`…`-43`). If it must shrink further, `-26`/`-28`/`-43` are the candidates, and the cost of each is
+stated in its entry.
 
 ### Phase 0 · Foundation
 
 - **CONSOLE-1 · One canonical operator principal** — new work · L. Namespaced principals
-  (`cert:<CN>` / `oidc:<iss>#<sub>`), threaded through `requireTier` onto the request context; the eight
-  `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account
-  and **four-eyes compares the account, not the string**; `operator_roles` gains an issuer discriminator so
-  an IdP subject cannot inherit a certificate CommonName's row; the operator route set becomes **data** so
-  a registered-but-unmounted route is unrepresentable, and `/report/response` (SOAR-6, registered at
+  (`cert:<CN>` / `oidc:<iss>#<sub>`) threaded through `requireTier` onto the request context; the eight
+  `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account and
+  **four-eyes compares the account, not the string**; `operator_roles` gains an issuer discriminator so an
+  IdP subject cannot inherit a certificate CN's row; the operator route set becomes **data**, so a
+  registered-but-unmounted route is unrepresentable — and `/report/response` (SOAR-6, registered at
   `operator_read.go:231`, absent from the outer mux) is mounted by it.
-  `Accept`: a bearer-only operator acknowledges, transitions, reads a timeline and opens a case; and one
-  human with two credentials is REFUSED at four-eyes, with the test first asserting the request reached the
-  tier gate. *OpenSpec change proposed: `2026-07-31-console-1-operator-principal`.*
-  **Three seams ride along, because this is the only cheap moment for them.** This ticket already rewrites
-  the principal model, adds a table, and moves four-eyes from a string to an account. Each of the following
-  is S-sized inside it and L-sized after it — after it they mean touching the same eight handlers, the same
-  cursors and the same four-eyes predicate a *second* time, and this file's own §1 preamble is the record of
-  what a second pass costs:
-  - **A machine principal distinct from a human one** — `svc:<name>`, with its own issue/scope/expire/
-    rotate/revoke lifecycle, and the non-negotiable rule that **a service account can NEVER satisfy
-    four-eyes**. Without it every customer integrating a ticketing system or a script hands a robot a
-    human's certificate, which is what the four-eyes account comparison is being built to detect.
-  - **A scope predicate on the principal**, resolved in `requireTier` and carried in the pagination cursor,
-    **defaulting to "all"**. This does NOT build multi-tenancy (still deferred, ADR-4, and named as an
-    evaluation-ending gap at `docs/enterprise-gap-assessment.md` §3). It reserves the seam so tenancy is
-    later a WHERE clause rather than a rewrite of every handler and every cursor.
-  - **Split `admin` into `admin` and `privacy-officer`** for DSAR export, legal-hold release and the
-    view-audit reader. Today one tier fuses "can change configuration" to "can read every subject's
-    compiled personal data", and no SOC 2 / ISO 27001 access review is answerable with three tiers. Full
-    per-capability custom roles stay deferred (`CONSOLE-30`); this is the separation of duties that cannot
-    wait for them.
+  **Three seams ride along because they are S-sized here and L-sized after**, when they would mean touching
+  the same eight handlers and cursors twice: a **machine principal** (`svc:<name>`) with its own lifecycle
+  that can **never satisfy four-eyes**; a **scope predicate** on the principal carried in the cursor,
+  defaulting to "all", reserving tenancy as a later `WHERE` clause; and **`admin` split into `admin` +
+  `privacy-officer`** for DSAR, legal-hold release and the view audit, because one tier currently fuses
+  "can change configuration" to "can read every subject's personal data".
+  `Accept`: a bearer-only operator acknowledges, transitions, reads a timeline and opens a case; **one human
+  with two credentials is REFUSED at four-eyes**, with the test first asserting the request reached the tier
+  gate. *OpenSpec: `2026-07-31-console-1-operator-principal`.*
 - **CONSOLE-2 · Toolchain, dependency budget, reproducible bundle** (ADR-13) — new work · M. React/TS/Vite
-  under `apps/console/`, embedded via `embed.FS`, same origin, no CDN, Node-free `go build`. The budget is a
-  **number** enforced in CI, and every direct dependency gets the one-sentence justification D276 demanded
-  when it refused goreleaser as "a dependency taken for its own sake". `Accept`: pinned-digest network-less
-  container build, `SOURCE_DATE_EPOCH`, and a byte-identical rebuild check that FAILS the release —
-  `internal/release/release_test.go:161` already tests that Go builds are reproducible, and embedding
-  bundler output puts a non-deterministic input inside that digest. Note `--ignore-scripts` is not the
-  control: `vite.config.ts` and its plugin import closure execute with filesystem and network access during
-  the build, on the machine holding the signing key.
+  under `apps/console/`, embedded via `embed.FS`, same origin, no CDN, Node-free `go build`. Budget is a
+  **number** in CI; each direct dependency gets the one-sentence justification D276 demanded when it refused
+  goreleaser. Logical CSS properties and the no-bare-string lint land here — the only i18n work that cannot
+  be retrofitted. `Accept`: pinned-digest **network-less** container build, `SOURCE_DATE_EPOCH`, and a
+  byte-identical rebuild check that **fails the release** — `internal/release/release_test.go:161` already
+  tests Go reproducibility and embedding bundler output puts a non-deterministic input inside that digest.
+  Note `--ignore-scripts` is not the control: `vite.config.ts` and its plugin import closure execute with
+  filesystem and network access during the build, on the machine holding the signing key.
 - **CONSOLE-3 · Browser session auth** (ADR-14) — CONSOLE-1 · L. OIDC Authorization Code + PKCE, `state`
   bound to a pre-auth cookie, `nonce`, callback `iss` check; server-side session in a `__Host-` cookie
   (`HttpOnly`, `Secure`, `SameSite=Strict`, idle + absolute timeout); CSRF as an `X-OpenShield-CSRF`
-  **header** so no existing route signature changes, plus an independent `Origin` check. The console's
-  OAuth client is a **separate component from the bearer verifier**, and a token whose `aud` is the console
-  `client_id` is refused on the bearer path. **`REQUIRE_DPOP=1` refuses console login and says so at
-  startup** — a cookie has no proof-of-possession, and silently exempting the browser is the downgrade that
-  switch exists to prevent. `Accept`: authorization is unchanged (no tier ever derived from a claim), and
-  the mutation that makes the session carry a `groups` claim fails the test.
+  **header** so no existing route signature changes, plus an independent `Origin` check. The console's OAuth
+  client is **separate from the bearer verifier**, and a token whose `aud` is the console `client_id` is
+  refused on the bearer path. **`REQUIRE_DPOP=1` refuses console login and says so at startup** — a cookie
+  has no proof-of-possession and silently exempting the browser is the downgrade that switch prevents.
+  `Accept`: authorization unchanged; mutation — make the session carry a `groups` claim → the test fails.
 
 ### Phase 1 · Slice 1 — one page, end to end
 
 - **CONSOLE-4 · Incidents queue + timeline detail** — CONSOLE-1,3 · L. The riskiest unknowns proved on the
   real path before any framework generalization: session auth → `/incidents` → `/incidents/timeline` with
   the **three evidence states rendered visually distinct** (resolved / unresolved / derived) → the view
-  recorded under the session principal. No i18n, no palette, no a11y gates yet. `Accept`: an analyst reads
-  a cross-domain timeline and a derived evidence link is not mistakable for a resolved one.
+  recorded under the session principal. No i18n, no palette, no a11y gates yet. Closure **disposition**
+  (true positive / false positive / benign-authorized / duplicate) lands in the schema here: XS now, a
+  backfill across an attributed forward-only lifecycle later. `Accept`: an analyst reads a cross-domain
+  timeline and a derived evidence link is not mistakable for a resolved one.
 
 ### Phase 2 · The MVP console
 
-- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — CONSOLE-1 · M. **A console
-  WEAKENS a documented trust boundary unless this lands.** `RecordView` has four call sites
-  (`views.go:47`, `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`); `/alerts`, `/search`, `/events`,
-  `/logs`, `/incidents`, `/overdue`, `/subject`, `/searches/run` record nothing —
-  and those are the console's primary reads. `docs/threat-model.md:184` bounds the malicious-operator
-  insider with "who LOOKED is recorded"; a UI turns that adversary's task into "scroll the fleet and leave
-  nothing". Per-route decision on what is an evidence-bearing read, recorded before the response, residual
-  stated for every route left unaudited. Plus: migration `007_investigation_views.sql` has **no TTL, no
-  purge and no DSAR path** while storing raw non-pseudonymised operator identities — a console makes it one
-  of the largest tables in the database. Adds a retention window, purge, and DSAR inclusion.
-- **CONSOLE-6 · Keyset pagination** — new work · M. `maxSearchLimit = 1000` (`operator_read.go:281`) with
-  no cursor and no `has_more`. Hunt cannot be built on "top 1000 rows, no row 1001" against 90-day
-  retention. The existing `ORDER BY received_at DESC, id DESC` is already a usable cursor.
-  *Residual:* no stable snapshot across pages while ingest is live.
+*Read models first, then the security primitives the console's own threat model forces, then tuning, then
+the surfaces, then the two exit-criteria tickets.*
+
+- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — CONSOLE-1 · M. **A console WEAKENS
+  a documented trust boundary unless this lands.** `RecordView` has four call sites (`views.go:47`,
+  `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`); `/alerts`, `/search`, `/events`, `/logs`,
+  `/incidents`, `/overdue`, `/subject`, `/searches/run` record nothing — and those are the console's primary
+  reads. `docs/threat-model.md:184` bounds the malicious-operator insider with "who LOOKED is recorded"; a
+  UI turns that task into "scroll the fleet and leave nothing". Per-route decision on what is an
+  evidence-bearing read, recorded **before** the response, residual stated for every route left unaudited.
+  Plus: migration `007_investigation_views.sql` has **no TTL, no purge and no DSAR path** while storing raw
+  non-pseudonymised operator identities — a console makes it one of the largest tables in the database.
+- **CONSOLE-6 · Keyset pagination** — new work · M. `maxSearchLimit = 1000` (`operator_read.go:281`), no
+  cursor, no `has_more`. Hunt cannot be built on "top 1000 rows, no row 1001" against 90-day retention; the
+  existing `ORDER BY received_at DESC, id DESC` is already a usable cursor. *Residual:* no stable snapshot
+  across pages while ingest is live.
 - **CONSOLE-7 · Operator-tier `/health`** — new work · S. Leader held / broker connected / ingest state /
   schema skew / last anchor. The Overview strip's first tile **has no data source today**: `/metrics` sits
-  behind a separate constant-time bearer token (PLAT-4b), not the operator session. Also specifies what the
-  console shows when it is talking to a follower.
+  behind a separate constant-time bearer token (PLAT-4b), not the operator session. Specifies what the
+  console shows when talking to a follower.
 - **CONSOLE-8 · Fleet inventory + break-glass surface** — CONSOLE-7 · M. Agent identity, platform, version,
   last-seen, attestation verdict + TTL, posture, spool depth — and **which agents are enforcement-suppressed,
-  since when, by whom, until when**, from `agent_enforcement` (`heartbeat.go:72`).
-  `INVARIANTS.md:131`: *"'How do I stop this?' is the question a CISO asks before 'what does it detect?'"*
+  since when, by whom, until when** from `agent_enforcement` (`heartbeat.go:72`). `INVARIANTS.md:131`:
+  *"'How do I stop this?' is the question a CISO asks before 'what does it detect?'"*
 - **CONSOLE-9 · Entity surface over HTTP** — new work · M. The entity graph (D203) and per-entity risk
   (D255) are database-only; no HTTP route exposes either.
 - **CONSOLE-10 · Replay + explain over HTTP** — new work · M. `openshieldctl replay` is CLI-only. Backs the
@@ -477,329 +597,267 @@ both as one change or neither.
   The four-eyes screen renders a **server-generated closed-vocabulary summary** (verb, subject count, blast
   radius, TTL) above the requester's free text, and the approve POST carries a one-time token bound to
   `(approval_id, requester, digest of the summary shown)` so a stale or re-rendered row fails closed.
-- **CONSOLE-12 · Hunt, Fleet, Explain + the pivot spine** — CONSOLE-6,8,9,10,11 · L. The roadmap names
-  five verbs — pivot, search, compare hosts, replay, explain a block — and the spine is what serves them:
-  ⌘K palette, a global time range in the URL, a pivot menu on every value, every view URL-addressable so an
-  IR handoff is a pasted link, and the whole loop completable by keyboard.
-  **Two scope cuts, both sequencing rather than refusal.** *Split-pane compare* moves to `CONSOLE-39`: it is
-  among the most expensive affordances to build — duplicated view state, two independent time ranges, a
-  layout every later page must respect — and because every view is URL-addressable by design, two browser
-  tabs serve "compare hosts" in the MVP. *The standalone Entity page* folds into the entity panel the
-  incident detail already carries; `CONSOLE-9`'s HTTP surface still ships on schedule because Fleet, the
-  incident detail and the risk score all need it. An entity is something an analyst pivots *to*, not a
-  destination reached cold — so this removes a surface without removing a capability.
-- **CONSOLE-25 · Step-up re-authentication for destructive acts** — CONSOLE-3 · S. §2.3 of the design
-  concedes the console *introduces* a privilege escalation: a stolen bearer token is effectively read-only
-  today, a session is write-capable by definition, and a certificate is not phishable while a session is.
-  Step-up is the compensating control every buyer expects and the plan had omitted — re-prove identity
-  (`acr_values` / `max_age`, phishing-resistant factor) at `CONTAIN`, `ENFORCEMENT_DISABLE`, legal-hold
-  release, DSAR export and case closure. **Binds to the one-time confirmation token `CONSOLE-11` already
-  issues**, so it is nearly free there and expensive anywhere else. Also the first place the product states
-  that MFA is delegated to the IdP — currently unstated anywhere, and it is a line item on every security
-  questionnaire.
-- **CONSOLE-26 · The queue as a worklist: assignment + bulk operations** — CONSOLE-4 · M. Without it the
-  MVP is a viewer, not a console: SOAR-2's lifecycle is attributed but nothing says *whose* an incident is,
-  so there is no "my queue", no unassigned bucket and no shift handover; and acknowledging a 200-incident
-  phishing wave is 200 round trips. Bulk returns **per-item results** (partial success is the norm), writes
-  **one audit row per item, not per batch**, and a bulk *containment* interacts with SOAR-7's blast-radius
-  ceiling by being refused as a whole rather than partially applied.
-  **State the distinction explicitly in the ticket:** SOAR-6 deliberately refuses per-analyst aggregation
-  as workforce surveillance, with a test asserting no series names an operator. **Assignment is workflow,
-  not measurement** — say so, or this gets refused for the wrong reason.
-- **CONSOLE-27 · Suppression with mandatory expiry + closure disposition** — CONSOLE-4 · M. `No
-  alert-storm suppression` is a named limit today. Weeks one to four of any deployment are dominated by
-  tuning, and with no scoped expiring mute the analyst does the only thing available: disables the detector
-  or ignores the queue. **This is the single most common reason a security-tool pilot is judged "too
-  noisy".** Design it as a control, not a convenience: default TTL, mandatory reason, an owner, the
-  suppressed count visible on the rule, audited creation, and **expiry that RESTORES detection** — the same
-  shape as the intent TTLs the product already uses. Closure disposition (true positive / false positive /
-  benign-authorized / duplicate) rides along: it is XS in the schema *while `CONSOLE-4` is being built* and
-  a backfill across an attributed forward-only lifecycle afterwards, and without it there is no
-  false-positive rate per rule to drive the tuning it enables.
-- **CONSOLE-28 · Export from every grid** — CONSOLE-5,6 · S. CSV/JSON from any result set. Cheapest
-  table-stakes item on the list, and it **strengthens** the boundary `CONSOLE-5` defends rather than
-  weakening it: a bulk export *is* the "scroll the fleet and leave nothing" event, so it is view-audited
-  with row count and filter, and it is the natural first signal for the per-viewer volume anomaly detection
-  `CONSOLE-5` already proposes.
-- **CONSOLE-29 · Session inventory, revoke-all, and deprovision kills live sessions** — CONSOLE-3 · S.
-  `requireTier` re-resolving the role per request covers *authorization*, not session *existence*, and it
-  does not cover "the analyst left and their laptop is unlocked in a shared room". Enumerate active
-  sessions, terminate one or all, and make ZT-7 SCIM deprovisioning and an `operator-role` revocation
-  invalidate live cookie sessions. The server-side session store is being built in `CONSOLE-3`, so this is
-  a query and a delete **now**, and a security incident later.
-- **CONSOLE-40 · Stable rule identity on alerts** — new work · S. **Blocks every tuning ticket below.**
-  `unified_alerts` (migration 025) carries `domain` and `dedup_key` but **no stable rule identifier**, and
-  `dedup_key`'s own comment calls its format "a projection detail" with a fallback. So "which rule is
-  noisiest", "suppress *this rule* on *these hosts*" and "what is this detector's false-positive rate" are
-  all unanswerable without parsing a key that is explicitly not a contract. Adds `rule_id` written by every
-  producer, with a whole-tree guard — the same shape as the `cmd/` guard that made every binary declare its
-  config (D274) — so a new detector cannot ship without one.
-- **CONSOLE-41 · Tuning: disposition → exception, with a preview that cannot lie** — CONSOLE-27,40 · L.
-  **This is the surface that decides whether the console gets used**, not an admin convenience: if week
-  three produces forty alerts a day and thirty are noise, analysts stop reading the queue regardless of
-  detection quality. Three distinct layers, deliberately not conflated — **disposition** (a fact about the
-  past, no risk), **exception** (stops future matches; a deliberate coverage reduction, so audited,
-  attributed, expiring, reviewable), **threshold** (fleet-wide sensitivity, a config revision). The operator
-  is always offered the *narrowest* layer that would work. Exclusion lists are already sanctioned as "a
-  first-class policy primitive" in `openspec/config.yaml`, so this surfaces a primitive the design has, not
-  a new concept. `Accept`: an exception is **dry-run against the retention window before it exists**, and
-  the dialog states how many alerts it would have suppressed **including how many were dispositioned TRUE
-  POSITIVE** — tuning blind is how real detections get muted. Never-expiring requires admin plus a separate
-  confirmation; default TTL 30 days; **expiry RESTORES detection**, like the intent TTLs.
-  **Four security requirements from review. The first must be decided before this ships, because retention
-  will have expired the alternative:**
-  1. **An exception NEVER prevents the alert being written.** It is written with `suppressed_by_exception_id`
-     and excluded from the queue *view*. Otherwise an insider creates a scoped exception, operates for 30
-     days, lets it expire, and there is nothing to hunt — no rows, no `rule_id`, nothing to correlate
-     retrospectively. That is not blindness, it is **retroactive deniability**, which is strictly better for
-     the attacker. `CONSOLE-42`'s "suppressed count" is a *counter*: it says 4,812 things were suppressed,
-     not which host or what the evidence was. Write-then-hide makes "this exception was malicious" a
-     `WHERE suppressed_by_exception_id = N` query and makes unsuppression a view change.
-  2. **A reserved NON-EXCEPTABLE rule class**, enforced by the same whole-tree guard that assigns `rule_id`
-     (`CONSOLE-40`) so a new self-monitoring detector is non-exceptable by construction: view-audit volume
-     anomaly, bulk-export audit, agent-overdue, four-eyes denial, ledger integrity, exception lifecycle.
-     Without it, one exception on the right rule makes the tuning surface **self-concealing**.
-  3. **A self-reference check.** "Narrowest scope first" minimizes blast radius, which is a *reliability*
-     property; as a *security* property it inverts — the narrowest useful exception is "this rule, on my
-     host, for my account", exactly the blinding an insider wants, and the UI would steer them to it. An
-     exception whose scope covers the proposer's own subject, host or account requires a different approver
-     and is flagged permanently in the register.
-  4. **Reuse `approvals.go`'s in-predicate `requester <> approver`** (`approvals.go:119`) rather than a
-     second gate — and show the approver the effect **attributed to the proposer**: *"would have suppressed
-     14 alerts, 9 on the proposer's own host, 2 dispositioned TRUE POSITIVE."* Approving a JSON predicate
-     with no attribution is rubber-stamping with an audit trail.
-  **Residual, named:** the dry-run cannot see before `CONSOLE-40` — `rule_id` is forward-only and
-  dispositions are sparse early, so during a new deployment's first weeks (exactly when tuning happens) the
-  dialog must render *"computed over 6 days of 30"* and show the true-positive count as **"≥ n" or
-  "unknown", never a confident zero.** A guard that under-reports silently is worse than no guard.
+- **CONSOLE-25 · Step-up re-authentication for destructive acts** — CONSOLE-3,11 · S. The compensating
+  control for the privilege escalation the console introduces — a stolen bearer token is effectively
+  read-only today, a session is write-capable by definition, and a certificate is not phishable while a
+  session is. Re-prove identity (`acr_values`/`max_age`, phishing-resistant) at `CONTAIN`,
+  `ENFORCEMENT_DISABLE`, legal-hold release, DSAR export and case closure; **binds to the one-time token
+  `CONSOLE-11` already issues.** Also the first place the product states that MFA is delegated to the IdP.
+- **CONSOLE-29 · Session inventory, revoke-all, deprovision kills live sessions** — CONSOLE-3 · S.
+  Per-request role resolution covers *authorization*, not session *existence*, and not "the analyst left and
+  their laptop is unlocked". Enumerate, terminate one or all, and make SCIM deprovisioning and an
+  `operator-role` revocation invalidate live cookie sessions. A query and a delete **now**; a security
+  incident later.
+- **CONSOLE-40 · Stable rule identity on alerts** — new work · S. **Blocks every tuning ticket.**
+  `unified_alerts` (migration 025) carries `domain` and `dedup_key` but no stable rule identifier, and
+  `dedup_key`'s own comment calls its format "a projection detail" with a fallback. Adds `rule_id` written
+  by every producer, with a whole-tree guard in the D274 shape so a new detector cannot ship without one.
+- **CONSOLE-41 · Tuning: disposition → exception, with a preview that cannot lie** — CONSOLE-4,40 · L.
+  *(Absorbs the former CONSOLE-27, which was the same ticket written in an earlier round.)*
+  **The surface that decides whether the console gets used**, not an admin convenience: if week three
+  produces forty alerts a day and thirty are noise, analysts stop reading the queue regardless of detection
+  quality — the most common reason a pilot is judged "too noisy". Three layers, deliberately not conflated:
+  **disposition** (a fact about the past, no risk), **exception** (stops future matches — a deliberate
+  coverage reduction, so audited, attributed, expiring, reviewable), **threshold** (fleet-wide, a config
+  revision). The operator is always offered the *narrowest* layer that would work. Exclusion lists are
+  already sanctioned as "a first-class policy primitive" in `openspec/config.yaml`.
+  `Accept`: an exception is **dry-run against the retention window before it exists**, and the dialog states
+  how many alerts it would have suppressed **including how many were dispositioned TRUE POSITIVE**. Default
+  TTL 30 days; never-expiring needs admin + separate confirmation; **expiry RESTORES detection**.
+  **Four security requirements, the first decided before shipping because retention forecloses it:**
+  (1) **an exception NEVER prevents the alert being written** — it is written with
+  `suppressed_by_exception_id` and hidden from the queue *view*, or an insider gets **retroactive
+  deniability**, which beats blindness, and "this exception was malicious" stops being a query;
+  (2) a reserved **non-exceptable rule class** (view-audit anomaly, export audit, agent-overdue, four-eyes
+  denial, ledger integrity, exception lifecycle) enforced by `CONSOLE-40`'s guard, or the tuning surface is
+  **self-concealing**; (3) a **self-reference check** — "narrowest first" is a reliability property that
+  inverts as a security one, since the narrowest useful exception is "this rule, on my host, for my
+  account"; (4) reuse `approvals.go:119`'s in-predicate `requester <> approver` and show the approver the
+  effect **attributed to the proposer**.
+  *Residual:* the dry-run is blind before `CONSOLE-40` — it must render the window it could evaluate and
+  show the true-positive count as "≥ n"/"unknown", never a confident zero.
 - **CONSOLE-42 · Detector health + exception register** — CONSOLE-41 · M. Per rule: fired, FP%,
-  dispositioned population, active exceptions, and a trend sparkline **annotated with tuning events** so
-  "did that exception help" is visible rather than inferred. **FP% renders with the population it excludes**
-  and is de-emphasised below a sample threshold — the same honesty SOAR-6 applies to MTTA/MTTR. Sorted by
-  noise contribution (`fired × FP%`), not raw count. The register shows every exception's
-  **suppressed-count since creation**: zero after 30 days means it does nothing and should go; thousands
-  means the detection needs fixing rather than muting. Neither is visible anywhere today.
+  dispositioned population, active exceptions, trend sparkline **annotated with tuning events**. FP% renders
+  **with the population it excludes** and is de-emphasised below a sample threshold — the honesty SOAR-6
+  applies to MTTA/MTTR. Sorted by noise contribution (`fired × FP%`). The register shows each exception's
+  **suppressed count since creation**: zero after 30 days means delete it; thousands means fix the detection.
 - **CONSOLE-43 · Quiet start — a NOTIFICATION control, not an enforcement one** — CONSOLE-41 · M.
-  **Rewritten after review; the first version was a blocker.** It said a per-domain window where detections
-  *"raise but do not enforce or page"*, promoted by one click, with no tier, no expiry and no audit. That is
-  a larger enforcement reduction than anything else in this console — larger than an exception, larger than
-  break-glass on one host — reached by a control that looked like onboarding convenience, and it routed
-  around the gate ADR-15 and `TOPO-2b` exist to impose. **A console feature that reaches around
-  `ENFORCEMENT_DISABLE` while the operator believes they are "starting quietly" is the failure a customer
-  experiences as a breach rather than as friction.**
-  What ships: **enforcement is never touched.** Detections run and enforce normally; the window holds
-  **routed notifications** (SOAR-9 sinks) for a domain while alerts and incidents are still created,
-  visible and dispositionable. Responder tier, **mandatory expiry (max 14 days)**, required reason, one
-  audit row, **automatic restoration**, and a banner naming the end date plus the count raised-but-not-paged.
-  Anything that would actually stop enforcement is not reachable from here — it is `ENFORCEMENT_DISABLE`
-  from the break-glass surface, with its own tier, four-eyes and TTL. `Accept`: mutation — make quiet start
-  suppress enforcement rather than paging → a test asserting the endpoint still refuses a matching action
-  must fail.
-- **CONSOLE-14 · Assurance gates** — CONSOLE-12 · M. Clicks-to-answer budgets asserted in Playwright and
-  CI-gating; axe/WCAG 2.2 AA; keyboard-only investigation path; **golden-response fixtures, not generated
-  types** — most handlers return anonymous `map[string]any` (`incidents.go:195`, `soar2.go`,
-  `config_http.go`), so a Go→TS generator degrades into "generate a few, hand-write the rest", the
-  half-maintained source of truth this project keeps being burned by.
-- **CONSOLE-15 · Console in the signed release** — CONSOLE-2 · M. JS SBOM generated **from the lockfile**
-  and fed into `BuildSBOM` so the manifest signature covers it — `internal/release/sbom.go:55` derives from
-  `debug/buildinfo` and would describe zero npm packages. Node/pnpm pinned in the manifest beside the Go
-  toolchain. Security-header audit on the served console.
+  **Rewritten after review; the first version was a blocker.** It said detections *"raise but do not enforce
+  or page"*, one click, no tier, no expiry — a larger enforcement reduction than anything else in the
+  console, reached around the gate ADR-15 exists to impose. What ships: **enforcement is never touched**;
+  the window holds **routed notifications** (SOAR-9 sinks) while alerts and incidents are still created and
+  dispositionable. Responder tier, **mandatory expiry (max 14 days)**, required reason, one audit row,
+  **automatic restoration**. `Accept`: mutation — make it suppress enforcement rather than paging → a test
+  asserting the endpoint still refuses a matching action must fail.
+- **CONSOLE-26 · The queue as a worklist: assignment + bulk** — CONSOLE-4 · M. Without it the MVP is a
+  viewer: SOAR-2's lifecycle is attributed but nothing says *whose* an incident is, and a 200-incident
+  phishing wave is 200 round trips. Bulk returns **per-item results**, writes **one audit row per item**,
+  and bulk containment is refused **as a whole** if it would exceed SOAR-7's blast-radius ceiling. Needs
+  `select all matching filter` — `⌘A` is select-*page* and the grid is keyset-paged. **State in the ticket
+  that assignment is workflow, not measurement**, or it gets refused for colliding with SOAR-6's deliberate
+  refusal of per-analyst metrics as workforce surveillance.
+- **CONSOLE-28 · Export from every grid** — CONSOLE-5,6 · S. Cheapest table-stakes item on the list, and it
+  **strengthens** the boundary `CONSOLE-5` defends: a bulk export *is* "scroll the fleet and leave nothing",
+  so it is view-audited with row count and filter, and is the natural first signal for per-viewer volume
+  anomaly detection.
+- **CONSOLE-12 · Hunt, Fleet, Explain + the pivot spine** — CONSOLE-6,8,9,10,11 · L. The five verbs —
+  pivot, search, compare hosts, replay, explain a block — served by ⌘K palette, a global time range in the
+  URL, a pivot menu on every value, every view URL-addressable so an IR handoff is a pasted link, and the
+  whole loop completable by keyboard. *Split-pane compare deferred to `CONSOLE-39`; the standalone Entity
+  page folds into the incident detail's entity panel, `CONSOLE-9`'s API unaffected.*
+- **CONSOLE-14 · Assurance gates** — CONSOLE-12 · M. **Exit criterion.** Clicks-to-answer budgets asserted
+  in Playwright and CI-gating, with the counting unit defined (*committed interactions*: pointer activations
+  plus field commits, excluding characters typed) and budgets **derived by walking the specified dialogs**,
+  covering the **safe** path including guards — a budget that excludes the guard turns the gate into
+  pressure to delete it. Keyboard and pointer paths budgeted separately. axe/WCAG 2.2 AA; contrast unit test
+  over the **named** token pairs in UX spec §11. **Golden-response fixtures, not generated types** — most
+  handlers return anonymous `map[string]any`, so a generator degrades into "generate a few, hand-write the
+  rest". *Workflows 7 and 8 are excluded from this gate: they depend on `CONSOLE-35` and `-20`, Phase 3.*
+- **CONSOLE-15 · Console in the signed release** — CONSOLE-2 · M. **Exit criterion.** JS SBOM generated
+  **from the lockfile** and fed into `BuildSBOM` so the manifest signature covers it —
+  `internal/release/sbom.go:55` derives from `debug/buildinfo` and would describe zero npm packages.
+  Node/pnpm pinned in the manifest beside the Go toolchain. Security-header audit on the served console.
 
-### Phase 3 · Deferred console surfaces — on the roadmap, not gating the MVP console
+### Phase 3 · Deferred — on the roadmap, not gating the MVP console
 
-**Sequencing note on i18n, for the owner to overrule if they disagree.** Multilingual support is an owner
-requirement and is NOT in question — the framework choice, ICU, the signed-bundle decision and the refusal
-of the unsigned overlay all stand as written in `CONSOLE-13`. What moved is *when*. The plan's own residual
-concedes the security narrative stays English until `I18N-2`, so what a Phase-2 `CONSOLE-13` would ship is
-translated chrome above English alert reasons — a property no analyst can use and no procurement checklist
-credits, bought with an M-sized ticket and two CI gates. **The two things that genuinely cannot be
-retrofitted stay in Phase 0**, folded into `CONSOLE-2`: logical CSS properties from the first component
-(`margin-inline-start`, never `margin-left`), and the no-bare-string lint rule. Those keep the retrofit
-cheap; the rest waits for `I18N-2` to make it mean something.
+**Sequencing note on i18n, for the owner to overrule.** Multilingual support is an owner requirement and is
+not in question — framework, ICU, signed bundles and the refusal of the unsigned overlay all stand. What
+moved is *when*: the plan's own residual concedes the security narrative stays English until `I18N-2`, so a
+Phase-2 `CONSOLE-13` would ship translated chrome above English alert reasons. The two things that cannot be
+retrofitted — logical CSS properties and the no-bare-string lint — are in `CONSOLE-2`, Phase 0.
 
-- **CONSOLE-39 · Split-pane compare** — CONSOLE-12 · M. Two hosts or two incidents side by side, with
-  independent time ranges. Deferred from the MVP spine, not refused — "compare hosts" is one of the five
-  named adoption verbs, and two URL-addressable tabs are the interim answer, not the final one.
+**Surfaces**
 
-- **CONSOLE-16 · Standalone Overview dashboard** — CONSOLE-7 · M. (MVP ships a health strip on Incidents.)
+- **CONSOLE-16 · Standalone Overview dashboard** — CONSOLE-7 · M. Tile grid where every tile is a saved
+  query. (MVP ships a health strip on Incidents.)
 - **CONSOLE-17 · Alerts as a first-class page** — CONSOLE-6 · M. Dedup by `dedup_key`, ATT&CK mapping, ack.
-- **CONSOLE-18 · Response surface** — new work · L. Playbook definitions and runs, integration runners,
-  notification routing. Needs `CONSOLE-19`.
+- **CONSOLE-18 · Response surface** — CONSOLE-19 · L. Playbook definitions and runs, integration runners,
+  notification routing.
 - **CONSOLE-19 · Playbook read/validate/dry-run over HTTP** — new work · M. Playbooks are a polled file
   (`OPENSHIELD_PLAYBOOKS`) with no API. Read and dry-run first; authoring is a separate decision.
 - **CONSOLE-20 · Evidence & ledger browser** — new work · M. Chain verification, anchors, witness,
   restore-drill history, and the view-audit reader.
-- **CONSOLE-21 · Configuration UI** — new work · M. Schema-driven forms over `GET /config/schema`;
-  bootstrap fields read-only with origin, dynamic editable; diff before save, revisions and rollback;
-  secrets never readable back; **all field errors rendered at once** because the API already reports them
-  at once. This is what PLAT-5's derived schema was built for (D262/D263).
-- **CONSOLE-22 · Administration & integrations** — new work · L. Role management, enroll-token
-  issue/revoke, feed ingest and status, fleet-control publish — **all CLI-only today**, each needing an
-  HTTP route with four-eyes where the CLI relied on shell access as the gate.
-- **CONSOLE-23 · Policy & compliance packs** — new work · M. Packs in force, lattice preview, simulation.
-- **API-9 · Streaming (SSE), if a measured need appears** — 🔵 deferred by decision, not backlog. Cut from
-  the MVP: correlation runs on a CLOCK (SOAR-2/D250) so streaming buys latency the backend does not
-  produce, and a long-lived stream authorizes once at handshake — reintroducing exactly the role staleness
-  ZT-7 deleted (`operator_roles.go:26`: *"the revocation takes effect within the cache TTL is the sentence
-  that makes a security control untrustworthy"*). MVP polls with ETag/`If-None-Match` at 10–15s.
-  *Residual:* freshness is bounded by the poll interval AND the correlation interval, and the second
-  dominates. If this lands, the stream loop must re-resolve the role on a tick, tear down on mismatch, and
-  cap its lifetime below the session idle timeout.
-- **CONSOLE-24 · Session sender-constraining** — CONSOLE-3 · M. Non-extractable WebCrypto keypair or DBSC,
-  so `REQUIRE_DPOP=1` no longer has to refuse console login. Until then the refusal is the honest answer.
-- **I18N-2 · Localizable security narrative** — CONSOLE-13 · L. Message IDs + params at the emission point
-  instead of pre-formatted English strings, so alert reasons and policy explanations localize. This is the
-  half that makes "multilingual" true rather than "the chrome is translated".
-- **CONSOLE-30 · Custom roles / per-capability grants** — CONSOLE-1 · M. Beyond the four tiers
-  `CONSOLE-1` leaves in place. A capability table behind the existing `requireTier` seam, so the grant is
-  data rather than a new gate. Procurement asks for this by name in an access review.
-- **CONSOLE-31 · Reporting: scheduled reports, exec PDF, compliance evidence packs** — CONSOLE-20 · L.
-  Today `SIEM-9` parks scheduled reports in enrichment and no console phase has a report page, while the
-  CISO's actual recurring deliverable is a board slide and the auditor's is an evidence pack mapped to
-  SOC 2 CC7 / ISO 27001 A.12 / PCI 10 / HIPAA §164.312(b). **This is where the product's strongest claim
-  becomes an artifact:** a report rendered server-side, deterministically, with a hash-chain-verifiable
-  evidence appendix is something the incumbents cannot produce. Skipping it forfeits the differentiator in
-  the one document executives actually read.
-- **CONSOLE-32 · Audit egress — forward the console's own audit log to the customer's SIEM** — new work ·
-  S. OpenShield ingests CEF, syslog, CloudTrail and WEF and **emits nothing**. Enterprises require operator
-  actions, authentication events, config changes and admin activity to land in *their* SIEM, not only in
-  the vendor's database. One CEF/syslog emitter over the existing audit rows. A SIEM-ingesting product with
-  no audit egress is a contradiction an evaluator finds in the first technical call.
-- **CONSOLE-33 · Onboarding, empty states, deployment self-diagnosis** — CONSOLE-7 · M. A fresh install
-  shows an empty queue, which is **indistinguishable from a broken install**. `CONSOLE-7` delivers health
-  *facts*; this delivers a *diagnosis*: "0 agents enrolled — here is the enroll command", "ingest connected
-  but no events in 24h", "3 agents silent for 7 days", "your schema is one migration behind". For an
-  open-source product where adoption is the distribution channel, this is plausibly the highest-ROI item in
-  Phase 3 — the evaluator decides in twenty minutes.
-- **CONSOLE-34 · OpenAPI document validated against the golden fixtures** — CONSOLE-14 · S. §10 rejects
-  *generated types* for good reason, but that leaves no published contract at all, and "send us your API
-  docs" is question two on every RFP. A hand-written OpenAPI doc checked in CI against the fixtures
-  `CONSOLE-14` already records costs one job and promotes those fixtures from a private test artifact to a
-  conformance corpus.
-- **CONSOLE-35 · Shared team views + watchlists** — CONSOLE-12 · M. SIEM-14 shipped saved searches, but
-  they are personal: no manager-curated team triage view (an owner/visibility column on the existing
-  table), and no watchlist for VIPs, crown-jewel hosts or contractors under review. The watchlist should
-  feed the entity risk score (D255) rather than being a UI filter — otherwise it is decoration.
-- **CONSOLE-36 · SLA timers + breach alerting on the live queue** — CONSOLE-26 · S. SOAR-6's own residual
-  names this gap: the console renders historical MTTA/MTTR while showing an analyst nothing about the
-  incident in front of them aging past a commitment. Per-severity target, a computed clock on the queue
-  row, and breach routed through SOAR-9's existing sinks. TABLE-STAKES for an MSSP, who sells contractual
-  response times.
-- **CONSOLE-37 · Multi-tenancy** — CONSOLE-1 · XL · 🔒 owner decision. ADR-4 defers org tenancy and
-  `docs/enterprise-gap-assessment.md` §3 names zero tenant scoping as an evaluation-ending gap. `CONSOLE-1`
-  reserves the seam so this is a WHERE clause; whether to build it is a positioning call (MSSP resale and
-  subsidiary/region isolation) rather than an engineering one.
-- **CONSOLE-38 · VPAT, browser support matrix, theming seam** — CONSOLE-14 · S. `CONSOLE-14` already funds
-  the real accessibility work (WCAG 2.2 AA, axe in CI, keyboard-only path); the **VPAT is the artifact US
-  federal and large-enterprise procurement actually requests**, and it is a document, not a project. State
-  the browser floor too — `CONSOLE-24`'s WebCrypto/DBSC path implies an aggressive one. Theming via CSS
-  custom properties is near-free during `CONSOLE-2` and expensive after fourteen components ship; white-label
-  itself stays a DIFFERENTIATOR for MSSP resale.
-**The administration gap, named as one thing.** A coverage matrix over every product domain (UX spec §13)
-found one pattern: **every domain that detects has a shipped, tested detection plane and no way to see or
-change what it is detecting on without editing a file on a host.** The five tickets below close it. None
-gate the MVP console; together they gate the sentence *"an administrator can run this product from the
-console"*, which is a different and later claim. Each is assembly over `CONSOLE-46`.
+- **CONSOLE-21 · Configuration UI** — new work · M. Schema-driven forms over `GET /config/schema`; bootstrap
+  read-only with origin, dynamic editable; diff before save, revisions and rollback; secrets never readable
+  back; **all field errors at once** because the API already reports them at once. What PLAT-5's derived
+  schema was built for (D262/D263).
+- **CONSOLE-22 · Administration & integrations** — new work · L. Role management, enroll-token issue/revoke,
+  feed ingest and status, fleet-control publish — **all CLI-only today**, each needing an HTTP route with
+  four-eyes where the CLI relied on shell access as the gate.
+- **CONSOLE-39 · Split-pane compare** — CONSOLE-12 · M. Two hosts or two incidents side by side with
+  independent time ranges. Deferred from the MVP spine, not refused — "compare hosts" is one of the five
+  named verbs, and two URL-addressable tabs are the interim answer.
+- **CONSOLE-52 · End-user directory** — CONSOLE-9,51 · L. *Was specified in the UX spec with no ticket
+  anywhere — a surface claimed ✅ in the coverage matrix with no number, size, phase or owner.* Operators run
+  the console; **end users are the people whose endpoints are protected** and the subjects of DLP decisions,
+  UEBA baselines, entity risk and DSAR. Per user: IdP identity, devices with attestation and posture, risk
+  over time, access grants, open incidents, DSAR record. Compiled subject view needs `privacy-officer`. The
+  leaver check — what still references them after SCIM deprovisioning — takes the full destructive-action
+  ceremony (summary, step-up, confirm, one audit row per object), **not the single click an earlier draft
+  specified**.
 
-- **CONSOLE-47 · Endpoint control** — CONSOLE-46 · M. Exec allow/deny lists and default-deny whitelisting
-  (D217/D224/D230), FIM baselines (D223/228/229/236), ransomware canary placement (D232), USB enforcement.
-  All shipped and VM-proven; none has an operator surface.
-- **CONSOLE-48 · Network defense** — CONSOLE-46 · M. IOC threat-intel feeds, content signatures, DNS
-  sinkhole lists, CASB catalog, TPROXY scope. Signature state matters here — D297 fixed the gateway reading
-  its IOC feed unverified, so the surface must render verified-before-parse rather than imply it.
-- **CONSOLE-49 · DLP classifiers & indexes** — CONSOLE-46 · L. EDM/IDM index lifecycle with **signed
-  indexes (ADR-9)**, detector breadth per national ID type, compliance packs in force and the
-  most-restrictive-wins lattice preview, exfil-channel coverage. Merges with `CONSOLE-23`.
+**Detection administration** — *every domain that detects has a shipped, tested detection plane and no way
+to see or change what it detects on without editing a file on a host. These close it, over one shared
+component family. None gate the MVP console; together they gate "an administrator can run this product from
+the console", which is a different and later claim.*
+
+- **CONSOLE-46 · The rule-source component family** — CONSOLE-12 · M. One list component: origin (file /
+  URL / operator), signature state where the artifact is signed, last reload, hot-reload vs restart, dry-run,
+  diff-and-approve. **Reused five times, not five bespoke pages** — specified once so `-47`…`-50` are
+  assembly.
+- **CONSOLE-47 · Endpoint control** — CONSOLE-46 · M. Exec allow/deny and default-deny whitelisting
+  (D217/D224/D230), FIM baselines (D223/228/229/236), canary placement (D232), USB enforcement.
+- **CONSOLE-48 · Network defense** — CONSOLE-46 · M. IOC feeds, content signatures, DNS sinkhole lists, CASB
+  catalog, TPROXY scope. Signature state matters: D297 fixed the gateway reading its IOC feed unverified, so
+  the surface must render verified-before-parse rather than imply it.
+- **CONSOLE-49 · DLP classifiers & indexes** *(absorbs `CONSOLE-23` policy/packs)* — CONSOLE-46 · L. EDM/IDM
+  index lifecycle with **signed indexes (ADR-9)**, detector breadth per national ID type, compliance packs in
+  force with a most-restrictive-wins lattice preview and simulation, exfil-channel coverage.
 - **CONSOLE-50 · Device trust operations** — CONSOLE-8 · M. Enrollment tokens and self-enrollment status,
   attestation verdict history, **measured-boot PCR policy** (a typo in a PCR list silently narrowed
-  attestation once, D413 — a surface that shows the effective PCR set is the guard), attestation TTL,
+  attestation once, D413 — a surface showing the effective PCR set is the guard), attestation TTL,
   re-attestation failures.
-- **CONSOLE-44 · Zero Trust access: catalog + effective-access matrix** — CONSOLE-9 · L. **Closes ZT-5's
-  UI half, which this roadmap already said "ties to the UI (PLAT-1)".** Today the catalog is
-  `OPENSHIELD_ACCESS_CATALOG` (an explicit allow-list, `internal/gateway/catalog.go:16`) and the policy is
-  a **Rego module** (`cmd/openshield-gateway/main.go:349`) — both files, no UI, and *"who can reach the
-  production database?"* is answerable only by reading Rego. Delivers the services tab (keeping HTTP
-  reverse-proxy and TCP CONNECT distinct, because the code deliberately refuses to interchange them) and
-  the **effective-access matrix**, readable in both directions, where **every cell is explainable** through
-  the same decision trace as `CONSOLE-10`. Surfaces catalog↔policy drift: a service nobody can reach, a
-  policy naming a service not in the catalog. Both are common and both are silent today.
-  **Catalog writes carry the SAME diff + four-eyes as policy writes — the earlier split was the bug.**
-  Putting four-eyes on `CONSOLE-45`'s policy save and leaving this tab ungated leaves the *easier* attack
-  ungated: `ParseCatalog` accepts any `name=url` that parses, and a `tcp://` entry becomes a CONNECT tunnel
-  that is **explicitly not inspected**. So an ungated catalog edit adds `tcp://169.254.169.254:80`,
-  `tcp://prod-db:5432` or `tcp://jumphost:22` and gets an authenticated, policy-brokered, **uninspected**
-  tunnel from the gateway's network position. The allow-list protects against a *client* choosing a
-  destination; it does nothing against a *writer* adding one. Therefore: adding a `tcp://` entry is a
-  **distinct, higher-privileged operation** than adding an `http://` one, with its own confirmation naming
-  the inspection being given up; destinations validate against **declared topology nodes** (`TOPO-1`) rather
-  than "does it parse" — the natural place for the declared model to be load-bearing; and link-local and
-  loopback are refused unless explicitly declared.
-  **The matrix is the single most valuable reconnaissance artifact in the deployment** — so it is
-  admin-tier, **view-audited before the result is returned** (the threat model's own ordering rule), and
-  rate-limited, feeding `CONSOLE-5`'s per-viewer volume anomaly.
-- **CONSOLE-45 · Zero Trust policy authoring + sessions** — CONSOLE-44 · L. Rego stays the source of truth
-  and **the console never becomes a second authoring model that drifts from it** — that is the failure this
-  project keeps finding. The editor is the real module, with a dry-run evaluator (principal + posture +
-  service → decision and rule path) and **diff + four-eyes on save**, because this is a change to who
-  reaches production. A guided builder emits into the same module and shows what it wrote. Sessions: active
-  principal/device/service, and **terminate one or all** — what an IR lead needs at 2am and cannot do from
-  anywhere today. *Session recording is owner-gated and named separately: it carries a DPIA weight this
-  product should not assume.*
-  **Three things review added, each of which the naive build gets wrong.** (1) **Default-deny must become
-  structural before this ships** — today `evalCandidate` grants on no-match (`policy.go:211`), so
-  default-deny lives in the *text* of the operator's Rego and a builder that appends allow-rules, or an edit
-  shadowing the default line, silently converts the gate to default-allow with no error and a diff showing
-  one deleted line. See `SEC-C`; this ticket depends on it. (2) **Hot-reload with fail-static, because the
-  policy is `fatal` on compile failure and read once at startup** — "edit the real module in a browser"
-  otherwise means one bad save takes **all production access down**, a single-credential DoS that
-  contradicts `TOPO-4`'s own fail-static constraint. Compile → assert the module denies a canonical
-  unknown-principal input → swap atomically → keep last-good → alarm on failure, never `fatal`. (3) **The
-  dry-run evaluator is an access oracle**: `principal + posture + service → decision and rule path`
-  enumerates who reaches production **without generating a single access-proxy decision**, so it is
-  invisible to the very telemetry edge health relies on — and the *rule path* output tells an attacker
-  which predicate to satisfy, and lets them verify a backdoored policy edit works before review. It is
-  admin-tier, view-audited before returning, and rate-limited.
-- **CONSOLE-46 · The rule-source component family** — CONSOLE-12 · M. Every detection domain needs the same
-  thing: a list of rules/feeds/baselines/lists where each entry shows origin (file / URL / operator),
-  signature state where the artifact is signed, last reload, hot-reload vs restart-required, a dry-run, and
-  diff-and-approve on change. **One component family reused five times, not five bespoke pages** — specified
-  once here so `-47`…`-50` are assembly rather than design.
-- **CONSOLE-52 · End-user directory** — CONSOLE-9,51 · L. **Was specified in the UX spec (§6.8) with no
-  ticket anywhere — a surface claimed as ✅ in the coverage matrix while having no number, size, phase or
-  owner.** That is the doc-form of the unwired-code pattern this repo's audits keep finding, so it is
-  ticketed here and the matrix row now points at the ticket instead of a section heading. Operators run the
-  console; **end users are the people whose endpoints are protected and who reach internal services through
-  the access proxy** — the subjects of DLP decisions, UEBA baselines, entity risk and DSAR, and previously
-  unrepresented. Per user: identity from the IdP (OIDC/SCIM), their devices with attestation and posture
-  state, entity risk over time, access grants (`CONSOLE-44`), open incidents, DLP decisions, DSAR/erasure
-  record. Pseudonymisation is honoured — the compiled subject view needs `privacy-officer`. Also the leaver
-  check: after SCIM deprovisioning, **what still references them** (live sessions, enrolled devices, pending
-  approvals) with a revoke action that takes the full §7 ceremony — server-generated summary naming the
-  counts, step-up, confirm, one audit row per revoked object. *Not a single click, despite an earlier draft
-  saying so.*
-- **CONSOLE-51 · Privacy operations** — CONSOLE-1 · M. DSAR request → compile → deliver as a workflow
-  rather than a `/subject?id=` link; legal holds with what they block and who released them; retention and
-  purge status; erasure verification. Gated on the `privacy-officer` tier from `CONSOLE-1`.
-- **CONSOLE-13 · i18n foundation** — CONSOLE-4 · M · Phase 3 by decision (see the sequencing note above).
-  `react-i18next` + ICU; **bundles embedded and signed with the release, never loaded from a mutable
-  directory** — an unsigned hot-loaded pack rewrites UI text
-  including the four-eyes button label, and `threat-model.md:193` requires signatures on everything loaded
-  before parse. Approval confirmations and destructive-action labels live in a **non-overridable embedded
-  namespace**. Gates: an ESLint rule failing CI on bare user-visible strings, and an `en-XA` pseudolocale
-  render test. Logical CSS properties from day one so RTL is a data change later.
-  *Residual, named:* backend-emitted reason strings stay English and render verbatim — the honest claim is
-  "the console chrome is localizable; the security narrative is not yet" (see `I18N-2`).
+- **CONSOLE-51 · Privacy operations** — CONSOLE-1 · M. DSAR request → compile → deliver as a workflow rather
+  than a `/subject?id=` link; legal holds with what they block and who released them; retention and purge
+  status; erasure verification. Gated on `privacy-officer`.
+
+**Zero Trust** — *closes ZT-5's UI half, which the roadmap already said "ties to the UI (PLAT-1)".*
+
+- **CONSOLE-44 · Catalog + effective-access matrix** — CONSOLE-9 · L. Today the catalog is
+  `OPENSHIELD_ACCESS_CATALOG` (`internal/gateway/catalog.go:16`) and the policy a **Rego module**
+  (`cmd/openshield-gateway/main.go:349`) — both files, and *"who can reach the production database?"* is
+  answerable only by reading Rego. Services tab keeps HTTP reverse-proxy and TCP CONNECT distinct because the
+  code refuses to interchange them; the **matrix reads in both directions** and **every cell is explainable**
+  through `CONSOLE-10`'s trace; catalog↔policy drift surfaces.
+  **Catalog writes carry the same diff + four-eyes as policy writes** — gating `-45` and not this is gating
+  the harder attack: `ParseCatalog` accepts any `name=url` that parses, and a `tcp://` entry is an
+  **uninspected** tunnel, so an ungated edit adds `tcp://169.254.169.254:80` or `tcp://prod-db:5432` and gets
+  an authenticated, policy-brokered tunnel from the gateway's network position. Adding a `tcp://` entry is a
+  **distinct, higher-privileged operation**; destinations validate against declared topology nodes (`TOPO-1`)
+  rather than "does it parse"; link-local and loopback refused unless declared. **The matrix is the most
+  valuable reconnaissance artifact in the deployment** — admin tier, **view-audited before the result
+  returns**, rate-limited, feeding `CONSOLE-5`'s volume anomaly.
+- **CONSOLE-45 · Policy authoring + sessions** — CONSOLE-44, SEC-C · L. Rego stays the source of truth and
+  **the console never becomes a second authoring model that drifts from it**. Editor is the real module, with
+  a dry-run evaluator and **diff + four-eyes on save**. Sessions: active principal/device/service and
+  **terminate one or all** — what an IR lead needs at 2am and cannot do from anywhere today (responder tier,
+  deliberately: admin builds a control nobody on shift can use).
+  **Three review requirements:** depends on `SEC-C` making default-deny structural, because today
+  `evalCandidate` grants on no-match and an edit shadowing one line converts the gate silently; **hot-reload
+  with fail-static** (compile → assert the module denies a canonical unknown-principal input → swap
+  atomically → keep last-good → alarm), because the policy is `fatal` on compile failure and read once at
+  startup, so a browser editor otherwise makes one bad save a **single-credential production-access DoS**;
+  and the **dry-run evaluator is an access oracle** — it enumerates who reaches production with no
+  access-proxy decision generated, so it is invisible to the telemetry edge health relies on, and its *rule
+  path* output tells an attacker which predicate to satisfy. Admin tier, view-audited, rate-limited.
+  *Session recording stays owner-gated: it carries a DPIA weight this product should not assume.*
+
+**Enterprise & adoption**
+
+- **CONSOLE-30 · Custom roles / per-capability grants** — CONSOLE-1 · M. A capability table behind the
+  existing `requireTier` seam, so the grant is data. Procurement asks for this by name in an access review.
+- **CONSOLE-31 · Reporting: scheduled, exec PDF, compliance evidence packs** — CONSOLE-20 · L. Mapped to
+  SOC 2 CC7 / ISO 27001 A.12 / PCI 10 / HIPAA §164.312(b). **Where the differentiator becomes an artifact:**
+  a report rendered server-side, deterministically, with a hash-chain-verifiable evidence appendix is
+  something the incumbents cannot produce.
+- **CONSOLE-32 · Audit egress to the customer's SIEM** — new work · S. OpenShield ingests CEF, syslog,
+  CloudTrail and WEF and **emits nothing**. One CEF/syslog emitter over the existing audit rows. A
+  SIEM-ingesting product with no audit egress is a contradiction an evaluator finds in the first call.
+- **CONSOLE-33 · Onboarding, empty states, deployment self-diagnosis** — CONSOLE-7 · M. A fresh install
+  shows an empty queue, **indistinguishable from a broken install**. `-7` delivers health *facts*; this
+  delivers a *diagnosis*. For an open-source product where adoption is the distribution channel, plausibly
+  the highest-ROI item in Phase 3.
+- **CONSOLE-34 · OpenAPI validated against the golden fixtures** — CONSOLE-14 · S. §10 rejects *generated
+  types* for good reason, but that leaves no published contract, and "send us your API docs" is question two
+  on every RFP. Promotes the fixtures from a private test artifact to a conformance corpus.
+- **CONSOLE-35 · Shared team views + watchlists** — CONSOLE-12 · M. Saved searches are personal (SIEM-14);
+  no manager-curated triage view, no watchlist for VIPs or crown-jewel hosts. Watchlists feed entity risk
+  (D255) rather than being a UI filter, or they are decoration.
+- **CONSOLE-36 · SLA timers + breach alerting** — CONSOLE-26 · S. SOAR-6's own residual names this gap: the
+  console renders historical MTTA/MTTR while showing nothing about the incident aging in front of the
+  analyst. Breach routed through SOAR-9's sinks. TABLE-STAKES for an MSSP.
+- **CONSOLE-37 · Multi-tenancy** — CONSOLE-1 · XL · 🔒 owner decision. ADR-4 defers it and
+  `docs/enterprise-gap-assessment.md` §3 names zero tenant scoping as evaluation-ending. `CONSOLE-1` reserves
+  the seam so this is a `WHERE` clause; whether to build it is positioning, not engineering.
+- **CONSOLE-38 · VPAT, browser support matrix, theming seam** — CONSOLE-14 · S. `-14` funds the real
+  accessibility work; the **VPAT is the artifact procurement requests** and is a document, not a project.
+  Theming via CSS custom properties is near-free during `-2` and expensive after fourteen components ship.
+
+**Freshness, security and i18n follow-ups**
+
+- **API-9 · Streaming (SSE), if a measured need appears** — 🔵 deferred by decision, not backlog. Cut from
+  the MVP: correlation runs on a CLOCK (SOAR-2/D250) so streaming buys latency the backend does not produce,
+  and a long-lived stream authorizes once at handshake — reintroducing the role staleness ZT-7 deleted
+  (`operator_roles.go:26`). MVP polls with ETag/`If-None-Match` at 10–15s. *Residual:* freshness is bounded
+  by the poll interval **and** the correlation interval, and the second dominates. If it lands, the stream
+  loop must re-resolve the role on a tick, tear down on mismatch, and cap lifetime below session idle.
+- **CONSOLE-24 · Session sender-constraining** — CONSOLE-3 · M. Non-extractable WebCrypto keypair or DBSC,
+  so `REQUIRE_DPOP=1` no longer has to refuse console login. Until then the refusal is the honest answer.
+- **CONSOLE-13 · i18n foundation** — CONSOLE-4 · M. `react-i18next` + ICU; **bundles embedded and signed
+  with the release, never loaded from a mutable directory** — an unsigned hot-loaded pack rewrites UI text
+  including the four-eyes button label, and `threat-model.md:193` requires signatures before parse.
+  Approval confirmations and destructive-action labels live in a **non-overridable embedded namespace**.
+  Gates: `en-XA` pseudolocale render test (the lint rule is in `CONSOLE-2`). *Residual:* backend-emitted
+  reason strings stay English — "the console chrome is localizable; the security narrative is not yet".
+- **I18N-2 · Localizable security narrative** — CONSOLE-13 · L. Message IDs + params at the emission point
+  instead of pre-formatted English, so alert reasons and policy explanations localize. The half that makes
+  "multilingual" true rather than "the chrome is translated".
 - **UI-19 · Signed locale packs** — CONSOLE-13 · M. Verified against the operator key before parse, same
   loader as rule bundles and IOC feeds; `{lng}`/`{ns}` pattern-matched and resolved under the root; the
   non-overridable namespace still wins. The **unsigned** overlay is REFUSED, not deferred.
 
 ---
 
-## 🗺️ Lane G · Topology — declared, compiled, and applied only over a signed channel
+## 🗺️ Lane G · Topology — declared, compiled, delivered
 
-Its own lane, sequenced after the console MVP because it serves none of the five adoption verbs. There is
-no topology, site or zone concept anywhere today (`grep -riE "topology|site_?id|zone_?id"` over `.go`
-returns nothing). ADR-15.
+Spec: `docs/superpowers/specs/2026-07-31-topology-canvas-spec.md`. Sequenced after the console MVP; it
+serves none of the five adoption verbs. There is no topology, site or zone concept today
+(`grep -riE "topology|site_?id|zone_?id"` over `.go` returns nothing). ADR-15.
+
+**The governing sentence: the canvas is a view of a reconciled model, not a drawing of a network.** Three
+rules follow — you cannot delete reality from it (deleting a discovered node removes your *declaration*; the
+node stays, marked `undeclared`); an edge is an assertion of intent, never an act; and the canvas never
+applies anything. **A node is a ROLE with a population, and also a CONFIGURATION IDENTITY** — one
+`user endpoints` node for all 51 laptops, editing it edits all of them, and hosts configured differently
+belong to different nodes.
+
+**Configuration delivery is a Lane D concern, not this lane's:** `PLAT-5c`/`-5d`/`-5e`. `TOPO-3` ships
+export as the interim path.
+
+### Lane G index
+
+| ID | Ticket | Depends | Size |
+|---|---|---|---|
+| TOPO-1 | Topology model + drift *(drift needs no canvas)* | CONSOLE-8 | L |
+| TOPO-2 | The canvas | TOPO-1 | L |
+| TOPO-2c | The node as a configuration surface | TOPO-2 | M |
+| TOPO-3 | Routing compiler + export | TOPO-1 | L |
+| TOPO-2b | Coverage meter, live during editing | TOPO-2, -3 | M |
+| TOPO-6 | Edge health *(passive)* | TOPO-1 | L |
+| TOPO-7 | Active reachability probes *(opt-in, off)* | TOPO-6 | M |
+| TOPO-8 | Unmanaged sources | TOPO-6 | S |
+| TOPO-4 | Topology-driven configuration delivery | PLAT-5c | 🔒 L |
+| TOPO-5 | Apply from the canvas | TOPO-4 | 🔒 L |
 
 - **TOPO-1 · Topology model + drift** — CONSOLE-8 · L. **A node is a ROLE, not a machine** (owner decision,
   2026-07-31, and it is what makes the whole lane tractable): one `user endpoints` node stands for all 51
@@ -862,12 +920,25 @@ returns nothing). ADR-15.
   because "everything agrees" is information. **What "applies to all" means today, stated precisely:** the
   edit declares the configuration for every member; *delivering* it is `PLAT-5c`'s signed channel once that
   lands, and `TOPO-3` export until then. The panel never implies a save reached a host.
-- **TOPO-8 · Unmanaged sources** — TOPO-6 · S. The one real blind spot in call-home discovery: a host that
-  never installed an agent is invisible to enrolment — but **not** to the gateway, which sees traffic from
-  sources mapping to no enrolled identity. Surfaced as a count with its caveat rendered in place: inferred
-  from observed traffic, sees only what traverses a gateway, **not an inventory**. Its own ticket rather
-  than folded into discovery, because a soft inference and a hard enrolment must never render as the same
-  kind of fact.
+- **TOPO-3 · Routing compiler + export** — TOPO-1 · L. A **pure function**: graph → *proposed* gateway
+  configuration plus CASB/policy/feed catalogs, with a validated per-node diff. Generates, never applies.
+  Pure means directly testable: given a graph, assert the emitted config. Output leads with the **semantic
+  summary** ("prod-web loses inline inspection"), because ADR-15 requires approval to be semantic and
+  nobody approves a field diff by inspection.
+  **Ships with EXPORT as the interim path, explicitly labelled interim.** Until `PLAT-5c` there is no
+  dynamic scope on endpoints or gateways to deliver into, so the compile output ends with an honest terminal
+  state — *"delivery is not available yet; export it or apply it through your existing configuration
+  management, and the canvas will show each member converge"* — rather than a greyed-out `Apply` implying it
+  is nearly ready. A validated, typechecked, coverage-checked config from a reconciled model is genuinely
+  useful with Ansible or a Containerfile, **so Lane G delivers value before `PLAT-5c` and `TOPO-4` land.**
+  But export is not the destination: **a configuration surface that requires shell access on every host is
+  not a configuration surface.**
+- **TOPO-2b · Coverage meter, live during editing** — TOPO-2,3 · M. ADR-15 requires a coverage-reducing
+  change to be expressed as `ENFORCEMENT_DISABLE`. The UX consequence is that **coverage loss must be
+  visible at the moment of the edit, not at approval** — an operator who learns at approval time has
+  already built a change set around a false assumption. A live meter in the toolbar (inline inspection
+  *n/m* services, sinkhole *n/m* zones, ZT-fronted *n/m*), and an edit that reduces it stops and offers
+  `Undo` or `Continue and request ENFORCEMENT_DISABLE`. They can still do it; they cannot do it quietly.
 - **TOPO-6 · Edge health — is the network operating as described?** — TOPO-1 · L. Drift asks whether
   configuration matches declaration; this asks whether **traffic is actually flowing the way the model says
   it should, right now**. It is what turns the canvas from a reconciliation tool into a monitoring surface.
@@ -888,113 +959,12 @@ returns nothing). ADR-15.
   baselines** — or the product alerts on itself and skews the baselines it uses to find real anomalies. The
   canvas always shows **which tier produced a state**, because "we saw real traffic" and "our probe
   succeeded" are different evidence.
-- **TOPO-2b · Coverage meter, live during editing** — TOPO-2,3 · M. ADR-15 requires a coverage-reducing
-  change to be expressed as `ENFORCEMENT_DISABLE`. The UX consequence is that **coverage loss must be
-  visible at the moment of the edit, not at approval** — an operator who learns at approval time has
-  already built a change set around a false assumption. A live meter in the toolbar (inline inspection
-  *n/m* services, sinkhole *n/m* zones, ZT-fronted *n/m*), and an edit that reduces it stops and offers
-  `Undo` or `Continue and request ENFORCEMENT_DISABLE`. They can still do it; they cannot do it quietly.
-- **TOPO-3 · Routing compiler + export** — TOPO-1 · L. A **pure function**: graph → *proposed* gateway
-  configuration plus CASB/policy/feed catalogs, with a validated per-node diff. Generates, never applies.
-  Pure means directly testable: given a graph, assert the emitted config. Output leads with the **semantic
-  summary** ("prod-web loses inline inspection"), because ADR-15 requires approval to be semantic and
-  nobody approves a field diff by inspection.
-  **Ships with EXPORT as the interim path, explicitly labelled interim.** Until `PLAT-5c` there is no
-  dynamic scope on endpoints or gateways to deliver into, so the compile output ends with an honest terminal
-  state — *"delivery is not available yet; export it or apply it through your existing configuration
-  management, and the canvas will show each member converge"* — rather than a greyed-out `Apply` implying it
-  is nearly ready. A validated, typechecked, coverage-checked config from a reconciled model is genuinely
-  useful with Ansible or a Containerfile, **so Lane G delivers value before `PLAT-5c` and `TOPO-4` land.**
-  But export is not the destination: **a configuration surface that requires shell access on every host is
-  not a configuration surface.**
-- **PLAT-5c · Configuration DELIVERY to endpoints and gateways — PLAT-5b is half-finished** — new work · L.
-  *Owner correction, 2026-07-31: "configurations SHOULD be delivered to the node, we can't assume we need
-  direct access to endpoints."* Correct, and the tree agrees more than the earlier plan admitted.
-  **Endpoint agent config has ZERO dynamic fields. So does the gateway.** Every setting on both is
-  bootstrap. Only the server got PLAT-5b's dynamic, cluster-wide scope (45 fields), and
-  `internal/intent/fleetcontrol.go:22` states the consequence in its own words: *"D265's kill switch reaches
-  server-side components through the configuration store. **ENDPOINT AGENTS DO NOT READ IT**"* — which is
-  why the endpoint half of the kill switch had to be built as a separate signed channel in the first place.
-  **This is a platform gap that predates the console; the console is only what makes it visible.**
-  **The pattern is proven five times over** — fleet-control, signed risk/posture, signed IOC feeds, signed
-  DLP indexes and response intents are all signed one-way channels to endpoints. Configuration is the one
-  thing that does not use one. So this is the sixth instance of an established shape, not new architecture:
-  signature, monotonic sequence, mandatory expiry, fail-toward-the-safe-state, with `fleetcontrol.go` as the
-  reference implementation.
-  **The first version of this ticket claimed typed `Field`s made it "a closed vocabulary by construction".
-  That was WRONG, adversarial review proved it against the code, and ADR-15 in this same file already said
-  so** — *"a configuration language is not a closed vocabulary in the INV-1 sense"* (line ~1469). The
-  vocabulary is closed over **keys**, not **values**, and several declared keys are dereferenced by the
-  consumer into things that execute:
-  - `OPENSHIELD_WORKER_BIN` (`endpoint2.go:23`, `KindPath`) is **executed** as the sandboxed worker.
-    `KindPath` validation is `os.Stat` — "the file exists".
-  - `OPENSHIELD_EXEC_IPC_SOCKET` / `OPENSHIELD_OPEN_IPC_SOCKET` (`endpoint.go:41`, `endpoint2.go:101`) name
-    the socket the **privileged, `CAP_SYS_ADMIN`, fanotify-answering agent** asks for exec and open
-    verdicts on. Repoint them and any local user answers ALLOW for every exec — **a direct INV-2 breach**.
-  - `OPENSHIELD_CONTROL_PLANE_KEY` (`endpoint2.go:35`) is the key that verifies fleet-control *and* would
-    verify this channel. Delivering a new path **re-roots trust permanently — a TTL does not undo a key
-    swap.**
-  - `OPENSHIELD_ENFORCE` (`endpoint2.go:41`, `gateway.go:48`) is a declared field meaning "set = enforce".
-    Delivering it **empty** stops enforcement fleet-wide with no four-eyes, no sequence, no TTL — and
-    because it is not the kill switch, `KillSwitch.Engaged()` stays false and the console's
-    "N enforcement suppressed" counter reads **zero**. INV-5's claim that enforcement is reachable exactly
-    two ways becomes false the day this ships.
-  **So the design is three controls, and the first two are categorical:**
-  1. **`Deliverable bool` on `Field`, default FALSE**, granted per field by explicit declaration and
-     **structurally denied** for any field dereferenced into an executable, a socket, an IPC peer, a key, a
-     CA, a roster or a URL. Enforced **in the endpoint's applier**, so a validly signed message carrying an
-     undeliverable key is still refused. Guarded by a whole-tree test in the D274 shape: walk every
-     `Deliverable` field and fail if its value reaches `exec.Command`, `net.Dial`, or a key/CA load.
-  2. **Security-relevant transitions cannot ride this channel at all.** `OPENSHIELD_ENFORCE`,
-     `OPENSHIELD_USB_ENFORCE`, `OPENSHIELD_ATTEST`, `OPENSHIELD_OPERATOR_ROLES_STRICT` are protection
-     switches; an on→off transition **is** `ENFORCEMENT_DISABLE` and may only travel the fleet-control
-     channel, which already has the four-eyes, the sequence and the mandatory TTL.
-  3. **The coverage check moves to the CONSUMER** — see `PLAT-5d`, which is the load-bearing one.
-  `Accept`: a dynamic endpoint setting changes on a live agent with no shell access; an undeclared key is
-  refused; **and a signed set containing `OPENSHIELD_WORKER_BIN` or `OPENSHIELD_ENFORCE=""` is refused by
-  the agent**. Mutations: mark a dereferenced field `Deliverable` → the whole-tree guard must fail; accept a
-  security-relevant off-transition → the refusal test must fail.
-- **PLAT-5d · The coverage check belongs on the ENDPOINT, not in the console** — PLAT-5c · L. **The
-  structural finding, and it invalidates how ADR-15 was specified.** The coverage meter recomputes in the
-  canvas and the `ENFORCEMENT_DISABLE` routing is decided by the `TOPO-3` compiler — **both in the control
-  plane. INV-1's threat model is a COMPROMISED control plane.** An attacker who owns it does not run the
-  compiler; they publish a signed change set directly. Everything fleet-control gets right, it gets right
-  **on the endpoint** (`fleetcontrol.go:79-133`: signature, sequence and expiry all checked in `apply`),
-  which is precisely why it survives control-plane compromise. ADR-15's coverage rule is currently the only
-  safety property in the design living on the wrong side of that boundary — `TOPO-2b`'s live meter is a
-  good **UX** property and was wrongly promoted to an invariant.
-  So: each endpoint and gateway computes its **own local protection level** from the fields it holds
-  (enforcers registered, monitored dirs non-empty, gate socket reachable, feed verified) and **refuses any
-  delivered set that lowers it** without an accompanying `ENFORCEMENT_DISABLE` authorization, auto-reverting
-  at that authorization's TTL. `Accept`: mutate the applier to accept a lowering set without the
-  authorization → the test must fail.
-- **PLAT-5e · Fail-safe resolution, atomicity and honest acknowledgement** — PLAT-5c · M. Four delivery
-  defects that are each independently sufficient to make the feature unsafe.
-  **(a) Fail-safe is INVERTED for endpoints.** Fleet-control fails safe because absence means enforcing.
-  Config has no safe absence: `Resolver.raw` resolves a dynamic field with no value to `f.Default`, and
-  `endpoint2.go:15` says *"almost every detection source is OFF by default"*. So an agent that is
-  partitioned, expired, or never received a set resolves to **no FIM, no canaries, no memory scanning, no
-  clipboard DLP, no exec monitoring** — an attacker who can partition an endpoint disarms it, and the
-  design would call that "failing safe". Fix: resolution is **delivered → last-good delivered → the host's
-  BOOTSTRAP value**, never the declared default; TTL expiry is a per-field revert timer to that fail-safe;
-  and a stale set makes the agent report **degraded**, rendered in the canvas state rail.
-  **(b) Change sets are not atomic across a host.** An endpoint is three processes (privileged agent,
-  engine, worker) with different field sets, and `Snapshot` swaps atomically only *within* one process. A
-  set touching `OPEN_GATE_DIRS` (agent) and `OPEN_IPC_SOCKET` (engine) applies at different moments, and the
-  intermediate state is "gate enabled, pointing at the wrong socket" — documented as fail-open. Fix: the
-  change set is the unit of atomicity across the host — stage, then commit on a barrier all three consumers
-  acknowledge, or refuse the set.
-  **(c) Silent no-ops.** Endpoint settings are read once at startup (`cmd/openshield-engine/main.go:1017`
-  registers enforcers from `os.Getenv` at boot). Flipping a field to dynamic does not make its consumer
-  re-read it, so the console would show the new value while the host runs the old one — the exact
-  console/host disagreement PLAT-5b exists to prevent. Fix: a per-field `HotAppliable` flag proven by a test
-  that the reader re-reads per tick; a non-hot-appliable field is delivered as **"pending restart"**, never
-  applied silently.
-  **(d) Acknowledgement must not be ordinary telemetry.** INV-4 says unsigned telemetry is never evidence,
-  yet a staged rollout is a control decision driven by it: forged positive acks show `51/51 applied` while
-  the fleet runs the old config *and* advance the rollout. Fix: the ack is **signed by the enrolled agent
-  key and carries the hash of the effective values**, not a revision number — and the UI renders
-  **"acked" and "verified in effect" as different states**, because an ack proves receipt, never effect.
+- **TOPO-8 · Unmanaged sources** — TOPO-6 · S. The one real blind spot in call-home discovery: a host that
+  never installed an agent is invisible to enrolment — but **not** to the gateway, which sees traffic from
+  sources mapping to no enrolled identity. Surfaced as a count with its caveat rendered in place: inferred
+  from observed traffic, sees only what traverses a gateway, **not an inventory**. Its own ticket rather
+  than folded into discovery, because a soft inference and a hard enrolment must never render as the same
+  kind of fact.
 - **TOPO-4 · Topology-driven configuration delivery** — PLAT-5c · 🔒 **owner-gated** · L *(was XL: with
   `PLAT-5c` carrying the channel, this becomes the topology-shaped layer over it rather than new
   transport)*. Gateway config is node-local with no database credentials (D272), so delivery rides the
@@ -1012,6 +982,7 @@ returns nothing). ADR-15.
   "previous", rate-limited per node, **fail-static** (keep last-good enforcing, raise an alert) rather than
   fail-flap, every rollback audited.
 - **TOPO-5 · Apply from the canvas** — TOPO-4 · L. Four-eyes plus staged rollout over the channel.
+
 
 ---
 
