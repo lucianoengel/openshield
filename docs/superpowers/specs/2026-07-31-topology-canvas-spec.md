@@ -108,14 +108,19 @@ problem. `PLAT-5c` closes it: a dynamic scope for endpoint and gateway configura
 signed channel modelled on fleet-control — signature, monotonic sequence, mandatory expiry, and
 fail-toward-the-safe-state.
 
-**What keeps that from becoming "a message meaning run this."** `INVARIANTS.md:27` bounds a compromised
-control plane on there being no such message, and a general key-value config channel would be one. The
-defence is already built: **PLAT-5 declares configuration as typed `Field`s with a `Kind` and a `Scope`
-(D262/D263), so a signed config message can carry only declared fields with validated types — a closed
-vocabulary by construction rather than by discipline.** An undeclared key is not "unknown", it is rejected,
-the same way an unknown fleet-control version is rejected whole. Coverage-reducing changes still route
-through `ENFORCEMENT_DISABLE` (§5.1, ADR-15); this channel delivers configuration, it does not become a
-second way to turn enforcement off.
+**What keeps that from becoming "a message meaning run this" — and the claim this spec got WRONG.** An
+earlier version of this paragraph argued that typed `Field`s made the channel *"a closed vocabulary by
+construction"*. **That is false, and ADR-15 already said so** (*"a configuration language is not a closed
+vocabulary in the INV-1 sense"*). The vocabulary is closed over **keys**; the value space is `string`, and
+the interpretation happens in the consumer — which `exec`s it, `dial`s it, or loads it as a key.
+`OPENSHIELD_WORKER_BIN` is executed; `OPENSHIELD_EXEC_IPC_SOCKET` is where the privileged agent asks for
+exec verdicts; `OPENSHIELD_CONTROL_PLANE_KEY` is the trust anchor for this very channel, and a key swap is
+a **permanent** side effect a TTL does not undo.
+
+The real defence is three-layered and specified in `PLAT-5c`/`PLAT-5d`: **`Deliverable: false` by default**
+with dereferenced fields and trust anchors categorically excluded; **security-relevant off-transitions may
+only travel the fleet-control channel**, which already carries four-eyes, sequence and mandatory TTL; and
+**the coverage check runs on the endpoint, not here** — see §5.1's own correction.
 
 Until `PLAT-5c` lands, the canvas is honest rather than silent: the node shows **declared** and **observed**
 configuration per member, the distance between them is the drift in rule 3, and a save never implies it
@@ -123,7 +128,7 @@ reached a host. `TOPO-3` export is the interim delivery path, explicitly labelle
 
 ### 2.1 Kinds and ports
 
-Twelve kinds, from `TOPO-1`. Each node renders as a **72×72 rounded square with a 20px kind glyph, a name,
+Thirteen kinds, from `TOPO-1` (the roadmap list plus `integration sink`; the two are reconciled and this table is authoritative). Each node renders as a **72×72 rounded square with a 20px kind glyph, a name,
 a population count, and a state rail across its bottom edge** — deliberately not a card, because the console
 reserves cards for the one moment that means "stop and read this" (approval).
 
@@ -148,7 +153,7 @@ only gateways and servers as valid drops; everything else dims to 30%. An edge t
 be drawn — the model rejects it (`TOPO-1`), so the canvas must not let a user express it and then explain
 the rejection afterwards.
 
-### 2.1 Binding: discovered vs declared
+### 2.2 Binding: discovered vs declared
 
 Every node carries one of three bindings, and this is **the primary information on the canvas**, so it gets
 the strongest non-colour encoding available — the border, matching how the console encodes evidence state:
@@ -176,7 +181,7 @@ is therefore the only thing that draws the eye across a large canvas. That is th
 documented, or worse, an enrolled agent on a host nobody knew about. It gets a persistent count in the
 canvas toolbar: **`⚠ 3 undeclared`**, always visible, one click to select them all.
 
-### 2.2a Discovery is call-home, and that makes the inventory complete
+### 2.3 Discovery is call-home, and that makes the inventory complete
 
 **No network scanning, and none is needed.** Every component this product deploys — agent, gateway, worker,
 server — enrols and then reports continuously. So the platform already holds an authoritative inventory of
@@ -206,7 +211,7 @@ in place: it is inferred from observed traffic, sees only what traverses a gatew
 inventory. It gets its own ticket (`TOPO-8`) rather than being folded into discovery, because a soft
 inference and a hard enrolment must never render as the same kind of fact.
 
-### 2.2 The state rail
+### 2.4 The state rail
 
 A 4px rail across the node's bottom edge, segmented, using the neutral ramp plus hatching — never colour:
 
@@ -231,7 +236,7 @@ not need the machinery one would require. What remains:
   health. That is the only hierarchy.
 - **Population never becomes geometry.** Expanding `user endpoints` opens a **list panel beside the
   canvas** — sortable, filterable, exportable — never fifty-one nodes.
-- **A soft ceiling with an honest failure.** Past ~60 nodes the canvas warns that the model has probably
+- **A soft ceiling with an honest failure.** Past ~60 nodes the canvas **refuses to auto-layout** and warns that the model has probably
   drifted from roles toward inventory, and points at the site containers. It does not silently render a
   hairball and let the operator conclude the feature is broken.
 
@@ -332,14 +337,26 @@ generated**:
 | gateway/server → broker | JetStream consumer health, publish counters |
 | user → ZT service | access-proxy allow/deny counts per catalogued service |
 
-Each edge shows **last observed traffic**, a rate sparkline, and one of four states:
+**The encoding, resolved — because drift and health cannot both own the stroke.** §4 assigns stroke
+pattern to **drift** (declared/observed), and an earlier draft of this section assigned stroke to health
+too, so `╌╌╌▶` meant two different things and `healthy` and `quiet` were drawn identically despite the text
+insisting quiet is *"neutral, not a fault"*. Colour is unavailable (severity owns it) and border geometry is
+spent on binding. So:
+
+- **Stroke pattern = drift** (`TOPO-1`'s deliverable, §4).
+- **Mid-edge glyph = health** (`TOPO-6`'s deliverable), the same way a node carries its state rail.
+
+Each edge shows **last observed traffic**, a rate sparkline, and one of four health glyphs:
 
 ```
-━━━━━━━▶  healthy      observed within the expected interval
-━━━━━━━▶  quiet        no traffic, and none expected (low-volume path)  — neutral, not a fault
-╌╌╌╌╌╌▶   silent       declared, expected, and NOT observed for 22m     ⚠
-━━✕━━━▶   failing      observed and being REFUSED (auth, policy, upstream error)
+━━━●━━▶   healthy      observed within the expected interval
+━━━○━━▶   quiet        no traffic, and none expected (low-volume path) — neutral, not a fault
+━━━◑━━▶   silent       declared, expected, and NOT observed for 22m    ⚠
+━━━✕━━▶   failing      observed and being REFUSED (auth, policy, upstream error)
 ```
+
+A dashed edge carrying a `✕` therefore reads correctly and unambiguously: *declared but never observed in
+config, and the traffic that does flow is being refused.*
 
 **`silent` and `failing` are different failures and must never be merged.** Silent means the path is not
 being used — a routing change, a dead upstream, an agent that stopped. Failing means the path *is* being
@@ -429,6 +446,22 @@ and the moment an edit reduces it:
 The operator can still do it. They cannot do it *quietly*, and they cannot do it while believing they are
 only moving a line.
 
+**This is a UX property, not an invariant — a correction, because the earlier draft promoted it to one.**
+The meter recomputes in the canvas and the routing decision is made by the `TOPO-3` compiler, both of which
+run in the **control plane**. INV-1's threat model is a *compromised control plane*, and an attacker who
+owns it does not run the compiler — they publish a signed set directly. Everything fleet-control gets
+right, it gets right **on the endpoint** (`fleetcontrol.go:79-133`), which is exactly why it survives
+control-plane compromise. So the enforceable coverage rule lives in the applier (`PLAT-5d`), and what this
+section specifies is the thing it is genuinely good at: **stopping an honest operator from making a mistake
+they cannot see.** Both are needed; only one is an invariant.
+
+**And the request must bind to a saved revision, not to editor state.** Saving is explicit and compile
+comes after it, so `Continue and request ENFORCEMENT_DISABLE` fired against a draft would leave a
+four-eyes-approved authorization alive for a coverage reduction that was undone, abandoned, or replaced.
+`Continue` therefore means **save this revision, compile it, and open the request against that revision id
+and its compiled coverage delta** — and an approval whose revision was subsequently rolled back or
+superseded is refused at approval time.
+
 ---
 
 ## 6. Compile — the diff that is the real deliverable (`TOPO-3`)
@@ -486,7 +519,7 @@ what stops it rotting: sighted keyboard users choose it, so it stays maintained.
 - Every node announces kind, name, binding state, health summary and edge count.
 - Selection, drift state and coverage warnings are announced in a `polite` live region.
 - The canvas honours `prefers-reduced-motion`: no pan easing, no layout animation, edges redraw instantly.
-- Zoom never falls below the type-legibility floor; below it, labels drop to the tier's aggregate names
+- Zoom never falls below the type-legibility floor; below it, labels drop to container-level aggregate names
   rather than shrinking into illegibility.
 - **Nothing is conveyed by colour alone anywhere in this spec** — binding is border, drift is stroke
   pattern, health is rail segmentation, severity carries its glyph.
@@ -495,20 +528,21 @@ what stops it rotting: sighted keyboard users choose it, so it stays maintained.
 
 ## 8. States
 
-The nine from the UX spec §4, with canvas-specific readings:
+All nine from the UX spec §4, plus two canvas-specific conflict states:
 
 | State | Canvas |
 |---|---|
-| Loading | Skeleton node placeholders in the final layout positions; no shimmer. |
+| Loading · first | Skeleton node placeholders in the final layout positions; no shimmer. |
 | Empty · unconfigured | **Never a blank canvas**, because call-home means something is always known. Everything enrolled sits in the unplaced tray with "Nothing is declared yet — 6 components have enrolled. Place them to build your model." One click to place all by suggested kind. |
-| Conflict · overlap | A save whose predicates would put a host in two nodes is refused, naming the hosts and both nodes (§2.0a rule 2). Not resolved by precedence. |
+| Conflict · membership overlap | A save whose predicates would put a host in two nodes is refused, naming the hosts and both nodes (§2.0a rule 2). Not resolved by precedence. |
 | Empty · no discovery | "No agents or gateways have enrolled" + the enroll command, matching `CONSOLE-33`. |
 | Filtered to nothing | Filter chips shown with one-click clear; the node count reads `0 of 214`. |
 | Error | The model failed to load: the canvas does not render a partial graph, because a partial topology reads as a complete one. |
 | **Degraded** | Discovery is stale — the canvas dims discovered state, keeps declared state crisp, and banners *"drift last computed 14m ago; nodes may have changed."* **A drift finding is never shown as current when its input is stale**, because acting on stale drift means declaring something that is no longer true. |
+| Loading · refresh | Nodes stay; a hairline progress bar runs along the canvas top edge. Drift counts never blank mid-recompute. |
 | Stale | Amber timestamp on the coverage meter and the drift panel. |
 | Forbidden | Analysts see the canvas read-only with the edit toggle absent and the required tier named. |
-| Conflict | Another operator saved a revision while you were editing: a diff of theirs vs yours, and a merge or rebase choice. No last-write-wins. |
+| Conflict · concurrent revision | Another operator saved a revision while you were editing: a diff of theirs vs yours, and a merge or rebase choice. No last-write-wins. |
 
 ---
 

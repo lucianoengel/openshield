@@ -530,23 +530,14 @@ invariant, semantic approval and fail-static rollback (§8).
 
 ## 12. Sequencing
 
-**Slice 1 proves the risky things first, end to end** — session auth → `/incidents` → `/incidents/timeline`
-with the three evidence states → view recorded under the session principal → the same human refused at
-four-eyes. That single slice exercises every blocker in §1 on the real path. No i18n, no palette, no a11y
-gates, no contract fixtures until a page exists to generalize from.
+**Superseded — do not sequence from this document.** This section originally used `API-0`/`UI-0`/`UI-1`…
+identifiers that no longer exist, listed Entity as an MVP surface after §10 had folded it away, and put
+i18n in Phase 2 after §10 had moved it to Phase 3. A sequencing plan that contradicts its own document two
+sections earlier is precisely the stale-source-of-truth failure this project keeps finding.
 
-- **Phase 0 · The foundation that is actually load-bearing** — `API-0` canonical principal + four-eyes on
-  account + route table as data + `/report/response` mounted; `UI-0` toolchain, budget, reproducible build;
-  `UI-1` browser session auth.
-- **Phase 1 · Slice 1** — Incidents queue + timeline detail, end to end.
-- **Phase 2 · The rest of the MVP console** — `API-1` fleet inventory + break-glass, `API-2` entity
-  surface, `API-4` keyset pagination, `API-5` health, `API-6` replay/explain; Entity, Hunt, Fleet,
-  Explain-a-decision; the pivot spine; `UI-3` i18n; `UI-17` clicks-to-answer, a11y and i18n gates;
-  `UI-18` console in the signed reproducible release.
-- **Phase 3 · Deferred console surfaces** — Overview, Alerts, Response, Evidence, Configuration,
-  Administration, Policy, and the admin write APIs behind them.
-- **Phase 4 · Topology** — `TOPO-1` model + drift list, `TOPO-2` canvas, `TOPO-3` compiler (dry-run).
-- **Phase 5 · 🔒 Owner-gated** — `TOPO-4`/`TOPO-5` signed apply; the AI lane.
+**The roadmap is the single source for sequencing**: `docs/architecture-roadmap.md`, *Lane F · Console*
+(`CONSOLE-1`…`-52`, phases 0–3) and *Lane G · Topology* (`TOPO-1`…`-8`), with `PLAT-5c`/`-5d`/`-5e` in
+Lane D. The design rationale in §1–§11 above stands; only the ordering moved.
 
 ## 13. ADRs proposed
 

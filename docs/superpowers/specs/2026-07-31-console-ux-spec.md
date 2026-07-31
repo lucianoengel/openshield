@@ -101,7 +101,7 @@ ink-950  #0B0C0E   canvas (dark)        ink-050  #FAFAF8  canvas (light)
 ink-900  #121417   surface              ink-100  #F2F2EF  surface
 ink-850  #191C20   raised / row hover   ink-200  #E4E4E0  raised
 ink-700  #2A2E34   hairline             ink-300  #CFCFCA  hairline
-ink-500  #6B7280   de-emphasised text   ink-500  #6B7280  de-emphasised text
+ink-mut  #8A919B   de-emphasised text   ink-mut  #6B7280  de-emphasised text
 ink-200  #D6D8DC   body text (dark)     ink-900  #16181B  body text (light)
 ink-050  #F5F6F7   emphasis text        ink-950  #0B0C0E  emphasis text
 ```
@@ -113,7 +113,7 @@ chip carries a **glyph and a text label**, never colour alone.
 | Severity | Dark | Light | Glyph | Rule |
 |---|---|---|---|---|
 | Critical | `#FF6B5A` | `#C0392B` | ▲ filled | the only colour permitted to animate |
-| High | `#FF9F45` | `#B25E00` | ▲ open | |
+| High | `#FF9F45` | `#9A5200` | ▲ open | |
 | Medium | `#E3C567` | `#8A6D1F` | ■ | |
 | Low | `#7FB3D5` | `#2C6E9B` | ● | |
 | Info | `ink-500` | `ink-500` | — | neutral by design |
@@ -212,10 +212,29 @@ that has not defined these is not designed.
 └──────┴─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Left rail (200px, collapsible to 48px):** Incidents · Hunt · Fleet · Entities* · Evidence* ·
-Settings · Admin*. Starred items appear by tier. A live count badge on Incidents (unassigned, mine) and on
-Approvals-pending — those are the only two badges permitted, because a badge on everything is a badge on
-nothing.
+**Left rail (200px, collapsible to 48px)**, derived from §6's page list rather than asserted — the first
+version listed four destinations that are cut or Phase 3 and omitted four surfaces §6 specifies:
+
+| Rail item | Ticket | Phase |
+|---|---|---|
+| Incidents *(health strip, cases folded in)* | `CONSOLE-4` | 2 |
+| Hunt | `CONSOLE-12` | 2 |
+| Fleet *(+ break-glass)* | `CONSOLE-8` | 2 |
+| Tuning *(detector health, exceptions)* | `CONSOLE-41/-42` | 2 |
+| Explain *(reached by pivot, not a rail item)* | `CONSOLE-10` | 2 |
+| Zero Trust | `CONSOLE-44/-45` | 3 |
+| End users | `CONSOLE-52` | 3 |
+| Evidence | `CONSOLE-20` | 3 |
+| Topology | `TOPO-2` | Lane G |
+| Settings | `CONSOLE-21` | 3 |
+| Admin | `CONSOLE-22` | 3 |
+
+**A rail item for an unbuilt surface is absent, not disabled** — §4's Forbidden rule ("absent, or disabled
+with the required tier named") applies to *authority*, not to *unbuilt*, and a disabled link to something
+that does not exist is a promise. Tier-gated items are absent for tiers that cannot use them.
+
+Two badges only — Incidents (unassigned / mine) and Approvals-pending — because a badge on everything is a
+badge on nothing. Approvals lives inside Incidents in the MVP rather than as its own rail item.
 
 **Command palette (⌘K)** — the spine. Four modes in one input, disambiguated by prefix:
 
@@ -410,7 +429,8 @@ An operator reaching for "make this stop" is offered the **narrowest** layer tha
 broader ones one click further away. Presenting them as equals is how a console ends up with a detector
 silently disabled six months ago by somebody who left.
 
-**The tuning flow, from an alert (4 clicks, workflow 5 in §7):**
+**The tuning flow, from an alert (8 committed interactions — workflow 5 in §7, budgeted on the safe path
+including every guard):**
 
 ```
 Alert ▸ ⋯ ▸ Not a true positive
@@ -474,10 +494,32 @@ zero after 30 days means the exception is doing nothing and should be deleted; a
 thousands means the underlying detection needs fixing rather than muting. Both are visible here and nowhere
 else.
 
-**Learning mode.** A new deployment sets a per-domain observation window during which detections are
-raised but not enforced and not paged, with a banner naming the end date and a one-click "promote to
-enforcing". The UEBA baselines already persist and prune; this exposes the same idea for the rest and
-prevents the week-one alert storm that kills pilots.
+**Quiet start — and what it deliberately is not.** A new deployment needs a way to stop the week-one alert
+storm that kills pilots. An earlier draft of this section called it "learning mode" and said detections
+would be *"raised but not enforced and not paged"* for a window, promoted by one click.
+
+**That was wrong and is withdrawn.** "Not enforced, per domain, fleet-wide, one click, no tier, no expiry"
+is a larger enforcement reduction than anything else in this console — larger than an exception, larger
+than break-glass on one host — reached by a control that looked like an onboarding convenience. It would
+have routed around the exact gate §5.1 of the topology spec spends a page defending: ADR-15 requires a
+coverage-reducing change to be expressed as `ENFORCEMENT_DISABLE` so it inherits four-eyes, a monotonic
+sequence and a mandatory TTL. A console feature that reaches around that while the operator believes they
+are merely "starting quietly" is the failure a customer experiences as a breach rather than as friction.
+
+What ships instead is **strictly a notification control, and enforcement is never touched**:
+
+- Detections run and **enforce normally**. Nothing is suppressed at the endpoint or the gateway.
+- What the window suppresses is **paging** — routed notifications (SOAR-9 sinks) for a domain are held,
+  while alerts and incidents are created, visible, and dispositionable as normal.
+- Responder tier, **mandatory expiry** (max 14 days), a required reason, one audit row, and **automatic
+  restoration**; a banner names the end date and the count of alerts raised but not paged during it.
+- **Anything that would actually stop enforcement is not reachable from here.** It is
+  `ENFORCEMENT_DISABLE`, with its own tier, four-eyes and TTL, from the break-glass surface (§6.4) where an
+  operator can see what they are doing.
+
+The name changed with the semantics: it is `Quiet start`, not `Learning mode`, because "learning" implied
+the product was not protecting yet — which was the misunderstanding that made the original design
+dangerous.
 
 **At scale, the queue shows work, not events.** Alerts group by `dedup_key` with an occurrence count and a
 sparkline; incidents group alerts; the default queue view is incidents. A thousand events becomes forty
@@ -554,7 +596,14 @@ affecting them, and their DSAR/erasure record. Pseudonymisation is honoured — 
 operator's tier permits, and the privacy-officer tier is what unlocks the compiled subject view.
 
 This is also where a leaver is verified: SCIM deprovisioned them, so **what still references them** — live
-sessions, enrolled devices, pending approvals — is listed with a single "revoke everything" action.
+sessions, enrolled devices, pending approvals — is listed with a revoke action that takes **the full §7
+ceremony**: a server-generated summary naming the counts (*"3 sessions, 2 devices, 1 pending approval"*),
+step-up re-authentication, confirm, and one audit row per revoked object. An earlier draft called this "a
+single 'revoke everything' action", which contradicted §7's own absolute rule — it is destructive,
+irreversible for the approvals, and fired against the wrong row it locks out a current employee.
+
+**Ticket: `CONSOLE-52`, Phase 3** (depends on `CONSOLE-9` and `-51`). Recorded because this section was
+written with no ticket behind it.
 
 ### 6.9 Deferred surfaces — layout intent recorded now
 
@@ -572,16 +621,29 @@ the Explain layout with editable inputs.
 These are the acceptance criteria for `CONSOLE-14`'s CI-gating budgets. A regression past the budget fails
 the build.
 
-| # | Workflow | Path | Budget |
-|---|---|---|---|
-| 1 | **Triage the top incident** | land → row → read chain + evidence | **1** |
-| 2 | **Is this host compromised elsewhere?** | incident → entity pivot → related alerts | **2** |
-| 3 | **Why was this blocked?** (auditor) | alert → Explain → Replay | **2** |
-| 4 | **Handle a 200-incident wave** | filter → select all → bulk acknowledge → assign | **4** |
-| 5 | **Tune a noisy rule** | incident → rule → suppress (scope, TTL, reason) | **4** |
-| 6 | **Contain a host** | incident → Contain → step-up auth → confirm → (2nd operator approves) | **3 + approval** |
-| 7 | **Shift handover** | `#team-triage` → filter mine → reassign selected | **3** |
-| 8 | **Prove nothing was tampered with** | Evidence → Verify chain → export | **3** |
+**The unit, defined — because an undefined unit makes the gate meaningless.** A *committed interaction* is
+one pointer activation or one field commit. Characters typed do not count; committing a required text field
+counts once. Keyboard and pointer paths are budgeted **separately**, because §11 requires full keyboard
+operation and the two have different counts — the keyboard path is measured with the pointer disabled.
+
+**Budgets cover the SAFE path, including every guard.** The first draft of this table budgeted the fast
+path and then specified dialogs that exceeded it — workflow 5 was budgeted at 4 against a dialog costing 8.
+A CI gate that fails when the count rises is then **direct pressure to delete the safety step**, which
+inverts the guard into a liability. Budgets below are derived by walking the dialogs in §6, not asserted.
+
+| # | Workflow | Path | Budget | Note |
+|---|---|---|---|---|
+| 1 | **Triage the top incident** | land → row → read chain + evidence | **1** | |
+| 2 | **Is this host compromised elsewhere?** | incident → entity pivot → related alerts | **2** | |
+| 3 | **Why was this blocked?** (auditor) | alert row → Explain → Replay | **3** | was 2; a row click costs 1 per workflow 1 |
+| 4 | **Handle a 200-incident wave** | filter → *select all matching* → bulk acknowledge → assign | **4** | needs `select all matching filter` in `CONSOLE-26`; `⌘A` is select-**page** and the grid is keyset-paged, so without it this is one interaction per page |
+| 5 | **Tune a noisy rule** | incident → alert → ⋯ → not-a-TP → FP → also-stop → reason → create | **8** | was 4. The true-positive review excursion is budgeted separately at **+2**, and is never counted against this |
+| 6 | **Contain a host** | incident → Contain → step-up → confirm → (2nd operator approves) | **4 + approval** | step-up is a committed interaction |
+| 7 | **Shift handover** | `#team-triage` → filter mine → reassign selected | **3** | ⚠ gated on `CONSOLE-35` (shared views, Phase 3) — a personal saved view is not a handover artifact. **Excluded from the Phase-2 gate.** |
+| 8 | **Prove nothing was tampered with** | incident → ledger panel → Verify chain | **3** | re-pathed through §6.2's ledger panel, which ships in MVP; the Evidence browser route is `CONSOLE-20`, Phase 3 |
+
+**Two of these cannot go green in Phase 2** and are marked: workflow 7 moves to `CONSOLE-35`'s acceptance,
+and workflow 8's export half moves to `CONSOLE-20`'s. `CONSOLE-14` gates the other six.
 
 **Workflow 6 in detail**, because it is where the security controls surface:
 
@@ -651,20 +713,43 @@ Settings
 What each tier *sees*, not only what it can call. A control the user cannot use is **absent or disabled
 with the required tier named** — never present and silently failing.
 
-| Surface | analyst | responder | admin | privacy-officer |
-|---|---|---|---|---|
-| Incidents / Hunt / Fleet / Explain read | ✓ | ✓ | ✓ | ✓ |
-| Acknowledge, transition, assign, bulk | — | ✓ | ✓ | — |
-| Suppression rules | propose | ✓ | ✓ | — |
-| Intents (CONTAIN / REVOKE_TRUST) | — | ✓ + 4-eyes | ✓ + 4-eyes | — |
-| Approve an intent | — | ✓ (not own) | ✓ (not own) | — |
-| Break-glass / ENFORCEMENT_DISABLE | — | — | ✓ + 4-eyes | — |
-| Configuration read / write | — | read | ✓ | — |
-| Operator roles, tokens, service accounts | — | — | ✓ | — |
-| DSAR export, legal-hold release, view audit | — | — | — | ✓ |
-| Export from grids | ✓ (audited) | ✓ | ✓ | ✓ |
+**One row per ACT, not per surface** — the earlier version was per-surface and therefore silent on the acts
+added by §6.6–§6.8 and the topology spec. Silence is not neutral: a reader maps an unlisted act onto the
+nearest matching row, and **Zero Trust policy authoring would have landed on "Configuration write: admin ✓"
+— granting the single most consequential write in the product without the `+ 4-eyes` that Intents and
+Break-glass carry.** An act missing from this table is an act whose authority was decided by accident.
 
-Machine principals: API only, and **never** an approval (`CONSOLE-1`).
+| Act | analyst | responder | admin | privacy-officer | Step-up |
+|---|---|---|---|---|---|
+| Read incidents / Hunt / Fleet / Explain | ✓ | ✓ | ✓ | ✓ | — |
+| Acknowledge, transition, assign, bulk | — | ✓ | ✓ | — | — |
+| **Disposition an alert** (a fact about the past) | ✓ | ✓ | ✓ | — | — |
+| Create an exception (scoped, expiring) | propose | ✓ approve (not own) | ✓ | — | — |
+| **Never-expiring exception** | — | — | ✓ + confirm | — | ✓ |
+| **Quiet start** (paging only, never enforcement) | — | ✓ | ✓ | — | — |
+| Intents (CONTAIN / REVOKE_TRUST) | — | ✓ + 4-eyes | ✓ + 4-eyes | — | ✓ |
+| Approve an intent | — | ✓ (not own) | ✓ (not own) | — | ✓ |
+| Break-glass / `ENFORCEMENT_DISABLE` | — | — | ✓ + 4-eyes | — | ✓ |
+| Configuration read / write | — | read | ✓ | — | ✓ (write) |
+| **ZT catalog edit** (`tcp://` = separate, higher) | — | — | ✓ + 4-eyes | — | ✓ |
+| **ZT policy authoring (Rego)** | — | — | ✓ + 4-eyes | — | ✓ |
+| **ZT policy dry-run evaluator** | — | — | ✓ audited | — | — |
+| **Effective-access matrix** | — | — | ✓ audited | — | — |
+| **Terminate a ZT session** | — | ✓ | ✓ | — | ✓ |
+| **Topology: view / edit / save revision** | view | view | ✓ edit | view | — |
+| Operator roles, tokens, service accounts | — | — | ✓ | — | ✓ |
+| **Revoke-everything for a leaver** | — | — | ✓ | ✓ | ✓ |
+| DSAR export, legal-hold release, view audit | — | — | — | ✓ | ✓ |
+| **Sees real identities (vs pseudonymised)** | — | — | — | ✓ | — |
+| Export from grids | ✓ audited | ✓ | ✓ | ✓ | — |
+
+- **Machine principals**: API only, and **never** an approval (`CONSOLE-1`).
+- **`owner`** appears in §6.7④ and Lane G but is *not* a console tier — it is a human gate outside the
+  product, and the UI represents an owner-gated capability as **absent**, never as a disabled control.
+- **Terminate-session is responder**, deliberately: it is an incident-response act at 2am, and putting it at
+  admin builds a control nobody on shift can use.
+- **CI guard:** every act named in a page spec must appear in this table. A spec section that adds an act
+  without a row fails the check — this table is the kind of source of truth that rots silently otherwise.
 
 ---
 
@@ -688,6 +773,18 @@ Machine principals: API only, and **never** an approval (`CONSOLE-1`).
 
 - WCAG 2.2 AA: 4.5:1 body, 3:1 large and UI boundaries, in **both** themes. Verified in CI by axe plus a
   contrast unit test over the token pairs — a token file that passes review can still ship a failing pair.
+  **It already did.** The first token set used one `#6B7280` for de-emphasised text in *both* themes, and on
+  dark it measured **4.05:1 on the canvas and 3.54:1 on the row-hover surface** — so all help text, every
+  residual note and every `Info` severity label failed, in the default theme. `High` on light measured
+  4.47:1, a marginal fail at body size. Both are corrected above (`#8A919B` dark, `#9A5200` light). **The
+  root cause is worth stating because it will recur: one token cannot serve two backgrounds.** Every
+  semantic token is declared per theme, and a token whose two themes share a hex is itself a review finding.
+- **The contrast test asserts a named list, not "the tokens".** In scope at 4.5:1: body, table cell,
+  de-emphasised/help, evidence mono, metric numeral, and every severity label — each against canvas,
+  surface **and row-hover**, in both themes. At 3:1: focus ring, selection fill, chip borders, the state
+  rail and the node borders. **Hairlines are explicitly out of scope** — a 1px row separator is decorative
+  redundancy beside spacing, not a UI boundary conveying state — and that ruling is written here so the CI
+  test can be authored from this document rather than from a judgement call.
 - **Never colour alone**: severity carries glyph + label; evidence state carries geometry + sentence.
 - Focus is always visible, 2px accent ring with a 1px inner offset so it reads on any surface. Focus is
   never removed on mouse users — a security console is used by keyboard under pressure.
@@ -739,7 +836,7 @@ Legend: ✅ specified · 🟡 partial · ❌ no surface.
 | **HIPS** exec control, FIM, canary, USB | 🟡 alerts + Fleet | ❌ **`CONSOLE-47`** — no allow/deny or baseline surface | ✅ §6.6 |
 | **Device trust** enrollment, attestation, PCR | 🟡 Fleet columns | ❌ **`CONSOLE-50`** — no enrollment or PCR-policy surface | n/a |
 | **Identity** operators, service accounts, tiers | 🟡 `CONSOLE-22` | 🟡 `CONSOLE-22` | n/a |
-| **End users** directory, access, subjects | ✅ §6.8 | ✅ §6.8 | n/a |
+| **End users** directory, access, subjects | 🟡 `CONSOLE-52` | 🟡 `CONSOLE-52` | n/a |
 | **Evidence** ledger, anchors, view audit | 🟡 §6.2 panel; `CONSOLE-20` full | n/a | n/a |
 | **Privacy** DSAR, legal hold, retention | ❌ **`CONSOLE-51`** — only a `/subject` link exists | 🟡 retention in Settings | n/a |
 | **Platform** config, health, break-glass, releases | ✅ §6.4, `CONSOLE-7` | ✅ §8 | n/a |
