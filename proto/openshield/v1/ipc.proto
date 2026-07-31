@@ -40,6 +40,15 @@ message ClassifyRequest {
   // Hard ceiling on bytes the worker may read. A decompression bomb must hit a
   // limit rather than exhaust memory.
   uint64 max_bytes = 5;
+  // The flow's protocol (tcp, udp, http, tls, dns), when the caller knows it.
+  //
+  // It exists for rule SCOPING (NIPS-11): a Suricata rule written for one protocol must not fire on
+  // another, and the worker cannot know the protocol from the bytes it was handed. Empty means the
+  // caller did not claim one — a protocol-scoped rule then does NOT match, because firing it would
+  // attribute a hit to a protocol nobody observed.
+  //
+  // It is METADATA about the flow, not content: it says nothing about what the body contains.
+  string protocol = 7;
 }
 
 message DetectorHit {

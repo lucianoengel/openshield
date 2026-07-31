@@ -71,6 +71,8 @@ var WorkerFields = []Field{
 		Description: "Indexed-document-match index for document fingerprinting."},
 	{Key: "OPENSHIELD_DLP_INDEX_PUBKEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Public key DLP indexes are verified against (ADR-9). Unset loads indexes UNVERIFIED, which is warned about at load."},
+	{Key: "OPENSHIELD_SURICATA_RULES", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "Suricata/Snort rule file (NIPS-11) — the language an estate's rules are already written in. A DEFINED SUBSET is honoured; a rule using anything outside it is REFUSED and named at startup rather than silently loaded with the unknown keyword dropped, because ignoring a keyword does not narrow a rule, it rewrites it. PCRE is refused deliberately: Go's RE2 cannot express what PCRE does, so an approximated rule would fire under the operator's own sid. Unset leaves it off."},
 	{Key: "OPENSHIELD_NIPS_RULES", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Content-signature rules (NIPS-2). Unset leaves body-content matching OFF."},
 	{Key: "OPENSHIELD_RULES_BUNDLE", Scope: ScopeBootstrap, Kind: KindPath, Default: "",

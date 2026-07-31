@@ -27,6 +27,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/classify"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/signature"
+	"github.com/lucianoengel/openshield/internal/suricata"
 )
 
 func main() {
@@ -147,6 +148,39 @@ func main() {
 		fmt.Fprintln(os.Stderr, "openshield-worker: NIPS-2 content signatures OFF (set OPENSHIELD_NIPS_RULES to enable)")
 	}
 
+	// NIPS-11: the operator's OWN Suricata rules, in the language they are already written in.
+	//
+	// A rule this engine cannot honour is REFUSED and REPORTED rather than ignored, and the report is
+	// the point: an operator loading a community ruleset has to be able to see which of their rules are
+	// actually running. Refusing the whole FILE would mean nobody ever loads one, so the file loads and
+	// the refusals are named.
+	var surRules atomic.Pointer[suricata.Ruleset]
+	if rp := os.Getenv("OPENSHIELD_SURICATA_RULES"); rp != "" {
+		f, err := os.Open(rp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: cannot open Suricata rules %q: %v\n", rp, err)
+			os.Exit(1)
+		}
+		rs, perr := suricata.ParseRuleset(f)
+		f.Close()
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "openshield-worker: bad Suricata ruleset %q: %v\n", rp, perr)
+			os.Exit(1)
+		}
+		surRules.Store(rs)
+		fmt.Fprintf(os.Stderr, "openshield-worker: NIPS-11 Suricata rules active (%d loaded, %d REFUSED)\n",
+			rs.Size(), len(rs.Refused))
+		for _, ref := range rs.Refused {
+			// Every refusal, individually, with its line and sid. A count alone would tell an operator
+			// that something did not load and give them no way to find it — and a rule they think is
+			// running and is not is worse than one they know is missing.
+			fmt.Fprintf(os.Stderr, "openshield-worker: NIPS-11 REFUSED line %d (sid %s): %s\n",
+				ref.Line, ref.SID, ref.Reason)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "openshield-worker: NIPS-11 Suricata rules OFF (set OPENSHIELD_SURICATA_RULES to enable)")
+	}
+
 	in, out := os.Stdin, os.Stdout
 
 	for {
@@ -158,7 +192,7 @@ func main() {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		resp := worker.Handle(ctx, c, rules.Load(), &req)
+		resp := worker.Handle(ctx, c, rules.Load(), surRules.Load(), &req)
 		cancel()
 		if err := ipc.WriteFrame(out, resp); err != nil {
 			return

@@ -239,6 +239,9 @@ jobs:
           # SIEM-16: the LEEF parser reads whatever an estate's appliances send, on the same ingest path
           # as CEF. Cheap here — the package links no pipeline — so it gets the full budget.
           go test -run '^$' -fuzz '^FuzzParse$' -fuzztime=100000x ./internal/connectors/leef/
+          # NIPS-11: the Suricata parser reads operator- and vendor-supplied rule files, which is how a
+          # community ruleset arrives. Cheap here — the package links no pipeline.
+          go test -run '^$' -fuzz '^FuzzParse$' -fuzztime=100000x ./internal/suricata/
 
   ledger:
     # The audit ledger's storage layer is tested against a REAL PostgreSQL.

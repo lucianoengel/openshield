@@ -313,3 +313,57 @@ the keyboard.
 #### Scenario: A malformed fingerprint indicator is refused at load
 - **WHEN** a feed carries a `ja3` entry that is not a 32-character hex digest
 - **THEN** loading fails rather than storing an indicator that can never match
+
+### Requirement: Operator rules are accepted in the Suricata language, and what is not honoured is refused
+
+The content-signature engine SHALL accept a defined subset of the Suricata/Snort rule language, and a rule
+using anything outside that subset SHALL be REFUSED and NAMED rather than loaded with the unknown keyword
+ignored.
+
+Every deployment that has ever run an IDS has rules already. A product with its own format asks them to
+rewrite all of it, which nobody does, so the rules that would have caught something stay in the file they
+were already in. Speaking the language they are written in is the difference between a signature engine
+that is used and one that is configured.
+
+REFUSING IS THE ONLY SAFE BEHAVIOUR, and this is the requirement's centre. An engine that silently drops a
+keyword it does not understand does not match LESS — it matches DIFFERENTLY, and almost always MORE.
+Ignore a URI scope and a rule matches the same bytes anywhere in a body; ignore a depth and a header rule
+matches a megabyte downstream. The operator sees a loaded rule with their own sid on it, firing on traffic
+it was never written for, with no way to tell the engine rewrote it.
+
+PCRE SHALL be refused rather than approximated. Suricata's is PCRE — backreferences, lookaround — and Go's
+regexp is RE2, which cannot express them; a rule that compiles under both can still match different
+things, and reporting a match under the operator's sid would assert something about their rule that is not
+true.
+
+An unknown ACTION SHALL be refused rather than defaulted. A `drop` silently becoming an `alert` is a rule
+the operator believes is preventing something and which is only watching.
+
+A rule with NO content requirement, or NO sid, SHALL be refused: the first matches every flow of its
+protocol, and the second produces a hit nobody can trace.
+
+A REFUSED RULE SHALL NOT FAIL THE WHOLE FILE. A community ruleset is thousands of rules from someone else,
+and refusing the file because some use unsupported keywords means nobody ever loads one. Every refusal
+SHALL be RECORDED with its line, its sid and its reason, and reported at load — a silent refusal leaves
+"which of my rules are actually running" unanswerable.
+
+Rules SHALL be scoped by protocol, and a flow whose protocol was not observed SHALL NOT satisfy a
+protocol-scoped rule: firing one would attribute the hit to a protocol nobody saw. Content modifiers
+SHALL be honoured with Suricata's meaning — in particular `depth` bounds where a match ENDS, and the two
+readings differ by the pattern length, which is exactly the traffic just past the boundary the author drew.
+
+Matching SHALL run in the sandboxed worker and a hit SHALL carry the rule's identity and never the matched
+bytes.
+
+#### Scenario: An operator's own rules load and enforce
+- **WHEN** a Suricata rule file is configured and a body matches an honoured rule
+- **THEN** the flow is refused and the bytes do not reach the upstream
+
+#### Scenario: Refusals are named at load and do not fire
+- **WHEN** the file contains rules using unsupported keywords
+- **THEN** the honourable rules load, each refusal is reported with its sid and the keyword, and a body
+  that would have matched a refused rule is not blocked
+
+#### Scenario: A hit carries no matched content
+- **WHEN** a rule matches
+- **THEN** the audit trail contains the rule identity and none of the matched bytes

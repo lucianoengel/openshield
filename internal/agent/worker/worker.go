@@ -25,6 +25,7 @@ import (
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/signature"
+	"github.com/lucianoengel/openshield/internal/suricata"
 )
 
 // Classifier turns bytes into detector hits. Real detectors arrive in T-007;
@@ -58,7 +59,8 @@ type Classifier interface {
 // reports content-free ThreatMatches — the pattern match runs HERE, behind the
 // sandbox, because the body is attacker content (D72). It reads the ruleset via an
 // atomic pointer so a hot-reload swaps it without a restart.
-func Handle(ctx context.Context, c Classifier, rules *signature.Ruleset, req *corev1.ClassifyRequest) *corev1.ClassifyResponse {
+func Handle(ctx context.Context, c Classifier, rules *signature.Ruleset, sur *suricata.Ruleset,
+	req *corev1.ClassifyRequest) *corev1.ClassifyResponse {
 	resp := &corev1.ClassifyResponse{
 		RequestId: req.GetRequestId(),
 		EventId:   req.GetEventId(),
@@ -101,7 +103,7 @@ func Handle(ctx context.Context, c Classifier, rules *signature.Ruleset, req *co
 	// With no content-signature ruleset the path is unchanged: stream straight into the
 	// DLP classifier. Only when signatures are active do we buffer the bounded body once
 	// so the SAME bytes feed both the DLP classifier and the signature engine.
-	if rules.Empty() {
+	if rules.Empty() && sur.Empty() {
 		hits, err := c.Classify(ctx, lr)
 		if err != nil {
 			resp.Error = fmt.Sprintf("worker: classify: %v", err)
@@ -132,6 +134,20 @@ func Handle(ctx context.Context, c Classifier, rules *signature.Ruleset, req *co
 			Category:    corev1.ThreatCategory_THREAT_CATEGORY_CONTENT_SIGNATURE,
 			Confidence:  h.Confidence,
 			IndicatorId: h.RuleID,
+		})
+	}
+	// NIPS-11: the operator's OWN Suricata rules, matched over the same body, scoped by the flow's
+	// protocol. Same content-free crossing: the sid identifies the rule and the matched bytes never
+	// leave this process.
+	//
+	// The confidence is 1.0 because a content signature either matched or did not — unlike a JA3, which
+	// identifies a shared library rather than a program, a literal byte sequence the operator wrote is
+	// exactly as definitive as the rule that asked for it.
+	for _, h := range sur.Match(body, req.GetProtocol()) {
+		resp.ThreatMatches = append(resp.ThreatMatches, &corev1.ThreatMatch{
+			Category:    corev1.ThreatCategory_THREAT_CATEGORY_CONTENT_SIGNATURE,
+			Confidence:  1.0,
+			IndicatorId: h.SID,
 		})
 	}
 	return resp

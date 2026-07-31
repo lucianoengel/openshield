@@ -46,7 +46,7 @@ func (s *scriptedReader) DisplayServer() string { return clipboard.DisplayX11 }
 type inProcessWorker struct{ c *classify.Classifier }
 
 func (w inProcessWorker) Classify(ctx context.Context, req *corev1.ClassifyRequest) (*corev1.ClassifyResponse, error) {
-	return worker.Handle(ctx, w.c, nil, req), nil
+	return worker.Handle(ctx, w.c, nil, nil, req), nil
 }
 
 // recordingLedger captures appended entries; the engine requires a ledger.

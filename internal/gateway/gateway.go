@@ -207,8 +207,11 @@ func (s bodyClassifyStage) Run(ctx context.Context, st *core.State) (core.Outcom
 	resp, err := s.c.Classify(ctx, &corev1.ClassifyRequest{
 		RequestId: st.Event.GetEventId(),
 		EventId:   st.Event.GetEventId(),
-		Subject:   &corev1.ClassifyRequest_Content{Content: s.body},
-		MaxBytes:  s.maxBytes,
+		// NIPS-11: the flow's protocol travels with the body so a Suricata rule written for one
+		// protocol cannot fire on another. The worker cannot know it from the bytes.
+		Protocol: st.Event.GetNetwork().GetProtocol(),
+		Subject:  &corev1.ClassifyRequest_Content{Content: s.body},
+		MaxBytes: s.maxBytes,
 	})
 	if err != nil {
 		// A worker failure is NOT "nothing found" — surface it so a failed parse

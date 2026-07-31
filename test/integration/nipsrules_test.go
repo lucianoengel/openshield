@@ -186,3 +186,98 @@ func TestTheNipsRulesetHotReloads(t *testing.T) {
 			"ruleset must be kept\n%s", code, gw.Output())
 	}
 }
+
+// SURICATA RULES IN THE SHIPPED WORKER (NIPS-11).
+//
+// The package tests prove the parser and the matcher. What only a running deployment proves is the part
+// an operator experiences: that a file of rules in the language they ALREADY have reaches the sandboxed
+// worker, that the rules which cannot be honoured are named at startup rather than silently loaded, and
+// that the ones which can are enforced with the match staying content-free.
+//
+// The ruleset deliberately mixes the two. A community ruleset is thousands of rules from someone else,
+// and the property that matters is that the good ones run while the rest are visibly refused — not that
+// the file is perfect.
+const suricataRuleset = `# an operator's own rules, in the language they already have
+alert tcp any any -> any any (msg:"exfil marker"; content:"SECRET-PROJECT-KESTREL"; sid:2000001; rev:1;)
+alert tcp any any -> any any (msg:"binary marker"; content:"|4d 5a 90 00|"; sid:2000002;)
+alert http any any -> any any (msg:"scoped to a uri"; content:"evil"; http.uri; sid:2000003;)
+alert tcp any any -> any any (msg:"regex"; content:"a"; pcre:"/b(?=c)/"; sid:2000004;)
+`
+
+func TestSuricataRulesReachTheWorkerAndTheRefusalsAreNamed(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+	origin := startUpstream(t)
+
+	rules := filepath.Join(work, "operator.rules")
+	if err := os.WriteFile(rules, []byte(suricataRuleset), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := filepath.Join(work, "block.rego")
+	if err := os.WriteFile(policy, []byte(blockOnThreatBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	gw, addr := startGateway(t, stack,
+		"OPENSHIELD_SURICATA_RULES="+rules,
+		"OPENSHIELD_POLICY_CUSTOM="+policy,
+		"OPENSHIELD_ENFORCE=1")
+
+	// 1. THE REFUSALS ARE NAMED, at startup, with their sid and the keyword. A count alone would tell an
+	// operator that something did not load and give them no way to find it — and a rule they think is
+	// running and is not is worse than one they know is missing.
+	gw.WaitForOutput("NIPS-11 Suricata rules active (2 loaded, 2 REFUSED)", 90*time.Second)
+	out := gw.Output()
+	for _, want := range []string{"sid 2000003", "http.uri", "sid 2000004", "pcre"} {
+		if !contains(out, want) {
+			t.Errorf("the startup report does not name %q — an operator loading a community ruleset "+
+				"needs the line they must look at, not a number\n%s", want, out)
+		}
+	}
+
+	// 2. A CLEAN BODY IS NOT BLOCKED, so what follows is a signature engine rather than an outage.
+	clean, err := proxyClient(t, addr).Post("http://"+origin.addr+"/ok", "text/plain",
+		strings.NewReader("an ordinary upload\n"))
+	if err != nil {
+		t.Fatalf("proxying a clean body: %v\n%s", err, gw.Output())
+	}
+	clean.Body.Close()
+	if clean.StatusCode != http.StatusOK {
+		t.Fatalf("a CLEAN body was blocked (%d)\n%s", clean.StatusCode, gw.Output())
+	}
+
+	// 3. AN HONOURED RULE ENFORCES, and the bytes do not leave.
+	before := origin.hits.Load()
+	marked, err := proxyClient(t, addr).Post("http://"+origin.addr+"/upload", "text/plain",
+		strings.NewReader("payload: SECRET-PROJECT-KESTREL trailing\n"))
+	if err != nil {
+		t.Fatalf("proxying the marked body: %v\n%s", err, gw.Output())
+	}
+	defer marked.Body.Close()
+	if marked.StatusCode != http.StatusForbidden {
+		t.Fatalf("a body matching the operator's OWN rule returned %d, want 403 — the ruleset did not "+
+			"reach the worker, or reached it and matched nothing\n%s", marked.StatusCode, gw.Output())
+	}
+	if n := origin.hits.Load(); n != before {
+		t.Errorf("the marked body REACHED the upstream (%d -> %d) — a 403 to the client is not "+
+			"prevention if the bytes left anyway", before, n)
+	}
+
+	// 4. THE REFUSED RULE DOES NOT FIRE. This is the property the refusal exists for: `evil` scoped to a
+	// URI must not match `evil` in a body. A silently-loaded rule would block this, under the operator's
+	// own sid, on traffic it was never written for.
+	scoped, err := proxyClient(t, addr).Post("http://"+origin.addr+"/ok", "text/plain",
+		strings.NewReader("this body mentions evil in passing\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scoped.Body.Close()
+	if scoped.StatusCode == http.StatusForbidden {
+		t.Fatalf("a REFUSED rule fired anyway — `evil` scoped to a URI matched a body, which is exactly "+
+			"what ignoring a keyword does: it does not narrow the rule, it rewrites it\n%s", gw.Output())
+	}
+
+	// 5. THE MATCH IS CONTENT-FREE. The worker sees the bytes; nothing downstream may.
+	assertLedgerCarriesNone(t, stack, "SECRET-PROJECT-KESTREL")
+}

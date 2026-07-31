@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -69,6 +70,19 @@ func StartWorker(ctx context.Context, workerPath string, args ...string) (*Worke
 	// This is also what made the worker invisible to coverage — a SIGKILLed process flushes no profile, so
 	// the parse path the entire privilege split exists for measured 0%. That was recorded as "unmeasurable"
 	// when it was really "we kill it too fast".
+	// THE WORKER'S STDERR GOES NOWHERE UNLESS IT IS WIRED, and it was not.
+	//
+	// exec.Cmd defaults an unset Stderr to /dev/null, so every message this binary has ever printed —
+	// twenty-nine of them, including "DLP indexes loaded UNVERIFIED", "content signatures active" and
+	// the NIPS-11 rule refusals — was written to nothing. The code that prints them says they are
+	// "warned about at load"; nobody was ever warned. It is the observability defect this project has
+	// found four times in counters, in the one process that cannot be reached any other way: the worker
+	// has no port, no ledger and no bus, so its stderr is its ONLY channel.
+	//
+	// Inheriting is safe by construction: the worker deliberately never prints content (D10/D29), and a
+	// test asserts its output carries none.
+	cmd.Stderr = os.Stderr
+
 	cmd.Cancel = func() error { return in.Close() }
 	cmd.WaitDelay = closeGrace
 	if err := cmd.Start(); err != nil {

@@ -38,7 +38,16 @@ type ClassifyRequest struct {
 	Subject isClassifyRequest_Subject `protobuf_oneof:"subject"`
 	// Hard ceiling on bytes the worker may read. A decompression bomb must hit a
 	// limit rather than exhaust memory.
-	MaxBytes      uint64 `protobuf:"varint,5,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+	MaxBytes uint64 `protobuf:"varint,5,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+	// The flow's protocol (tcp, udp, http, tls, dns), when the caller knows it.
+	//
+	// It exists for rule SCOPING (NIPS-11): a Suricata rule written for one protocol must not fire on
+	// another, and the worker cannot know the protocol from the bytes it was handed. Empty means the
+	// caller did not claim one — a protocol-scoped rule then does NOT match, because firing it would
+	// attribute a hit to a protocol nobody observed.
+	//
+	// It is METADATA about the flow, not content: it says nothing about what the body contains.
+	Protocol      string `protobuf:"bytes,7,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,6 +135,13 @@ func (x *ClassifyRequest) GetMaxBytes() uint64 {
 		return x.MaxBytes
 	}
 	return 0
+}
+
+func (x *ClassifyRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
 }
 
 type isClassifyRequest_Subject interface {
@@ -310,7 +326,7 @@ var File_openshield_v1_ipc_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_ipc_proto_rawDesc = "" +
 	"\n" +
-	"\x17openshield/v1/ipc.proto\x12\ropenshield.v1\x1a\"openshield/v1/classification.proto\x1a\x1aopenshield/v1/threat.proto\"\xc8\x01\n" +
+	"\x17openshield/v1/ipc.proto\x12\ropenshield.v1\x1a\"openshield/v1/classification.proto\x1a\x1aopenshield/v1/threat.proto\"\xe4\x01\n" +
 	"\x0fClassifyRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x19\n" +
@@ -319,7 +335,8 @@ const file_openshield_v1_ipc_proto_rawDesc = "" +
 	"\vfile_handle\x18\x04 \x01(\fH\x00R\n" +
 	"fileHandle\x12\x1a\n" +
 	"\acontent\x18\x06 \x01(\fH\x00R\acontent\x12\x1b\n" +
-	"\tmax_bytes\x18\x05 \x01(\x04R\bmaxBytesB\t\n" +
+	"\tmax_bytes\x18\x05 \x01(\x04R\bmaxBytes\x12\x1a\n" +
+	"\bprotocol\x18\a \x01(\tR\bprotocolB\t\n" +
 	"\asubject\"\x85\x01\n" +
 	"\vDetectorHit\x12@\n" +
 	"\rdetector_type\x18\x01 \x01(\x0e2\x1b.openshield.v1.DetectorTypeR\fdetectorType\x12\x1e\n" +
