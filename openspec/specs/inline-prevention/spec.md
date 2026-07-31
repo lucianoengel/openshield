@@ -529,3 +529,41 @@ indistinguishable from a gate that is working.
 
 - **WHEN** asynchronous classification is consuming its capacity
 - **THEN** a gate verdict MUST still be answered from reserved capacity
+
+### Requirement: TLS interception offers HTTP/2, so an h2-only client is inspected rather than broken
+
+The interception path SHALL offer `h2` alongside `http/1.1` in its ALPN, and SHALL serve a negotiated h2
+connection through the SAME pipeline as HTTP/1.1.
+
+Forcing http/1.1 looked harmless because a client offering both simply downgrades and is inspected exactly
+as before. The clients that do NOT offer both are the problem: a gRPC client advertises `h2` alone, so
+selecting http/1.1 fails its handshake with no application protocol. The flow is not inspected, it is
+BROKEN — and a deployment's only recourse is to add the host to the do-not-intercept list, at which point
+gRPC becomes a channel this product has excluded itself from, permanently and quietly.
+
+The h2 path SHALL reuse the h1 handler rather than introducing a second inspection path, so classification,
+policy, the body limit and the audit cannot drift out of agreement between the two protocols. A block
+decided over h2 SHALL bind exactly as it does over h1: a protocol that is carried but not enforced on is
+worse than one that is not intercepted, because the deployment believes it is covered.
+
+Offering h2 SHALL NOT impose it. A client that prefers HTTP/1.1 SHALL continue to get HTTP/1.1, unchanged.
+
+The frame and header (HPACK) decoding runs IN THE GATEWAY PROCESS on attacker-controlled bytes. That is
+the same exposure already accepted for HTTP/1.1 header parsing and it is a larger parser, which SHALL be
+stated rather than glossed: the mitigation is that this process is unprivileged and separate from the
+agent, and content classification still happens in the sandboxed worker.
+
+QUIC remains out of scope and is NOT implied: it is UDP and needs a different data path, not a different
+ALPN string.
+
+#### Scenario: An h2-only client transits and is inspected
+- **WHEN** a client offering only `h2` posts through the intercepting proxy
+- **THEN** the request completes over HTTP/2 and produces an audit entry
+
+#### Scenario: A block binds over h2
+- **WHEN** the policy blocks an intercepted h2 request
+- **THEN** it is refused, as the same request over HTTP/1.1 is
+
+#### Scenario: An HTTP/1.1 client is unaffected
+- **WHEN** a client that prefers HTTP/1.1 posts through the intercepting proxy
+- **THEN** it is served over HTTP/1.1 and is still classified

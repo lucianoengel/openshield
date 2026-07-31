@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/enforcers/flow"
 )
@@ -307,9 +309,21 @@ func (p *Proxy) intercept(client net.Conn, connectHost string) {
 			}
 			return p.minter.ForHost(name)
 		},
-		// Force HTTP/1.1 so request framing is standard net/http (HTTP/2 and QUIC
-		// interception are out of scope, D75).
-		NextProtos: []string{"http/1.1"},
+		// NIPS-10: HTTP/2 IS OFFERED, and offering it is the whole point.
+		//
+		// Forcing http/1.1 looked harmless because a client that offers both simply downgrades and is
+		// inspected exactly as before. The clients that DO NOT offer both are the problem: a gRPC client
+		// advertises "h2" alone, so selecting http/1.1 fails its handshake with no application protocol
+		// — the flow is not inspected, it is BROKEN. A deployment then adds the host to the
+		// do-not-intercept list, and gRPC becomes a channel this product has excluded itself from,
+		// permanently and quietly.
+		//
+		// Order matters: h2 first, so a client offering both gets the protocol it prefers rather than a
+		// downgrade that is visible to anything fingerprinting the connection.
+		//
+		// QUIC stays out of scope and is not implied by this: it is UDP and needs a different data path
+		// entirely, not a different ALPN string.
+		NextProtos: []string{"h2", "http/1.1"},
 	})
 	if err := tlsConn.Handshake(); err != nil {
 		p.logger.Warn("gateway: intercept handshake failed", "host", connectHost, "err", err.Error())
@@ -317,7 +331,6 @@ func (p *Proxy) intercept(client net.Conn, connectHost string) {
 		return
 	}
 
-	ln := newOneShotListener(tlsConn)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Inside the terminated TLS the request is origin-form (r.URL is path-only,
 		// r.Host is the origin). Reconstruct the absolute https URL and re-forward
@@ -325,6 +338,24 @@ func (p *Proxy) intercept(client net.Conn, connectHost string) {
 		target := "https://" + r.Host + r.URL.RequestURI()
 		p.serve(w, r, target, p.originRT)
 	})
+
+	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+		// THE SAME HANDLER, and that is what makes this cheap rather than a second inspection path.
+		// http2.Server hands up ordinary *http.Request values with an ordinary body, so classification,
+		// policy, the body limit and the audit are the h1 code unchanged — there is no second place for
+		// the DLP rules to drift out of agreement with the first.
+		//
+		// The frame and HPACK decoding is x/net/http2's, running in THIS process on attacker-controlled
+		// bytes. That is the same exposure the gateway already accepts for HTTP/1.1 (net/http parses
+		// those headers here too) and it is a bigger parser, which is worth stating rather than
+		// glossing: the mitigation is that this process is unprivileged and separate from the agent
+		// (D13/D72), and that the decoder is the one Go's own servers run.
+		p.logger.Info("gateway: intercepting HTTPS over HTTP/2", "host", connectHost)
+		(&http2.Server{}).ServeConn(tlsConn, &http2.ServeConnOpts{Handler: handler})
+		return
+	}
+
+	ln := newOneShotListener(tlsConn)
 	// http.Serve returns when the served connection closes (the one-shot listener
 	// closes itself then), i.e. exactly when this tunnel is done.
 	_ = http.Serve(ln, handler)
