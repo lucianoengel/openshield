@@ -532,6 +532,57 @@ both as one change or neither.
   sessions, terminate one or all, and make ZT-7 SCIM deprovisioning and an `operator-role` revocation
   invalidate live cookie sessions. The server-side session store is being built in `CONSOLE-3`, so this is
   a query and a delete **now**, and a security incident later.
+- **CONSOLE-40 · Stable rule identity on alerts** — new work · S. **Blocks every tuning ticket below.**
+  `unified_alerts` (migration 025) carries `domain` and `dedup_key` but **no stable rule identifier**, and
+  `dedup_key`'s own comment calls its format "a projection detail" with a fallback. So "which rule is
+  noisiest", "suppress *this rule* on *these hosts*" and "what is this detector's false-positive rate" are
+  all unanswerable without parsing a key that is explicitly not a contract. Adds `rule_id` written by every
+  producer, with a whole-tree guard — the same shape as the `cmd/` guard that made every binary declare its
+  config (D274) — so a new detector cannot ship without one.
+- **CONSOLE-41 · Tuning: disposition → exception, with a preview that cannot lie** — CONSOLE-27,40 · L.
+  **This is the surface that decides whether the console gets used**, not an admin convenience: if week
+  three produces forty alerts a day and thirty are noise, analysts stop reading the queue regardless of
+  detection quality. Three distinct layers, deliberately not conflated — **disposition** (a fact about the
+  past, no risk), **exception** (stops future matches; a deliberate coverage reduction, so audited,
+  attributed, expiring, reviewable), **threshold** (fleet-wide sensitivity, a config revision). The operator
+  is always offered the *narrowest* layer that would work. Exclusion lists are already sanctioned as "a
+  first-class policy primitive" in `openspec/config.yaml`, so this surfaces a primitive the design has, not
+  a new concept. `Accept`: an exception is **dry-run against the retention window before it exists**, and
+  the dialog states how many alerts it would have suppressed **including how many were dispositioned TRUE
+  POSITIVE** — tuning blind is how real detections get muted. Never-expiring requires admin plus a separate
+  confirmation; default TTL 30 days; **expiry RESTORES detection**, like the intent TTLs.
+- **CONSOLE-42 · Detector health + exception register** — CONSOLE-41 · M. Per rule: fired, FP%,
+  dispositioned population, active exceptions, and a trend sparkline **annotated with tuning events** so
+  "did that exception help" is visible rather than inferred. **FP% renders with the population it excludes**
+  and is de-emphasised below a sample threshold — the same honesty SOAR-6 applies to MTTA/MTTR. Sorted by
+  noise contribution (`fired × FP%`), not raw count. The register shows every exception's
+  **suppressed-count since creation**: zero after 30 days means it does nothing and should go; thousands
+  means the detection needs fixing rather than muting. Neither is visible anywhere today.
+- **CONSOLE-43 · Learning mode** — CONSOLE-41 · M. A per-domain observation window where detections raise
+  but do not enforce or page, with the end date on a banner and one-click promotion. Prevents the week-one
+  alert storm that kills pilots.
+- **CONSOLE-44 · Zero Trust access: catalog + effective-access matrix** — CONSOLE-9 · L. **Closes ZT-5's
+  UI half, which this roadmap already said "ties to the UI (PLAT-1)".** Today the catalog is
+  `OPENSHIELD_ACCESS_CATALOG` (an explicit allow-list, `internal/gateway/catalog.go:16`) and the policy is
+  a **Rego module** (`cmd/openshield-gateway/main.go:349`) — both files, no UI, and *"who can reach the
+  production database?"* is answerable only by reading Rego. Delivers the services tab (keeping HTTP
+  reverse-proxy and TCP CONNECT distinct, because the code deliberately refuses to interchange them) and
+  the **effective-access matrix**, readable in both directions, where **every cell is explainable** through
+  the same decision trace as `CONSOLE-10`. Surfaces catalog↔policy drift: a service nobody can reach, a
+  policy naming a service not in the catalog. Both are common and both are silent today.
+- **CONSOLE-45 · Zero Trust policy authoring + sessions** — CONSOLE-44 · L. Rego stays the source of truth
+  and **the console never becomes a second authoring model that drifts from it** — that is the failure this
+  project keeps finding. The editor is the real module, with a dry-run evaluator (principal + posture +
+  service → decision and rule path) and **diff + four-eyes on save**, because this is a change to who
+  reaches production. A guided builder emits into the same module and shows what it wrote. Sessions: active
+  principal/device/service, and **terminate one or all** — what an IR lead needs at 2am and cannot do from
+  anywhere today. *Session recording is owner-gated and named separately: it carries a DPIA weight this
+  product should not assume.*
+- **CONSOLE-46 · The rule-source component family** — CONSOLE-12 · M. Every detection domain needs the same
+  thing: a list of rules/feeds/baselines/lists where each entry shows origin (file / URL / operator),
+  signature state where the artifact is signed, last reload, hot-reload vs restart-required, a dry-run, and
+  diff-and-approve on change. **One component family reused five times, not five bespoke pages** — specified
+  once here so `-47`…`-50` are assembly rather than design.
 - **CONSOLE-14 · Assurance gates** — CONSOLE-12 · M. Clicks-to-answer budgets asserted in Playwright and
   CI-gating; axe/WCAG 2.2 AA; keyboard-only investigation path; **golden-response fixtures, not generated
   types** — most handlers return anonymous `map[string]any` (`incidents.go:195`, `soar2.go`,
@@ -632,6 +683,28 @@ cheap; the rest waits for `I18N-2` to make it mean something.
   the browser floor too — `CONSOLE-24`'s WebCrypto/DBSC path implies an aggressive one. Theming via CSS
   custom properties is near-free during `CONSOLE-2` and expensive after fourteen components ship; white-label
   itself stays a DIFFERENTIATOR for MSSP resale.
+**The administration gap, named as one thing.** A coverage matrix over every product domain (UX spec §13)
+found one pattern: **every domain that detects has a shipped, tested detection plane and no way to see or
+change what it is detecting on without editing a file on a host.** The five tickets below close it. None
+gate the MVP console; together they gate the sentence *"an administrator can run this product from the
+console"*, which is a different and later claim. Each is assembly over `CONSOLE-46`.
+
+- **CONSOLE-47 · Endpoint control** — CONSOLE-46 · M. Exec allow/deny lists and default-deny whitelisting
+  (D217/D224/D230), FIM baselines (D223/228/229/236), ransomware canary placement (D232), USB enforcement.
+  All shipped and VM-proven; none has an operator surface.
+- **CONSOLE-48 · Network defense** — CONSOLE-46 · M. IOC threat-intel feeds, content signatures, DNS
+  sinkhole lists, CASB catalog, TPROXY scope. Signature state matters here — D297 fixed the gateway reading
+  its IOC feed unverified, so the surface must render verified-before-parse rather than imply it.
+- **CONSOLE-49 · DLP classifiers & indexes** — CONSOLE-46 · L. EDM/IDM index lifecycle with **signed
+  indexes (ADR-9)**, detector breadth per national ID type, compliance packs in force and the
+  most-restrictive-wins lattice preview, exfil-channel coverage. Merges with `CONSOLE-23`.
+- **CONSOLE-50 · Device trust operations** — CONSOLE-8 · M. Enrollment tokens and self-enrollment status,
+  attestation verdict history, **measured-boot PCR policy** (a typo in a PCR list silently narrowed
+  attestation once, D413 — a surface that shows the effective PCR set is the guard), attestation TTL,
+  re-attestation failures.
+- **CONSOLE-51 · Privacy operations** — CONSOLE-1 · M. DSAR request → compile → deliver as a workflow
+  rather than a `/subject?id=` link; legal holds with what they block and who released them; retention and
+  purge status; erasure verification. Gated on the `privacy-officer` tier from `CONSOLE-1`.
 - **UI-19 · Signed locale packs** — CONSOLE-13 · M. Verified against the operator key before parse, same
   loader as rule bundles and IOC feeds; `{lng}`/`{ns}` pattern-matched and resolved under the root; the
   non-overridable namespace still wins. The **unsigned** overlay is REFUSED, not deferred.
@@ -856,7 +929,13 @@ adjacent work.
   DSPM buyers mean; the other half is a separate ticket and should not be implied by this one.
 
 ### Zero Trust
-- **ZT-5 · Policy admin + session recording** — new work · L. Ties to the UI (PLAT-1).
+- **ZT-5 · Policy admin + session recording** — **now scheduled as `CONSOLE-44` + `CONSOLE-45` in Lane F.**
+  This entry said "ties to the UI (PLAT-1)" and the first console plan missed it: the access catalog is an
+  allow-list string and the access policy is a Rego module, both files, so *"who can reach the production
+  database?"* is answerable today only by reading Rego. `CONSOLE-44` delivers the catalog and the
+  effective-access matrix, `CONSOLE-45` the authoring and session termination. **Session RECORDING stays
+  owner-gated and out of both** — it carries a DPIA weight this product should not assume, and it is a
+  separate decision from policy administration.
 - **ZT-7 · Operator identity: SSO, and the role out of the certificate** — ✅ **DONE (D372, D373, D375, D379,
   D380).** Rewritten as one entry: successive in-place edits had spliced the history mid-sentence and it had
   stopped being readable.

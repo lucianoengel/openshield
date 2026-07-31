@@ -385,7 +385,178 @@ Why was this blocked?
 **Replay is the thesis.** When the replayed decision *differs*, the page shows both and diffs the rule
 path — that is the single most persuasive screen in the product, and it is why this page is in the MVP.
 
-### 6.6 Deferred surfaces — layout intent recorded now
+### 6.6 Tuning — how false positives are actually handled
+
+**The scale question.** 100 endpoints producing thousands of events a day is not a data-volume problem —
+correlation and dedup already collapse that into tens of incidents. It is a *trust* problem: if week three
+produces forty alerts a day and thirty are noise, analysts stop reading the queue, and the product is dead
+regardless of detection quality. **Tuning is not an admin convenience; it is the surface that decides
+whether the console gets used at all.** It belongs in the MVP.
+
+**What blocks it.** `unified_alerts` carries `domain` and `dedup_key` but **no stable rule identity**, and
+`dedup_key`'s format is documented as a projection detail rather than a contract. Every question below —
+"which rule is noisiest", "suppress *this rule* on *these hosts*", "what is this detector's FP rate" — needs
+a stable `rule_id`. That is `CONSOLE-40`, and it gates the rest.
+
+**The three-layer model**, because "suppression" conflates three different acts with different risks:
+
+| Layer | What it does | Where it lives | Risk |
+|---|---|---|---|
+| **Disposition** | labels an alert/incident already raised — true positive / false positive / benign-authorized / duplicate | alert record | none; it is a fact about the past |
+| **Exception** | stops *matching future events* from raising an alert, scoped and expiring | policy primitive (already sanctioned) | **reduces coverage** — audited, attributed, expiring, reviewable |
+| **Threshold** | changes a detector's sensitivity fleet-wide | dynamic config | broad; a config revision with diff and rollback |
+
+An operator reaching for "make this stop" is offered the **narrowest** layer that would work, with the
+broader ones one click further away. Presenting them as equals is how a console ends up with a detector
+silently disabled six months ago by somebody who left.
+
+**The tuning flow, from an alert (4 clicks, workflow 5 in §7):**
+
+```
+Alert ▸ ⋯ ▸ Not a true positive
+─────────────────────────────────────────────────────────────
+ Disposition   ( ) True positive
+               (•) False positive        ← selecting FP offers the next step
+               ( ) Benign but authorized
+               ( ) Duplicate of …
+
+ ☑ Also stop this from alerting again
+
+ SCOPE  — narrowest first, prefilled from this alert
+   (•) This rule, on this host              → est. 31 of last 30d
+   ( ) This rule, on this host group (12)   → est. 214 of last 30d
+   ( ) This rule, everywhere                → est. 1,847 of last 30d  ⚠
+   ( ) This rule + this exact path pattern  → est. 28 of last 30d
+
+ EXPIRES  ( ) 7 days  (•) 30 days  ( ) 90 days  ( ) never ⚠ requires admin
+ REASON   [ required, free text ]
+
+ ⓘ This exception would have suppressed 31 alerts in the last 30 days,
+   including 2 that were dispositioned TRUE POSITIVE.        ← the guard
+   [ Review those 2 ]
+─────────────────────────────────────────────────────────────
+                                        [ Cancel ]  [ Create exception ]
+```
+
+**The line that makes this safe is the preview**, and specifically the second sentence of it: an exception
+is dry-run against history *before* it exists, and if it would have suppressed anything an analyst called a
+true positive, that is surfaced and countable. Tuning blind is how real detections get muted. The estimate
+is computed server-side over the retention window, not in the browser.
+
+**Never-expiring exceptions require the admin tier and a separate confirmation.** Default TTL is 30 days,
+and expiry **restores detection** — the same shape as the intent TTLs the product already uses. An
+exception that quietly became permanent is indistinguishable from a detector that was never written.
+
+**Detector health** — the page that tells you whether tuning is working:
+
+```
+Detector health · last 30 days                        [ Domain ▾ ] [ Export ]
+──────────────────────────────────────────────────────────────────────────────
+RULE                        DOMAIN   FIRED   FP%   DISPOSITIONED  EXCEPTIONS  TREND
+hips.canary.modified        endpoint  1,847  94%   612 of 1,847   3 active    ▁▃▇▇▅▂▁
+dlp.edm.customer-pii-v4     endpoint    412  11%   380 of 412     0           ▃▃▄▃▃▄▃
+nips.ioc.sni-match          network     208   3%   201 of 208     1 active    ▂▂▃▂▂▂▂
+ueba.peer.deviation         identity     64  38%    22 of 64      0      ⚠ low coverage
+```
+
+- **FP% is computed only over dispositioned alerts**, and the `DISPOSITIONED` column shows the population
+  it excludes — the same honesty SOAR-6 already applies to MTTA/MTTR. A rule with 12 of 1,800 dispositioned
+  gets its percentage rendered de-emphasised with the sample size, never as a confident number.
+- Rules sorted by *noise contribution*, not raw count: `fired × FP%`.
+- The trend sparkline is **annotated with tuning events**, so "did that exception help" is visible rather
+  than inferred.
+- `⚠ low coverage` marks rules whose disposition rate is too low to say anything — an invitation to
+  disposition, not a verdict.
+
+**Exception register** — every active exception, its scope, author, reason, age, expiry countdown,
+**suppressed-count since creation**, and a review queue for those expiring in 7 days. A suppressed count of
+zero after 30 days means the exception is doing nothing and should be deleted; a suppressed count in the
+thousands means the underlying detection needs fixing rather than muting. Both are visible here and nowhere
+else.
+
+**Learning mode.** A new deployment sets a per-domain observation window during which detections are
+raised but not enforced and not paged, with a banner naming the end date and a one-click "promote to
+enforcing". The UEBA baselines already persist and prune; this exposes the same idea for the rest and
+prevents the week-one alert storm that kills pilots.
+
+**At scale, the queue shows work, not events.** Alerts group by `dedup_key` with an occurrence count and a
+sparkline; incidents group alerts; the default queue view is incidents. A thousand events becomes forty
+alerts becomes six incidents. The raw stream stays reachable in Hunt for anyone who wants it — but the
+default surface is the one that reflects how much work there actually is.
+
+### 6.7 Zero Trust access — who may reach what
+
+**This was missing, and the roadmap already said it would be needed:** `ZT-5 · Policy admin + session
+recording — new work · L. Ties to the UI (PLAT-1).` The access proxy today is configured by
+`OPENSHIELD_ACCESS_CATALOG` (an explicit allow-list of internal services, `internal/gateway/catalog.go:16`)
+and `OPENSHIELD_ACCESS_POLICY` (a **Rego module**, default-deny, operator-authored,
+`cmd/openshield-gateway/main.go:349-364`). Both are files. Neither has a UI, and the question every
+administrator asks — *"who can reach the production database?"* — is answerable today only by reading Rego.
+
+Four tabs.
+
+**① Services** — the catalog. Name, kind (**HTTP reverse-proxied** vs **TCP CONNECT tunnel**, ZT-9/D427 —
+and the UI must keep them distinct because the code deliberately refuses to interchange them), upstream,
+which gateway fronts it, and the count of principals who may reach it. Adding a service is adding a row to
+an allow-list, and the UI says so: *"services not listed here are refused, never forwarded."*
+
+**② Access — the effective-access matrix.** The centrepiece, and the reason this page exists:
+
+```
+                        prod-db   billing   wiki   grafana   ssh-bastion
+                        (tcp)     (http)    (http) (http)    (tcp)
+─────────────────────────────────────────────────────────────────────────
+ group: platform-eng      ●         ●         ●      ●          ●
+ group: finance           ○         ●         ●      ○          ○
+ group: contractors       ○         ○         ●      ○          ○
+ mia@corp.example         ●*        ●         ●      ●          ○
+ svc: backup-runner       ●         ○         ○      ○          ○
+─────────────────────────────────────────────────────────────────────────
+ ● allowed   ○ denied   * conditional — requires attested device, posture pass
+```
+
+- **Reads both directions**: pick a service → who reaches it; pick a person → what they reach. Both are the
+  same question and both get asked, so neither is a filter on the other.
+- **Every cell is explainable.** Click it and get the same Event→Policy→Decision trace as §6.5, showing
+  which Rego rule allowed or denied and what conditions attached. An access matrix that cannot show its
+  reasoning is a diagram, not a control.
+- **Conditions are visible in the cell**, not hidden behind it — device attestation required, posture
+  threshold, time window. A `*` that needs a hover to decode is a `*` nobody reads.
+- **Drift**: rows where the catalog and the policy disagree — a service nobody can reach, or a policy rule
+  naming a service not in the catalog — surface as warnings. Both are common and both are silent today.
+
+**③ Policy.** Rego is the source of truth and **the console never becomes a second authoring model that
+drifts from it** — that is exactly the failure this project keeps finding. So: the editor is the real
+module, with syntax highlighting, a **dry-run evaluator** (pick a principal, a device posture and a
+service; see the decision and the rule path), and a **diff + four-eyes on save**, because an access policy
+change is a change to who can reach production. A guided builder emits Rego into the same module and shows
+what it wrote — it never maintains a parallel representation.
+
+**④ Sessions** (ZT-5). Active sessions: principal, device, service, started, bytes, source. Terminate one
+or all for a principal — the thing an IR lead needs at 2am and currently cannot do from anywhere. Session
+*recording* is a separate decision with a privacy weight the product should not take lightly: it is listed
+here as owner-gated, with the DPIA implication named, not assumed.
+
+**Device requirements** are shown as an attribute of access, not a separate page: a service can require an
+attested device (the full ZT-1 chain), a posture threshold, or a valid enrollment — and the matrix shows
+which of a principal's devices satisfy it. This is where fleet, attestation and access finally meet, and
+it is the product's Zero Trust story made legible.
+
+### 6.8 The end-user directory
+
+Distinct from operators, and previously unrepresented. Operators run the console; **end users are the 100
+people whose endpoints are protected and who reach internal services through the access proxy.** They are
+the subjects of DLP decisions, UEBA baselines, entity risk and DSAR — and there was no page listing them.
+
+Per user: identity (from the IdP, via OIDC/SCIM), their devices and each device's attestation and posture
+state, their entity risk over time, their access grants (link to §6.7), open incidents, DLP decisions
+affecting them, and their DSAR/erasure record. Pseudonymisation is honoured — the directory shows what the
+operator's tier permits, and the privacy-officer tier is what unlocks the compiled subject view.
+
+This is also where a leaver is verified: SCIM deprovisioned them, so **what still references them** — live
+sessions, enrolled devices, pending approvals — is listed with a single "revoke everything" action.
+
+### 6.9 Deferred surfaces — layout intent recorded now
 
 So the shell does not have to be redesigned later: **Overview** (`CONSOLE-16`) is a tile grid where every
 tile is a saved query; **Alerts** (`-17`) reuses the incident queue grid with a different row model;
@@ -548,9 +719,46 @@ accessibility default** when the OS requests larger text.
 
 ---
 
-## 13. What this spec does not cover
+## 13. Capability coverage — every product domain, and which surface serves it
 
-Named so nobody assumes it: no visual design for the deferred surfaces beyond layout intent (§6.6); no
+The first draft of this plan designed the **investigation** half well and the **administration, policy and
+tuning** half barely at all. That is a predictable bias — investigation is what a demo shows — and it is
+what the tuning and Zero Trust gaps above both came from. This matrix exists so the remaining gaps are
+visible rather than discovered by a customer.
+
+Legend: ✅ specified · 🟡 partial · ❌ no surface.
+
+| Domain | Operate / investigate | Configure / author | Tune |
+|---|---|---|---|
+| **XDR** correlation, entities, timeline | ✅ §6.2, §6.4 | 🟡 correlation params in Settings | ✅ §6.6 |
+| **SOAR** playbooks, intents, approvals, routing | ✅ §6.2 response column, approvals | 🟡 `CONSOLE-18/-19`, read + dry-run only | ✅ §6.6 |
+| **Zero Trust** catalog, policy, sessions, posture | ✅ §6.7 | ✅ §6.7 ③ | n/a |
+| **SIEM** search, external ingest, saved views | ✅ §6.3 | 🟡 ingest endpoints in Settings | ✅ §6.6 |
+| **DLP** detection, EDM/IDM, packs, channels | 🟡 alerts + Explain | ❌ **`CONSOLE-49`** — no index/classifier surface | ✅ §6.6 |
+| **NIPS/NTPS** IOC, signatures, sinkhole, CASB | 🟡 alerts + Explain | ❌ **`CONSOLE-48`** — no rule/feed/list surface | ✅ §6.6 |
+| **HIPS** exec control, FIM, canary, USB | 🟡 alerts + Fleet | ❌ **`CONSOLE-47`** — no allow/deny or baseline surface | ✅ §6.6 |
+| **Device trust** enrollment, attestation, PCR | 🟡 Fleet columns | ❌ **`CONSOLE-50`** — no enrollment or PCR-policy surface | n/a |
+| **Identity** operators, service accounts, tiers | 🟡 `CONSOLE-22` | 🟡 `CONSOLE-22` | n/a |
+| **End users** directory, access, subjects | ✅ §6.8 | ✅ §6.8 | n/a |
+| **Evidence** ledger, anchors, view audit | 🟡 §6.2 panel; `CONSOLE-20` full | n/a | n/a |
+| **Privacy** DSAR, legal hold, retention | ❌ **`CONSOLE-51`** — only a `/subject` link exists | 🟡 retention in Settings | n/a |
+| **Platform** config, health, break-glass, releases | ✅ §6.4, `CONSOLE-7` | ✅ §8 | n/a |
+
+**The pattern in the ❌ column is one sentence:** every domain that *detects* has a shipped, tested
+detection plane and **no way to see or change what it is detecting on** without editing a file on a host.
+Four surfaces close it — endpoint control (`-47`), network defense (`-48`), DLP classifiers (`-49`), device
+trust (`-50`) — plus privacy operations (`-51`). None of them gate the MVP console. All of them gate the
+sentence *"an administrator can run this product from the console"*, which is a different and later claim,
+and the roadmap should not let the two be confused.
+
+**They also share a shape worth designing once:** each is a list of rules, feeds, baselines or lists, each
+entry needing origin (file / URL / operator-authored), signature state where the artifact is signed, last
+reload, hot-reload vs restart, a dry-run, and a diff-and-approve on change. That is one component family
+reused five times, not five bespoke pages — and specifying it once is `CONSOLE-46`.
+
+## 14. What this spec does not cover
+
+Named so nobody assumes it: no visual design for the deferred surfaces beyond layout intent (§6.9); no
 topology canvas interaction model (that is `TOPO-2`, and it needs its own spec); no email/notification
 template design; no marketing or docs site; no mobile or tablet layouts; no white-label theming beyond the
 CSS-custom-property seam; and no motion spec for the timeline beyond the single first-load draw-in.
