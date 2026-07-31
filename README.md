@@ -308,7 +308,9 @@ upcoming and is now built, tested, and in the capability table above:
 - 🔐 **Zero-Trust reach** — continuous posture re-evaluation inside a long-lived tunnel, beyond the
   per-decision re-authorization that ships today. (SOCKS5 with device-bound tickets and split-horizon
   DNS have since shipped)
-- 📦 **Distribution** — Sigstore/cosign and a transparency log, `.deb`/`.rpm`, macOS notarization
+- 📦 **Distribution** — Sigstore/cosign and a transparency log, `.rpm`, macOS notarization. (A `.deb`
+  built FROM the signed manifest now ships — `openshieldctl package-deb` refuses a release directory
+  that does not verify, so the package cannot become a second, unattested path onto a machine)
 
 <sub>The detailed engineering plan and design-decision records are maintained in
 [`docs/architecture-roadmap.md`](docs/architecture-roadmap.md).</sub>

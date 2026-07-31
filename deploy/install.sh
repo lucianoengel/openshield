@@ -8,6 +8,19 @@
 #
 # It refuses to run without root (installing units needs it) and does NOT
 # auto-start the agent — fanotify on an unconfigured host is the operator's call.
+#
+# THIS SCRIPT COMPILES FROM SOURCE, AND THAT IS ITS LIMIT. The binaries it installs
+# are built here and now: they carry no signature, nobody attested to them, and they
+# are not the artifacts the release pipeline produced. That is acceptable for a
+# development host and is NOT how a fleet should be installed — it also requires a Go
+# toolchain on every endpoint.
+#
+# For anything else, use the package, which is built from the SIGNED artifact set and
+# refuses a release directory that does not verify:
+#
+#   openshieldctl verify-release --dir dist --key release.pub
+#   openshieldctl package-deb    --dir dist --key release.pub
+#   dpkg -i dist/openshield_<version>_amd64.deb
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then

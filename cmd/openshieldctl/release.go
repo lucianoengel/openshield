@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/lucianoengel/openshield/internal/debpkg"
 	"github.com/lucianoengel/openshield/internal/release"
 )
 
@@ -155,4 +156,79 @@ func platformOf(name string) string {
 		return ""
 	}
 	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+}
+
+// buildDeb packages a VERIFIED release directory as a Debian package (PLAT-6 increment 2).
+//
+// The gap it closes is embarrassing and real: deploy/install.sh runs `go build` on the target host, so an
+// operator following the documented path installs binaries that were never signed and never verified —
+// while this project's README argues at length that that is the posture to refuse. It also puts a Go
+// toolchain on every endpoint.
+//
+// THE KEY IS REQUIRED, with no fall back to the one inside the release. Falling back would let whoever
+// produced the directory also produce the key that vouches for it, which establishes nothing — the same
+// reasoning verify-release already applies to its own pinned key.
+func buildDeb(args []string) int {
+	fs := flag.NewFlagSet("package-deb", flag.ContinueOnError)
+	dir := fs.String("dir", "dist", "release directory (must verify)")
+	keyPath := fs.String("key", "", "ed25519 PUBLIC key obtained out of band (REQUIRED)")
+	version := fs.String("version", "", "package version")
+	arch := fs.String("arch", "amd64", "Debian architecture: amd64 or arm64")
+	units := fs.String("units", "deploy/systemd", "directory of systemd units to ship")
+	out := fs.String("out", "", "output path (default: <dir>/<name>_<version>_<arch>.deb)")
+	maintainer := fs.String("maintainer", "OpenShield <security@openshield.invalid>", "package maintainer")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *keyPath == "" {
+		fmt.Fprintln(os.Stderr, "openshieldctl: --key is required. A package built from an unverified "+
+			"directory launders unattested binaries into a format dpkg installs without asking.")
+		return 2
+	}
+	key, err := os.ReadFile(*keyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshieldctl: reading the public key: %v\n", err)
+		return 1
+	}
+	if len(key) != ed25519.PublicKeySize {
+		fmt.Fprintf(os.Stderr, "openshieldctl: the key is %d bytes, want %d (raw ed25519 public key)\n",
+			len(key), ed25519.PublicKeySize)
+		return 1
+	}
+	v := *version
+	if v == "" {
+		m, merr := release.LoadAndVerifyWithKey(*dir, ed25519.PublicKey(key))
+		if merr != nil {
+			fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", merr)
+			return 1
+		}
+		v = m.Version
+	}
+
+	pkg, err := debpkg.Build(debpkg.Spec{
+		Name: "openshield", Version: v, Arch: *arch,
+		Maintainer:  *maintainer,
+		Description: "OpenShield data security platform (pipeline-native XDR and DLP)",
+		Dir:         *dir,
+		PublicKey:   ed25519.PublicKey(key),
+		UnitDir:     *units,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
+		return 1
+	}
+	dest := *out
+	if dest == "" {
+		dest = filepath.Join(*dir, pkg.Filename)
+	}
+	if err := os.WriteFile(dest, pkg.Bytes, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "openshieldctl: writing the package: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "built %s from a VERIFIED release (%d files)\n", dest, len(pkg.Files))
+	// SAY WHAT INSTALLING WILL AND WILL NOT DO. An operator who installs a security package and sees no
+	// output reasonably assumes it is now protecting the machine.
+	fmt.Fprintln(os.Stdout, "installing it creates the service users and places the units; it enables "+
+		"and starts NOTHING — that stays the operator's decision.")
+	return 0
 }
