@@ -145,6 +145,16 @@ var GatewayFields = []Field{
 		Description: "Address for the NIPS-8 preventive DNS resolver. Set with an upstream to enable it."},
 	{Key: "OPENSHIELD_DNS_UPSTREAM", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Upstream resolver that normal queries are forwarded to."},
+	// NIPS-12 — the inline QUIC plane. Opt-in for a stronger reason than most: it moves the host's whole
+	// UDP/443 through a userspace hop, and UDP/443 is most of the modern web.
+	{Key: "OPENSHIELD_QUIC_PLANE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Set to enable the inline QUIC plane (NIPS-12): FORWARDED UDP/443 is diverted (mangle PREROUTING TPROXY) to a local plane that reads the QUIC Initial's ClientHello and decides the flow on SNI and JA3. A BLOCKED flow is DROPPED — QUIC has no polite refusal — which makes the client fall back to TCP, where this gateway inspects it; blocking QUIC RECOVERS inspectability rather than providing it. An ALLOWED flow is forwarded and NOT inspected: only the handshake was read, exactly like a blind CONNECT tunnel. Needs CAP_NET_ADMIN. Unset leaves UDP/443 unexamined."},
+	{Key: "OPENSHIELD_QUIC_PLANE_LISTEN", Scope: ScopeBootstrap, Kind: KindString, Default: "0.0.0.0:0",
+		Description: "Address the QUIC plane listens on for diverted datagrams. The default takes an ephemeral port, which is what the divert rule is built against — pin it only if another rule needs a fixed number."},
+	{Key: "OPENSHIELD_QUIC_PLANE_MARK", Scope: ScopeBootstrap, Kind: KindString, Default: "0x1d6",
+		Description: "Firewall mark the TPROXY divert tags UDP/443 with, so policy routing can deliver it to the plane. Must not collide with the TPROXY connector's mark or with OPENSHIELD_DNS_REDIRECT_MARK."},
+	{Key: "OPENSHIELD_QUIC_PLANE_TABLE", Scope: ScopeBootstrap, Kind: KindString, Default: "0x1d6",
+		Description: "Dedicated routing table for the QUIC divert. It holds a broad 'every address is local' route, which is why it is a table nothing else consults rather than the main one — that route in the main table would make every destination local for all traffic on this host."},
 	{Key: "OPENSHIELD_DNS_REDIRECT", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Transparent :53 redirect scope: local (this host's own DNS) or off."},
 	{Key: "OPENSHIELD_DNS_REDIRECT_MARK", Scope: ScopeBootstrap, Kind: KindString, Default: "0x1d5",

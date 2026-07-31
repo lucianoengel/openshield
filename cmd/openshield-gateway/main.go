@@ -148,6 +148,7 @@ func main() {
 	applyCasbCatalog(ctx, log)
 	applyTProxy(ctx, gw, log)
 	applyDNSSink(ctx, gw, log)
+	applyQUICPlane(ctx, gw, log)
 	table := gateway.NewTable()
 	proxy := gateway.NewProxy(gw, table, nil, redirectURL, gateway.DefaultMaxBody, enforce, log)
 	// NIPS-4: opt-in response-body inspection (classify + audit the response, not only
@@ -272,6 +273,16 @@ func main() {
 			log.Error("gateway: the transparent DNS redirect was NOT confirmed removed before exit — " +
 				"host :53 traffic may still be redirected to a port nothing is listening on; remove it " +
 				"with `nft delete table openshield_dnsredirect` or the iptables equivalent")
+		}
+	}
+	if quicRedirectDone != nil {
+		select {
+		case <-quicRedirectDone:
+		case <-time.After(10 * time.Second):
+			log.Error("gateway: the transparent QUIC redirect was NOT confirmed removed before exit — " +
+				"host UDP/443 may still be redirected to a port nothing is listening on, which is a " +
+				"silent and total QUIC outage; remove it with `iptables -t nat -F OPENSHIELD_QUIC` " +
+				"(or `nft delete table ip openshield_quic`)")
 		}
 	}
 	log.Info("gateway shut down")
@@ -1065,6 +1076,79 @@ func listenPort(bound net.Addr, addr string) int {
 }
 
 // envMark reads a firewall mark (accepts hex "0x1d5" or decimal); def on unset/parse error.
+// quicRedirectDone is closed once the QUIC redirect has been removed. Same reasoning as dnsRedirectDone:
+// host nat state must not outlive the process that installed it.
+var quicRedirectDone <-chan struct{}
+
+// applyQUICPlane starts the inline QUIC plane (NIPS-12) when OPENSHIELD_QUIC_PLANE is set.
+//
+// WHY THIS IS OFF BY DEFAULT. Everything else on the egress path degrades to a passive wire when it
+// fails; this one installs a nat rule that moves the host's entire UDP/443 through a userspace hop, and
+// UDP/443 is most of the modern web. It is opt-in, it fails to WIRE rather than to block at every step,
+// and it removes its rule on the way out.
+func applyQUICPlane(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
+	if strings.TrimSpace(os.Getenv("OPENSHIELD_QUIC_PLANE")) == "" {
+		return
+	}
+	mark := envMark("OPENSHIELD_QUIC_PLANE_MARK", 0x1d6)
+	table := envMark("OPENSHIELD_QUIC_PLANE_TABLE", 0x1d6)
+	listen := strings.TrimSpace(os.Getenv("OPENSHIELD_QUIC_PLANE_LISTEN"))
+	if listen == "" {
+		listen = "0.0.0.0:0"
+	}
+	pc, err := gateway.ListenQUICRedirect(listen)
+	if err != nil {
+		log.Error("gateway: the QUIC plane could NOT bind — continuing WITHOUT it (fail-to-wire). "+
+			"UDP/443 is unexamined and a client preferring HTTP/3 is not subject to egress policy.",
+			slog.String("listen", listen), slog.String("err", err.Error()))
+		return
+	}
+	port := listenPort(pc.LocalAddr(), listen)
+	if port == 0 {
+		pc.Close()
+		log.Error("gateway: the QUIC plane could not determine its own port — NOT installing the redirect")
+		return
+	}
+	plane := gateway.NewQUICPlane(gw, log)
+	go func() {
+		if err := plane.Serve(ctx, pc); err != nil && ctx.Err() == nil {
+			log.Error("gateway: the QUIC plane stopped", slog.String("err", err.Error()))
+		}
+	}()
+	// PROBE BEFORE DIVERTING. The plane forwards each flow from the CLIENT'S OWN address, which needs
+	// IP_TRANSPARENT and so CAP_NET_ADMIN. Installing the divert first and discovering this later would
+	// hand the host's entire UDP/443 to a plane that cannot forward any of it — a total QUIC blackhole
+	// behind a rule that installed cleanly.
+	if err := plane.CanForwardTransparently(); err != nil {
+		log.Error("gateway: the QUIC plane cannot bind a transparent forward socket (needs "+
+			"CAP_NET_ADMIN), so it could take delivery of UDP/443 and forward NONE of it. NOT installing "+
+			"the divert.", slog.String("err", err.Error()))
+		return
+	}
+	if err := gateway.InstallQUICRedirect(port, mark, table, log); err != nil {
+		// The plane is running but nothing is redirected to it. Say so plainly: "started" and "receiving
+		// traffic" are different claims, and only the second one is a capability.
+		log.Error("gateway: the QUIC divert could NOT be installed (needs CAP_NET_ADMIN) — the plane is "+
+			"running but NOTHING is diverted to it, so UDP/443 is unexamined",
+			slog.String("err", err.Error()))
+		return
+	}
+	log.Warn("gateway: inline QUIC plane ACTIVE on UDP/443. A BLOCKED flow is DROPPED, which makes the "+
+		"client fall back to TCP where this gateway inspects it. An ALLOWED flow is forwarded and NOT "+
+		"inspected — only its handshake was read.",
+		slog.Int("plane_port", port), slog.String("mark", fmt.Sprintf("%#x", mark)))
+
+	done := make(chan struct{})
+	quicRedirectDone = done
+	go func() {
+		defer close(done)
+		<-ctx.Done()
+		if err := gateway.RemoveQUICRedirect(port, mark, table, log); err != nil {
+			log.Error("gateway: removing the QUIC redirect", slog.String("err", err.Error()))
+		}
+	}()
+}
+
 func envMark(k string, def int) int {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		if n, err := strconv.ParseInt(v, 0, 32); err == nil {

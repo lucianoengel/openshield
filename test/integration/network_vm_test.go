@@ -676,3 +676,76 @@ func TestTheGatewayAnswersCataloguedNamesWithItsOwnAddress(t *testing.T) {
 			rc, ans, gw.Output())
 	}
 }
+
+// TestTheShippedGatewayInstallsAndRemovesTheQUICDivert is NIPS-12's deployment claim.
+//
+// The package tests prove the plane decides a QUIC flow on the server name inside its Initial. This proves
+// the SHIPPED BINARY does the deployment half: reads the configuration, opens a transparent listener,
+// checks it can forward before putting itself in the path, installs the divert, and — the part that only
+// an integration test can see — TAKES IT BACK DOWN when the process ends.
+//
+// The teardown is the point. A TPROXY rule that outlives its listener diverts the host's entire UDP/443 to
+// a socket that no longer exists: a silent, total QUIC outage that survives the process that caused it,
+// with nothing on the box explaining why the web went half-broken.
+func TestTheShippedGatewayInstallsAndRemovesTheQUICDivert(t *testing.T) {
+	requireNetAdmin(t)
+	if _, err := exec.LookPath("iptables"); err != nil {
+		t.Skip("iptables is not available to install the divert")
+	}
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+
+	gw := Start(t, "openshield-gateway", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_LISTEN=127.0.0.1:" + freePort(t),
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_QUIC_PLANE=1",
+	})
+	gw.WaitForOutput("gateway proxying", 90*time.Second)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && !quicDivertInstalled() {
+		time.Sleep(300 * time.Millisecond)
+	}
+	if !quicDivertInstalled() {
+		t.Fatalf("the shipped gateway did not install the QUIC divert, so UDP/443 reaches its destination "+
+			"unexamined while the configuration says the plane is on\n%s", gw.Output())
+	}
+	// AND IT SAID SO, in the terms the capability is actually limited by. An operator who reads "QUIC
+	// inspection" and gets handshake-only visibility has been misled by this product, not by QUIC.
+	if !contains(gw.Output(), "NOT inspected") {
+		t.Errorf("the gateway announced the QUIC plane without stating that an ALLOWED flow is not "+
+			"inspected. Only the handshake is read; the rest is a blind tunnel, and a deployment that "+
+			"believes otherwise has a hole exactly where it thinks it has coverage\n%s", gw.Output())
+	}
+
+	// Stopped EXPLICITLY rather than in a cleanup: cleanups run LIFO, so one registered here would check
+	// while the gateway was still running.
+	gw.Stop()
+	deadline = time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && quicDivertInstalled() {
+		time.Sleep(500 * time.Millisecond)
+	}
+	if quicDivertInstalled() {
+		t.Errorf("the QUIC divert SURVIVED the gateway's shutdown — the host's UDP/443 is still diverted " +
+			"to a socket that no longer exists, which blackholes QUIC for everything on this machine " +
+			"with no visible cause")
+	}
+}
+
+// quicDivertInstalled reports whether the mangle PREROUTING TPROXY rule for UDP/443 is present.
+func quicDivertInstalled() bool {
+	out, err := exec.Command("iptables", "-t", "mangle", "-S", "PREROUTING").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "TPROXY") && strings.Contains(line, "-p udp") &&
+			strings.Contains(line, "--dport 443") {
+			return true
+		}
+	}
+	return false
+}
