@@ -67,6 +67,8 @@ func run(args []string) int {
 		return releaseManifest(args[1:])
 	case "package-deb":
 		return buildDeb(args[1:])
+	case "verify-install":
+		return verifyInstall(args[1:])
 	case "verify-release":
 		return verifyRelease(args[1:])
 	case "backup":

@@ -310,7 +310,10 @@ upcoming and is now built, tested, and in the capability table above:
   DNS have since shipped)
 - 📦 **Distribution** — Sigstore/cosign and a transparency log, `.rpm`, macOS notarization. (A `.deb`
   built FROM the signed manifest now ships — `openshieldctl package-deb` refuses a release directory
-  that does not verify, so the package cannot become a second, unattested path onto a machine)
+  that does not verify, so the package cannot become a second, unattested path onto a machine. The
+  package CARRIES its signed manifest, so `openshieldctl verify-install --key <pub>` re-hashes every
+  installed binary against the release it came from. Detection, not prevention, and not effective
+  against root: what it costs an attacker is the signing key, which is not on the endpoint)
 
 <sub>The detailed engineering plan and design-decision records are maintained in
 [`docs/architecture-roadmap.md`](docs/architecture-roadmap.md).</sub>

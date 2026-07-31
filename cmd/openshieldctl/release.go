@@ -272,3 +272,55 @@ func isInside(dir, p string) (bool, error) {
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
+
+// verifyInstall checks a live installation against the signed manifest its package embedded.
+//
+// The product argues that operators should be able to establish what is running on their machines. This
+// asks that question about OpenShield itself: every installed binary is re-hashed and compared to the
+// release it came from, using a key the operator holds rather than one found on the machine.
+//
+// It is DETECTION, not prevention, and not effective against root (D16) — anything able to replace a
+// binary can remove the manifest beside it. What it costs an attacker is the SIGNING KEY, which is not on
+// the endpoint: tampering without it leaves a mismatch this reports.
+func verifyInstall(args []string) int {
+	fs := flag.NewFlagSet("verify-install", flag.ContinueOnError)
+	prefix := fs.String("prefix", "/", "installation root")
+	keyPath := fs.String("key", "", "ed25519 PUBLIC key obtained out of band (REQUIRED)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *keyPath == "" {
+		fmt.Fprintln(os.Stderr, "openshieldctl: --key is required. A key read from the installation "+
+			"would confirm only that the files there agree with each other, which is what an attacker "+
+			"who replaced all of them would arrange.")
+		return 2
+	}
+	key, err := os.ReadFile(*keyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshieldctl: reading the public key: %v\n", err)
+		return 1
+	}
+	if len(key) != ed25519.PublicKeySize {
+		fmt.Fprintf(os.Stderr, "openshieldctl: the key is %d bytes, want %d (raw ed25519 public key)\n",
+			len(key), ed25519.PublicKeySize)
+		return 1
+	}
+
+	rep, err := debpkg.VerifyInstalled(*prefix, ed25519.PublicKey(key))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
+		return 1
+	}
+	if !rep.OK() {
+		fmt.Fprintf(os.Stderr, "openshieldctl: THIS INSTALLATION DOES NOT MATCH THE RELEASE IT CLAIMS "+
+			"TO BE: %s\n", rep.Error())
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "installation verified: %d binaries match release %s (commit %s, %s) "+
+		"against key %s\n", rep.Checked, rep.Version, rep.Commit, rep.Arch, rep.KeyFinger)
+	// SAY WHAT THIS DOES NOT ESTABLISH. An operator who runs a verification command and sees success
+	// believes the strongest claim it could plausibly be making.
+	fmt.Fprintln(os.Stdout, "this is DETECTION, not prevention: root on this host can replace a binary "+
+		"AND the manifest beside it. What it cannot do without the signing key is make them agree.")
+	return 0
+}

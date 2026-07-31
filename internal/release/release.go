@@ -243,6 +243,34 @@ func LoadAndVerifyWithKey(dir string, pub ed25519.PublicKey) (Manifest, error) {
 	return Verify(dir, manifestBytes, sig, pub)
 }
 
+// VerifyManifestSignature checks only the manifest's SIGNATURE and returns its contents.
+//
+// Split out from Verify because an INSTALLED system is not a release directory: its files live at
+// different paths, under different names, and there is nothing to walk in place. What is shared — and what
+// matters — is that the manifest's contents must not be used before the signature over them is checked.
+// An unverified manifest is attacker-controlled input, and reading the file list out of it to decide what
+// to check would let it simply not mention the binary that was replaced.
+//
+// It deliberately does NOT verify any file. A caller that only calls this has checked authenticity and
+// nothing else, which is why the name says signature.
+func VerifyManifestSignature(manifestBytes, sig []byte, pub ed25519.PublicKey) (Manifest, error) {
+	var m Manifest
+	if len(pub) != ed25519.PublicKeySize {
+		return m, fmt.Errorf("release: public key is %d bytes, want %d", len(pub), ed25519.PublicKeySize)
+	}
+	if err := json.Unmarshal(manifestBytes, &m); err != nil {
+		return m, fmt.Errorf("release: unreadable manifest: %w", err)
+	}
+	canonical, err := m.Canonical()
+	if err != nil {
+		return m, err
+	}
+	if !ed25519.Verify(pub, canonical, sig) {
+		return m, &VerificationError{Signature: true}
+	}
+	return m, nil
+}
+
 // loadMeta reads the manifest and its signature. Shared so the pinned and unpinned paths cannot drift.
 func loadMeta(dir string) (manifestBytes, sig []byte, err error) {
 	manifestBytes, err = os.ReadFile(filepath.Join(dir, ManifestName))

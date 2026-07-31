@@ -155,7 +155,39 @@ func TestAReleaseBecomesAPackageDpkgInstalls(t *testing.T) {
 		t.Errorf("the service user was not created by postinst: %v\n%s", uerr, id)
 	}
 
-	// 4. AND REMOVAL LEAVES THE SERVICE USER ALONE. The engine owns forward-secure ledger state; deleting
+	// 4. THE INSTALLATION CAN BE CHECKED AGAINST THE RELEASE IT CAME FROM.
+	//
+	// This is the product's own claim, asked about the product: an operator holding the public key can
+	// establish that what is on the machine is what was published. It is checked HERE, against a real
+	// dpkg installation, because the provenance has to survive the packaging and the install — which is
+	// exactly where it would be lost.
+	if vout, verr := runCapture(t, "openshieldctl", nil, "verify-install", "--key", pub); verr != nil {
+		t.Fatalf("a freshly installed package did not verify: %v\n%s", verr, vout)
+	}
+
+	// AND TAMPERING IS CAUGHT. Same length, different bytes — the shape most tampering takes, and the
+	// case a size comparison cannot see.
+	engine := "/usr/bin/openshield-engine"
+	orig, rerr := os.ReadFile(engine)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	tampered := append([]byte{}, orig...)
+	tampered[len(tampered)/2] ^= 0xff
+	if werr := os.WriteFile(engine, tampered, 0o755); werr != nil {
+		t.Fatal(werr)
+	}
+	tout, terr := runCapture(t, "openshieldctl", nil, "verify-install", "--key", pub)
+	if terr == nil {
+		t.Fatalf("a MODIFIED installed binary passed verification. The one question this command exists "+
+			"to answer is whether what is running here is what was published:\n%s", tout)
+	}
+	if !strings.Contains(tout, "openshield-engine") {
+		t.Errorf("the failure does not name the binary that changed, so an operator cannot act on "+
+			"it:\n%s", tout)
+	}
+
+	// 5. AND REMOVAL LEAVES THE SERVICE USER ALONE. The engine owns forward-secure ledger state; deleting
 	// its uid orphans those files and a reinstall cannot read its own history.
 	if rem, rerr := exec.Command(dpkg, "--purge", "openshield").CombinedOutput(); rerr != nil {
 		t.Fatalf("dpkg --purge: %v\n%s", rerr, rem)

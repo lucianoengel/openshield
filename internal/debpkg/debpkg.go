@@ -71,7 +71,18 @@ type Package struct {
 const (
 	binPrefix  = "usr/bin"
 	unitPrefix = "lib/systemd/system"
+
+	// provenanceDir holds the signed manifest the package was built from, so an installed system can be
+	// checked against the release it came from.
+	provenanceDir = "usr/share/openshield"
+
+	// ArchFile records the package's architecture, so a verifier reconstructs artifact names from the
+	// PACKAGE rather than from whatever machine it happens to run on.
+	ArchFile = "arch"
 )
+
+// ProvenanceDir is where an installed system keeps its signed manifest, rooted at the install prefix.
+const ProvenanceDir = "/" + provenanceDir
 
 // Build produces the package.
 //
@@ -175,7 +186,8 @@ func dataArchive(spec Spec) (gz []byte, names []string, installed []string, err 
 	addDir := func(p string) error {
 		return tw.WriteHeader(&tar.Header{Name: "./" + p + "/", Typeflag: tar.TypeDir, Mode: 0o755})
 	}
-	for _, d := range []string{"usr", binPrefix, "lib", "lib/systemd", unitPrefix} {
+	for _, d := range []string{"usr", binPrefix, "usr/share", "usr/share/openshield", "lib",
+		"lib/systemd", unitPrefix} {
 		if err := addDir(d); err != nil {
 			return nil, nil, nil, err
 		}
@@ -201,6 +213,33 @@ func dataArchive(spec Spec) (gz []byte, names []string, installed []string, err 
 			return nil, nil, nil, err
 		}
 		names = append(names, name)
+	}
+
+	// THE PROVENANCE TRAVELS WITH THE PACKAGE.
+	//
+	// Without this, everything the release proved is lost at `dpkg -i`: the binaries land in /usr/bin and
+	// nothing on the machine can answer "are these the ones that were signed?" — which is the question
+	// this product spends its whole README arguing operators should be able to ask. Shipping the signed
+	// manifest and its signature means an installed system can be checked against the release it came
+	// from, by anyone holding the public key, at any time after installation.
+	//
+	// The manifest is shipped UNMODIFIED. Rewriting it into installed paths would mean re-signing it, and
+	// this command holds only the public key by design — a manifest this tool could rewrite is one an
+	// attacker who reached this tool could rewrite too. The verifier reconstructs artifact names from
+	// installed ones instead.
+	for _, meta := range []string{release.ManifestName, release.SignatureName} {
+		body, rerr := os.ReadFile(filepath.Join(spec.Dir, meta))
+		if rerr != nil {
+			return nil, nil, nil, fmt.Errorf("debpkg: reading %s to embed: %w", meta, rerr)
+		}
+		if err := add(path.Join(provenanceDir, meta), 0o644, body); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	// The architecture the package was built for, so the verifier can reconstruct artifact names without
+	// guessing at the machine it is running on — a package inspected from elsewhere still checks out.
+	if err := add(path.Join(provenanceDir, ArchFile), 0o644, []byte(spec.Arch+"\n")); err != nil {
+		return nil, nil, nil, err
 	}
 
 	if spec.UnitDir != "" {
