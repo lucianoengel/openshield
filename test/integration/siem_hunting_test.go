@@ -408,3 +408,113 @@ func TestLEEFArrivesOnTheSameListenerAsCEF(t *testing.T) {
 		}
 	}
 }
+
+// TestSysmonEventsArriveNamedAndHuntable (SIEM-17).
+//
+// Sysmon events already arrived before this — the WEF poller parsed them and stored their EventData.
+// What only a running deployment shows is whether they arrive USABLE: named by their action rather than
+// by a number, and reachable through the same canonical vocabulary as everything else.
+//
+// The assertion is deliberately on a CROSS-SOURCE hunt. `Image` answering the same question as a Linux
+// exec path is the entire point of the naming layer; a Sysmon record that is only findable by Sysmon's
+// own field names has been ingested into its own corner.
+func TestSysmonEventsArriveNamedAndHuntable(t *testing.T) {
+	p := newPKI(t)
+	wefDir := t.TempDir()
+
+	// A Sysmon 1 (process create) and a Sysmon 22 (DNS query) — the two an investigation pivots on.
+	sysmonXML := `<Events>` +
+		`<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">` +
+		`<System><Provider Name="Microsoft-Windows-Sysmon"/><EventID>1</EventID>` +
+		`<TimeCreated SystemTime="2026-07-27T11:00:00Z"/><Computer>WS-14</Computer></System>` +
+		`<EventData><Data Name="Image">C:\Windows\System32\cmd.exe</Data>` +
+		`<Data Name="ParentImage">C:\Windows\explorer.exe</Data>` +
+		`<Data Name="User">` + oneUser + `</Data></EventData></Event>` +
+		`<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">` +
+		`<System><Provider Name="Microsoft-Windows-Sysmon"/><EventID>22</EventID>` +
+		`<TimeCreated SystemTime="2026-07-27T11:01:00Z"/><Computer>WS-14</Computer></System>` +
+		`<EventData><Data Name="QueryName">c2.evil.example</Data>` +
+		`<Data Name="User">` + oneUser + `</Data></EventData></Event>` +
+		`</Events>`
+	if err := os.WriteFile(filepath.Join(wefDir, "sysmon.xml"), []byte(sysmonXML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stack, srv, base := mtlsServer(t, p, map[string]string{
+		"OPENSHIELD_WEF_DIR":            wefDir,
+		"OPENSHIELD_CORRELATE_INTERVAL": "0s",
+	})
+	srv.WaitForOutput("WEF ingest watching", 90*time.Second)
+	pool := openPool(t, stack.DSN)
+	Eventually(t, 120*time.Second, "the Sysmon events to be ingested", func() bool {
+		var n int
+		_ = pool.QueryRow(Ctx(t), `SELECT count(*) FROM external_logs WHERE product='sysmon'`).Scan(&n)
+		return n >= 2
+	})
+
+	// NAMED BY ACTION, not by number.
+	var names []string
+	rows, err := pool.Query(Ctx(t), `SELECT name FROM external_logs WHERE product='sysmon' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, n)
+	}
+	rows.Close()
+	want := map[string]bool{"process_create": true, "dns_query": true}
+	for _, n := range names {
+		delete(want, n)
+	}
+	if len(want) > 0 {
+		t.Fatalf("the Sysmon events are stored as %v — an event stored as its NUMBER is huntable only "+
+			"by someone who has memorised Microsoft's table, which in practice means by nobody, and the "+
+			"richest Windows source in the estate sits in the store being counted", names)
+	}
+
+	// AND REACHABLE BY THE SHARED VOCABULARY. `Image` must answer the same question as a Linux exec
+	// path, or Sysmon has been ingested into its own corner.
+	analyst := p.operator(t, "analyst", "carol")
+	for _, hunt := range []struct{ field, value, why string }{
+		{"user", oneUser, "the Sysmon User field must answer the same hunt as every other source's"},
+		{"process", `C:\Windows\System32\cmd.exe`, "Image is the process the event is ABOUT, never ParentImage"},
+		{"domain", "c2.evil.example", "a DNS query from an endpoint is the pivot an investigation starts from"},
+	} {
+		h := hunt
+		code, body := do(t, analyst, http.MethodGet,
+			base+"/logs?field="+h.field+":"+url.QueryEscape(h.value)+"&limit=50", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET /logs (%s) = %d: %s", h.field, code, body)
+		}
+		var logs []struct {
+			Product    string            `json:"Product"`
+			Normalized map[string]string `json:"Normalized"`
+		}
+		if err := json.Unmarshal([]byte(body), &logs); err != nil {
+			t.Fatal(err)
+		}
+		var hit bool
+		for _, l := range logs {
+			if l.Product != "sysmon" {
+				continue
+			}
+			hit = true
+			// THE PROJECTED VALUE, not merely the row. The query ORs every alias, so a record is found
+			// whichever alias carries the value — ordering inside the map is invisible to the search
+			// and visible only HERE, in what the analyst reads. `Image` before `ParentImage` is what
+			// stops every process_create on the host being attributed to explorer.exe.
+			if got := l.Normalized[h.field]; got != h.value {
+				t.Fatalf("the Sysmon record projects %s=%q, want %q — %s",
+					h.field, got, h.value, h.why)
+			}
+		}
+		if !hit {
+			t.Fatalf("the canonical hunt %s=%q did not reach the Sysmon record — %s",
+				h.field, h.value, h.why)
+		}
+	}
+}

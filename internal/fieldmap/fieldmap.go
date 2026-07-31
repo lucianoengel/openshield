@@ -41,6 +41,10 @@ const (
 	File       = "file"
 	Action     = "action"  // what was done
 	Outcome    = "outcome" // whether it succeeded
+	// Domain is the DNS name a flow or query was ABOUT. It earns a place because it is the pivot an
+	// investigation actually starts from — a name from a report — and three different sources carry it
+	// under three different keys.
+	Domain = "domain"
 )
 
 // aliases maps each canonical name to the source-specific keys that carry it, IN PRIORITY ORDER: the
@@ -67,6 +71,7 @@ var aliases = map[string][]string{
 		"SubjectUserName", // Windows EventData
 		"TargetUserName",  // Windows logon events record the authenticating principal here
 		"usrName",         // LEEF (SIEM-16)
+		"User",            // Sysmon (SIEM-17)
 		"user.name",       // ECS — the convention generic JSON logs follow (SIEM-15)
 		"user",
 	},
@@ -80,6 +85,7 @@ var aliases = map[string][]string{
 		"src",             // CEF and LEEF share this one
 		"sourceIPAddress", // CloudTrail
 		"IpAddress",       // Windows 4624/4625
+		"SourceIp",        // Sysmon 3
 		"source.ip",       // ECS
 		"client.ip",       // ECS, a proxy's view of the same thing
 		"src.ip",
@@ -87,6 +93,7 @@ var aliases = map[string][]string{
 	},
 	DestIP: {
 		"dst",            // CEF
+		"DestinationIp",  // Sysmon 3
 		"destination.ip", // ECS
 		"server.ip",      // ECS
 		"dst.ip",
@@ -104,6 +111,7 @@ var aliases = map[string][]string{
 	},
 	Process: {
 		"NewProcessName", // Windows 4688: the process that was CREATED, not its parent
+		"Image",          // Sysmon: the process the event is ABOUT, never ParentImage
 		"sproc",          // CEF
 		"ProcessName",
 		"process.name", // ECS
@@ -114,7 +122,8 @@ var aliases = map[string][]string{
 		"filePath", // CEF
 		"fname",    // CEF
 		"ObjectName",
-		"file.path", // ECS
+		"TargetFilename", // Sysmon 11/23/26
+		"file.path",      // ECS
 		"file.name",
 		"file",
 	},
@@ -124,6 +133,13 @@ var aliases = map[string][]string{
 		"eventName",    // CloudTrail
 		"event.action", // ECS
 		"action",
+	},
+	Domain: {
+		"destinationDnsDomain", // CEF / ECS-style
+		"dns.question.name",    // ECS
+		"QueryName",            // Sysmon 22
+		"query",
+		"domain",
 	},
 	Outcome: {
 		"outcome",       // CEF

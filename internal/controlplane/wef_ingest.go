@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucianoengel/openshield/internal/connectors/sysmon"
 	"github.com/lucianoengel/openshield/internal/connectors/wef"
 )
 
@@ -76,13 +77,34 @@ func wefToExternalLog(r wef.Record) ExternalLog {
 	if host == "" {
 		host = r.Data["IpAddress"] // fall back to a reported IP if the computer name is absent
 	}
+	// SIEM-17: a Sysmon event gets its ACTION as the name and `sysmon` as the product.
+	//
+	// `Microsoft-Windows-Sysmon/1` is the single most important endpoint line Windows produces — a
+	// process was created — and stored as the string "1" it is huntable only by an analyst who has
+	// memorised Microsoft's table, which in practice means by nobody. The richest Windows source in the
+	// estate then sits in the store being counted.
+	//
+	// The product changes too, so `product=sysmon` selects the endpoint telemetry and `product=windows`
+	// the Security channel. They answer different questions and folding them together makes both
+	// searches worse.
+	name := r.Provider + "/" + r.EventID
+	product := "windows"
+	if sysmon.IsSysmon(r.Provider) {
+		product = "sysmon"
+		if action, ok := sysmon.Action(r.EventID); ok {
+			name = action
+		}
+		// An UNMAPPED id keeps `provider/id`, deliberately: Sysmon gains event IDs with every release,
+		// and labelling them all "unknown" would collapse every new type into one bucket a hunt would
+		// return an unrelated mixture from, with nobody noticing the map had fallen behind.
+	}
 	return ExternalLog{
 		ReceivedAt:  r.TimeCreated, // the event's own TimeCreated is the authoritative timestamp
 		SourceHost:  host,
 		Vendor:      "microsoft",
-		Product:     "windows",
+		Product:     product,
 		SignatureID: r.EventID,
-		Name:        r.Provider + "/" + r.EventID,
+		Name:        name,
 		Severity:    r.Level,
 		Message:     msg,
 		Raw:         r.Raw,

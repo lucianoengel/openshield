@@ -56,3 +56,49 @@ elected leader SHALL ingest.
 
 > Field-level hunting: this source's parsed fields are stored in `external_logs.fields` (JSONB) and
 > searchable via the shared field filter — see `cef-syslog-ingest` (SIEM field-level hunting, D212).
+
+### Requirement: Sysmon events arrive named by their action, not by their number
+
+A Windows event from the Sysmon provider SHALL be stored with an action name rather than a provider/ID
+string, under a product that distinguishes endpoint telemetry from the Security channel, and its own
+field names SHALL be reachable through the canonical cross-vendor vocabulary.
+
+Sysmon events already arrived: they are Windows events, so the existing connector parsed them and stored
+their EventData. What arrived was unusable at the point it mattered. `Microsoft-Windows-Sysmon/1` is the
+single most important endpoint telemetry line Windows produces — a process was created — and stored as
+the string "1" it is huntable only by an analyst who has memorised Microsoft's table. In practice that
+means by nobody, and the richest Windows source in the estate sits in the store being counted.
+
+The naming layer SHALL INTERPRET NOTHING. Which process creation is suspicious is the policy's and the
+detector's job, exactly as for every other source; a connector that decided what was bad would put
+detection logic where nobody looks for it.
+
+It SHALL NEVER FILTER. Sysmon's schema grows between releases, so a field the map does not know SHALL
+still be stored under its own name and remain huntable — a mapping layer that dropped what it did not
+recognise would silently narrow the estate's best endpoint source with every Microsoft release.
+
+An UNMAPPED event ID SHALL keep its identifying string rather than being given a placeholder name.
+Mapping every unknown ID to one label collapses each new event type into a single bucket, from which a
+hunt returns an unrelated mixture and nobody notices the map has fallen behind.
+
+The provider SHALL be matched by prefix. Deployments see it bare, suffixed, and alongside a GUID, and an
+exact comparison would treat those as ordinary Windows events — not a crash, but a whole endpoint fleet
+quietly losing its naming.
+
+Where Sysmon carries both a process and its parent, the canonical process field SHALL resolve to the
+process the event is ABOUT. Resolving to the parent attributes every process creation on the host to the
+shell that started it — a confidently wrong answer rather than a missing one, and invisible in a search
+result because the query matches either way.
+
+#### Scenario: A Sysmon event is stored under its action
+- **WHEN** a Sysmon process-create and DNS-query event are ingested
+- **THEN** they are stored as `process_create` and `dns_query` under the sysmon product
+
+#### Scenario: An unmapped event ID is not given a name
+- **WHEN** an event ID outside the mapped set is seen
+- **THEN** it keeps its identifying string
+
+#### Scenario: Sysmon fields answer the shared hunt
+- **WHEN** a canonical hunt is run for a user, a process or a domain
+- **THEN** the Sysmon record is returned, and its projected process is the created process rather than
+  its parent
