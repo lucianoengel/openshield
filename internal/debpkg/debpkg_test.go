@@ -320,3 +320,84 @@ func keys(m map[string]int64) []string {
 	}
 	return out
 }
+
+// unitDir builds a directory of systemd units plus files that are NOT units.
+func unitDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	for name, body := range map[string]string{
+		"openshield-engine.service": "[Unit]\nDescription=OpenShield engine\n[Service]\nUser=openshield-engine\n",
+		"openshield-anchor.timer":   "[Unit]\nDescription=anchor\n[Timer]\nOnCalendar=daily\n",
+		"README.md":                 "not a unit",
+		"drop-in.conf":              "not a unit either",
+	} {
+		if err := os.WriteFile(filepath.Join(d, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d
+}
+
+// THE UNITS ARE WHAT MAKE THE PACKAGE USEFUL, and this path had no test at all when it shipped.
+//
+// A package that installs binaries and no units leaves an operator with an inert /usr/bin and a
+// `systemctl enable` that fails — after `dpkg -i` reported success. The whole point of packaging over a
+// tarball is that the service definitions arrive with the code.
+func TestTheSystemdUnitsAreShipped(t *testing.T) {
+	s := spec(t)
+	s.UnitDir = unitDir(t)
+	pkg, err := Build(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := tarEntries(t, members(t, pkg.Bytes)["data.tar.gz"])
+
+	for _, want := range []string{
+		"./lib/systemd/system/openshield-engine.service",
+		"./lib/systemd/system/openshield-anchor.timer",
+	} {
+		if _, ok := data[want]; !ok {
+			t.Errorf("%s is not in the package. Installing it would leave the binaries in place and "+
+				"nothing to start them, after dpkg reported success:\n%v", want, keys(data))
+		}
+	}
+	// A unit must not be executable: systemd does not care, but a 0755 file in /lib/systemd/system is a
+	// signal to anyone auditing the package that something is off about how it was assembled.
+	if mode := data["./lib/systemd/system/openshield-engine.service"]; mode&0o111 != 0 {
+		t.Errorf("the unit file is executable (mode %o)", mode)
+	}
+}
+
+// AND ONLY THE UNITS.
+//
+// The unit directory in this repo also holds a README and drop-in .conf fragments. Sweeping the whole
+// directory into /lib/systemd/system would put documentation where systemd looks for services — and a
+// drop-in fragment installed as a top-level unit is a unit with no [Service] section, which systemd
+// reports as a broken unit the operator did not write.
+func TestOnlyUnitFilesAreSweptIntoTheSystemdDirectory(t *testing.T) {
+	s := spec(t)
+	s.UnitDir = unitDir(t)
+	pkg, err := Build(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range tarEntries(t, members(t, pkg.Bytes)["data.tar.gz"]) {
+		if strings.Contains(name, "README") || strings.HasSuffix(name, ".conf") {
+			t.Errorf("%s was packaged into the systemd directory — documentation and drop-in fragments "+
+				"are not units, and a fragment installed as one is a broken unit nobody wrote", name)
+		}
+	}
+}
+
+// A UNIT DIRECTORY THAT DOES NOT EXIST IS AN ERROR, not a silently unit-less package.
+//
+// A typo in the path would otherwise produce a package that installs cleanly, contains no units, and
+// gives no indication of it until someone tries to start a service.
+func TestAMissingUnitDirectoryIsRefused(t *testing.T) {
+	s := spec(t)
+	s.UnitDir = filepath.Join(t.TempDir(), "does-not-exist")
+	if _, err := Build(s); err == nil {
+		t.Fatal("a package was built from a unit directory that does not exist. It would install with " +
+			"no service definitions and report success, and the operator finds out at `systemctl enable`")
+	}
+}

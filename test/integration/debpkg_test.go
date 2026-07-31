@@ -68,10 +68,23 @@ func TestAReleaseBecomesAPackageDpkgInstalls(t *testing.T) {
 		t.Fatalf("release-manifest: %v\n%s", merr, out)
 	}
 
+	// The units ship WITH the package — that is most of why a package beats a tarball. They are written
+	// here rather than pointing at the repo's deploy/systemd because this test binary runs on a machine
+	// that has no checkout.
+	units := filepath.Join(work, "units")
+	if merr := os.MkdirAll(units, 0o755); merr != nil {
+		t.Fatal(merr)
+	}
+	if werr := os.WriteFile(filepath.Join(units, "openshield-engine.service"),
+		[]byte("[Unit]\nDescription=OpenShield engine\n[Service]\nUser=openshield-engine\n"+
+			"ExecStart=/usr/bin/openshield-engine\n"), 0o644); werr != nil {
+		t.Fatal(werr)
+	}
+
 	// 1. THE PACKAGE IS BUILT FROM THE VERIFIED SET, and lands OUTSIDE it.
 	deb := filepath.Join(work, "openshield_9.9.9_amd64.deb")
 	out, err := runCapture(t, "openshieldctl", nil, "package-deb",
-		"--dir", dist, "--key", pub, "--version", "9.9.9", "--units", "", "--out", deb)
+		"--dir", dist, "--key", pub, "--version", "9.9.9", "--units", units, "--out", deb)
 	if err != nil {
 		t.Fatalf("package-deb: %v\n%s", err, out)
 	}
@@ -122,6 +135,19 @@ func TestAReleaseBecomesAPackageDpkgInstalls(t *testing.T) {
 	}
 	if _, serr := os.Stat("/usr/bin/openshield-engine"); serr != nil {
 		t.Fatalf("the engine was not installed: %v", serr)
+	}
+	// THE UNIT LANDS WHERE SYSTEMD LOOKS, and systemd itself is asked rather than the filesystem: a file
+	// in the right directory that systemd refuses to parse is not a working unit, and only systemd knows.
+	if _, serr := os.Stat("/lib/systemd/system/openshield-engine.service"); serr != nil {
+		t.Fatalf("the unit was not installed, so `systemctl enable` fails after a successful `dpkg -i`: "+
+			"%v", serr)
+	}
+	if sc, serr := exec.LookPath("systemctl"); serr == nil {
+		if cat, cerr := exec.Command(sc, "cat", "openshield-engine.service").CombinedOutput(); cerr != nil {
+			t.Errorf("systemd cannot read the installed unit: %v\n%s", cerr, cat)
+		} else if !strings.Contains(string(cat), "ExecStart=/usr/bin/openshield-engine") {
+			t.Errorf("the unit systemd sees does not point at the installed binary:\n%s", cat)
+		}
 	}
 	// The postinst must have created the service users, or every unit fails to start with a message
 	// nobody sees until they try.
