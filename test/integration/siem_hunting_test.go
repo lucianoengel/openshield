@@ -258,3 +258,78 @@ func keysOf(m map[string]bool) []string {
 	}
 	return out
 }
+
+// TestJSONLinesLogsAreIngestedAndHuntableWithEveryoneElse (D435 / SIEM-15).
+//
+// CEF, CloudTrail and WEF each cover one vendor. JSON lines is what everything ELSE emits, so the claim
+// worth proving is not that it parses — the package tests do that — but that a file dropped in a
+// directory becomes a row the SAME canonical query reaches, alongside the three formats that were
+// already there. A format that ingests into its own corner is a place to put logs, not a SIEM.
+func TestJSONLinesLogsAreIngestedAndHuntableWithEveryoneElse(t *testing.T) {
+	p := newPKI(t)
+	jsonDir := t.TempDir()
+
+	// The same principal again, in a fourth vocabulary: nested, the way an application log names things.
+	line := fmt.Sprintf(`{"@timestamp":"2026-07-27T10:20:00Z","service":{"name":"checkout"},`+
+		`"user":{"name":%q},"src":{"ip":"203.0.113.5"},"message":"payment refused"}`, oneUser)
+	if err := os.WriteFile(filepath.Join(jsonDir, "app.jsonl"), []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stack, srv, base := mtlsServer(t, p, map[string]string{
+		"OPENSHIELD_JSONLOG_DIR":    jsonDir,
+		"OPENSHIELD_JSONLOG_VENDOR": "acme",
+	})
+	srv.WaitForOutput("JSON-lines ingest watching", 90*time.Second)
+	pool := openPool(t, stack.DSN)
+	Eventually(t, 120*time.Second, "the JSON record to be ingested", func() bool {
+		var n int
+		_ = pool.QueryRow(Ctx(t), `SELECT count(*) FROM external_logs WHERE vendor='acme'`).Scan(&n)
+		return n > 0
+	})
+
+	analyst := p.operator(t, "analyst", "carol")
+	code, body := do(t, analyst, http.MethodGet,
+		base+"/logs?field=user:"+url.QueryEscape(oneUser)+"&limit=50", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /logs = %d: %s", code, body)
+	}
+	var logs []struct {
+		Vendor     string            `json:"Vendor"`
+		Product    string            `json:"Product"`
+		Fields     map[string]string `json:"Fields"`
+		Normalized map[string]string `json:"Normalized"`
+	}
+	if err := json.Unmarshal([]byte(body), &logs); err != nil {
+		t.Fatalf("decoding /logs: %v (%s)", err, body)
+	}
+	var found bool
+	for _, l := range logs {
+		if l.Vendor != "acme" {
+			continue
+		}
+		found = true
+		if l.Product != "checkout" {
+			t.Errorf("product = %q, want the service the document named", l.Product)
+		}
+		// The NESTED key is flat and huntable, and the canonical projection reached it.
+		if l.Fields["src.ip"] != "203.0.113.5" {
+			t.Errorf("the nested source IP did not flatten (%q) — a document searchable only by its "+
+				"top-level keys is stored, not ingested", l.Fields["src.ip"])
+		}
+		if l.Normalized["user"] != oneUser {
+			t.Errorf("the canonical projection did not reach the JSON record (%q) — a format that "+
+				"ingests into its own corner is a place to put logs, not a SIEM",
+				l.Normalized["user"])
+		}
+	}
+	if !found {
+		t.Fatalf("the canonical hunt for user=%s did not reach the JSON-lines record at all", oneUser)
+	}
+
+	// The file is marked processed, so a restart does not re-ingest it.
+	Eventually(t, 60*time.Second, "the ingested file to be marked", func() bool {
+		_, err := os.Stat(filepath.Join(jsonDir, "app.jsonl.ingested"))
+		return err == nil
+	})
+}

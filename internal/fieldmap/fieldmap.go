@@ -48,6 +48,13 @@ const (
 // records both the parent (`ProcessName`) and the process that was created (`NewProcessName`), and an
 // analyst asking for "the process" means the one that started.
 //
+// ECS DOTTED KEYS (`user.name`, `source.ip`) are here because generic JSON logs (SIEM-15) flatten to
+// exactly that shape, and ECS is the convention they follow. They were MISSING when JSON ingest was
+// wired, and the symptom was the one this package exists to prevent: the records ingested, they were
+// searchable by their own key names, and the canonical hunt returned nothing — a coverage gap that reads
+// as an absence of activity. The integration scenario caught it; no unit test could, because each side
+// was correct on its own.
+//
 // Matching is case-insensitive because the conventions collide: CEF is lower-case (`suser`), Windows
 // EventData is PascalCase (`SubjectUserName`), and CloudTrail is camelCase (`sourceIPAddress`). Requiring
 // an exact case match would make the map silently miss a source whose vendor capitalised differently
@@ -59,21 +66,29 @@ var aliases = map[string][]string{
 		"userIdentityArn", // CloudTrail (the ARN is the identity; there is no bare username)
 		"SubjectUserName", // Windows EventData
 		"TargetUserName",  // Windows logon events record the authenticating principal here
+		"user.name",       // ECS — the convention generic JSON logs follow (SIEM-15)
 		"user",
 	},
 	TargetUser: {
 		"duser",          // CEF
 		"TargetUserName", // Windows
+		"user.target.name",
 		"target_user",
 	},
 	SourceIP: {
 		"src",             // CEF
 		"sourceIPAddress", // CloudTrail
 		"IpAddress",       // Windows 4624/4625
+		"source.ip",       // ECS
+		"client.ip",       // ECS, a proxy's view of the same thing
+		"src.ip",
 		"source_ip",
 	},
 	DestIP: {
-		"dst", // CEF
+		"dst",            // CEF
+		"destination.ip", // ECS
+		"server.ip",      // ECS
+		"dst.ip",
 		"dest_ip",
 	},
 	Host: {
@@ -82,29 +97,37 @@ var aliases = map[string][]string{
 		"dhost",           // CEF destination host
 		"WorkstationName", // Windows
 		"Computer",
+		"host.name", // ECS
+		"host.hostname",
 		"host",
 	},
 	Process: {
 		"NewProcessName", // Windows 4688: the process that was CREATED, not its parent
 		"sproc",          // CEF
 		"ProcessName",
+		"process.name", // ECS
+		"process.executable",
 		"process",
 	},
 	File: {
 		"filePath", // CEF
 		"fname",    // CEF
 		"ObjectName",
+		"file.path", // ECS
+		"file.name",
 		"file",
 	},
 	Action: {
-		"act",       // CEF
-		"eventName", // CloudTrail
+		"act",          // CEF
+		"eventName",    // CloudTrail
+		"event.action", // ECS
 		"action",
 	},
 	Outcome: {
-		"outcome",   // CEF
-		"errorCode", // CloudTrail: empty on success, an error code on failure
-		"Status",    // Windows
+		"outcome",       // CEF
+		"errorCode",     // CloudTrail: empty on success, an error code on failure
+		"event.outcome", // ECS
+		"Status",        // Windows
 	},
 }
 

@@ -137,6 +137,10 @@ var ServerFields = []Field{
 		Description: "Address to receive CEF-over-syslog on (SIEM-4). Empty disables ingest."},
 	{Key: "OPENSHIELD_CLOUDTRAIL_DIR", Scope: ScopeDynamic, Kind: KindString, Default: "",
 		Description: "Directory polled for CloudTrail records (SIEM-4)."},
+	{Key: "OPENSHIELD_JSONLOG_DIR", Scope: ScopeDynamic, Kind: KindString, Default: "",
+		Description: "Directory of newline-delimited JSON log files to ingest (SIEM-15) — the format application logs, Kubernetes, GCP audit and Azure activity all emit. Nested objects flatten to dotted keys and become huntable through the canonical vocabulary. Unset disables it."},
+	{Key: "OPENSHIELD_JSONLOG_VENDOR", Scope: ScopeDynamic, Kind: KindString, Default: "jsonlog",
+		Description: "The vendor label stored against records from OPENSHIELD_JSONLOG_DIR. It is the operator's name for the source, not something read out of the documents — a vendor taken from a field the log happened to carry would split one directory's contents across facets nobody chose."},
 	{Key: "OPENSHIELD_WEF_DIR", Scope: ScopeDynamic, Kind: KindString, Default: "",
 		Description: "Directory polled for Windows Event Forwarding records (SIEM-4)."},
 	// ZT-7: operator SSO. The token AUTHENTICATES; the role still comes from the operator record, so a

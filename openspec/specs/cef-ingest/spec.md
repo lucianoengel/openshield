@@ -87,3 +87,59 @@ own entities and not for arbitrary third-party logs.
 #### Scenario: The vocabulary is discoverable
 - **WHEN** an analyst asks the API for the hunting vocabulary
 - **THEN** it returns the canonical names and the source fields each one covers
+
+### Requirement: Newline-delimited JSON logs are ingested and huntable alongside every other source
+
+The control plane SHALL ingest newline-delimited JSON log files from a configured directory, flattening
+nested objects into dotted keys, and those records SHALL be reachable by the SAME canonical vocabulary as
+CEF, CloudTrail and WEF.
+
+CEF, CloudTrail and WEF each cover one vendor's idea of a log. JSON lines is what everything else emits —
+application logs, Kubernetes, GCP audit, Azure activity, every shipper's default output. It is not one
+more format: it is the difference between a SIEM that ingests three products and one that ingests an
+estate. A format that ingests into its own corner is a place to put logs, not a SIEM, so the canonical
+vocabulary SHALL cover the ECS dotted keys those documents use.
+
+A DOCUMENT WITH NO RECOGNISABLE TIMESTAMP SHALL BE MARKED AS SUCH, and the count SHALL be exposed. JSON
+logs have no agreed time field, so a source naming its timestamp something unrecognised has EVERY event
+stamped with the moment of ingest — all present, all searchable, and all in the wrong place on the
+timeline, where a time-bounded hunt misses them while reporting a clean result. Nothing else about that
+source looks wrong.
+
+Timestamp field names SHALL come from a closed list rather than a substring match: matching anything
+containing "time" pulls in durations, and a duration parsed as a date is not a missing timestamp but a
+confidently wrong one that sorts to the top of every descending query.
+
+Array elements SHALL become indexed keys rather than a joined string, so an exact-match hunt cannot match
+a substring spanning two elements. A JSON null SHALL be absent from the field set rather than stored as
+empty, because the canonical projection reads an empty value as "this source does not carry the field".
+
+A document that is not an object SHALL be refused rather than stored as a row with no fields. Field count,
+value length and nesting depth SHALL be bounded, and a document that lost fields to a bound SHALL say so —
+a partial parse that looked complete makes a hunt over the missing keys read as a finding of absence. A
+branch below the depth bound SHALL be kept as its JSON text rather than dropped.
+
+A file with SOME unparseable lines SHALL still ingest the rest, with the bad ones counted: failing the
+whole file lets one truncated line discard everything before it. A file with NO parseable lines SHALL be
+marked failed, so a source sending something unreadable is visible rather than emptying a directory into
+nothing.
+
+The vendor label SHALL come from configuration, not from the documents: a vendor read out of a field the
+log happened to carry would split one directory's contents across facets nobody chose.
+
+#### Scenario: A nested JSON document becomes huntable
+- **WHEN** a JSON-lines file is dropped in the watched directory
+- **THEN** its nested keys are flattened and the record is returned by a canonical hunt alongside the
+  other sources
+
+#### Scenario: A synthesised timestamp is declared and counted
+- **WHEN** a document carries no recognisable time field
+- **THEN** the record is marked as having a supplied timestamp and the counter rises
+
+#### Scenario: A duration is not read as a timestamp
+- **WHEN** a document carries a duration field whose value falls in the epoch range
+- **THEN** the timestamp is still treated as absent
+
+#### Scenario: Bad lines do not discard the good ones
+- **WHEN** a file contains a mixture of parseable and unparseable lines
+- **THEN** the parseable ones are stored and the rest are counted

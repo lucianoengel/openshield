@@ -521,6 +521,18 @@ func main() {
 			}()
 		}
 
+		// SIEM-15: generic newline-delimited JSON ingest. Leader-only, same as the other file pollers.
+		if jsonDir := cfg.String("OPENSHIELD_JSONLOG_DIR"); jsonDir != "" {
+			vendor := cfg.String("OPENSHIELD_JSONLOG_VENDOR")
+			go func() {
+				fmt.Fprintf(os.Stderr, "openshield-server: SIEM-15 JSON-lines ingest watching %s "+
+					"(vendor %q)\n", jsonDir, vendor)
+				if err := srv.RunJSONLogIngest(leaderCtx, jsonDir, vendor); err != nil && leaderCtx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "openshield-server: JSON-lines ingest stopped: %v\n", err)
+				}
+			}()
+		}
+
 		// Alert delivery (D83): when OPENSHIELD_ALERT_WEBHOOK is set, deliver peer-UEBA
 		// alerts and overdue-agent alerts to a webhook so a human is TOLD, not left to
 		// poll. Best-effort — a down sink never breaks ingest. Overdue notifications are
