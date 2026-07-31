@@ -401,3 +401,78 @@ func TestAMissingUnitDirectoryIsRefused(t *testing.T) {
 			"no service definitions and report success, and the operator finds out at `systemctl enable`")
 	}
 }
+
+// THE PACKAGE REPRODUCES BYTE FOR BYTE.
+//
+// It is what most operators actually install, so a .deb that differed between builds would leave the
+// release's reproducibility claim true of the artifacts nobody downloads and false of the file they do.
+// The CI workflow asserts this across two full builds; this asserts the property in the code that owns
+// it, where a regression is attributable.
+//
+// It holds only because every timestamp inside the archive is fixed rather than taken from the clock —
+// tar headers with a zero ModTime, gzip with no ModTime, ar members with mtime 0. Any one of those
+// defaulting to time.Now() breaks it, and the failure would appear in CI as an unexplained
+// "NOT REPRODUCIBLE" days later.
+func TestThePackageIsByteForByteReproducible(t *testing.T) {
+	s := spec(t)
+	s.UnitDir = unitDir(t)
+
+	first, err := Build(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Build(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first.Bytes, second.Bytes) {
+		t.Fatalf("two builds of the same input produced different packages (%d vs %d bytes). Something "+
+			"inside the archive is taking a value from the clock, and the release's reproducibility claim "+
+			"is false for the file operators actually install",
+			len(first.Bytes), len(second.Bytes))
+	}
+
+	// THE EQUALITY CHECK ABOVE IS NOT ENOUGH ON ITS OWN, and finding that out is why this half exists.
+	//
+	// Two builds inside one test run happen in the same second, and tar's mtime resolution IS a second —
+	// so a header taking ModTime from the clock produces identical bytes here and differs in CI whenever
+	// a build straddles a second boundary. The mutation (ModTime: time.Now()) PASSED the comparison. A
+	// test that fails only sometimes, in someone else's pipeline, is worse than no test.
+	//
+	// So the mechanism is asserted directly: every timestamp in the archive is zero.
+	for member, body := range members(t, first.Bytes) {
+		if member == "debian-binary" {
+			continue
+		}
+		zr, zerr := gzip.NewReader(bytes.NewReader(body))
+		if zerr != nil {
+			t.Fatalf("%s: %v", member, zerr)
+		}
+		if !zr.ModTime.IsZero() && zr.ModTime.Unix() != 0 {
+			t.Errorf("%s: the gzip header carries a modification time (%s) taken from the clock",
+				member, zr.ModTime)
+		}
+		tr := tar.NewReader(zr)
+		for {
+			h, terr := tr.Next()
+			if terr != nil {
+				break
+			}
+			if h.ModTime.Unix() != 0 {
+				t.Errorf("%s: %s has mtime %s. A timestamp from the clock makes the package differ "+
+					"between builds, and the release's reproducibility claim becomes false for the exact "+
+					"file operators install", member, h.Name, h.ModTime)
+			}
+		}
+	}
+	// And the ar member headers, which carry their own mtime field.
+	for _, name := range []string{"debian-binary", "control.tar.gz", "data.tar.gz"} {
+		i := bytes.Index(first.Bytes, []byte(name))
+		if i < 0 {
+			t.Fatalf("member %s not found", name)
+		}
+		if mt := strings.TrimSpace(string(first.Bytes[i+16 : i+28])); mt != "0" {
+			t.Errorf("the ar header for %s carries mtime %q rather than 0", name, mt)
+		}
+	}
+}

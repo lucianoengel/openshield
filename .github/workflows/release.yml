@@ -46,6 +46,7 @@ jobs:
       - name: Prove the build reproduces
         run: |
           mv dist dist-first
+          mv dist-packages dist-packages-first
           OPENSHIELD_RELEASE_KEY="$RUNNER_TEMP/keys/release.key" make release
           for f in dist/*; do
             n=$(basename "$f")
@@ -54,10 +55,22 @@ jobs:
             b=$(sha256sum "$f" | cut -d' ' -f1)
             [ "$a" = "$b" ] || { echo "NOT REPRODUCIBLE: $n ($a vs $b)"; exit 1; }
           done
-          echo "all artifacts reproduced byte-for-byte"
+          # THE PACKAGES REPRODUCE TOO. They are what most operators actually install, so a .deb that
+          # differed between builds would leave the reproducibility claim true of the artifacts nobody
+          # downloads and false of the file they do. It holds because every timestamp inside the archive
+          # is fixed rather than taken from the clock.
+          for f in dist-packages/*; do
+            n=$(basename "$f")
+            a=$(sha256sum "dist-packages-first/$n" | cut -d' ' -f1)
+            b=$(sha256sum "$f" | cut -d' ' -f1)
+            [ "$a" = "$b" ] || { echo "NOT REPRODUCIBLE: $n ($a vs $b)"; exit 1; }
+          done
+          echo "all artifacts and packages reproduced byte-for-byte"
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*
+            dist-packages/*
           fail_on_unmatched_files: true

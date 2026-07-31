@@ -40,4 +40,23 @@ go run ./cmd/openshieldctl release-manifest \
   --dir "$DIST" --version "$VERSION" --commit "$COMMIT" \
   --key "${OPENSHIELD_RELEASE_KEY:?set OPENSHIELD_RELEASE_KEY to the ed25519 private key file}"
 
+# Native packages, built FROM the signed set (PLAT-6 inc 2).
+#
+# They land NEXT TO the release directory, never inside it: the manifest signature covers the SET, so an
+# unlisted file in $DIST makes verify-release fail with "present but not in the manifest" — the wording of
+# a tamper detection, produced by the packaging step (D447).
+#
+# The key used here is the one this script just derived from the signing key, so this is an INTEGRITY
+# self-check — it confirms the signing step produced a coherent set. It establishes nothing about
+# authenticity, which is a property of a key an operator obtained out of band, and package-deb's own
+# output says so.
+PKGDIR=${PKGDIR:-$DIST-packages}
+rm -rf "$PKGDIR"; mkdir -p "$PKGDIR"
+for arch in amd64 arm64; do
+  go run ./cmd/openshieldctl package-deb \
+    --dir "$DIST" --key "$DIST/release-key.pub" --version "${VERSION#v}" --arch "$arch" \
+    --units deploy/systemd --out "$PKGDIR/openshield_${VERSION#v}_${arch}.deb"
+done
+
 echo "release: $DIST ($VERSION) — verify with: make verify-release"
+echo "packages: $PKGDIR"
