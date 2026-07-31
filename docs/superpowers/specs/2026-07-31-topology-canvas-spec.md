@@ -57,9 +57,40 @@ Three consequences, all simplifications:
   declared model stops churning, and drift becomes meaningful — a changing graph cannot show drift, because
   everything is always changing.
 
-Membership is a **predicate**, stored in the model (`TOPO-1`): platform, enrolment tag, OU, subnet, site.
-An endpoint that matches no node's predicate is itself a drift finding — *"7 enrolled agents belong to no
-declared node"* — which is exactly the population an inventory diagram would have hidden in plain sight.
+### 2.0a A node is also a CONFIGURATION IDENTITY
+
+The second half of the same decision, and it is what makes the model prescriptive rather than merely
+descriptive:
+
+> **A node holds every host that shares one configuration. Editing the node edits all of them. Hosts with
+> different configuration belong to different nodes.**
+
+This is stronger than "a node is a role", and it replaces an earlier, worse idea in which a node showed the
+*distribution* of differing values across its members. A distribution is a symptom being rendered as a
+feature: it tells an operator their fleet is inconsistent and then offers no way to say what it should be.
+A configuration identity says what the configuration **is**, and any host that differs is drift.
+
+Four rules follow, and they are load-bearing:
+
+1. **One host belongs to exactly one node per configuration domain.** Otherwise "editing the node edits all
+   of them" is ambiguous, and which configuration wins becomes an accident of evaluation order.
+2. **Overlapping membership predicates are a validation error, refused at save** — not silently resolved by
+   precedence. A host matching two nodes is the operator's mistake to fix, and the save dialog names the
+   hosts and both nodes.
+3. **A member whose actual configuration differs from its node's declaration is a drift finding**, listed on
+   the node with two honest resolutions: *re-apply* (bring the host to the declaration) or **split** —
+   extract those hosts into their own node, because if the difference is deliberate it *is* a different
+   configuration and the model should say so. `Split node` is a first-class operation, not a workaround.
+4. **New members are announced, never silent.** Membership is a predicate (platform, enrolment tag, OU,
+   subnet, site), so a newly enrolled laptop joining `user endpoints` inherits that node's policy — which is
+   the desired behaviour and exactly why it must be visible: *"3 hosts joined this node since the last
+   revision."*
+
+**What "applies to all" means today, stated precisely.** Editing a node declares the configuration for every
+member. *Delivering* it is still `TOPO-3` export or, once the owner takes it, `TOPO-4`'s signed channel —
+gateway settings remain node-local bootstrap by design (D272). The canvas is honest about the gap: the node
+shows **declared** configuration and **observed** configuration per member, and the distance between them is
+the drift in rule 3. It never implies a save reached a host.
 
 ### 2.1 Kinds and ports
 
@@ -116,6 +147,36 @@ is therefore the only thing that draws the eye across a large canvas. That is th
 documented, or worse, an enrolled agent on a host nobody knew about. It gets a persistent count in the
 canvas toolbar: **`⚠ 3 undeclared`**, always visible, one click to select them all.
 
+### 2.2a Discovery is call-home, and that makes the inventory complete
+
+**No network scanning, and none is needed.** Every component this product deploys — agent, gateway, worker,
+server — enrols and then reports continuously. So the platform already holds an authoritative inventory of
+its own world, and the canvas is not guessing.
+
+The design consequence is that **"not yet placed" is an explicit state, not an unknown**. Every component
+that has called home is either on a node or sitting in the **unplaced tray** — a docked rail at the canvas
+edge showing what enrolled and has not been given a place:
+
+```
+UNPLACED · 4                                                    [ Place all… ]
+  ⧉  gw-edge-02      gateway · egress proxy   enrolled 2h ago
+  ▤  LAPTOP-M09      endpoint agent           enrolled 6d ago · matches no node predicate
+  ▤  LAPTOP-M11      endpoint agent           enrolled 6d ago · matches no node predicate
+  ▣  srv-app-02      control-plane server     enrolled 22m ago
+```
+
+This is the honest replacement for a scan: rather than *"we might not know about things"*, the statement is
+**"we know about everything that called home, and here is precisely what you have not accounted for."**
+Dragging from the tray onto the canvas declares it; the count is a completeness meter for the model, and an
+empty tray genuinely means the model is complete with respect to everything deployed.
+
+**The one real blind spot, named rather than papered over:** a host that never installed an agent is
+invisible to enrolment. It is not invisible to the *gateway*, which sees traffic from sources that map to no
+enrolled identity. That signal is worth surfacing as `unmanaged sources` — a count, with the caveat stated
+in place: it is inferred from observed traffic, sees only what traverses a gateway, and is **not** an
+inventory. It gets its own ticket (`TOPO-8`) rather than being folded into discovery, because a soft
+inference and a hard enrolment must never render as the same kind of fact.
+
 ### 2.2 The state rail
 
 A 4px rail across the node's bottom edge, segmented, using the neutral ramp plus hatching — never colour:
@@ -167,10 +228,14 @@ Rules that keep this from becoming a second, drifting configuration model:
 - **Scope is stated on the node**, because it differs sharply and silently: gateway settings are
   bootstrap-scope and node-local (D272, restart required), while most server settings are dynamic and
   cluster-wide. The panel says which it is *before* an edit, not after a save that appeared to do nothing.
-- **A role-scoped setting is only offered where one genuinely exists.** Where a setting is per-host and the
-  node stands for many hosts, the panel shows the *distribution* of current values across the population and
-  refuses to pretend a single field sets them all. This is the honest failure mode, and it is the one that
-  would otherwise ship a lie.
+- **The node's value IS the declaration for every member** (§2.0a). There is no distribution to render and
+  no per-host override reachable from here: a field has one declared value on a node, and a member that
+  differs is drift with two named resolutions — re-apply, or split into a node of its own. An interface that
+  displayed the spread of current values would be describing an inconsistency it gave the operator no way to
+  resolve.
+- **Declared and observed are shown side by side**, never conflated. The field renders its declared value,
+  and beside it *"47 of 51 match · 4 differ"* linking to the drift list. Zero drift renders as a quiet
+  confirmation rather than nothing at all, because "everything agrees" is information.
 
 Navigating configuration by picture is a real usability win over a 133-row list, and it costs nothing new —
 it is a second route into machinery that already exists.
@@ -403,7 +468,8 @@ The nine from the UX spec §4, with canvas-specific readings:
 | State | Canvas |
 |---|---|
 | Loading | Skeleton node placeholders in the final layout positions; no shimmer. |
-| Empty · unconfigured | Not a blank canvas. Shows *discovered* nodes with the message "Nothing is declared yet. 6 nodes were discovered — start by accepting them into the model." One click to declare all. |
+| Empty · unconfigured | **Never a blank canvas**, because call-home means something is always known. Everything enrolled sits in the unplaced tray with "Nothing is declared yet — 6 components have enrolled. Place them to build your model." One click to place all by suggested kind. |
+| Conflict · overlap | A save whose predicates would put a host in two nodes is refused, naming the hosts and both nodes (§2.0a rule 2). Not resolved by precedence. |
 | Empty · no discovery | "No agents or gateways have enrolled" + the enroll command, matching `CONSOLE-33`. |
 | Filtered to nothing | Filter chips shown with one-click clear; the node count reads `0 of 214`. |
 | Error | The model failed to load: the canvas does not render a partial graph, because a partial topology reads as a complete one. |
@@ -448,8 +514,9 @@ The guardrails, all of which fall out of the rules already in this spec:
 
 ## 9. What this spec does not cover
 
-No auto-discovery of *undeployed* infrastructure — the model knows only what enrolled or was declared, it
-does not scan networks, and it must never imply it does. No cost or capacity modelling, no latency budgets,
+No network scanning — and per §2.2a none is needed, because every component calls home; the residual blind
+spot is hosts that never enrolled, addressed as a soft inference in `TOPO-8` and never rendered as
+inventory. No cost or capacity modelling, no latency budgets,
 no simulation of traffic volume. **No topology-driven alerting**: edge states are visible on the canvas and
 in the drift panel, and routing them into the alert pipeline is a separate decision, because a monitoring
 signal promoted to an alert without tuning is how the queue fills with noise (see `CONSOLE-41`). No canvas

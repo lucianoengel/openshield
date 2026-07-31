@@ -724,8 +724,22 @@ returns nothing). ADR-15.
   list — and **never becomes geometry**. Consequences: a real deployment is 8–20 nodes so the scale
   machinery an inventory graph needs is not built; the diagram matches how operators already whiteboard;
   and the model stops churning as endpoints come and go, **which is what makes drift meaningful — a graph
-  that always changes cannot show change.** An endpoint matching no node's predicate is itself a drift
-  finding.
+  that always changes cannot show change.**
+  **A node is also a CONFIGURATION IDENTITY** (owner decision, same date): it holds every host sharing one
+  configuration, editing it edits all of them, and hosts configured differently belong to **different
+  nodes**. That replaces an earlier, worse idea in which a node displayed the *distribution* of differing
+  values — a distribution renders a symptom as a feature, telling an operator their fleet is inconsistent
+  while offering no way to say what it should be. Four rules follow: one host is in exactly one node per
+  config domain (or "edits all of them" is ambiguous); **overlapping predicates are a validation error
+  refused at save**, never resolved by precedence; a member whose observed config differs from the
+  declaration is drift with two honest resolutions — re-apply, or **`Split node`** as a first-class
+  operation, because a deliberate difference *is* a different configuration; and new members joining by
+  predicate are **announced, never silent**.
+  **Discovery is call-home, so the inventory is complete and "not yet placed" is an explicit state.** Every
+  component enrols and reports, so nothing is guessed and no scanning is needed. Everything that called home
+  is either on a node or in the **unplaced tray** — a completeness meter whose empty state genuinely means
+  the model accounts for everything deployed. This replaces the weaker framing of "we might not know about
+  things" with "here is precisely what you have not accounted for".
   Typed kinds (control-plane server · worker · gateway in one of four modes: egress proxy, ZT access proxy,
   inline TPROXY, DNS sinkhole · user endpoints · internal service · external network · identity provider ·
   broker · database · integration sink · site/zone). Every node is **discovered** (bound by canonical device
@@ -756,9 +770,19 @@ returns nothing). ADR-15.
   the same schema-driven forms as Settings** (`GET /config/schema`) — one renderer, two entry points, so a
   field added in Go appears in both and no diagram needs updating. Scope is stated **on the node before the
   edit**, because it differs sharply and silently (gateway = bootstrap, node-local, restart; server = mostly
-  dynamic, cluster-wide). Where a setting is per-host and the node stands for many hosts, the panel shows
-  the **distribution of current values across the population** and refuses to pretend one field sets them
-  all — that is the honest failure mode and the one that would otherwise ship a lie.
+  dynamic, cluster-wide). **The node's value IS the declaration for every member** — no distribution
+  display, no per-host override reachable from here; a field has one declared value and a member that
+  differs is drift with two named resolutions (re-apply, or split). Declared and observed render side by
+  side — *"47 of 51 match · 4 differ"* — and zero drift shows a quiet confirmation rather than nothing,
+  because "everything agrees" is information. **What "applies to all" means today, stated precisely:** the
+  edit declares the configuration for every member; *delivering* it is still `TOPO-3` export or `TOPO-4`'s
+  signed channel. The panel never implies a save reached a host.
+- **TOPO-8 · Unmanaged sources** — TOPO-6 · S. The one real blind spot in call-home discovery: a host that
+  never installed an agent is invisible to enrolment — but **not** to the gateway, which sees traffic from
+  sources mapping to no enrolled identity. Surfaced as a count with its caveat rendered in place: inferred
+  from observed traffic, sees only what traverses a gateway, **not an inventory**. Its own ticket rather
+  than folded into discovery, because a soft inference and a hard enrolment must never render as the same
+  kind of fact.
 - **TOPO-6 · Edge health — is the network operating as described?** — TOPO-1 · L. Drift asks whether
   configuration matches declaration; this asks whether **traffic is actually flowing the way the model says
   it should, right now**. It is what turns the canvas from a reconciliation tool into a monitoring surface.
