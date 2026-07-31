@@ -816,43 +816,112 @@ accessibility default** when the OS requests larger text.
 
 ---
 
-## 13. Capability coverage — every product domain, and which surface serves it
+## 13. Capability coverage — all 77 declared capabilities, classified
 
-The first draft of this plan designed the **investigation** half well and the **administration, policy and
-tuning** half barely at all. That is a predictable bias — investigation is what a demo shows — and it is
-what the tuning and Zero Trust gaps above both came from. This matrix exists so the remaining gaps are
-visible rather than discovered by a customer.
+The first version of this section had 14 rows built from the pages an analyst would want. That is how
+`peer-ueba` — a shipped detection domain — reached a finished-looking plan with no surface, no ticket and no
+row in any table: nobody thought of it, and nothing was structured to notice.
 
-Legend: ✅ specified · 🟡 partial · ❌ no surface.
+So the ground truth is now `openspec/specs/`, which is complete by construction and already guarded.
+`scripts/plan-coverage-audit.py` fails when a declared capability has no row here, or when a row gives no
+reason. **It checks that a capability is classified, not that the classification is right** — judgement
+stays with the reviewer; what it removes is the ability to skip one silently.
 
-| Domain | Operate / investigate | Configure / author | Tune |
-|---|---|---|---|
-| **XDR** correlation, entities, timeline | ✅ §6.2, §6.4 | 🟡 correlation params in Settings | ✅ §6.6 |
-| **UEBA** baselines, peer deviation, warm-up | ❌ **`CONSOLE-53`** — no surface at all | ❌ **`UEBA-1`** — no maturity concept EXISTS to surface | 🟡 threshold only |
-| **SOAR** playbooks, intents, approvals, routing | ✅ §6.2 response column, approvals | 🟡 `CONSOLE-18/-19`, read + dry-run only | ✅ §6.6 |
-| **Zero Trust** catalog, policy, sessions, posture | ✅ §6.7 | ✅ §6.7 ③ | n/a |
-| **SIEM** search, external ingest, saved views | ✅ §6.3 | 🟡 ingest endpoints in Settings | ✅ §6.6 |
-| **DLP** detection, EDM/IDM, packs, channels | 🟡 alerts + Explain | ❌ **`CONSOLE-49`** — no index/classifier surface | ✅ §6.6 |
-| **NIPS/NTPS** IOC, signatures, sinkhole, CASB | 🟡 alerts + Explain | ❌ **`CONSOLE-48`** — no rule/feed/list surface | ✅ §6.6 |
-| **HIPS** exec control, FIM, canary, USB | 🟡 alerts + Fleet | ❌ **`CONSOLE-47`** — no allow/deny or baseline surface | ✅ §6.6 |
-| **Device trust** enrollment, attestation, PCR | 🟡 Fleet columns | ❌ **`CONSOLE-50`** — no enrollment or PCR-policy surface | n/a |
-| **Identity** operators, service accounts, tiers | 🟡 `CONSOLE-22` | 🟡 `CONSOLE-22` | n/a |
-| **End users** directory, access, subjects | 🟡 `CONSOLE-52` | 🟡 `CONSOLE-52` | n/a |
-| **Evidence** ledger, anchors, view audit | 🟡 §6.2 panel; `CONSOLE-20` full | n/a | n/a |
-| **Privacy** DSAR, legal hold, retention | ❌ **`CONSOLE-51`** — only a `/subject` link exists | 🟡 retention in Settings | n/a |
-| **Platform** config, health, break-glass, releases | ✅ §6.4, `CONSOLE-7` | ✅ §8 | n/a |
+- **surface** — an operator surface exists or is ticketed.
+- **internal** — no operator surface, deliberately, *with the reason*. A bare "internal" is not an answer.
+- **deferred** — needs one, not planned yet, with the ticket that would close it.
 
-**The pattern in the ❌ column is one sentence:** every domain that *detects* has a shipped, tested
-detection plane and **no way to see or change what it is detecting on** without editing a file on a host.
-Four surfaces close it — endpoint control (`-47`), network defense (`-48`), DLP classifiers (`-49`), device
-trust (`-50`) — plus privacy operations (`-51`). None of them gate the MVP console. All of them gate the
-sentence *"an administrator can run this product from the console"*, which is a different and later claim,
-and the roadmap should not let the two be confused.
+| Capability | Class | Surface / reason |
+|---|---|---|
+| `agent-identity` | surface | Fleet + device trust — `CONSOLE-8`, `CONSOLE-50` |
+| `agent-process-boundary` | internal | The privilege split is an architectural invariant (INV-2), not an operator setting; exposing it as configuration would make it defeatable |
+| `architectural-fitness` | internal | A CI guard over the codebase; its audience is the build, not an operator |
+| `attack-mapping` | deferred | **`CONSOLE-54`** — ATT&CK mapping ships (SIEM-7/D201) and "what is my ATT&CK coverage?" has no answer in the product |
+| `audit-ledger` | surface | Evidence browser + the incident-detail ledger panel — `CONSOLE-20`, `CONSOLE-4` |
+| `audit-timeline` | surface | Incident timeline — `CONSOLE-4` |
+| `behavioral-detection` | surface | Alerts + Explain — `CONSOLE-17`, `CONSOLE-10`; rule administration `CONSOLE-47` |
+| `cef-ingest` | surface | Log-ingest settings + ingest health — §8, `CONSOLE-7` |
+| `cef-syslog-ingest` | surface | Log-ingest settings + ingest health — §8, `CONSOLE-7` |
+| `classification-contract` | internal | A contract between producer and worker; a change is a code change, and rendering it would imply it is tunable |
+| `clipboard-monitor` | surface | Endpoint control — `CONSOLE-47`; exclusions are policy, not a toggle |
+| `cloudtrail-ingest` | surface | Log-ingest settings + ingest health — §8, `CONSOLE-7` |
+| `control-plane` | surface | Platform health — `CONSOLE-7` |
+| `cross-domain-correlation` | surface | Incidents + correlation parameters — `CONSOLE-4`, §8 |
+| `decision-contract` | internal | The frozen pipeline's contract; a UI over it would invite editing what must stay fixed (D26/D69) |
+| `device-attestation` | surface | Device trust operations — `CONSOLE-50` |
+| `device-posture` | surface | Fleet + Zero Trust access conditions — `CONSOLE-8`, `CONSOLE-44` |
+| `dev-stack` | internal | Developer tooling; no operator ever sees it |
+| `dns-connector` | surface | Network defense + ingest health — `CONSOLE-48`, `CONSOLE-7` |
+| `dns-sinkhole` | surface | Network defense — `CONSOLE-48` |
+| `doc-consistency` | internal | A CI guard over documentation |
+| `document-fingerprinting` | surface | DLP classifiers and indexes (IDM) — `CONSOLE-49` |
+| `durable-notification-dedup` | surface | Notification routing and its health — `CONSOLE-18` |
+| `e2e-verification` | internal | A test-suite property proving the pipeline end to end; not an operator artifact |
+| `endpoint-engine` | surface | Fleet — `CONSOLE-8` |
+| `enforcement` | surface | Break-glass and enforcement state — `CONSOLE-8` |
+| `entity-graph-population` | surface | Entity surface — `CONSOLE-9` |
+| `entity-model` | surface | Entity surface — `CONSOLE-9` |
+| `event-contract` | internal | The frozen pipeline's contract — see `decision-contract` |
+| `event-transport` | surface | Ingest and broker health — `CONSOLE-7` |
+| `exact-data-matching` | surface | DLP classifiers and indexes (EDM) — `CONSOLE-49` |
+| `execaudit-connector` | surface | Endpoint control — `CONSOLE-47` |
+| `exfil-channel-awareness` | surface | DLP classifiers — `CONSOLE-49` |
+| `fail-open-watchdog` | deferred | **`CONSOLE-55`** — every timeout-allow emits a high-severity audit event by design and **there is nowhere to see them**, which makes the product's central honesty mechanism invisible |
+| `fanotify-connector` | surface | Endpoint control — `CONSOLE-47` |
+| `file-integrity-monitoring` | surface | Endpoint control (FIM baselines) — `CONSOLE-47` |
+| `fleet-simulation` | internal | A test and demo harness; shipping a surface for it would put synthetic events beside real ones |
+| `four-eyes-approvals` | surface | Approval inbox — `CONSOLE-11`, `CONSOLE-4` |
+| `heartbeat` | surface | Fleet, overdue agents, enforcement state — `CONSOLE-8` |
+| `incident-timeline` | surface | Incident detail — `CONSOLE-4` |
+| `inline-prevention` | surface | Network defense + break-glass — `CONSOLE-48`, `CONSOLE-8` |
+| `integration-runners` | surface | Response surface — `CONSOLE-18` |
+| `memory-injection-detection` | surface | Endpoint control — `CONSOLE-47` |
+| `network-gateway` | surface | Topology + gateway settings — `TOPO-2c`, §8 |
+| `network-threat-intel` | surface | Network defense (IOC feeds) — `CONSOLE-48` |
+| `notification-routing` | surface | Response surface — `CONSOLE-18` |
+| `object-discovery` | deferred | **`CONSOLE-56`** — DSPM-1 shipped (D371) with no operator surface at all: nothing lists what was discovered or where sensitive data sits |
+| `observability` | deferred | **`CONSOLE-57`** — `/metrics` is behind a separate bearer token (PLAT-4b), so the product's own telemetry is unreachable from the console session; `CONSOLE-7` covers health, not metrics |
+| `offline-queue` | surface | Fleet (spool depth) — `CONSOLE-8` |
+| `opencore-separability` | internal | A licensing/packaging boundary enforced in the build, not an operator concern |
+| `operator-identity` | surface | Administration — `CONSOLE-22`; the model is `CONSOLE-1` |
+| `packaging` | internal | Release engineering; the operator-facing half is the runbook, not the console |
+| `parser-sandbox` | internal | The seccomp boundary is an invariant (INV-2); a surface would imply it is adjustable |
+| `pattern-classifier` | surface | DLP classifiers — `CONSOLE-49` |
+| `peer-ueba` | deferred | **`CONSOLE-53`** + **`UEBA-1`** — the surface is missing *and* the engine has no maturity concept to render. This row is why this section was rewritten |
+| `pipeline-dispatcher` | internal | The frozen core; a UI over it would invite editing what must stay fixed |
+| `playbook-orchestration` | surface | Response surface — `CONSOLE-18`, `CONSOLE-19` |
+| `policy-evaluation` | surface | Explain a decision + policy/packs — `CONSOLE-10`, `CONSOLE-49` |
+| `portable-file-connector` | surface | Endpoint control — `CONSOLE-47` |
+| `print-monitor` | surface | Endpoint control — `CONSOLE-47` |
+| `privacy-features` | surface | Privacy operations — `CONSOLE-51`; pseudonymisation is enforced across every surface (§9) |
+| `provisioning` | surface | Device trust operations (enrollment tokens) — `CONSOLE-50`, `CONSOLE-22` |
+| `ransomware-canary` | surface | Endpoint control (canary placement) — `CONSOLE-47` |
+| `response-intent` | surface | Response + approvals — `CONSOLE-11`, `CONSOLE-18` |
+| `response-metrics` | surface | MTTA/MTTR on Overview and Incidents — `CONSOLE-16`, `CONSOLE-4` |
+| `retention-reporting` | surface | Privacy operations — `CONSOLE-51` |
+| `signed-dlp-index` | surface | DLP classifiers and indexes — `CONSOLE-49` |
+| `smtp-connector` | surface | Network defense + ingest health — `CONSOLE-48`, `CONSOLE-7` |
+| `spec-store-integrity` | internal | A CI guard over `openspec/`; its audience is the build |
+| `syslog-connector` | surface | Log-ingest settings + ingest health — §8, `CONSOLE-7` |
+| `threat-intel-store` | surface | Network defense (feeds) — `CONSOLE-48` |
+| `transport-security` | internal | mTLS and cipher policy are deployment configuration; a console toggle would let the console weaken its own transport |
+| `typed-config` | surface | Configuration UI — `CONSOLE-21`; delivery is `PLAT-5c` |
+| `unified-alerts` | surface | Alerts + Hunt — `CONSOLE-17`, `CONSOLE-12` |
+| `usb-enforcement` | surface | Endpoint control — `CONSOLE-47` |
+| `wef-ingest` | surface | Log-ingest settings + ingest health — §8, `CONSOLE-7` |
+| `ztna-client` | surface | Zero Trust access + Fleet — `CONSOLE-44`, `CONSOLE-8` |
 
-**They also share a shape worth designing once:** each is a list of rules, feeds, baselines or lists, each
-entry needing origin (file / URL / operator-authored), signature state where the artifact is signed, last
-reload, hot-reload vs restart, a dry-run, and a diff-and-approve on change. That is one component family
-reused five times, not five bespoke pages — and specifying it once is `CONSOLE-46`.
+**What the audit yielded: five capabilities that ship and have no operator surface** — `attack-mapping`,
+`fail-open-watchdog`, `object-discovery`, `observability` and `peer-ueba`. Four of the five were invisible
+in every previous version of this plan. They are ticketed as `CONSOLE-53`…`-57`.
+
+**What this method structurally cannot catch**, stated so it is not mistaken for completeness: capabilities
+the product *should* have and never declared — there is no spec for step-up authentication, bulk operations
+or SLA timers, and those were found by comparing outside-in against what a buyer expects (§10a). And it
+cannot catch a capability that is present, specified, and *wrong* — learning mode being an ungated kill
+switch was found by adversarial review reading two sections against each other. Three methods, three
+distinct yields; this one is only the first.
+
 
 ## 14. What this spec does not cover
 

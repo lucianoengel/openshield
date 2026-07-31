@@ -635,6 +635,32 @@ the console", which is a different and later claim.*
   path* output tells an attacker which predicate to satisfy. Admin tier, view-audited, rate-limited.
   *Session recording stays owner-gated: it carries a DPIA weight this product should not assume.*
 
+**Capabilities that ship with no operator surface** — *found by auditing all 77 declared capabilities in
+`openspec/specs/` against the plan (`scripts/plan-coverage-audit.py`) rather than by designing an
+information architecture and hoping it was complete. Four of these five were invisible in every previous
+version of this plan; `peer-ueba`/`CONSOLE-53` is the fifth and is above.*
+
+- **CONSOLE-54 · ATT&CK coverage** — CONSOLE-17 · M. Technique mapping ships (SIEM-7/D201) and
+  *"what is my ATT&CK coverage?"* — the question every SOC manager is asked by their board — has no answer
+  in the product. A matrix over observed techniques, what detected them, and **what is mapped but never
+  fired**, which is the half that matters and the half a vendor-supplied heatmap always overstates. State
+  the limit inline: coverage means *"a rule maps to this technique"*, never *"you are protected against it"*.
+- **CONSOLE-55 · Fail-open events** — CONSOLE-8 · S. Every timeout-allow emits a high-severity audit event
+  by design (D17), because fail-open is mandatory for stability and is itself a bypass. **There is nowhere
+  to see them.** That makes the product's central honesty mechanism invisible: the one signal that says
+  "enforcement did not happen and we are telling you" is written and never read. A filtered view with rate,
+  the path or gate that opened, and the budget it blew — and it belongs beside break-glass, because both
+  answer "is this thing actually enforcing right now?"
+- **CONSOLE-56 · Discovered objects (DSPM)** — CONSOLE-46 · M. DSPM-1 shipped (D371) and nothing lists what
+  was discovered or where sensitive data sits. A discovery connector with no surface is an unwired feature
+  with a passing test — the exact pattern `docs/unwired-audit.md` exists to catch.
+- **CONSOLE-57 · Product observability at operator tier** — CONSOLE-7 · M. `/metrics` sits behind a separate
+  constant-time bearer token (PLAT-4b) on a separate listener, so **the product's own telemetry is
+  unreachable from an operator session**. `CONSOLE-7` covers health facts; this covers the counters —
+  including the ones this repo keeps discovering are rendered by nothing (D415/D417/D418). Deliberately not
+  a Grafana replacement: the operator-tier view is the counters that explain *this console's* answers, and
+  Prometheus scraping stays where it is.
+
 **Enterprise & adoption**
 
 - **CONSOLE-30 · Custom roles / per-capability grants** — CONSOLE-1 · M. A capability table behind the
