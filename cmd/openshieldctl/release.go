@@ -175,7 +175,8 @@ func buildDeb(args []string) int {
 	version := fs.String("version", "", "package version")
 	arch := fs.String("arch", "amd64", "Debian architecture: amd64 or arm64")
 	units := fs.String("units", "deploy/systemd", "directory of systemd units to ship")
-	out := fs.String("out", "", "output path (default: <dir>/<name>_<version>_<arch>.deb)")
+	out := fs.String("out", "", "output path (default: ./<name>_<version>_<arch>.deb — deliberately NOT "+
+		"inside the release directory, see below)")
 	maintainer := fs.String("maintainer", "OpenShield <security@openshield.invalid>", "package maintainer")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -217,9 +218,25 @@ func buildDeb(args []string) int {
 		fmt.Fprintf(os.Stderr, "openshieldctl: %v\n", err)
 		return 1
 	}
+	// THE PACKAGE MUST NOT LAND INSIDE THE RELEASE DIRECTORY.
+	//
+	// The signature covers the SET, so verify-release reports any file that is present but not in the
+	// manifest — the check that catches a binary added after signing. A .deb written into dist/ is
+	// exactly such a file, so the very next verify-release FAILS, and it fails with the wording of a
+	// tamper detection. An operator would reasonably conclude their release had been compromised by
+	// their own packaging step.
+	//
+	// The first version of this command defaulted to dist/ and did precisely that.
 	dest := *out
 	if dest == "" {
-		dest = filepath.Join(*dir, pkg.Filename)
+		dest = pkg.Filename
+	}
+	if inside, ierr := isInside(*dir, dest); ierr == nil && inside {
+		fmt.Fprintf(os.Stderr, "openshieldctl: refusing to write %s inside the release directory %s.\n"+
+			"The manifest signature covers the SET, so an unlisted file there makes verify-release fail "+
+			"with 'present but not in the manifest' — the wording of a tamper detection, caused by this "+
+			"command. Write it elsewhere.\n", dest, *dir)
+		return 2
 	}
 	if err := os.WriteFile(dest, pkg.Bytes, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "openshieldctl: writing the package: %v\n", err)
@@ -230,5 +247,28 @@ func buildDeb(args []string) int {
 	// output reasonably assumes it is now protecting the machine.
 	fmt.Fprintln(os.Stdout, "installing it creates the service users and places the units; it enables "+
 		"and starts NOTHING — that stays the operator's decision.")
+	// SAY WHAT THE PACKAGE DOES NOT CARRY. Its contents were verified when it was built; the file itself
+	// is not signed and nothing downstream re-checks it. The attested unit is the release directory, and
+	// an operator moving only the .deb around is trusting however they moved it.
+	fmt.Fprintln(os.Stdout, "the package's CONTENTS were verified against the signed manifest at build "+
+		"time; the .deb file itself carries no signature, so distributing it alone rests on how it is "+
+		"transported.")
 	return 0
+}
+
+// isInside reports whether path p resolves to somewhere within dir.
+func isInside(dir, p string) (bool, error) {
+	ad, err := filepath.Abs(dir)
+	if err != nil {
+		return false, err
+	}
+	ap, err := filepath.Abs(p)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(ad, ap)
+	if err != nil {
+		return false, err
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }

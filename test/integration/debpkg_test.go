@@ -68,13 +68,32 @@ func TestAReleaseBecomesAPackageDpkgInstalls(t *testing.T) {
 		t.Fatalf("release-manifest: %v\n%s", merr, out)
 	}
 
-	// 1. THE PACKAGE IS BUILT FROM THE VERIFIED SET.
+	// 1. THE PACKAGE IS BUILT FROM THE VERIFIED SET, and lands OUTSIDE it.
+	deb := filepath.Join(work, "openshield_9.9.9_amd64.deb")
 	out, err := runCapture(t, "openshieldctl", nil, "package-deb",
-		"--dir", dist, "--key", pub, "--version", "9.9.9", "--units", "")
+		"--dir", dist, "--key", pub, "--version", "9.9.9", "--units", "", "--out", deb)
 	if err != nil {
 		t.Fatalf("package-deb: %v\n%s", err, out)
 	}
-	deb := filepath.Join(dist, "openshield_9.9.9_amd64.deb")
+
+	// AND THE RELEASE STILL VERIFIES AFTERWARDS.
+	//
+	// The manifest signature covers the SET, so verify-release reports any file present but unnamed —
+	// the check that catches a binary added after signing. A package written into the release directory
+	// is exactly such a file, and the first version of this command defaulted to putting it there: the
+	// next verify-release failed with the wording of a tamper detection, caused by the packaging step.
+	// An operator would reasonably have concluded their release was compromised.
+	if vout, verr := runCapture(t, "openshieldctl", nil, "verify-release",
+		"--dir", dist, "--key", pub); verr != nil {
+		t.Fatalf("the release stopped verifying after packaging it: %v\n%s", verr, vout)
+	}
+	// Writing INTO the release directory is refused rather than silently breaking it later.
+	if bad, berr := runCapture(t, "openshieldctl", nil, "package-deb",
+		"--dir", dist, "--key", pub, "--version", "9.9.9", "--units", "",
+		"--out", filepath.Join(dist, "x.deb")); berr == nil {
+		t.Errorf("a package was written into the release directory. The next verify-release there fails "+
+			"with 'present but not in the manifest', which reads as tampering:\n%s", bad)
+	}
 	if _, serr := os.Stat(deb); serr != nil {
 		t.Fatalf("no package was written: %v\n%s", serr, out)
 	}
