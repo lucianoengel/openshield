@@ -214,6 +214,13 @@ func (s *Server) OperatorReadHandler() http.Handler {
 
 	mux.HandleFunc("/alerts/ack", s.alertAckHandler)
 
+	// SIEM-14: saved searches. Listing and running are reads; writing one is not, because a saved
+	// search is a tool the whole team will run and trust.
+	mux.HandleFunc("/searches", s.savedSearchHandler)
+	mux.HandleFunc("/searches/save", s.savedSearchSaveHandler)
+	mux.HandleFunc("/searches/run", s.savedSearchRunHandler)
+	mux.HandleFunc("/searches/delete", s.savedSearchDeleteHandler)
+
 	mux.HandleFunc("/subject", s.subjectHandler)
 
 	mux.HandleFunc("/incidents", s.incidentsHandler)

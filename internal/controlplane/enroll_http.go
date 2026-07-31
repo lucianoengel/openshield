@@ -98,9 +98,16 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		mux.Handle("/alerts", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/alerts/ack", s.requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)
 		mux.Handle("/search", s.requireTier(RoleAnalyst, opRead))
-		mux.Handle("/events", s.requireTier(RoleAnalyst, opRead)) // SIEM-1: event search over the fleet aggregate
-		mux.Handle("/logs", s.requireTier(RoleAnalyst, opRead))
-		mux.Handle("/logs/fields", s.requireTier(RoleAnalyst, opRead))          // SIEM-13: the vocabulary /logs accepts                 // SIEM-4: search ingested third-party external logs
+		mux.Handle("/events", s.requireTier(RoleAnalyst, opRead))      // SIEM-1: event search over the fleet aggregate
+		mux.Handle("/logs", s.requireTier(RoleAnalyst, opRead))        // SIEM-4: search ingested third-party external logs
+		mux.Handle("/logs/fields", s.requireTier(RoleAnalyst, opRead)) // SIEM-13: the cross-vendor vocabulary /logs accepts
+		// SIEM-14: an analyst may list and run saved searches — they reach exactly the surfaces that
+		// tier already reads, so allowing the run widens nothing. WRITING one is RESPONDER: a saved
+		// search is a tool the whole team will run and trust, and its author is recorded.
+		mux.Handle("/searches", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/searches/save", s.requireTier(RoleResponder, opRead))
+		mux.Handle("/searches/run", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/searches/delete", s.requireTier(RoleResponder, opRead))
 		mux.Handle("/compliance/retention", s.requireTier(RoleAnalyst, opRead)) // SIEM-10: retention compliance report
 		mux.Handle("/incidents", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/incidents/ack", s.requireTier(RoleResponder, opRead))        // SIEM-11b: acknowledge an incident (POST)

@@ -697,3 +697,60 @@ interpolated into the query.
 - **THEN** the request is refused with 400 rather than falling back to a default rule or threshold
 
 <!-- restored from 2026-07-26-xdr4-cross-domain-correlation -->
+
+### Requirement: A hunt can be saved by name and re-run by anyone on the team
+
+The control plane SHALL let an operator save a named search against a named read surface, list them, run
+one by name, and delete one. Running a saved search SHALL return exactly what typing the equivalent query
+against that surface returns.
+
+The problem is not typing. A SOC's hunts are institutional knowledge and they live in people's shell
+history, so the hunt that found something last quarter is not repeatable by whoever is on shift tonight —
+and a detection only one analyst can perform is not a detection the team has.
+
+The stored form SHALL be the query as written, not a parsed structure, so there is no second
+representation to drift from the first and a parameter added to a surface later is expressible in a saved
+search without a schema change.
+
+A saved search SHALL be VALIDATED WHEN IT IS SAVED, by the same parser the live endpoint uses rather than
+a copy of it, and an invalid one SHALL be refused with that parser's own message. The analyst is standing
+there and can fix it; discovering it during the incident it was saved for is the failure mode. A stored
+search that has become unrunnable SHALL fail loudly when run rather than silently returning something
+narrower.
+
+The surface SHALL be part of the saved search and SHALL come from a closed set. The parameters are not
+interchangeable between surfaces, so a surface-less saved search would run somewhere it does not apply
+and return an empty result that reads as a finding.
+
+Replacing a saved search SHALL preserve who introduced it while recording who last changed it — those are
+different questions, and overwriting one with the other loses the answer to both.
+
+Deleting a name that is not saved SHALL be reported as such and SHALL NOT be reported as success:
+"deleted" when nothing was deleted lets an operator believe a hunt is gone when a differently-spelled one
+is still running.
+
+Listing and running SHALL be available at the analyst tier — they reach exactly the surfaces that tier
+already reads — while authoring and deleting SHALL require the responder tier, because a saved search is
+a tool the whole team will run and trust. The read and write surfaces SHALL be separate paths, since the
+role gate is per-path.
+
+#### Scenario: A saved search matches the typed query
+- **WHEN** a search is saved and then run by name
+- **THEN** its results are identical to running the same filter directly against that surface
+
+#### Scenario: An unrunnable search is refused when saved
+- **WHEN** a search is saved with a query its surface's parser rejects, or with a surface outside the set
+- **THEN** saving fails with that refusal rather than storing it
+
+#### Scenario: Replacing keeps the original author
+- **WHEN** one operator saves a search and another replaces it
+- **THEN** the original author is preserved and the replacer is recorded separately
+
+#### Scenario: Deleting a name that was never saved is not a success
+- **WHEN** a delete names a search that does not exist
+- **THEN** it is reported as not found
+
+#### Scenario: Reading and authoring are different tiers
+- **WHEN** an analyst lists or runs a saved search
+- **THEN** it succeeds
+- **AND** WHEN the same analyst tries to author one, it is refused

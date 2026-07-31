@@ -63,7 +63,7 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 	lockDB(t)
 	ddlCtx, ddlCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer ddlCancel()
-	if _, err := pool.Exec(ddlCtx, `DROP TABLE IF EXISTS entity_aliases, entities, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, agent_identities, enrollment_tokens, investigation_views, case_notes, cases, approvals, legal_holds, incidents, incident_alerts, incident_escalations, agent_enforcement, config_changes, config_revisions, config_settings, itsm_tickets, runner_actions, ioc_indicators, ioc_feeds, playbook_steps, playbook_runs, incident_annotations, ueba_baselines, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(ddlCtx, `DROP TABLE IF EXISTS entity_aliases, entities, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, agent_identities, enrollment_tokens, investigation_views, case_notes, cases, approvals, legal_holds, incidents, incident_alerts, incident_escalations, saved_searches, agent_enforcement, config_changes, config_revisions, config_settings, itsm_tickets, runner_actions, ioc_indicators, ioc_feeds, playbook_steps, playbook_runs, incident_annotations, ueba_baselines, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	if err := postgres.Migrate(ddlCtx, pool); err != nil {
