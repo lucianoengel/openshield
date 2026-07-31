@@ -208,7 +208,7 @@ func LoadRoutes(r io.Reader, sinkNames []string) ([]Route, error) {
 // matches, i.e. a silent hole in the table.
 func knownKind(k Kind) bool {
 	switch k {
-	case KindPeerAlert, KindAgentOverdue, KindIncident, KindApprovalPending:
+	case KindPeerAlert, KindAgentOverdue, KindIncident, KindApprovalPending, KindEscalation:
 		return true
 	default:
 		return false

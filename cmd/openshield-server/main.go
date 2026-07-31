@@ -579,6 +579,44 @@ func main() {
 			if !installed {
 				srv.SetNotifier(notify.NewMulti(sinks...))
 			}
+			// SOAR-9b: escalate incidents nobody acknowledges. Read PER TICK so a ladder change applies
+			// without a restart, and leader-only so replicas do not multiply the page.
+			//
+			// A ladder that fails to load leaves escalation OFF and says so, rather than substituting a
+			// default: guessing at deadlines an operator did not write would page people on a schedule
+			// nobody agreed to, and the honest failure of a broken ladder is that it does not run.
+			sinkOrder := order
+			if p := cfg.String("OPENSHIELD_ESCALATION_LADDER"); p == "" {
+				fmt.Fprintf(os.Stderr, "openshield-server: incident escalation IDLE — set "+
+					"OPENSHIELD_ESCALATION_LADDER to a ladder file to turn it on (no restart needed)\n")
+			} else if _, err := loadLadderFile(p, sinkOrder); err != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: escalation ladder NOT loaded from %s: %v — "+
+					"unacknowledged incidents will NOT be escalated\n", p, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "openshield-server: incident escalation ACTIVE from %s "+
+					"(acknowledging an incident stops its ladder)\n", p)
+			}
+			// The loop ALWAYS runs and reads path + ladder per tick, so both enabling escalation and
+			// editing the ladder apply to a running server. Gating the goroutine on the value read at
+			// start would make "dynamic" mean "dynamic once you restart", which is the shape PLAT-5b
+			// exists to refuse.
+			go srv.RunEscalationLoop(leaderCtx,
+				func() time.Duration { return cfg.Duration("OPENSHIELD_ESCALATION_INTERVAL") },
+				func() controlplane.Ladder {
+					p := cfg.String("OPENSHIELD_ESCALATION_LADDER")
+					if p == "" {
+						return controlplane.Ladder{} // not configured: no rungs, nothing fires
+					}
+					l, err := loadLadderFile(p, sinkOrder)
+					if err != nil {
+						// A file edited into an invalid state must not silently disable escalation:
+						// count it where the operator already looks.
+						controlplane.EscalationFailures.Add(1)
+						return controlplane.Ladder{}
+					}
+					return l
+				}, nil)
+
 			overdueThreshold := cfg.Duration("OPENSHIELD_OVERDUE_THRESHOLD")
 			overdueInterval := cfg.Duration("OPENSHIELD_OVERDUE_INTERVAL")
 			go retain.Loop(leaderCtx, overdueInterval, func(ctx context.Context) {
@@ -1006,6 +1044,18 @@ func loadRoutesFile(path string, sinkNames []string) ([]notify.Route, error) {
 	}
 	defer f.Close()
 	return notify.LoadRoutes(f, sinkNames)
+}
+
+// loadLadderFile reads and VALIDATES an escalation ladder against the configured sink names (SOAR-9b).
+// Same discipline as the routing table, for the same reason: an escalation mistake found at firing time
+// is found by a page that did not arrive.
+func loadLadderFile(path string, sinkNames []string) (controlplane.Ladder, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return controlplane.Ladder{}, err
+	}
+	defer f.Close()
+	return controlplane.LoadLadder(f, sinkNames)
 }
 
 // intentVerificationKey loads the control-plane public key an intent must verify against before the

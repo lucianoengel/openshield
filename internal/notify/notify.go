@@ -27,6 +27,11 @@ const (
 	// Without it a request waits for someone who was never told — and a playbook step gated on approval
 	// (SOAR-4) parks indefinitely on a decision nobody knows is pending.
 	KindApprovalPending Kind = "approval-pending"
+	// KindEscalation is an incident that has gone unacknowledged past a configured deadline (SOAR-9b).
+	// It is a SEPARATE kind, not a re-send of KindIncident, because the whole point of escalating is to
+	// reach somewhere the first notification did not — and routing keys on kind. Sent to the same
+	// destination as the page nobody answered, it would be a louder version of being ignored.
+	KindEscalation Kind = "escalation"
 )
 
 // Notification is one alert. Subject and AgentID are pseudonymous (D23) — the

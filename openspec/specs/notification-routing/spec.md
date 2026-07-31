@@ -77,3 +77,62 @@ others, and failures SHALL be aggregated rather than short-circuited.
 #### Scenario: One selected sink fails
 - **WHEN** a rule selects two sinks and one returns an error
 - **THEN** the other still receives the notification and the error is reported
+
+### Requirement: An unacknowledged incident escalates on a timer
+
+The control plane SHALL support an ordered ESCALATION LADDER: rungs of the form "after this long
+unacknowledged, notify these sinks", fired against incidents that are still open. Escalation SHALL be a
+distinct notification kind, routable like any other, rather than a re-send of the original — routing keys
+on kind, so a re-send arrives exactly where the page nobody answered went.
+
+This closes the half of alerting that routing did not. Routing decided WHERE a notification goes at the
+moment it is raised; nothing decided what happens when it goes there and no one answers. The page is
+delivered, delivery is recorded as a success, and the incident sits open — every part of the machine
+reporting that it worked.
+
+Acknowledging an incident SHALL stop its ladder, and that SHALL be a consequence of the incident leaving
+the open state rather than a separate cancellation step.
+
+Each rung SHALL fire AT MOST ONCE per incident, durably, so that a restart, a leader handover or a
+repeated sweep does not re-fire it. The claim SHALL be recorded BEFORE the notification is sent: sending
+first would re-page on any crash in between, and the crash window is when an operator can least absorb a
+duplicate. Each rung's notification SHALL carry its own idempotency key, or a receiver deduping on the key
+treats a later rung as a retry of an earlier one and discards it.
+
+A rung's deadline SHALL be measured from when the incident was raised, so the ladder that executes is the
+one the operator wrote rather than one that depends on when a sweep happened to run.
+
+A ladder SHALL be validated when it is loaded: a rung with no sinks, no deadline, an unknown sink, an
+unknown severity, a deadline not after the previous rung's, or an unrecognised field SHALL be refused. An
+out-of-order ladder SHALL be refused rather than silently sorted — sorting delivers a working ladder that
+is not the one that was written, which is the failure nobody then finds.
+
+This is a TIMER and SHALL NOT claim to be a schedule. There is no rotation, calendar or on-call roster;
+those require a roster this product does not have, and a half-built rotation that pages the wrong person
+is worse than none. The roster half stays named as absent.
+
+Rungs fired and sweeps that failed SHALL both be counted and exposed. A ladder that has stopped climbing
+is externally indistinguishable from a fleet where everything is acknowledged promptly, and that is the
+flattering reading.
+
+#### Scenario: An ignored incident escalates and an acknowledged one does not
+- **WHEN** the sweep runs against one unacknowledged and one acknowledged incident, both past a deadline
+- **THEN** only the unacknowledged one escalates
+- **AND** the escalation is delivered as the escalation kind, naming the incident
+
+#### Scenario: A rung fires once however often the sweep runs
+- **WHEN** the sweep runs repeatedly against the same still-open incident
+- **THEN** the rung is delivered exactly once
+
+#### Scenario: The ladder climbs by its own deadlines
+- **WHEN** an incident is older than the first two rungs' deadlines but not the third's
+- **THEN** exactly the first two fire, each under its own idempotency key
+
+#### Scenario: A severity floor and a deadline are both honoured
+- **WHEN** a rung names a minimum severity, or an incident is younger than a rung's deadline
+- **THEN** that rung does not fire for it
+
+#### Scenario: A structurally bad ladder is refused at load
+- **WHEN** a ladder has a rung with no sinks, no deadline, an unknown sink or severity, a deadline out of
+  order, or an unrecognised field
+- **THEN** loading it fails rather than producing a ladder that runs and does the wrong thing
