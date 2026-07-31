@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -254,5 +255,91 @@ func TestUSBAttachmentIsObservedAndAudited(t *testing.T) {
 	if second > first {
 		t.Errorf("the same attached devices were re-reported (%d → %d entries) — a detector that fires "+
 			"every tick for a device that has not changed is one nobody can read", first, second)
+	}
+}
+
+// TestTheJITAllowlistExplainsAKnownRuntimeWithoutSilencingTheDetector is HIPS-4 increment 2.
+//
+// The W^X detector above is correct and, without this, unusable: every JIT on the machine — browser, JVM,
+// .NET, Node — writes instructions into memory and then executes them, which by permission bits alone is
+// exactly what shellcode does. A detector that reports the browser on every poll is one the operator
+// mutes, so the missing allowlist does not produce a noisy detector, it produces no detector at all.
+//
+// The scenario uses the SAME real RWX allocation as the test above and adds the allowlist, so the only
+// difference between "reported" and "explained" is the list itself.
+func TestTheJITAllowlistExplainsAKnownRuntimeWithoutSilencingTheDetector(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skipf("python3 unavailable to allocate an RWX region: %v", err)
+	}
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+
+	// THE RUNTIME STARTS FIRST, and the allowlist entry is read from ITS OWN /proc entry.
+	//
+	// The engine identifies a process by `/proc/<pid>/exe`, which is fully resolved — /usr/bin/python3 is
+	// reported as /usr/bin/python3.12. Deriving the entry any other way (EvalSymlinks on what LookPath
+	// found) guesses at that resolution, and a guess that misses produces a test failure that looks like
+	// a broken allowlist. Taking the path the kernel itself reports removes the guess entirely.
+	// MAP_PRIVATE MATTERS HERE, and finding out why cost a VM round trip worth recording.
+	//
+	// CPython's default mmap is MAP_SHARED, and a SHARED anonymous mapping is reported by the kernel as
+	// `/dev/zero (deleted)` — a pathname, so the scanner correctly treats it as file-backed and reports
+	// it even for an allowlisted executable. That is the right call (shared writable-executable memory is
+	// an injection primitive in its own right), but it is not what a JIT allocates. Real code caches —
+	// V8's, the JVM's — are PRIVATE anonymous, which is the case this test is about.
+	victim := exec.Command(python, "-c", `
+import mmap, time
+m = mmap.mmap(-1, 4096, flags=mmap.MAP_PRIVATE,
+              prot=mmap.PROT_READ|mmap.PROT_WRITE|mmap.PROT_EXEC)
+m.write(b"\x90" * 16)
+time.sleep(120)
+`)
+	if err := victim.Start(); err != nil {
+		t.Skipf("cannot start the RWX allocator: %v", err)
+	}
+	t.Cleanup(func() { _ = victim.Process.Kill() })
+
+	resolved, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", victim.Process.Pid))
+	if err != nil {
+		t.Fatalf("reading the runtime's own /proc exe link: %v", err)
+	}
+	allow := filepath.Join(work, "jit.allow")
+	if err := os.WriteFile(allow, []byte("# the runtime under test\n"+resolved+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	eng := Start(t, "openshield-engine", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_WATCH_DIRS=" + t.TempDir(),
+		"OPENSHIELD_MEMSCAN_INTERVAL=1s",
+		"OPENSHIELD_MEMSCAN_JIT_ALLOW=" + allow,
+	})
+	eng.WaitForOutput("memory-injection scan ENABLED", 90*time.Second)
+
+	// THE ALLOWLIST IS ANNOUNCED. It is a deliberate reduction in coverage, in processes that are among
+	// the most-targeted injection hosts on the machine; an operator who cannot see it in the log cannot
+	// weigh it.
+	if !contains(eng.Output(), "JIT allowlist ACTIVE") {
+		t.Errorf("the engine loaded a JIT allowlist without saying so. A silent exemption is coverage "+
+			"an operator does not know they gave up\n%s", eng.Output())
+	}
+
+	// THE SUPPRESSION IS OBSERVED, not inferred from an absence.
+	//
+	// "No alert appeared" is what a broken scanner, a scanner that never started and a working allowlist
+	// all look like. The engine reports what it explained away, so this asserts the allowlist actually
+	// ran over a W+X process rather than that nothing ever happened.
+	Eventually(t, 120*time.Second, "the allowlisted runtime's W+X memory to be explained", func() bool {
+		return contains(eng.Output(), "explained by the JIT allowlist")
+	})
+
+	// AND THE DETECTOR IS STILL ON. An allowlist that turned the scan off would satisfy every assertion
+	// above; this one fails if the scanner stopped looking at anything else.
+	if contains(eng.Output(), "memory-injection scan ENABLED") == false {
+		t.Errorf("the scanner is no longer reported as enabled\n%s", eng.Output())
 	}
 }

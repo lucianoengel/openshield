@@ -47,6 +47,7 @@ import (
 	usbenforce "github.com/lucianoengel/openshield/internal/enforcers/usb"
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/fim"
+	"github.com/lucianoengel/openshield/internal/meminject"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/printguard"
 	"github.com/lucianoengel/openshield/internal/retain"
@@ -507,10 +508,26 @@ func main() {
 	}
 
 	if iv := envDuration("OPENSHIELD_MEMSCAN_INTERVAL", 0); iv > 0 {
+		// The JIT allowlist. A CONFIGURED-BUT-UNREADABLE list is FATAL rather than empty: degrading to
+		// "allow nothing" turns every JIT on the machine into an alert until the operator disables the
+		// scanner, and degrading to "allow everything" disables it immediately. Neither is a decision
+		// the operator made, and both look like the scanner working.
+		var jit meminject.JITAllowlist
+		if path := env("OPENSHIELD_MEMSCAN_JIT_ALLOW", ""); path != "" {
+			loaded, err := meminject.LoadJITAllowlist(path)
+			if err != nil {
+				fatal(log, "engine: the memory-scan JIT allowlist could not be loaded", err)
+			}
+			jit = loaded
+			log.Warn("engine: JIT allowlist ACTIVE — these executables' ANONYMOUS W+X memory is EXPECTED "+
+				"and will not be reported. This is a deliberate reduction in coverage in processes that "+
+				"are among the most-targeted injection hosts; a FILE-BACKED W+X mapping is still "+
+				"reported for them.", slog.String("file", path), slog.Int("executables", jit.Len()))
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			memScanSource(ctx, "/proc", iv, events, log)
+			memScanSource(ctx, "/proc", iv, jit, events, log)
 		}()
 		log.Info("engine: memory-injection scan ENABLED (W^X detection)", slog.Duration("interval", iv))
 	}
