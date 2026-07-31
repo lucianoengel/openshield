@@ -270,7 +270,11 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   still hold. The gateway is declared
   ALL-BOOTSTRAP because a network appliance's settings are node-local, so it needs no database
   credentials and a future fleet-wide gateway setting belongs on the signed channel; no per-node dynamic
-  values; no staged rollout; no keystore.
+  values; no staged rollout; no keystore. **That "future signed channel" is now ticketed as `PLAT-5c`, and
+  the residual is larger than this entry implied: the ENDPOINT AGENT has no dynamic scope either.** Both
+  are all-bootstrap, so PLAT-5b's dynamic, cluster-wide configuration reached only the server — meaning a
+  policy change on a hundred endpoints requires shell access on a hundred hosts. Named here because the
+  entry above reads as though only the gateway were outstanding.
   **BREAKING:** a dynamic field set in the environment no longer takes effect — it is reported, not
   silent (`OPENSHIELD_BREAKGLASS` is the deliberate, reported override).
 - **PLAT-6 · Release, packaging & deploy** — 🟡 **increment 1 DONE (D264)** — see Done ledger. `make
@@ -775,8 +779,8 @@ returns nothing). ADR-15.
   differs is drift with two named resolutions (re-apply, or split). Declared and observed render side by
   side — *"47 of 51 match · 4 differ"* — and zero drift shows a quiet confirmation rather than nothing,
   because "everything agrees" is information. **What "applies to all" means today, stated precisely:** the
-  edit declares the configuration for every member; *delivering* it is still `TOPO-3` export or `TOPO-4`'s
-  signed channel. The panel never implies a save reached a host.
+  edit declares the configuration for every member; *delivering* it is `PLAT-5c`'s signed channel once that
+  lands, and `TOPO-3` export until then. The panel never implies a save reached a host.
 - **TOPO-8 · Unmanaged sources** — TOPO-6 · S. The one real blind spot in call-home discovery: a host that
   never installed an agent is invisible to enrolment — but **not** to the gateway, which sees traffic from
   sources mapping to no enrolled identity. Surfaced as a count with its caveat rendered in place: inferred
@@ -814,15 +818,39 @@ returns nothing). ADR-15.
   Pure means directly testable: given a graph, assert the emitted config. Output leads with the **semantic
   summary** ("prod-web loses inline inspection"), because ADR-15 requires approval to be semantic and
   nobody approves a field diff by inspection.
-  **Ships as EXPORT, and that is the point.** Until `TOPO-4` there is no signed channel and gateway settings
-  are node-local by design (D272), so the compile output ends with an honest terminal state — *"this cannot
-  be delivered from the console; export it or apply it through your existing configuration management"* —
-  rather than a greyed-out `Apply` implying it is nearly ready. A validated, typechecked, coverage-checked
-  config generated from a reconciled model is genuinely useful with Ansible or a Containerfile, **so Lane G
-  delivers value two owner-gated tickets earlier than it otherwise would.**
-- **TOPO-4 · Signed gateway-configuration channel** — 🔒 **owner-gated** · XL. Gateway config is
-  deliberately all bootstrap-scope, node-local, with no database credentials (D272), so apply cannot go
-  through the config DB. Three constraints are the whole design: **(1)** it must not become a second
+  **Ships with EXPORT as the interim path, explicitly labelled interim.** Until `PLAT-5c` there is no
+  dynamic scope on endpoints or gateways to deliver into, so the compile output ends with an honest terminal
+  state — *"delivery is not available yet; export it or apply it through your existing configuration
+  management, and the canvas will show each member converge"* — rather than a greyed-out `Apply` implying it
+  is nearly ready. A validated, typechecked, coverage-checked config from a reconciled model is genuinely
+  useful with Ansible or a Containerfile, **so Lane G delivers value before `PLAT-5c` and `TOPO-4` land.**
+  But export is not the destination: **a configuration surface that requires shell access on every host is
+  not a configuration surface.**
+- **PLAT-5c · Configuration DELIVERY to endpoints and gateways — PLAT-5b is half-finished** — new work · L.
+  *Owner correction, 2026-07-31: "configurations SHOULD be delivered to the node, we can't assume we need
+  direct access to endpoints."* Correct, and the tree agrees more than the earlier plan admitted.
+  **Endpoint agent config has ZERO dynamic fields. So does the gateway.** Every setting on both is
+  bootstrap. Only the server got PLAT-5b's dynamic, cluster-wide scope (45 fields), and
+  `internal/intent/fleetcontrol.go:22` states the consequence in its own words: *"D265's kill switch reaches
+  server-side components through the configuration store. **ENDPOINT AGENTS DO NOT READ IT**"* — which is
+  why the endpoint half of the kill switch had to be built as a separate signed channel in the first place.
+  **This is a platform gap that predates the console; the console is only what makes it visible.**
+  **The pattern is proven five times over** — fleet-control, signed risk/posture, signed IOC feeds, signed
+  DLP indexes and response intents are all signed one-way channels to endpoints. Configuration is the one
+  thing that does not use one. So this is the sixth instance of an established shape, not new architecture:
+  signature, monotonic sequence, mandatory expiry, fail-toward-the-safe-state, with `fleetcontrol.go` as the
+  reference implementation.
+  **What stops it becoming "a message meaning run this"** (`INVARIANTS.md:27`): PLAT-5 already declares
+  configuration as typed `Field`s with a `Kind` and a `Scope` (D262/D263), so a signed config message can
+  carry **only declared fields with validated types — a closed vocabulary by construction rather than by
+  discipline.** An undeclared key is not "unknown", it is rejected, exactly as an unknown fleet-control
+  version is rejected whole rather than partially applied. `Accept`: a dynamic endpoint setting changes on a
+  live agent with no shell access to it, and an undeclared or mistyped field is refused; mutation — accept
+  an undeclared key → the refusal test must fail.
+- **TOPO-4 · Topology-driven configuration delivery** — PLAT-5c · 🔒 **owner-gated** · L *(was XL: with
+  `PLAT-5c` carrying the channel, this becomes the topology-shaped layer over it rather than new
+  transport)*. Gateway config is node-local with no database credentials (D272), so delivery rides the
+  signed channel rather than the config DB. Three constraints are the whole design: **(1)** it must not become a second
   command channel — `INVARIANTS.md:27` bounds a compromised control plane because *"there is no message
   meaning 'run this'"*, and configuration is where enforcement lives, so **a compiled config that reduces
   enforcement coverage must be REFUSED unless expressed as `ENFORCEMENT_DISABLE`**, computed by the

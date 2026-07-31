@@ -86,11 +86,40 @@ Four rules follow, and they are load-bearing:
    the desired behaviour and exactly why it must be visible: *"3 hosts joined this node since the last
    revision."*
 
-**What "applies to all" means today, stated precisely.** Editing a node declares the configuration for every
-member. *Delivering* it is still `TOPO-3` export or, once the owner takes it, `TOPO-4`'s signed channel —
-gateway settings remain node-local bootstrap by design (D272). The canvas is honest about the gap: the node
-shows **declared** configuration and **observed** configuration per member, and the distance between them is
-the drift in rule 3. It never implies a save reached a host.
+**What "applies to all" means, and the platform gap behind it.** Editing a node declares the configuration
+for every member, and **that declaration must be delivered, not hand-applied.** Requiring shell access to
+each host to change a policy is not viable at a hundred endpoints, and it is not how the rest of this
+product already works.
+
+The honest state of the tree:
+
+- **Endpoint agent configuration has ZERO dynamic fields today. So does the gateway.** Every setting on
+  both is bootstrap-scope. Only the *server* has dynamic, cluster-wide configuration (45 fields via the
+  database, PLAT-5b).
+- **`internal/intent/fleetcontrol.go:22` states the consequence directly:** *"D265's kill switch reaches
+  server-side components through the configuration store. **ENDPOINT AGENTS DO NOT READ IT**"* — which is
+  why the endpoint half of the kill switch had to be built as a separate signed channel.
+- **But the delivery pattern is proven five times over**: fleet-control, signed risk/posture, signed IOC
+  feeds, signed DLP indexes, and response intents are all signed one-way channels to endpoints. Configuration
+  is the one thing that does not use one.
+
+So **PLAT-5b is half-finished**, and that is a platform gap predating the console rather than a topology
+problem. `PLAT-5c` closes it: a dynamic scope for endpoint and gateway configuration, delivered over a
+signed channel modelled on fleet-control — signature, monotonic sequence, mandatory expiry, and
+fail-toward-the-safe-state.
+
+**What keeps that from becoming "a message meaning run this."** `INVARIANTS.md:27` bounds a compromised
+control plane on there being no such message, and a general key-value config channel would be one. The
+defence is already built: **PLAT-5 declares configuration as typed `Field`s with a `Kind` and a `Scope`
+(D262/D263), so a signed config message can carry only declared fields with validated types — a closed
+vocabulary by construction rather than by discipline.** An undeclared key is not "unknown", it is rejected,
+the same way an unknown fleet-control version is rejected whole. Coverage-reducing changes still route
+through `ENFORCEMENT_DISABLE` (§5.1, ADR-15); this channel delivers configuration, it does not become a
+second way to turn enforcement off.
+
+Until `PLAT-5c` lands, the canvas is honest rather than silent: the node shows **declared** and **observed**
+configuration per member, the distance between them is the drift in rule 3, and a save never implies it
+reached a host. `TOPO-3` export is the interim delivery path, explicitly labelled as interim.
 
 ### 2.1 Kinds and ports
 
@@ -421,19 +450,22 @@ gw-edge-01                                       ▾
   ⓘ all gateway settings are bootstrap-scope — this node requires a restart
 ```
 
-**③ What cannot be applied yet.** Until `TOPO-4` ships there is no signed channel, and gateway settings are
-node-local by design (D272). So the compile output ends with an honest terminal state rather than a
-disabled `Apply` button implying it is nearly ready:
+**③ How it gets delivered.** Once `PLAT-5c` ships, this pane offers `Request delivery` — the compiled,
+typed, closed-vocabulary change set published on the signed channel with four-eyes, staged rollout and
+per-node acknowledgement, and the pane tracks which members have applied it. **Delivery is the target
+state, not an optional extra**: a configuration surface that requires shell access on every host is not a
+configuration surface.
 
-> **This configuration cannot be delivered from the console.** Gateway settings are node-local and there is
-> no signed fleet-wide configuration channel yet (`TOPO-4`). Export the per-node configuration, or apply it
-> through your existing configuration management.
+Until then the pane is honest rather than showing a disabled button that implies it is nearly ready:
+
+> **Delivery is not available yet.** Endpoint and gateway settings have no dynamic scope, so this change
+> set cannot be published to the fleet (`PLAT-5c`). Export it, or apply it through your existing
+> configuration management, and the canvas will show each member's configuration converge.
 > `[ Export per-node config ]  [ Copy as env ]  [ Download bundle ]`
 
-**Export is the product until `TOPO-4`.** That is not a consolation prize — a validated, typechecked,
-coverage-checked configuration generated from a reconciled model is genuinely useful with Ansible or a
-Containerfile, and shipping `TOPO-3` as export-only means Lane G delivers value two owner-gated tickets
-earlier than it otherwise would.
+**Export is the interim path and is labelled as interim** — a validated, typechecked, coverage-checked
+configuration generated from a reconciled model is genuinely useful with Ansible or a Containerfile, and it
+lets `TOPO-3` deliver value before `PLAT-5c` and `TOPO-4` land. It is not the destination.
 
 ---
 
