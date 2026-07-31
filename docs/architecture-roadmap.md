@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D419)
+## What OpenShield is (status at a glance, through D426)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -113,7 +113,10 @@ set of named trust/distribution decisions, not engineering left undone. The sect
 collapsed into the Done ledger — because each entry states the **residuals** its ticket deliberately did
 not close, and those residuals are the honest boundary of what the MVP claims.
 
-**Do not re-propose anything here. The next work is PLAT-1 (the UI), plus enrichment.**
+**Do not re-propose anything here. The next work is Lane F · Console (PLAT-1, now decomposed and
+unparked), plus enrichment.** Start at `CONSOLE-1` — and read its preamble first: it is not a UI ticket, it
+is a shipped ZT-7 defect that makes SSO operators unable to acknowledge, transition, or read a timeline,
+and whose naive fix collapses four-eyes.
 
 Each ticket names the ADR it implements where one applies, and its `Accept` is the real-path test that
 closed it.
@@ -355,6 +358,323 @@ actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a h
   watermark/redact, install is a root step.
 *(Lane E's MVP items — HIPS-3 inc 2a/2b, DLP-2a, DLP-2b — are all ✅ above. **Lane E is complete**, and
 with it the MVP queue.)*
+
+---
+
+## 🚧 Lane F · Console (PLAT-1) — the next queue
+
+Design: `docs/superpowers/specs/2026-07-31-console-plat1-design.md` (adversarially reviewed against D426).
+**PLAT-1 is roughly 40% backend**, and one part of it is a shipped defect that already breaks ZT-7 SSO.
+
+**Read this before pulling anything here.** `requireTier` (`internal/controlplane/views.go:131`)
+authenticates by client certificate **or** OIDC bearer token and then discards `auth.identity` — it never
+reaches the request context. Eight handlers re-derive identity from `operatorIdentity(r.TLS)`
+(`views.go:166`), which returns `""` without a peer certificate. **So an SSO operator today passes the tier
+gate and is then refused by `/alerts/ack`, `/incidents/ack`, `/incidents/transition`,
+`/incidents/timeline`, `/cases/*`, `/searches/save`, `/subject` and `/view`.** D373 shipped an
+authentication method that reaches almost none of the product. Same shape as D415/D417/D418.
+
+And the obvious fix is a trap: a certificate mints `"operator:" + CN`, a token mints the raw `sub`, and
+four-eyes is `AND requester <> $2` (`internal/controlplane/approvals.go:119`). Thread the bearer identity
+through unchanged and **one human requests from the CLI and approves from the browser** — two-person
+control collapses on case closure, `CONTAIN` intents and fleet `ENFORCEMENT_DISABLE`. `CONSOLE-1` fixes
+both as one change or neither.
+
+### Phase 0 · Foundation
+
+- **CONSOLE-1 · One canonical operator principal** — new work · L. Namespaced principals
+  (`cert:<CN>` / `oidc:<iss>#<sub>`), threaded through `requireTier` onto the request context; the eight
+  `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account
+  and **four-eyes compares the account, not the string**; `operator_roles` gains an issuer discriminator so
+  an IdP subject cannot inherit a certificate CommonName's row; the operator route set becomes **data** so
+  a registered-but-unmounted route is unrepresentable, and `/report/response` (SOAR-6, registered at
+  `operator_read.go:231`, absent from the outer mux) is mounted by it.
+  `Accept`: a bearer-only operator acknowledges, transitions, reads a timeline and opens a case; and one
+  human with two credentials is REFUSED at four-eyes, with the test first asserting the request reached the
+  tier gate. *OpenSpec change proposed: `2026-07-31-console-1-operator-principal`.*
+  **Three seams ride along, because this is the only cheap moment for them.** This ticket already rewrites
+  the principal model, adds a table, and moves four-eyes from a string to an account. Each of the following
+  is S-sized inside it and L-sized after it — after it they mean touching the same eight handlers, the same
+  cursors and the same four-eyes predicate a *second* time, and this file's own §1 preamble is the record of
+  what a second pass costs:
+  - **A machine principal distinct from a human one** — `svc:<name>`, with its own issue/scope/expire/
+    rotate/revoke lifecycle, and the non-negotiable rule that **a service account can NEVER satisfy
+    four-eyes**. Without it every customer integrating a ticketing system or a script hands a robot a
+    human's certificate, which is what the four-eyes account comparison is being built to detect.
+  - **A scope predicate on the principal**, resolved in `requireTier` and carried in the pagination cursor,
+    **defaulting to "all"**. This does NOT build multi-tenancy (still deferred, ADR-4, and named as an
+    evaluation-ending gap at `docs/enterprise-gap-assessment.md` §3). It reserves the seam so tenancy is
+    later a WHERE clause rather than a rewrite of every handler and every cursor.
+  - **Split `admin` into `admin` and `privacy-officer`** for DSAR export, legal-hold release and the
+    view-audit reader. Today one tier fuses "can change configuration" to "can read every subject's
+    compiled personal data", and no SOC 2 / ISO 27001 access review is answerable with three tiers. Full
+    per-capability custom roles stay deferred (`CONSOLE-30`); this is the separation of duties that cannot
+    wait for them.
+- **CONSOLE-2 · Toolchain, dependency budget, reproducible bundle** (ADR-13) — new work · M. React/TS/Vite
+  under `apps/console/`, embedded via `embed.FS`, same origin, no CDN, Node-free `go build`. The budget is a
+  **number** enforced in CI, and every direct dependency gets the one-sentence justification D276 demanded
+  when it refused goreleaser as "a dependency taken for its own sake". `Accept`: pinned-digest network-less
+  container build, `SOURCE_DATE_EPOCH`, and a byte-identical rebuild check that FAILS the release —
+  `internal/release/release_test.go:161` already tests that Go builds are reproducible, and embedding
+  bundler output puts a non-deterministic input inside that digest. Note `--ignore-scripts` is not the
+  control: `vite.config.ts` and its plugin import closure execute with filesystem and network access during
+  the build, on the machine holding the signing key.
+- **CONSOLE-3 · Browser session auth** (ADR-14) — CONSOLE-1 · L. OIDC Authorization Code + PKCE, `state`
+  bound to a pre-auth cookie, `nonce`, callback `iss` check; server-side session in a `__Host-` cookie
+  (`HttpOnly`, `Secure`, `SameSite=Strict`, idle + absolute timeout); CSRF as an `X-OpenShield-CSRF`
+  **header** so no existing route signature changes, plus an independent `Origin` check. The console's
+  OAuth client is a **separate component from the bearer verifier**, and a token whose `aud` is the console
+  `client_id` is refused on the bearer path. **`REQUIRE_DPOP=1` refuses console login and says so at
+  startup** — a cookie has no proof-of-possession, and silently exempting the browser is the downgrade that
+  switch exists to prevent. `Accept`: authorization is unchanged (no tier ever derived from a claim), and
+  the mutation that makes the session carry a `groups` claim fails the test.
+
+### Phase 1 · Slice 1 — one page, end to end
+
+- **CONSOLE-4 · Incidents queue + timeline detail** — CONSOLE-1,3 · L. The riskiest unknowns proved on the
+  real path before any framework generalization: session auth → `/incidents` → `/incidents/timeline` with
+  the **three evidence states rendered visually distinct** (resolved / unresolved / derived) → the view
+  recorded under the session principal. No i18n, no palette, no a11y gates yet. `Accept`: an analyst reads
+  a cross-domain timeline and a derived evidence link is not mistakable for a resolved one.
+
+### Phase 2 · The MVP console
+
+- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — CONSOLE-1 · M. **A console
+  WEAKENS a documented trust boundary unless this lands.** `RecordView` has four call sites
+  (`views.go:47`, `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`); `/alerts`, `/search`, `/events`,
+  `/logs`, `/incidents`, `/overdue`, `/subject`, `/searches/run` record nothing —
+  and those are the console's primary reads. `docs/threat-model.md:184` bounds the malicious-operator
+  insider with "who LOOKED is recorded"; a UI turns that adversary's task into "scroll the fleet and leave
+  nothing". Per-route decision on what is an evidence-bearing read, recorded before the response, residual
+  stated for every route left unaudited. Plus: migration `007_investigation_views.sql` has **no TTL, no
+  purge and no DSAR path** while storing raw non-pseudonymised operator identities — a console makes it one
+  of the largest tables in the database. Adds a retention window, purge, and DSAR inclusion.
+- **CONSOLE-6 · Keyset pagination** — new work · M. `maxSearchLimit = 1000` (`operator_read.go:281`) with
+  no cursor and no `has_more`. Hunt cannot be built on "top 1000 rows, no row 1001" against 90-day
+  retention. The existing `ORDER BY received_at DESC, id DESC` is already a usable cursor.
+  *Residual:* no stable snapshot across pages while ingest is live.
+- **CONSOLE-7 · Operator-tier `/health`** — new work · S. Leader held / broker connected / ingest state /
+  schema skew / last anchor. The Overview strip's first tile **has no data source today**: `/metrics` sits
+  behind a separate constant-time bearer token (PLAT-4b), not the operator session. Also specifies what the
+  console shows when it is talking to a follower.
+- **CONSOLE-8 · Fleet inventory + break-glass surface** — CONSOLE-7 · M. Agent identity, platform, version,
+  last-seen, attestation verdict + TTL, posture, spool depth — and **which agents are enforcement-suppressed,
+  since when, by whom, until when**, from `agent_enforcement` (`heartbeat.go:72`).
+  `INVARIANTS.md:131`: *"'How do I stop this?' is the question a CISO asks before 'what does it detect?'"*
+- **CONSOLE-9 · Entity surface over HTTP** — new work · M. The entity graph (D203) and per-entity risk
+  (D255) are database-only; no HTTP route exposes either.
+- **CONSOLE-10 · Replay + explain over HTTP** — new work · M. `openshieldctl replay` is CLI-only. Backs the
+  thesis page: which pack and rule won under the most-restrictive-wins lattice (ADR-5), and whether current
+  policy still produces this decision.
+- **CONSOLE-11 · Untrusted-render component + approval hardening** — CONSOLE-3 · M. One `<Untrusted>`
+  component is the **only** path telemetry reaches the DOM, with an href scheme allowlist applied inside it
+  — "a pivot menu on every value" turns every telemetry string into a potential `href`, and
+  `javascript:`/`data:` are blocked by no CSP directive. Tree-wide lint ban on `dangerouslySetInnerHTML`.
+  The four-eyes screen renders a **server-generated closed-vocabulary summary** (verb, subject count, blast
+  radius, TTL) above the requester's free text, and the approve POST carries a one-time token bound to
+  `(approval_id, requester, digest of the summary shown)` so a stale or re-rendered row fails closed.
+- **CONSOLE-12 · Hunt, Fleet, Explain + the pivot spine** — CONSOLE-6,8,9,10,11 · L. The roadmap names
+  five verbs — pivot, search, compare hosts, replay, explain a block — and the spine is what serves them:
+  ⌘K palette, a global time range in the URL, a pivot menu on every value, every view URL-addressable so an
+  IR handoff is a pasted link, and the whole loop completable by keyboard.
+  **Two scope cuts, both sequencing rather than refusal.** *Split-pane compare* moves to `CONSOLE-39`: it is
+  among the most expensive affordances to build — duplicated view state, two independent time ranges, a
+  layout every later page must respect — and because every view is URL-addressable by design, two browser
+  tabs serve "compare hosts" in the MVP. *The standalone Entity page* folds into the entity panel the
+  incident detail already carries; `CONSOLE-9`'s HTTP surface still ships on schedule because Fleet, the
+  incident detail and the risk score all need it. An entity is something an analyst pivots *to*, not a
+  destination reached cold — so this removes a surface without removing a capability.
+- **CONSOLE-13 · i18n foundation** — CONSOLE-4 · M · **moved to Phase 3 (see below), sequencing only.**
+  `react-i18next` + ICU; **bundles embedded and signed with the release, never loaded from a mutable
+  directory** — an unsigned hot-loaded pack rewrites UI text
+  including the four-eyes button label, and `threat-model.md:193` requires signatures on everything loaded
+  before parse. Approval confirmations and destructive-action labels live in a **non-overridable embedded
+  namespace**. Gates: an ESLint rule failing CI on bare user-visible strings, and an `en-XA` pseudolocale
+  render test. Logical CSS properties from day one so RTL is a data change later.
+  *Residual, named:* backend-emitted reason strings stay English and render verbatim — the honest claim is
+  "the console chrome is localizable; the security narrative is not yet" (see `I18N-2`).
+- **CONSOLE-25 · Step-up re-authentication for destructive acts** — CONSOLE-3 · S. §2.3 of the design
+  concedes the console *introduces* a privilege escalation: a stolen bearer token is effectively read-only
+  today, a session is write-capable by definition, and a certificate is not phishable while a session is.
+  Step-up is the compensating control every buyer expects and the plan had omitted — re-prove identity
+  (`acr_values` / `max_age`, phishing-resistant factor) at `CONTAIN`, `ENFORCEMENT_DISABLE`, legal-hold
+  release, DSAR export and case closure. **Binds to the one-time confirmation token `CONSOLE-11` already
+  issues**, so it is nearly free there and expensive anywhere else. Also the first place the product states
+  that MFA is delegated to the IdP — currently unstated anywhere, and it is a line item on every security
+  questionnaire.
+- **CONSOLE-26 · The queue as a worklist: assignment + bulk operations** — CONSOLE-4 · M. Without it the
+  MVP is a viewer, not a console: SOAR-2's lifecycle is attributed but nothing says *whose* an incident is,
+  so there is no "my queue", no unassigned bucket and no shift handover; and acknowledging a 200-incident
+  phishing wave is 200 round trips. Bulk returns **per-item results** (partial success is the norm), writes
+  **one audit row per item, not per batch**, and a bulk *containment* interacts with SOAR-7's blast-radius
+  ceiling by being refused as a whole rather than partially applied.
+  **State the distinction explicitly in the ticket:** SOAR-6 deliberately refuses per-analyst aggregation
+  as workforce surveillance, with a test asserting no series names an operator. **Assignment is workflow,
+  not measurement** — say so, or this gets refused for the wrong reason.
+- **CONSOLE-27 · Suppression with mandatory expiry + closure disposition** — CONSOLE-4 · M. `No
+  alert-storm suppression` is a named limit today. Weeks one to four of any deployment are dominated by
+  tuning, and with no scoped expiring mute the analyst does the only thing available: disables the detector
+  or ignores the queue. **This is the single most common reason a security-tool pilot is judged "too
+  noisy".** Design it as a control, not a convenience: default TTL, mandatory reason, an owner, the
+  suppressed count visible on the rule, audited creation, and **expiry that RESTORES detection** — the same
+  shape as the intent TTLs the product already uses. Closure disposition (true positive / false positive /
+  benign-authorized / duplicate) rides along: it is XS in the schema *while `CONSOLE-4` is being built* and
+  a backfill across an attributed forward-only lifecycle afterwards, and without it there is no
+  false-positive rate per rule to drive the tuning it enables.
+- **CONSOLE-28 · Export from every grid** — CONSOLE-5,6 · S. CSV/JSON from any result set. Cheapest
+  table-stakes item on the list, and it **strengthens** the boundary `CONSOLE-5` defends rather than
+  weakening it: a bulk export *is* the "scroll the fleet and leave nothing" event, so it is view-audited
+  with row count and filter, and it is the natural first signal for the per-viewer volume anomaly detection
+  `CONSOLE-5` already proposes.
+- **CONSOLE-29 · Session inventory, revoke-all, and deprovision kills live sessions** — CONSOLE-3 · S.
+  `requireTier` re-resolving the role per request covers *authorization*, not session *existence*, and it
+  does not cover "the analyst left and their laptop is unlocked in a shared room". Enumerate active
+  sessions, terminate one or all, and make ZT-7 SCIM deprovisioning and an `operator-role` revocation
+  invalidate live cookie sessions. The server-side session store is being built in `CONSOLE-3`, so this is
+  a query and a delete **now**, and a security incident later.
+- **CONSOLE-14 · Assurance gates** — CONSOLE-12 · M. Clicks-to-answer budgets asserted in Playwright and
+  CI-gating; axe/WCAG 2.2 AA; keyboard-only investigation path; **golden-response fixtures, not generated
+  types** — most handlers return anonymous `map[string]any` (`incidents.go:195`, `soar2.go`,
+  `config_http.go`), so a Go→TS generator degrades into "generate a few, hand-write the rest", the
+  half-maintained source of truth this project keeps being burned by.
+- **CONSOLE-15 · Console in the signed release** — CONSOLE-2 · M. JS SBOM generated **from the lockfile**
+  and fed into `BuildSBOM` so the manifest signature covers it — `internal/release/sbom.go:55` derives from
+  `debug/buildinfo` and would describe zero npm packages. Node/pnpm pinned in the manifest beside the Go
+  toolchain. Security-header audit on the served console.
+
+### Phase 3 · Deferred console surfaces — on the roadmap, not gating the MVP console
+
+**Sequencing note on i18n, for the owner to overrule if they disagree.** Multilingual support is an owner
+requirement and is NOT in question — the framework choice, ICU, the signed-bundle decision and the refusal
+of the unsigned overlay all stand as written in `CONSOLE-13`. What moved is *when*. The plan's own residual
+concedes the security narrative stays English until `I18N-2`, so what a Phase-2 `CONSOLE-13` would ship is
+translated chrome above English alert reasons — a property no analyst can use and no procurement checklist
+credits, bought with an M-sized ticket and two CI gates. **The two things that genuinely cannot be
+retrofitted stay in Phase 0**, folded into `CONSOLE-2`: logical CSS properties from the first component
+(`margin-inline-start`, never `margin-left`), and the no-bare-string lint rule. Those keep the retrofit
+cheap; the rest waits for `I18N-2` to make it mean something.
+
+- **CONSOLE-39 · Split-pane compare** — CONSOLE-12 · M. Two hosts or two incidents side by side, with
+  independent time ranges. Deferred from the MVP spine, not refused — "compare hosts" is one of the five
+  named adoption verbs, and two URL-addressable tabs are the interim answer, not the final one.
+
+- **CONSOLE-16 · Standalone Overview dashboard** — CONSOLE-7 · M. (MVP ships a health strip on Incidents.)
+- **CONSOLE-17 · Alerts as a first-class page** — CONSOLE-6 · M. Dedup by `dedup_key`, ATT&CK mapping, ack.
+- **CONSOLE-18 · Response surface** — new work · L. Playbook definitions and runs, integration runners,
+  notification routing. Needs `CONSOLE-19`.
+- **CONSOLE-19 · Playbook read/validate/dry-run over HTTP** — new work · M. Playbooks are a polled file
+  (`OPENSHIELD_PLAYBOOKS`) with no API. Read and dry-run first; authoring is a separate decision.
+- **CONSOLE-20 · Evidence & ledger browser** — new work · M. Chain verification, anchors, witness,
+  restore-drill history, and the view-audit reader.
+- **CONSOLE-21 · Configuration UI** — new work · M. Schema-driven forms over `GET /config/schema`;
+  bootstrap fields read-only with origin, dynamic editable; diff before save, revisions and rollback;
+  secrets never readable back; **all field errors rendered at once** because the API already reports them
+  at once. This is what PLAT-5's derived schema was built for (D262/D263).
+- **CONSOLE-22 · Administration & integrations** — new work · L. Role management, enroll-token
+  issue/revoke, feed ingest and status, fleet-control publish — **all CLI-only today**, each needing an
+  HTTP route with four-eyes where the CLI relied on shell access as the gate.
+- **CONSOLE-23 · Policy & compliance packs** — new work · M. Packs in force, lattice preview, simulation.
+- **API-9 · Streaming (SSE), if a measured need appears** — 🔵 deferred by decision, not backlog. Cut from
+  the MVP: correlation runs on a CLOCK (SOAR-2/D250) so streaming buys latency the backend does not
+  produce, and a long-lived stream authorizes once at handshake — reintroducing exactly the role staleness
+  ZT-7 deleted (`operator_roles.go:26`: *"the revocation takes effect within the cache TTL is the sentence
+  that makes a security control untrustworthy"*). MVP polls with ETag/`If-None-Match` at 10–15s.
+  *Residual:* freshness is bounded by the poll interval AND the correlation interval, and the second
+  dominates. If this lands, the stream loop must re-resolve the role on a tick, tear down on mismatch, and
+  cap its lifetime below the session idle timeout.
+- **CONSOLE-24 · Session sender-constraining** — CONSOLE-3 · M. Non-extractable WebCrypto keypair or DBSC,
+  so `REQUIRE_DPOP=1` no longer has to refuse console login. Until then the refusal is the honest answer.
+- **I18N-2 · Localizable security narrative** — CONSOLE-13 · L. Message IDs + params at the emission point
+  instead of pre-formatted English strings, so alert reasons and policy explanations localize. This is the
+  half that makes "multilingual" true rather than "the chrome is translated".
+- **CONSOLE-30 · Custom roles / per-capability grants** — CONSOLE-1 · M. Beyond the four tiers
+  `CONSOLE-1` leaves in place. A capability table behind the existing `requireTier` seam, so the grant is
+  data rather than a new gate. Procurement asks for this by name in an access review.
+- **CONSOLE-31 · Reporting: scheduled reports, exec PDF, compliance evidence packs** — CONSOLE-20 · L.
+  Today `SIEM-9` parks scheduled reports in enrichment and no console phase has a report page, while the
+  CISO's actual recurring deliverable is a board slide and the auditor's is an evidence pack mapped to
+  SOC 2 CC7 / ISO 27001 A.12 / PCI 10 / HIPAA §164.312(b). **This is where the product's strongest claim
+  becomes an artifact:** a report rendered server-side, deterministically, with a hash-chain-verifiable
+  evidence appendix is something the incumbents cannot produce. Skipping it forfeits the differentiator in
+  the one document executives actually read.
+- **CONSOLE-32 · Audit egress — forward the console's own audit log to the customer's SIEM** — new work ·
+  S. OpenShield ingests CEF, syslog, CloudTrail and WEF and **emits nothing**. Enterprises require operator
+  actions, authentication events, config changes and admin activity to land in *their* SIEM, not only in
+  the vendor's database. One CEF/syslog emitter over the existing audit rows. A SIEM-ingesting product with
+  no audit egress is a contradiction an evaluator finds in the first technical call.
+- **CONSOLE-33 · Onboarding, empty states, deployment self-diagnosis** — CONSOLE-7 · M. A fresh install
+  shows an empty queue, which is **indistinguishable from a broken install**. `CONSOLE-7` delivers health
+  *facts*; this delivers a *diagnosis*: "0 agents enrolled — here is the enroll command", "ingest connected
+  but no events in 24h", "3 agents silent for 7 days", "your schema is one migration behind". For an
+  open-source product where adoption is the distribution channel, this is plausibly the highest-ROI item in
+  Phase 3 — the evaluator decides in twenty minutes.
+- **CONSOLE-34 · OpenAPI document validated against the golden fixtures** — CONSOLE-14 · S. §10 rejects
+  *generated types* for good reason, but that leaves no published contract at all, and "send us your API
+  docs" is question two on every RFP. A hand-written OpenAPI doc checked in CI against the fixtures
+  `CONSOLE-14` already records costs one job and promotes those fixtures from a private test artifact to a
+  conformance corpus.
+- **CONSOLE-35 · Shared team views + watchlists** — CONSOLE-12 · M. SIEM-14 shipped saved searches, but
+  they are personal: no manager-curated team triage view (an owner/visibility column on the existing
+  table), and no watchlist for VIPs, crown-jewel hosts or contractors under review. The watchlist should
+  feed the entity risk score (D255) rather than being a UI filter — otherwise it is decoration.
+- **CONSOLE-36 · SLA timers + breach alerting on the live queue** — CONSOLE-26 · S. SOAR-6's own residual
+  names this gap: the console renders historical MTTA/MTTR while showing an analyst nothing about the
+  incident in front of them aging past a commitment. Per-severity target, a computed clock on the queue
+  row, and breach routed through SOAR-9's existing sinks. TABLE-STAKES for an MSSP, who sells contractual
+  response times.
+- **CONSOLE-37 · Multi-tenancy** — CONSOLE-1 · XL · 🔒 owner decision. ADR-4 defers org tenancy and
+  `docs/enterprise-gap-assessment.md` §3 names zero tenant scoping as an evaluation-ending gap. `CONSOLE-1`
+  reserves the seam so this is a WHERE clause; whether to build it is a positioning call (MSSP resale and
+  subsidiary/region isolation) rather than an engineering one.
+- **CONSOLE-38 · VPAT, browser support matrix, theming seam** — CONSOLE-14 · S. `CONSOLE-14` already funds
+  the real accessibility work (WCAG 2.2 AA, axe in CI, keyboard-only path); the **VPAT is the artifact US
+  federal and large-enterprise procurement actually requests**, and it is a document, not a project. State
+  the browser floor too — `CONSOLE-24`'s WebCrypto/DBSC path implies an aggressive one. Theming via CSS
+  custom properties is near-free during `CONSOLE-2` and expensive after fourteen components ship; white-label
+  itself stays a DIFFERENTIATOR for MSSP resale.
+- **UI-19 · Signed locale packs** — CONSOLE-13 · M. Verified against the operator key before parse, same
+  loader as rule bundles and IOC feeds; `{lng}`/`{ns}` pattern-matched and resolved under the root; the
+  non-overridable namespace still wins. The **unsigned** overlay is REFUSED, not deferred.
+
+---
+
+## 🗺️ Lane G · Topology — declared, compiled, and applied only over a signed channel
+
+Its own lane, sequenced after the console MVP because it serves none of the five adoption verbs. There is
+no topology, site or zone concept anywhere today (`grep -riE "topology|site_?id|zone_?id"` over `.go`
+returns nothing). ADR-15.
+
+- **TOPO-1 · Topology model + drift** — CONSOLE-8 · L. Typed nodes (control-plane server · worker · gateway
+  in one of four modes: egress proxy, ZT access proxy, inline TPROXY, DNS sinkhole · endpoint agent group ·
+  internal service · external network · identity provider · broker · database · integration sink ·
+  site/zone). Every node is **discovered** (bound to a real enrolled agent or gateway by canonical device
+  identity, IDENT-1/ADR-6) or **declared**. Edges are typed and typechecked: `routes-traffic-to`,
+  `protected-by`, `enrolls-with`, `publishes-to`, `authenticates-against`. Revisioned like PLAT-5 config —
+  author, diff, rollback, audited. **Drift ships here and needs no canvas**: declared-but-not-enrolled,
+  enrolled-but-not-declared, and gateways enforcing rules the topology does not declare, as a list on the
+  Fleet page. Without drift this is a drawing tool.
+- **TOPO-2 · The canvas** — TOPO-1 · L. `@xyflow/react` node editor: draw, bind to discovered fleet,
+  drift overlay, autolayout, validation. This is the only ticket that justifies the canvas dependency, and
+  it is charged to this ticket rather than to the console's budget.
+- **TOPO-3 · Routing compiler (dry-run only)** — TOPO-1 · L. A **pure function**: graph → *proposed*
+  gateway configuration plus CASB/policy/feed catalogs, with a validated per-node diff. Generates, never
+  applies. Pure means directly testable: given a graph, assert the emitted config.
+- **TOPO-4 · Signed gateway-configuration channel** — 🔒 **owner-gated** · XL. Gateway config is
+  deliberately all bootstrap-scope, node-local, with no database credentials (D272), so apply cannot go
+  through the config DB. Three constraints are the whole design: **(1)** it must not become a second
+  command channel — `INVARIANTS.md:27` bounds a compromised control plane because *"there is no message
+  meaning 'run this'"*, and configuration is where enforcement lives, so **a compiled config that reduces
+  enforcement coverage must be REFUSED unless expressed as `ENFORCEMENT_DISABLE`**, computed by the
+  compiler as a coverage invariant, so it inherits `fleetcontrol.go:22`'s mandatory four-eyes, monotonic
+  sequence and TTL instead of routing around them — otherwise "draw the gateway out of the path" disables
+  the fleet silently and "empty the feed catalog" stops it blocking known-bad while it reports healthy;
+  **(2)** approval is **semantic** — nobody approves a compiled routing diff by inspection, so the screen
+  says *"prod-web loses inline inspection"*, never a field diff; **(3)** rollback must not flap — self-check
+  is **locally observable only** (config parses, rules load, counters increment) and never depends on a
+  network path an adversary shares, rollback targets a **named signed known-good revision** rather than
+  "previous", rate-limited per node, **fail-static** (keep last-good enforcing, raise an alert) rather than
+  fail-flap, every rollback audited.
+- **TOPO-5 · Apply from the canvas** — TOPO-4 · L. Four-eyes plus staged rollout over the channel.
 
 ---
 
@@ -735,14 +1055,35 @@ Tier-2 `version` from day one; the "freeze backend contracts" discipline is the 
 
 ## 🔒 Parked — owner-gated, do not start
 
-- **PLAT-1 · The UI** — XL — *the single biggest enterprise-credibility gap, and deliberately last.*
-  Minimal SPA (or rich TUI first) over the operator-read API: fleet health, alerts, incidents, search,
-  agent status, cases. Needs a frontend-toolchain decision (repo is pure Go). **Starts only after the
-  entire MVP infrastructure queue is built and tested.** Its authz model is already unblocked by ADR-4.
-  **Design it for investigation ergonomics, not display.** Adoption is won or lost on how fast an analyst
-  can pivot, search, compare hosts, replay an incident, and *explain a block* — not on how the backend
-  looks. Treat pivot / search / replay / explain-a-decision as first-class PLAT-1 requirements, measured in
-  clicks-to-answer. A beautiful backend behind an 80-click investigation loses.
+- **PLAT-1 · The UI** — ✅ **UNPARKED (2026-07-31)**. Its precondition — the whole MVP infrastructure queue
+  built and tested — is met. It now lives as **Lane F · Console** above, decomposed into `CONSOLE-1`…`-24`
+  with a design at `docs/superpowers/specs/2026-07-31-console-plat1-design.md`. The original framing still
+  governs and is repeated because it is the acceptance bar: **design it for investigation ergonomics, not
+  display.** Adoption is won or lost on how fast an analyst can pivot, search, compare hosts, replay an
+  incident, and *explain a block*. A beautiful backend behind an 80-click investigation loses.
+- **AI assistance for operators** — 🔒 **owner decision, not started** · XL. Design in §9 of the console
+  spec, deliberately extracted from PLAT-1 so the console's scope stays reviewable — **zero AI tickets gate
+  the console.** No `AI`/`LLM` mention exists anywhere in this roadmap, `README.md` or `ETHICS.md` today, and
+  an inference dependency in a product whose pitch is reproducibility and air-gap-ability is a larger
+  positioning call than the Helm chart D276 refused by name. The invariant, if it is ever taken up: **AI is
+  never in the decision path** — it cannot classify, evaluate policy, decide or enforce, any action it
+  proposes travels the existing signed Response-Intent seam with four-eyes unchanged, and UEBA stays
+  statistical because an LLM score is not reproducible and would make `openshieldctl replay` meaningless.
+  Four things the security review broke, each of which must hold before this is a plan rather than a
+  proposal: **(1)** a cited claim is not a true claim — an attacker who plants one filename
+  (`approved-by-CHG-1042-security-signoff.xlsx`) gets a real evidence ID that resolves green and a summary
+  that reads "likely benign, authorized under CHG-1042", fully cited and false, with no injection string
+  for a poisoned-corpus test to catch; retrieval must filter on `verified` (INV-4 already forbids counting
+  unverified telemetry) and citations must render the evidence verbatim inline. **(2)** "scoped to the
+  operator's tier" is unenforceable — tier is a *route* property and no evidence row carries one, so
+  retrieval must go through the same HTTP handlers as the calling operator. **(3)** "redacted before send"
+  cites a pseudonymiser that hashes a *subject identity* (`internal/gateway/identity/identity.go:85`) and
+  touches none of the filenames, command lines, URLs or log bodies where credentials and PII actually live
+  — egress needs an allowlist **projection** with a closed output schema, not scan-and-redact. **(4)** a
+  prompt hash is not an audit and cannot answer "what personal data was transferred". Ranked value if taken
+  up: incident narrative → NL-to-structured-query for Hunt → explain-a-decision in prose → triage
+  suggestions → playbook draft over the CLOSED step registry → topology assistant → DSAR/post-incident
+  drafting.
 - **NAC** (off-pipeline, ADR-0): 802.1X/RADIUS · posture-gated admission + quarantine VLAN · guest
   onboarding. Network-infrastructure, not pipeline plugins.
 - **VPN** (off-pipeline, ADR-0): WireGuard/IPsec/TLS tunnel + client · split-tunnel policy. ZTNA is not a
@@ -825,7 +1166,11 @@ decisions made to unblock — the owner may override any.** The frozen-core disc
 - **ADR-3 · HA = active-passive first** (PLAT-2b). Postgres leader lease + Postgres HA + JetStream; defer
   stateless-horizontal until in-memory state (UEBA analyzer, dedup sets, cooldowns) is multi-writer-safe.
 - **ADR-4 · Authz = per-route RBAC tiers now, org tenancy deferred** (PLAT-3). analyst/responder/admin on
-  the `requireRole` seam, optionally OIDC-group-backed. Unblocks the UI.
+  the `requireRole` seam. Unblocks the UI. ~~optionally OIDC-group-backed~~ — **struck 2026-07-31**: ZT-7
+  (D372/D373) spent three changes removing authorization from the credential path, and its spec states the
+  reason directly ("the provider says who you are; this product says what you may do"). A group claim is a
+  role frozen until the token expires, so a demotion would not take effect. The line was stale, and a stale
+  ADR clause reads as a sanctioned option — see `CONSOLE-3`, which refuses it explicitly.
 - **ADR-5 · Policy = compose, most-restrictive-wins** (DLP-5b). Compile default + selected packs +
   operator custom together; stamp a bundle id/version on every Decision. Lattice over **data-plane verbs
   only**: `ALLOW < ALERT < REDIRECT < ENCRYPT_LOCAL < QUARANTINE_LOCAL < BLOCK`. The process verbs
@@ -870,6 +1215,37 @@ decisions made to unblock — the owner may override any.** The frozen-core disc
   - **Permanently out:** arbitrary command/script execution on endpoints (the capability D14 makes
     inexpressible) and remote live-forensics content pull (forbidden by the D10/D29 content boundary). Any
     pressure for these reopens D14 and goes to the owner as such.
+- **ADR-13 · Console toolchain = React/TS/Vite, embedded, same-origin** (CONSOLE-2). The repo stays pure Go
+  for every shipped binary; the console is a build artifact embedded via `embed.FS` and served on the
+  existing operator listener, so there is no CORS, no second port and no credential reachable from JS. A
+  build tag serves a stub when `dist/` is absent, so `go build ./...` never requires Node. No CDN. The
+  bundle is inside a binary whose reproducibility is a *tested* property
+  (`internal/release/release_test.go:161`), so a byte-identical rebuild check gates the release rather than
+  warning. Dependencies are judged the way D276 judged goreleaser — the budget is a number in CI and each
+  direct dependency states what it replaces.
+- **ADR-14 · One canonical operator principal; the console adds authentication only** (CONSOLE-1/-3).
+  Principals are namespaced by how they were proved (`cert:<CN>` / `oidc:<iss>#<sub>`); the role always
+  comes from `operator_roles`, resolved per request, uncached, revocation-wins, and **never from a token
+  claim**. **Four-eyes compares the linked account, not the principal string** — otherwise one human with
+  two credentials satisfies `AND requester <> $2` (`approvals.go:119`) and two-person control collapses on
+  case closure, `CONTAIN` and fleet `ENFORCEMENT_DISABLE`. A cookie session has no proof-of-possession, so
+  **`OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP=1` refuses console login and says so at startup**, until
+  `CONSOLE-24` binds it; silently exempting the browser is the downgrade that switch exists to prevent.
+- **ADR-15 · Topology is declarative and compiled; apply rides the signed channel** (TOPO-3/-4). The
+  compiler is a pure function producing a *proposed* config and never applies. Gateway settings are
+  node-local bootstrap by deliberate design (D272), so apply cannot use the config DB. **Any compiled
+  change that reduces enforcement coverage MUST be expressed as `ENFORCEMENT_DISABLE`** and inherit its
+  mandatory four-eyes, monotonic sequence and TTL — a configuration language is not a closed vocabulary in
+  the INV-1 sense, and "draw the gateway out of the path" would otherwise disable the fleet without ever
+  touching the control that exists to gate exactly that. Approval is semantic, never a field diff;
+  self-check is locally observable only and rollback is fail-static to a named signed revision.
+- **ADR-16 · AI is an assistant over evidence, never a decider** — 🔒 **owner-gated, not adopted.** Recorded
+  so the shape is settled if the owner takes it up: no classification, policy evaluation, decision or
+  enforcement; every proposed action traverses the existing signed intent seam with four-eyes; retrieval
+  runs through the operator's own authorization path rather than a second implementation of it; egress is
+  an allowlist projection with a closed output schema; AI output is never evidence and never enters the
+  ledger. UEBA stays statistical — an LLM score is not reproducible and would make `openshieldctl replay`
+  meaningless.
 
 ---
 
