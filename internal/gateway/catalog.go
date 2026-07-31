@@ -22,7 +22,17 @@ type service struct {
 	name     string
 	upstream *url.URL
 	proxy    *httputil.ReverseProxy
+	// tcpAddr is set for a `tcp://host:port` entry (ZT-9): a service reached by CONNECT tunnel rather
+	// than by reverse-proxied HTTP. Empty for an HTTP service, and the two are NOT interchangeable —
+	// see the refusals in the access handler.
+	tcpAddr string
 }
+
+// TCPAddr is the dial address of a CONNECT-able service, or "" if this service is HTTP.
+func (s *service) TCPAddr() string { return s.tcpAddr }
+
+// Name is the catalogued service name.
+func (s *service) Name() string { return s.name }
 
 func NewCatalog() *Catalog { return &Catalog{services: map[string]*service{}} }
 
@@ -31,6 +41,18 @@ func (c *Catalog) Add(name string, upstream *url.URL) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.services[name] = &service{name: name, upstream: upstream, proxy: httputil.NewSingleHostReverseProxy(upstream)}
+}
+
+// AddTCP registers a non-HTTP internal service reachable by CONNECT tunnel (ZT-9) — a database, an SSH
+// host, an RDP server.
+//
+// It gets NO reverse proxy, deliberately: the two kinds are not interchangeable, and letting a CONNECT
+// reach an HTTP-catalogued service (or the reverse) would turn a catalogued web app into a TCP pivot to
+// wherever its upstream happens to listen. The access handler refuses each in the other's method.
+func (c *Catalog) AddTCP(name, addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.services[name] = &service{name: name, tcpAddr: addr}
 }
 
 // Resolve routes a request host to a service. A host not in the catalog is not found —
@@ -67,6 +89,17 @@ func ParseCatalog(spec string) (*Catalog, error) {
 		u, err := url.Parse(rawURL)
 		if err != nil || u.Host == "" {
 			return nil, fmt.Errorf("catalog: bad url in %q: %v", part, err)
+		}
+		// ZT-9: a `tcp://host:port` entry is a CONNECT-tunnelled service. The PORT is required and is
+		// the gateway's, not the client's — a client naming a service must never get to choose which
+		// port on the internal host it reaches, or the allow-list constrains the host and nothing else.
+		if u.Scheme == "tcp" {
+			if u.Port() == "" {
+				return nil, fmt.Errorf("catalog: tcp service %q needs an explicit port — without one the "+
+					"client's requested port would decide, and the allow-list would constrain the host only", name)
+			}
+			c.AddTCP(name, u.Host)
+			continue
 		}
 		c.Add(name, u)
 	}

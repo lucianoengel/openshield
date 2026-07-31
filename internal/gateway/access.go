@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/gateway/identity"
 	"github.com/lucianoengel/openshield/internal/xdr"
@@ -60,6 +61,10 @@ type AccessProxy struct {
 	graph *xdr.Store
 	// EntityLinkFailures counts best-effort device⋈user links that failed — observable, never fatal.
 	EntityLinkFailures atomic.Int64
+
+	// tunnels counts CONNECT outcomes (ZT-9); recheck is how often a live tunnel is re-authorized.
+	tunnels tunnelCounters
+	recheck time.Duration
 }
 
 // SetAttestationVerifier enables hardware-attestation-aware access (ZT-1): the access
@@ -204,6 +209,19 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown service", http.StatusNotFound)
 		return
 	}
+	// ZT-9: HTTP services and CONNECT-tunnelled services are NOT interchangeable, and each is refused
+	// in the other's method. Tunnelling to an HTTP-catalogued service would turn a catalogued web app
+	// into a TCP pivot to wherever its upstream listens; reverse-proxying a tcp:// entry would send
+	// HTTP at something that does not speak it. Both are refusals, not fallbacks.
+	isConnect := r.Method == http.MethodConnect
+	if isConnect && svc.tcpAddr == "" {
+		http.Error(w, "service is not tunnelled", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isConnect && svc.tcpAddr != "" {
+		http.Error(w, "service is reachable only by CONNECT", http.StatusMethodNotAllowed)
+		return
+	}
 
 	// Buffer the body: it is both classified (DLP on the request) and forwarded.
 	body, tooLarge, err := readBounded(r.Body, p.maxBody)
@@ -216,39 +234,15 @@ func (p *AccessProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the identity context, enriched with the subject's PUBLISHED risk for
-	// continuous verification (D89): the policy can step-up/deny a subject whose risk
-	// rose mid-session. Absent risk is left unset (not high) — the opposite
-	// fail-direction from posture (D85).
-	idCtx := id.Context()
-	if p.risk != nil {
-		if score, ok := p.risk.Get(id.Subject); ok {
-			idCtx.RiskScore = score
-			idCtx.HasRiskScore = true
-		}
-	}
-	// Enrich device posture (D92), keyed by the DEVICE certificate — NOT the user (ZT-3). Posture is
-	// about the device the user connects FROM (the agent reports its own device's posture, keyed by
-	// the device identity, SEC-12). So a user with a valid token on an UNATTESTED device is still
-	// denied by a posture-requiring policy: dual credential requires a valid user AND a compliant
-	// device. A device with NO published posture keeps HasPosture=false — the D85 tamper-lockout.
-	if p.posture != nil {
-		if dp, ok := p.posture.Get(deviceID.Subject); ok {
-			idCtx.DevicePosture = dp
-		}
-	}
-	// Overlay the gateway's SERVER-VERIFIED attestation verdict (ZT-1). Attested is
-	// set ONLY from the gateway's own quote verification, never from the endpoint's
-	// self-reported posture — so a compromised endpoint cannot claim attestation. An
-	// attested device also has posture present (we verified something about it); an
-	// unverified device keeps Attested=false, and a policy requiring it fails closed.
-	if p.attest != nil {
-		if p.attest.IsAttested(deviceID.Subject) {
-			idCtx.DevicePosture.Attested = true
-			idCtx.DevicePosture.HasPosture = true
-		} else {
-			idCtx.DevicePosture.Attested = false
-		}
+	idCtx := p.identityContext(id, deviceID.Subject)
+
+	// ZT-9: a tunnel is decided, dialled and spliced here — same credentials, same policy, same
+	// fail-closed direction, and then the bytes are opaque. See accesstunnel.go on why that last part
+	// is stated rather than glossed. The identity and device subject are passed rather than the
+	// context, because a long-lived tunnel must be re-authorized against FRESH enrichment.
+	if isConnect {
+		p.serveConnect(w, r, svc, id, deviceID.Subject)
+		return
 	}
 
 	// Authorize through the pipeline on the verified identity AND the target service
@@ -312,4 +306,48 @@ func sanitizeIdentityHeaders(h http.Header) {
 	for _, name := range spoofableIdentityHeaders {
 		h.Del(name)
 	}
+}
+
+// identityContext builds the policy context for one access decision: the verified identity plus the
+// subject's CURRENT published risk, device posture and attestation verdict.
+//
+// It is a function rather than inline code because it has to be re-run. A long-lived tunnel (ZT-9) is
+// re-authorized on a clock, and re-authorizing against the context captured when the tunnel opened would
+// re-derive the same verdict forever — continuous verification that re-evaluates a stale snapshot is
+// exactly as continuous as no verification at all. The first version of the tunnel did that, and its own
+// revocation test caught it.
+func (p *AccessProxy) identityContext(id *identity.Identity, deviceSubject string) *core.Context {
+	// Risk (D89): the policy can step-up/deny a subject whose risk rose mid-session. Absent risk is
+	// left unset (not high) — the opposite fail-direction from posture (D85).
+	idCtx := id.Context()
+	if p.risk != nil {
+		if score, ok := p.risk.Get(id.Subject); ok {
+			idCtx.RiskScore = score
+			idCtx.HasRiskScore = true
+		}
+	}
+	// Device posture (D92), keyed by the DEVICE certificate — NOT the user (ZT-3). Posture is about
+	// the device the user connects FROM (the agent reports its own device's posture, keyed by the
+	// device identity, SEC-12). So a user with a valid token on an UNATTESTED device is still denied by
+	// a posture-requiring policy: dual credential requires a valid user AND a compliant device. A
+	// device with NO published posture keeps HasPosture=false — the D85 tamper-lockout.
+	if p.posture != nil {
+		if dp, ok := p.posture.Get(deviceSubject); ok {
+			idCtx.DevicePosture = dp
+		}
+	}
+	// The gateway's SERVER-VERIFIED attestation verdict (ZT-1). Attested is set ONLY from the gateway's
+	// own quote verification, never from the endpoint's self-reported posture — so a compromised
+	// endpoint cannot claim attestation. An attested device also has posture present (we verified
+	// something about it); an unverified device keeps Attested=false, and a policy requiring it fails
+	// closed.
+	if p.attest != nil {
+		if p.attest.IsAttested(deviceSubject) {
+			idCtx.DevicePosture.Attested = true
+			idCtx.DevicePosture.HasPosture = true
+		} else {
+			idCtx.DevicePosture.Attested = false
+		}
+	}
+	return idCtx
 }

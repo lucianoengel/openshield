@@ -612,6 +612,14 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	if gw.KillSwitch != nil {
 		degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})
 	}
+	// ZT-9: tunnel outcomes. `tunnels_revoked` is the one worth waking up for — it is continuous
+	// verification tearing down a session that was authorized and no longer is, and it happens on a
+	// connection nobody is watching. Refusals and dial failures are here so a run of either is visible
+	// rather than reported one connection at a time to whoever happened to be trying.
+	degraded = append(degraded,
+		rejectionCounter{"tunnels_revoked", ap.TunnelsRevoked},
+		rejectionCounter{"tunnels_refused", ap.TunnelsRefused},
+		rejectionCounter{"tunnel_dial_failures", ap.TunnelDialFailures})
 	go reportRejections(ctx,
 		log,
 		"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+

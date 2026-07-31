@@ -615,3 +615,69 @@ closed), while the gateway holds the bytes only long enough to proxy and to hand
 - **THEN** the gateway terminates the request as a failure rather than treating it as no findings
 
 <!-- restored from 2026-07-21-worker-classify-network-bodies -->
+
+### Requirement: The access broker tunnels non-HTTP services on the same authenticated connection
+
+The access broker SHALL support CONNECT tunnels to catalogued non-HTTP internal services — databases,
+SSH hosts, anything TCP — decided by the same pipeline, on the same identity, posture and risk, and
+failing CLOSED like every other access decision.
+
+The topology has always said users reach web apps, file servers and databases through the gateway; an
+HTTP-only broker made two thirds of that aspiration, because a database or an SSH host could not be
+reached through the gate at all. In practice that means a VPN beside the gate, and a Zero-Trust gate with
+a VPN next to it is a VPN.
+
+A tunnel SHALL NOT be described as inspected. The bytes inside are opaque: no classification runs and no
+DLP verdict is reached. The decision is made on identity, service, posture and risk, and saying so is
+required rather than optional — "brokered" and "inspected" are different claims, and blurring them tells
+an operator their database traffic is being examined when it is not.
+
+THE CLIENT NAMES A SERVICE; THE GATEWAY CHOOSES THE ADDRESS. The host and port in the CONNECT request
+SHALL be used only to look the service up, and the dial target SHALL come from the catalogue. Honouring
+the requested address would leave the allow-list constraining the service name while the address stayed
+free — an open relay wearing a catalogue.
+
+HTTP services and tunnelled services SHALL NOT be interchangeable, and each SHALL be REFUSED in the
+other's method rather than falling through. A CONNECT reaching an HTTP-catalogued service would make every
+catalogued web app a TCP pivot to whatever its upstream listens on.
+
+AN ESTABLISHED TUNNEL SHALL BE RE-AUTHORIZED ON A CLOCK, against FRESHLY resolved risk, posture and
+attestation — not against the context captured when it opened. A tunnel outlives the decision that opened
+it, so without re-authorization a single CONNECT is a permanent grant; and re-evaluating a stale snapshot
+is exactly as continuous as not re-evaluating at all. There SHALL be no way to disable re-authorization.
+
+A re-authorization that FAILS SHALL leave the tunnel up. The door fails closed because admitting on an
+error is unrecoverable; disconnecting an already-authorized session because the pipeline blinked is a
+self-inflicted outage, and a transient fault would become a disconnection storm. Failures SHALL be counted
+instead.
+
+Tunnels refused, tunnels revoked by re-authorization, and dial failures SHALL be counted and surfaced
+where the gateway already reports. A revocation in particular happens on a connection nobody is watching.
+
+SOCKS5 and split DNS are explicitly NOT provided. SOCKS carries no place for a client certificate or a
+bearer token, so it would need an authentication design of its own rather than inheriting this one.
+
+#### Scenario: An authorized identity gets a byte pipe to a TCP service
+- **WHEN** an authorized device and user CONNECT to a catalogued tcp:// service
+- **THEN** the tunnel is established and bytes make a round trip to the backend
+
+#### Scenario: An unauthorized identity gets no tunnel
+- **WHEN** an identity the policy denies attempts a CONNECT
+- **THEN** it is refused and the refusal is counted
+
+#### Scenario: A tunnel cannot reach an uncatalogued or HTTP service
+- **WHEN** a CONNECT names a host that is not catalogued, or one catalogued as HTTP
+- **THEN** it is refused explicitly rather than attempted
+- **AND** a plain HTTP request at a tcp:// service is likewise refused
+
+#### Scenario: The catalogued address wins over the requested one
+- **WHEN** a CONNECT names a catalogued service but a different port
+- **THEN** the gateway reaches the catalogued address
+
+#### Scenario: Withdrawn access closes a live tunnel
+- **WHEN** a subject's published risk crosses the policy's deny threshold while a tunnel is open
+- **THEN** the tunnel is closed at both ends and the revocation is counted
+
+#### Scenario: A failed re-authorization leaves the tunnel up
+- **WHEN** the pipeline is unavailable during a re-authorization of an established tunnel
+- **THEN** the tunnel continues to carry traffic

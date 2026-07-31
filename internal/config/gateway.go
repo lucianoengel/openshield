@@ -90,7 +90,7 @@ var GatewayFields = []Field{
 	{Key: "OPENSHIELD_ACCESS_POLICY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Access policy evaluated per request."},
 	{Key: "OPENSHIELD_ACCESS_CATALOG", Scope: ScopeBootstrap, Kind: KindString, Default: "",
-		Description: "Services this access gateway fronts. An access gateway must front at least one."},
+		Description: "Services this access gateway fronts, as name=url pairs. An http(s):// url is reverse-proxied and inspected; a tcp://host:port url is reached by CONNECT tunnel (ZT-9) for databases, SSH and other non-HTTP services — brokered on identity, posture and risk, and NOT inspected. An access gateway must front at least one."},
 	{Key: "OPENSHIELD_OIDC_ISSUER", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "OIDC issuer (ZT-2). Set to resolve SSO identity."},
 	{Key: "OPENSHIELD_OIDC_AUDIENCE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
