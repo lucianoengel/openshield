@@ -405,10 +405,12 @@ deuteranopia and greyscale. Navigation, links and selection use the single cool 
 colour — if nav were red, red would stop meaning "wake someone up".</p>
 
 <h2>5 · Topology canvas — a view of a reconciled model, not a drawing</h2>
-<p class="note">Binding state is <b>border geometry</b>, never colour — solid = declared and discovered,
-dashed = declared but never enrolled, double = <b>discovered and undeclared</b>, the state the feature
-exists to surface. Severity is the only saturated colour on the canvas, so it is the only thing that draws
-the eye across a large graph.</p>
+<p class="note"><b>A node is a role, not a machine</b> — one <span class="mono">user endpoints</span> node
+stands for all 51 laptops, one <span class="mono">internet</span> node for all external traffic. Population
+is an attribute (count, health rail, member list), never geometry, so a real deployment is 8–20 nodes.
+Binding state is <b>border geometry</b>, never colour — solid = declared and discovered, dashed = declared
+but never enrolled, double = <b>discovered and undeclared</b>. Severity is the only saturated colour, so it
+is the only thing that draws the eye.</p>
 
 <div style="display:flex;gap:10px;align-items:center;margin:14px 0;font-size:12px;flex-wrap:wrap">
   <div style="border:1px solid var(--ink-600);padding:5px 10px;background:var(--ink-850);border-radius:2px">Edit mode <span style="color:var(--accent)">●</span></div>
@@ -418,6 +420,11 @@ the eye across a large graph.</p>
   <div style="border:1px solid var(--ink-700);padding:5px 10px;border-radius:2px;font-family:var(--mono);font-size:11px">
     COVERAGE&nbsp; inline <b style="color:var(--sev-hig)">12/14</b> &nbsp;·&nbsp; sinkhole 3/3 &nbsp;·&nbsp; ZT-fronted 8/8</div>
 </div>
+<p class="note" style="margin:0 0 8px">Edge health is <b>passive by default</b> — derived from telemetry
+already flowing (heartbeats, proxy decisions naming an upstream, per-service allow/deny counts), generating
+no new traffic. <b>Silent</b> (declared, expected, not observed) and <b>failing</b> (observed and being
+refused — often default-deny working correctly) are never merged into one red line, because they send an
+operator to different places.</p>
 
 <div style="position:relative;height:340px;border:1px solid var(--ink-700);background:
   linear-gradient(var(--ink-900) 0 0) padding-box,
@@ -444,8 +451,14 @@ the eye across a large graph.</p>
     <!-- undeclared gateway -> prod-db : observed, not declared -->
     <path d="M268,318 C320,318 330,260 358,252" stroke="#E3C567" stroke-width="1.4"
       stroke-dasharray="9 4 2 4" marker-end="url(#aw)" fill="none"/>
+    <!-- silent edge: declared, expected, not observed -->
+    <path d="M448,238 L520,238" stroke="#E3C567" stroke-width="1.4" stroke-dasharray="4 4"
+      marker-end="url(#aw)" fill="none"/>
     <text x="292" y="300" fill="#E3C567" font-family="var(--mono)" font-size="10">observed, not declared</text>
     <text x="286" y="120" fill="#6B7280" font-family="var(--mono)" font-size="10">declared, not observed</text>
+    <text x="452" y="228" fill="#E3C567" font-family="var(--mono)" font-size="10">silent 22m ⚠</text>
+    <text x="128" y="66" fill="#6B7280" font-family="var(--mono)" font-size="10">healthy</text>
+    <text x="128" y="230" fill="#6B7280" font-family="var(--mono)" font-size="10">healthy</text>
   </svg>
 
   <!-- nodes -->
@@ -483,8 +496,8 @@ the eye across a large graph.</p>
   <div style="position:absolute;left:40px;top:206px;width:78px;text-align:center">
     <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
       <div style="font-size:19px;line-height:1;color:var(--ink-200)">▤</div>
-      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">eng-laptops</div>
-      <div style="font-size:9px;color:var(--ink-500)">51 endpoints</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">user endpoints</div>
+      <div style="font-size:9px;color:var(--ink-500)">51 · role</div>
       <div style="display:flex;height:3px;margin:6px 5px 0;gap:1px">
         <div style="flex:42;background:var(--ink-200)"></div>
         <div style="flex:5;background:repeating-linear-gradient(45deg,var(--ink-500),var(--ink-500) 1px,transparent 1px,transparent 3px)"></div>
@@ -506,6 +519,14 @@ the eye across a large graph.</p>
       <div style="font-size:10px;color:var(--ink-200);margin-top:5px">prod-db</div>
       <div style="font-size:9px;color:var(--ink-500)">tcp</div>
       <div style="height:3px;margin:6px 5px 0;background:var(--ink-200)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:522px;top:206px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-200)">⛁</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">replica-db</div>
+      <div style="font-size:9px;color:var(--sev-hig)">no traffic</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-700)"></div>
     </div></div>
 
   <div style="position:absolute;left:190px;top:286px;width:78px;text-align:center">

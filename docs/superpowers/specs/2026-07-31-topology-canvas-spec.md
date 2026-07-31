@@ -35,9 +35,37 @@ Three rules make that concrete, and they are the ones to keep if everything else
 
 ## 2. The node model on screen
 
+### 2.0 A node is a ROLE, not a machine
+
+**This is the decision that makes the whole feature tractable.** A node represents a *class of traffic or
+function* — "user endpoints", "internet", "internal services", "the gateway in front of production" — with
+a **population** behind it. It is not an inventory item.
+
+So there is one `user endpoints` node standing for all 51 laptops, one `internet` node standing for all
+external traffic, one `internal services` node per zone. The population is an attribute of the node
+(a count, a health distribution, a member list in the side panel), never a set of nodes on the canvas.
+
+Three consequences, all simplifications:
+
+- **The canvas stays small by construction.** A real deployment is 8–20 nodes, not 200. The elaborate
+  scale machinery an inventory graph would need — semantic zoom tiers, grouping predicates, node budgets —
+  is not needed and is not built. §3 is what survives of it.
+- **The diagram matches how operators already think and draw.** People whiteboard *"internet → gateway →
+  prod"*, not fifty-one laptops. The canvas should look like the whiteboard, because that is the mental
+  model it has to confirm or contradict.
+- **A node is stable.** Endpoints enrol and leave constantly; the *role* "user endpoints" does not. So the
+  declared model stops churning, and drift becomes meaningful — a changing graph cannot show drift, because
+  everything is always changing.
+
+Membership is a **predicate**, stored in the model (`TOPO-1`): platform, enrolment tag, OU, subnet, site.
+An endpoint that matches no node's predicate is itself a drift finding — *"7 enrolled agents belong to no
+declared node"* — which is exactly the population an inventory diagram would have hidden in plain sight.
+
+### 2.1 Kinds and ports
+
 Twelve kinds, from `TOPO-1`. Each node renders as a **72×72 rounded square with a 20px kind glyph, a name,
-and a state rail across its bottom edge** — deliberately not a card, because the console reserves cards for
-the one moment that means "stop and read this" (approval).
+a population count, and a state rail across its bottom edge** — deliberately not a card, because the console
+reserves cards for the one moment that means "stop and read this" (approval).
 
 | Kind | Glyph | Ports (in / out) |
 |---|---|---|
@@ -48,7 +76,7 @@ the one moment that means "stop and read this" (approval).
 | Gateway · DNS sinkhole | ⌁ | any / external |
 | Control-plane server | ▣ | agent-group, gateway / broker, database |
 | Worker | ⚙ | server / — |
-| Endpoint agent **group** | ▤ | — / gateway, server |
+| **User endpoints** (a role, any population) | ▤ | — / gateway, server |
 | Internal service | ▢ | gateway / database |
 | Identity provider | ⊙ | — / gateway, server |
 | Broker (NATS) | ⇄ | server, gateway, agent-group / — |
@@ -104,32 +132,48 @@ them are not in a good state, expandable to the list.
 
 ---
 
-## 3. Scale — the problem every topology canvas fails
+## 3. Scale — mostly solved by §2.0
 
-A hundred endpoints cannot be a hundred nodes. Neither can a thousand. Three mechanisms, applied in order:
+Because nodes are roles, a real deployment is **8–20 nodes**. The canvas is not an inventory graph and does
+not need the machinery one would require. What remains:
 
-**① Endpoints are never individual nodes.** They aggregate into **agent-group** nodes by site, platform,
-enrollment tag or OU. Expanding a group opens a **list panel beside the canvas**, not a hundred nodes on
-it. This is non-negotiable and is a model decision, not a rendering one: `TOPO-1` stores the grouping
-predicate, so the group is stable across sessions and shared between operators.
-
-**② Semantic zoom, three tiers.** Zoom changes *what is drawn*, not merely its size:
-
-| Zoom | Shows | Node count target |
-|---|---|---|
-| **Sites** (< 40%) | site containers, inter-site links, aggregate health | ≤ 12 |
-| **Zones** (40–90%) | gateways, services, agent groups, brokers | ≤ 60 |
-| **Detail** (> 90%) | + individual ports, edge labels, per-node counters | ≤ 60 in viewport |
-
-**③ A hard budget with an honest failure.** Above **150 nodes at the current tier** the canvas stops
-auto-laying-out and shows: *"This view has 214 nodes. Group by site to continue, or filter."* — with the
-grouping controls right there. It does **not** silently render an unusable hairball and let the operator
-conclude the feature is broken. A canvas that degrades without saying so is worse than one that refuses.
+- **Site containers** nest nodes for multi-site deployments, collapsible to a single node with aggregate
+  health. That is the only hierarchy.
+- **Population never becomes geometry.** Expanding `user endpoints` opens a **list panel beside the
+  canvas** — sortable, filterable, exportable — never fifty-one nodes.
+- **A soft ceiling with an honest failure.** Past ~60 nodes the canvas warns that the model has probably
+  drifted from roles toward inventory, and points at the site containers. It does not silently render a
+  hairball and let the operator conclude the feature is broken.
 
 **Layout.** Deterministic layered layout (rank by edge direction: external → gateway → service → data),
 because a force-directed graph that settles differently on every load destroys spatial memory — and spatial
 memory is the entire reason a map beats a list. Operator-moved nodes pin and persist in the revision;
 `Auto-arrange` is explicit and undoable, never automatic on load.
+
+## 3a. The node is the configuration surface
+
+A second reason roles beat instances: **a role is exactly the right scope for a setting.**
+
+The console has **133 configuration fields** (70 server, 63 gateway) and the Settings IA groups them by
+subject matter, which is correct but still asks the operator to already know where a thing lives. The
+topology gives the same fields a *spatial* index: click the gateway in front of production and configure
+that gateway; click `user endpoints` and configure the endpoint agent policy that population receives.
+
+Rules that keep this from becoming a second, drifting configuration model:
+
+- **The panel renders the same schema-driven forms as Settings** (`GET /config/schema`), not a bespoke
+  editor. One renderer, two entry points. A field added in Go appears in both without anyone updating a
+  diagram.
+- **Scope is stated on the node**, because it differs sharply and silently: gateway settings are
+  bootstrap-scope and node-local (D272, restart required), while most server settings are dynamic and
+  cluster-wide. The panel says which it is *before* an edit, not after a save that appeared to do nothing.
+- **A role-scoped setting is only offered where one genuinely exists.** Where a setting is per-host and the
+  node stands for many hosts, the panel shows the *distribution* of current values across the population and
+  refuses to pretend a single field sets them all. This is the honest failure mode, and it is the one that
+  would otherwise ship a lie.
+
+Navigating configuration by picture is a real usability win over a 133-row list, and it costs nothing new —
+it is a second route into machinery that already exists.
 
 ---
 
@@ -171,6 +215,73 @@ misunderstanding of the whole feature and it is defended in the copy, the confir
 post-action toast (*"Model updated. No configuration was changed."*).
 
 ---
+
+## 4a. Edge health — "is the network operating as described?"
+
+Drift (§4) answers *does the configuration match the declaration.* This answers a different and more
+operationally useful question: **is traffic actually flowing the way the model says it should, right now?**
+It is what turns the canvas from a reconciliation tool into a monitoring surface, and it is the strongest
+argument for the feature existing at all.
+
+Two tiers, and the ordering is a safety decision.
+
+### Tier 1 — passive, derived from telemetry already flowing (default, always on)
+
+Every declared edge is scored from evidence the platform already collects, with **no new traffic
+generated**:
+
+| Edge | Existing signal |
+|---|---|
+| endpoints → gateway | agent heartbeats, decisions attributed to that gateway |
+| gateway → internal service | proxy/access-proxy decisions naming that upstream |
+| endpoints → control plane | heartbeat freshness, spool depth, enrolment state |
+| gateway/server → broker | JetStream consumer health, publish counters |
+| user → ZT service | access-proxy allow/deny counts per catalogued service |
+
+Each edge shows **last observed traffic**, a rate sparkline, and one of four states:
+
+```
+━━━━━━━▶  healthy      observed within the expected interval
+━━━━━━━▶  quiet        no traffic, and none expected (low-volume path)  — neutral, not a fault
+╌╌╌╌╌╌▶   silent       declared, expected, and NOT observed for 22m     ⚠
+━━✕━━━▶   failing      observed and being REFUSED (auth, policy, upstream error)
+```
+
+**`silent` and `failing` are different failures and must never be merged.** Silent means the path is not
+being used — a routing change, a dead upstream, an agent that stopped. Failing means the path *is* being
+used and is being rejected — which is often correct behaviour (default-deny working) and occasionally an
+outage. A single red line conflating them sends operators to the wrong place, so the state carries the
+distinction and the panel explains it.
+
+**"Expected" must be declared, not inferred.** An edge carries an expected-traffic interval set by the
+operator (or "none"), because inferring expectation from history means a path that broke last week is
+silently reclassified as normal. That is the trap this design refuses.
+
+### Tier 2 — active reachability probes (opt-in, off by default)
+
+Passive cannot distinguish *"nobody tried"* from *"it is broken"* on a quiet path. Synthetic probes can —
+and they are **off by default, per-edge opt-in, and audited**, for a reason worth stating plainly:
+
+> **A security product that probes internal services is generating exactly the traffic it is built to
+> detect.** Unscoped, it trips the customer's other controls, pollutes its own telemetry, and looks like
+> reconnaissance in someone else's SIEM.
+
+So probes: run from a declared node toward a declared node only (never arbitrary addresses — the same
+allow-list discipline the access catalog uses to avoid being an SSRF pivot); are rate-limited and carry a
+stable identifying marker so they are recognisable in any log; are attributed to the operator who enabled
+them; and **are excluded from detection and from UEBA baselines**, or the product raises alerts on itself
+and skews the baselines it uses to find real anomalies.
+
+Probe results feed the same four states. The canvas always shows **which tier produced the state**, because
+"we saw real traffic" and "our own probe succeeded" are different evidence and a monitoring surface that
+blurs them is not trustworthy.
+
+### What this is not
+
+Not a network monitor and it must not imply it is. It knows about **declared edges between declared
+nodes** — nothing about links it was never told about, nothing about latency budgets or capacity, and
+nothing about hosts that never enrolled. `TOPO-6` ships Tier 1; Tier 2 is a separate ticket with its own
+opt-in.
 
 ## 5. Editing
 
@@ -303,10 +414,45 @@ The nine from the UX spec §4, with canvas-specific readings:
 
 ---
 
+## 8a. AI topology review — where it would fit, and the guardrails it needs
+
+Recorded because the owner named it as a future direction, and because the topology is one of the few
+places an assistant could add real value with **bounded** risk. It remains part of the 🔒 owner-gated AI
+lane (ADR-16) and gates nothing in Lane G.
+
+Why the fit is unusually good: the topology is **small, structured, declared by a human, and not
+attacker-controlled**. That last property is what makes it different from every other AI use in this
+product — an assistant reasoning over incident evidence is reasoning over data an attacker wrote, whereas an
+assistant reasoning over the topology is reasoning over operator-authored declarations plus the platform's
+own health signals. The prompt-injection surface is close to nil.
+
+What it could usefully say:
+
+- *"`prod-api` is declared behind no gateway — every other service in this zone is behind `gw-edge-01`."*
+- *"Zone `contractors` reaches `prod-db` directly; every comparable deployment fronts it with ZT access."*
+- *"This edge has been `silent` for 11 days and was healthy before that."*
+- *"You have 7 enrolled agents matching no declared node."*
+
+The guardrails, all of which fall out of the rules already in this spec:
+
+- **It proposes declarations, never applies configuration.** Its output is a diff on the model that a human
+  saves — it enters at exactly the point a human edit enters, and inherits §5.1's coverage check and §6's
+  compile and approval path unchanged.
+- **It cannot suggest a coverage reduction without that being surfaced as one.** The coverage meter runs on
+  its proposals identically; there is no path where an AI-authored edit skips the `ENFORCEMENT_DISABLE`
+  gate.
+- **Every suggestion cites the observation it came from** — a drift finding, an edge state, a population
+  count — and an uncited suggestion is not rendered, matching the AI lane's citation rule.
+- **It is never the source of a health verdict.** It may summarise `silent`/`failing` states; it may not
+  produce them, because those are measurements and measurements must stay reproducible.
+
 ## 9. What this spec does not cover
 
-No auto-discovery of *undeployed* infrastructure (the model knows only what enrolled or was declared — it
-does not scan networks, and it must never imply it does). No cost or capacity modelling. No simulation of
-traffic volume. No topology-driven alerting. No canvas on mobile — the tree view is the small-screen answer,
-and it is not a degraded one. And no `TOPO-4` apply flow, which needs its own spec once the signed channel's
-shape is decided by the owner.
+No auto-discovery of *undeployed* infrastructure — the model knows only what enrolled or was declared, it
+does not scan networks, and it must never imply it does. No cost or capacity modelling, no latency budgets,
+no simulation of traffic volume. **No topology-driven alerting**: edge states are visible on the canvas and
+in the drift panel, and routing them into the alert pipeline is a separate decision, because a monitoring
+signal promoted to an alert without tuning is how the queue fills with noise (see `CONSOLE-41`). No canvas
+on mobile — the tree view is the small-screen answer and is not a degraded one. No `TOPO-4` apply flow,
+which needs its own spec once the signed channel's shape is an owner decision. And **no active probing in
+`TOPO-6`** — Tier 1 is passive only; Tier 2 is separately ticketed and off by default.

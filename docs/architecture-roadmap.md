@@ -717,15 +717,23 @@ Its own lane, sequenced after the console MVP because it serves none of the five
 no topology, site or zone concept anywhere today (`grep -riE "topology|site_?id|zone_?id"` over `.go`
 returns nothing). ADR-15.
 
-- **TOPO-1 · Topology model + drift** — CONSOLE-8 · L. Typed nodes (control-plane server · worker · gateway
-  in one of four modes: egress proxy, ZT access proxy, inline TPROXY, DNS sinkhole · endpoint agent group ·
-  internal service · external network · identity provider · broker · database · integration sink ·
-  site/zone). Every node is **discovered** (bound to a real enrolled agent or gateway by canonical device
+- **TOPO-1 · Topology model + drift** — CONSOLE-8 · L. **A node is a ROLE, not a machine** (owner decision,
+  2026-07-31, and it is what makes the whole lane tractable): one `user endpoints` node stands for all 51
+  laptops, one `internet` node for all external traffic. Membership is a **predicate** stored in the model
+  (platform, tag, OU, subnet, site); population is an attribute — a count, a health distribution, a member
+  list — and **never becomes geometry**. Consequences: a real deployment is 8–20 nodes so the scale
+  machinery an inventory graph needs is not built; the diagram matches how operators already whiteboard;
+  and the model stops churning as endpoints come and go, **which is what makes drift meaningful — a graph
+  that always changes cannot show change.** An endpoint matching no node's predicate is itself a drift
+  finding.
+  Typed kinds (control-plane server · worker · gateway in one of four modes: egress proxy, ZT access proxy,
+  inline TPROXY, DNS sinkhole · user endpoints · internal service · external network · identity provider ·
+  broker · database · integration sink · site/zone). Every node is **discovered** (bound by canonical device
   identity, IDENT-1/ADR-6) or **declared**. Edges are typed and typechecked: `routes-traffic-to`,
   `protected-by`, `enrolls-with`, `publishes-to`, `authenticates-against`. Revisioned like PLAT-5 config —
   author, diff, rollback, audited. **Drift ships here and needs no canvas**: declared-but-not-enrolled,
-  enrolled-but-not-declared, and gateways enforcing rules the topology does not declare, as a list on the
-  Fleet page. Without drift this is a drawing tool.
+  enrolled-but-not-declared, agents matching no node, and gateways enforcing rules the topology does not
+  declare — as a list on the Fleet page. Without drift this is a drawing tool.
 - **TOPO-2 · The canvas** — TOPO-1 · L. Spec: `docs/superpowers/specs/2026-07-31-topology-canvas-spec.md`.
   `@xyflow/react` node editor — the only ticket that justifies the canvas dependency, charged here rather
   than to the console's budget. **Governed by one sentence: the canvas is a view of a reconciled model, not
@@ -741,6 +749,36 @@ returns nothing). ADR-15.
   destroys the spatial memory that is the whole reason a map beats a list. `Accept`: the tree view is
   **co-equal and fully editable**, not an accessibility fallback — it is the screen-reader path, the
   keyboard path, and the faster path for bulk edits, which is what stops it rotting.
+- **TOPO-2c · The node as a configuration surface** — TOPO-2 · M. The console has **133 config fields**
+  and the Settings IA groups them correctly but still asks the operator to know where a thing lives. The
+  topology gives the same fields a **spatial index**: click the gateway in front of production and configure
+  that gateway; click `user endpoints` and configure the policy that population receives. **The panel renders
+  the same schema-driven forms as Settings** (`GET /config/schema`) — one renderer, two entry points, so a
+  field added in Go appears in both and no diagram needs updating. Scope is stated **on the node before the
+  edit**, because it differs sharply and silently (gateway = bootstrap, node-local, restart; server = mostly
+  dynamic, cluster-wide). Where a setting is per-host and the node stands for many hosts, the panel shows
+  the **distribution of current values across the population** and refuses to pretend one field sets them
+  all — that is the honest failure mode and the one that would otherwise ship a lie.
+- **TOPO-6 · Edge health — is the network operating as described?** — TOPO-1 · L. Drift asks whether
+  configuration matches declaration; this asks whether **traffic is actually flowing the way the model says
+  it should, right now**. It is what turns the canvas from a reconciliation tool into a monitoring surface.
+  **Tier 1 only: passive, derived from telemetry already flowing, generating no new traffic** — agent
+  heartbeats, gateway/access-proxy decisions naming an upstream, JetStream consumer health, per-service
+  allow/deny counts. Four states, and **`silent` and `failing` must never be merged**: silent means the path
+  is not being used (routing change, dead upstream, stopped agent); failing means it *is* being used and
+  refused — which is often default-deny working correctly. Conflating them sends operators to the wrong
+  place. **"Expected" is declared, never inferred**, because inferring expectation from history silently
+  reclassifies a path that broke last week as normal.
+- **TOPO-7 · Active reachability probes** — TOPO-6 · M · **off by default, per-edge opt-in.** Passive cannot
+  separate "nobody tried" from "it is broken" on a quiet path. The reason for the opt-in, stated plainly:
+  **a security product that probes internal services generates exactly the traffic it is built to detect** —
+  unscoped it trips the customer's other controls, pollutes its own telemetry, and looks like reconnaissance
+  in someone else's SIEM. So: declared-node → declared-node only (the same allow-list discipline that keeps
+  the access catalog from being an SSRF pivot, never arbitrary addresses), rate-limited, carrying a stable
+  identifying marker, attributed to the operator who enabled it, and **excluded from detection and from UEBA
+  baselines** — or the product alerts on itself and skews the baselines it uses to find real anomalies. The
+  canvas always shows **which tier produced a state**, because "we saw real traffic" and "our probe
+  succeeded" are different evidence.
 - **TOPO-2b · Coverage meter, live during editing** — TOPO-2,3 · M. ADR-15 requires a coverage-reducing
   change to be expressed as `ENFORCEMENT_DISABLE`. The UX consequence is that **coverage loss must be
   visible at the moment of the edit, not at approval** — an operator who learns at approval time has
@@ -1189,6 +1227,16 @@ Tier-2 `version` from day one; the "freeze backend contracts" discipline is the 
   up: incident narrative → NL-to-structured-query for Hunt → explain-a-decision in prose → triage
   suggestions → playbook draft over the CLOSED step registry → topology assistant → DSAR/post-incident
   drafting.
+  **One use has an unusually good risk profile and is worth naming: topology review** (spec §8a). The
+  topology is small, structured, operator-declared and **not attacker-controlled** — which is what separates
+  it from every other AI use here, where the assistant reasons over data an attacker wrote. It would say
+  things like *"prod-api is declared behind no gateway while every other service in this zone is behind
+  gw-edge-01"* or *"7 enrolled agents match no declared node"*. Guardrails fall out of rules Lane G already
+  has: it **proposes declarations, never applies configuration** — entering at exactly the point a human
+  edit enters, inheriting the coverage check and the approval path unchanged; it cannot propose a coverage
+  reduction without the `ENFORCEMENT_DISABLE` gate firing on it identically; every suggestion cites the
+  observation it came from; and **it is never the source of a health verdict** — it may summarise a
+  `silent`/`failing` edge, never produce one, because measurements must stay reproducible.
 - **NAC** (off-pipeline, ADR-0): 802.1X/RADIUS · posture-gated admission + quarantine VLAN · guest
   onboarding. Network-infrastructure, not pipeline plugins.
 - **VPN** (off-pipeline, ADR-0): WireGuard/IPsec/TLS tunnel + client · split-tunnel policy. ZTNA is not a
