@@ -665,12 +665,24 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	}
 
 	// The access proxy handles everything except the ticket endpoint, which needs its own route.
+	//
+	// CONNECT GOES STRAIGHT TO THE PROXY, BEFORE THE MUX, and that is not a shortcut. http.ServeMux
+	// routes on the request PATH, and a CONNECT has none — its target is an AUTHORITY (`db:5432`), so
+	// r.URL.Path is empty and the mux answers 404. Putting a mux in front of this handler to add one
+	// route silently broke every tunnel, and the integration suite is what said so.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ticket", ap.TicketHandler)
 	mux.Handle("/", ap)
+	accessHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			ap.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 
 	srv := &http.Server{
-		Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second,
+		Addr: listen, Handler: accessHandler, ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{kp},
 			ClientAuth:   tls.RequireAndVerifyClientCert,
