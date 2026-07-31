@@ -759,6 +759,7 @@ reused five times, not five bespoke pages — and specifying it once is `CONSOLE
 ## 14. What this spec does not cover
 
 Named so nobody assumes it: no visual design for the deferred surfaces beyond layout intent (§6.9); no
-topology canvas interaction model (that is `TOPO-2`, and it needs its own spec); no email/notification
+topology canvas interaction model — that is `TOPO-2`, specified separately in
+`2026-07-31-topology-canvas-spec.md`; no email/notification
 template design; no marketing or docs site; no mobile or tablet layouts; no white-label theming beyond the
 CSS-custom-property seam; and no motion spec for the timeline beyond the single first-load draw-in.

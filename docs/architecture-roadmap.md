@@ -726,12 +726,38 @@ returns nothing). ADR-15.
   author, diff, rollback, audited. **Drift ships here and needs no canvas**: declared-but-not-enrolled,
   enrolled-but-not-declared, and gateways enforcing rules the topology does not declare, as a list on the
   Fleet page. Without drift this is a drawing tool.
-- **TOPO-2 · The canvas** — TOPO-1 · L. `@xyflow/react` node editor: draw, bind to discovered fleet,
-  drift overlay, autolayout, validation. This is the only ticket that justifies the canvas dependency, and
-  it is charged to this ticket rather than to the console's budget.
-- **TOPO-3 · Routing compiler (dry-run only)** — TOPO-1 · L. A **pure function**: graph → *proposed*
-  gateway configuration plus CASB/policy/feed catalogs, with a validated per-node diff. Generates, never
-  applies. Pure means directly testable: given a graph, assert the emitted config.
+- **TOPO-2 · The canvas** — TOPO-1 · L. Spec: `docs/superpowers/specs/2026-07-31-topology-canvas-spec.md`.
+  `@xyflow/react` node editor — the only ticket that justifies the canvas dependency, charged here rather
+  than to the console's budget. **Governed by one sentence: the canvas is a view of a reconciled model, not
+  a drawing of a network** — so (1) you cannot delete reality from it (deleting a discovered node removes
+  your *declaration*; the node stays, marked `undeclared`), (2) an edge is an assertion of intent, never an
+  act, and (3) the canvas never applies anything. It is **not n8n**: there the graph *is* the program, here
+  nodes exist whether or not you drew them. Binding state is border geometry (solid / dashed / double), not
+  colour, because severity owns colour — so severity chips are the only thing that draws the eye across a
+  large graph, which is the intent. **Scale is a design requirement, not a rendering detail**: endpoints are
+  never individual nodes (agent-group aggregation is a `TOPO-1` model decision), semantic zoom has three
+  tiers, and above 150 nodes the canvas **refuses with instructions** rather than rendering an unusable
+  hairball. Deterministic layered layout — a force-directed graph that settles differently each load
+  destroys the spatial memory that is the whole reason a map beats a list. `Accept`: the tree view is
+  **co-equal and fully editable**, not an accessibility fallback — it is the screen-reader path, the
+  keyboard path, and the faster path for bulk edits, which is what stops it rotting.
+- **TOPO-2b · Coverage meter, live during editing** — TOPO-2,3 · M. ADR-15 requires a coverage-reducing
+  change to be expressed as `ENFORCEMENT_DISABLE`. The UX consequence is that **coverage loss must be
+  visible at the moment of the edit, not at approval** — an operator who learns at approval time has
+  already built a change set around a false assumption. A live meter in the toolbar (inline inspection
+  *n/m* services, sinkhole *n/m* zones, ZT-fronted *n/m*), and an edit that reduces it stops and offers
+  `Undo` or `Continue and request ENFORCEMENT_DISABLE`. They can still do it; they cannot do it quietly.
+- **TOPO-3 · Routing compiler + export** — TOPO-1 · L. A **pure function**: graph → *proposed* gateway
+  configuration plus CASB/policy/feed catalogs, with a validated per-node diff. Generates, never applies.
+  Pure means directly testable: given a graph, assert the emitted config. Output leads with the **semantic
+  summary** ("prod-web loses inline inspection"), because ADR-15 requires approval to be semantic and
+  nobody approves a field diff by inspection.
+  **Ships as EXPORT, and that is the point.** Until `TOPO-4` there is no signed channel and gateway settings
+  are node-local by design (D272), so the compile output ends with an honest terminal state — *"this cannot
+  be delivered from the console; export it or apply it through your existing configuration management"* —
+  rather than a greyed-out `Apply` implying it is nearly ready. A validated, typechecked, coverage-checked
+  config generated from a reconciled model is genuinely useful with Ansible or a Containerfile, **so Lane G
+  delivers value two owner-gated tickets earlier than it otherwise would.**
 - **TOPO-4 · Signed gateway-configuration channel** — 🔒 **owner-gated** · XL. Gateway config is
   deliberately all bootstrap-scope, node-local, with no database credentials (D272), so apply cannot go
   through the config DB. Three constraints are the whole design: **(1)** it must not become a second

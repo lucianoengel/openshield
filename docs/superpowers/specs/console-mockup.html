@@ -404,7 +404,140 @@ executives who do not use the product daily.</p>
 deuteranopia and greyscale. Navigation, links and selection use the single cool accent and never a severity
 colour — if nav were red, red would stop meaning "wake someone up".</p>
 
-<h2>5 · The nine states every view must define</h2>
+<h2>5 · Topology canvas — a view of a reconciled model, not a drawing</h2>
+<p class="note">Binding state is <b>border geometry</b>, never colour — solid = declared and discovered,
+dashed = declared but never enrolled, double = <b>discovered and undeclared</b>, the state the feature
+exists to surface. Severity is the only saturated colour on the canvas, so it is the only thing that draws
+the eye across a large graph.</p>
+
+<div style="display:flex;gap:10px;align-items:center;margin:14px 0;font-size:12px;flex-wrap:wrap">
+  <div style="border:1px solid var(--ink-600);padding:5px 10px;background:var(--ink-850);border-radius:2px">Edit mode <span style="color:var(--accent)">●</span></div>
+  <div style="border:1px solid var(--ink-700);padding:5px 10px;border-radius:2px">Zoom: <b style="color:var(--ink-050)">Zones</b></div>
+  <div style="border:1px solid var(--sev-hig);color:var(--sev-hig);padding:5px 10px;border-radius:2px">⚠ 1 undeclared</div>
+  <div style="flex:1"></div>
+  <div style="border:1px solid var(--ink-700);padding:5px 10px;border-radius:2px;font-family:var(--mono);font-size:11px">
+    COVERAGE&nbsp; inline <b style="color:var(--sev-hig)">12/14</b> &nbsp;·&nbsp; sinkhole 3/3 &nbsp;·&nbsp; ZT-fronted 8/8</div>
+</div>
+
+<div style="position:relative;height:340px;border:1px solid var(--ink-700);background:
+  linear-gradient(var(--ink-900) 0 0) padding-box,
+  repeating-linear-gradient(0deg,transparent,transparent 23px,var(--ink-850) 23px,var(--ink-850) 24px),
+  repeating-linear-gradient(90deg,transparent,transparent 23px,var(--ink-850) 23px,var(--ink-850) 24px);
+  background-color:var(--ink-900);overflow:hidden">
+
+  <svg style="position:absolute;inset:0;width:100%;height:100%" aria-hidden="true">
+    <defs><marker id="a" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6" fill="none" stroke="#6B7280" stroke-width="1.2"/></marker>
+    <marker id="aw" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6" fill="none" stroke="#E3C567" stroke-width="1.2"/></marker></defs>
+    <!-- internet -> tproxy -->
+    <path d="M118,74 L188,74" stroke="#6B7280" stroke-width="1.4" marker-end="url(#a)"/>
+    <!-- tproxy -> prod-web -->
+    <path d="M268,74 L360,74" stroke="#6B7280" stroke-width="1.4" marker-end="url(#a)"/>
+    <!-- tproxy -> prod-api (declared, not observed) -->
+    <path d="M268,86 C310,86 320,150 358,150" stroke="#6B7280" stroke-width="1.4"
+      stroke-dasharray="4 4" marker-end="url(#a)" fill="none"/>
+    <!-- agent group -> access proxy -->
+    <path d="M118,238 L188,238" stroke="#6B7280" stroke-width="1.4" marker-end="url(#a)"/>
+    <!-- access proxy -> prod-db -->
+    <path d="M268,238 L360,238" stroke="#6B7280" stroke-width="1.4" marker-end="url(#a)"/>
+    <!-- undeclared gateway -> prod-db : observed, not declared -->
+    <path d="M268,318 C320,318 330,260 358,252" stroke="#E3C567" stroke-width="1.4"
+      stroke-dasharray="9 4 2 4" marker-end="url(#aw)" fill="none"/>
+    <text x="292" y="300" fill="#E3C567" font-family="var(--mono)" font-size="10">observed, not declared</text>
+    <text x="286" y="120" fill="#6B7280" font-family="var(--mono)" font-size="10">declared, not observed</text>
+  </svg>
+
+  <!-- nodes -->
+  <div style="position:absolute;left:40px;top:44px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-200)">◍</div>
+      <div style="font-size:10px;color:var(--ink-400);margin-top:5px">Internet</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-600)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:190px;top:44px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px;position:relative">
+      <div style="position:absolute;top:3px;right:4px;font-size:8px;color:var(--sev-hig)">▲</div>
+      <div style="font-size:19px;line-height:1;color:var(--ink-050)">⇥</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">gw-edge-01</div>
+      <div style="font-size:9px;color:var(--ink-500)">inline TPROXY</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-200)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:362px;top:44px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-200)">▢</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">prod-web</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-200)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:362px;top:120px;width:78px;text-align:center">
+    <div style="border:1px dashed var(--ink-500);border-radius:3px;background:transparent;padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-500)">▢</div>
+      <div style="font-size:10px;color:var(--ink-400);margin-top:5px">prod-api</div>
+      <div style="font-size:9px;color:var(--ink-500)">not enrolled</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-700)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:40px;top:206px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-200)">▤</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">eng-laptops</div>
+      <div style="font-size:9px;color:var(--ink-500)">51 endpoints</div>
+      <div style="display:flex;height:3px;margin:6px 5px 0;gap:1px">
+        <div style="flex:42;background:var(--ink-200)"></div>
+        <div style="flex:5;background:repeating-linear-gradient(45deg,var(--ink-500),var(--ink-500) 1px,transparent 1px,transparent 3px)"></div>
+        <div style="flex:4;background:var(--ink-700)"></div>
+      </div>
+    </div></div>
+
+  <div style="position:absolute;left:190px;top:206px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-050)">⛨</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">gw-access-01</div>
+      <div style="font-size:9px;color:var(--ink-500)">ZT access</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-200)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:362px;top:206px;width:78px;text-align:center">
+    <div style="border:1px solid var(--ink-500);border-radius:3px;background:var(--ink-850);padding:9px 0 5px">
+      <div style="font-size:19px;line-height:1;color:var(--ink-200)">⛁</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">prod-db</div>
+      <div style="font-size:9px;color:var(--ink-500)">tcp</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-200)"></div>
+    </div></div>
+
+  <div style="position:absolute;left:190px;top:286px;width:78px;text-align:center">
+    <div style="border:3px double var(--sev-hig);border-radius:3px;background:var(--ink-850);padding:8px 0 4px;position:relative">
+      <div style="position:absolute;top:-1px;left:-1px;width:0;height:0;
+        border-top:9px solid var(--sev-hig);border-inline-end:9px solid transparent"></div>
+      <div style="font-size:19px;line-height:1;color:var(--ink-050)">⧉</div>
+      <div style="font-size:10px;color:var(--ink-200);margin-top:5px">gw-edge-02</div>
+      <div style="font-size:9px;color:var(--sev-hig)">undeclared</div>
+      <div style="height:3px;margin:6px 5px 0;background:var(--ink-200)"></div>
+    </div></div>
+</div>
+
+<div style="border:1px solid var(--sev-hig);border-inline-start-width:2px;padding:12px 14px;margin-top:12px;
+  background:rgba(255,159,69,.05);font-size:12px;line-height:19px;max-width:76ch">
+  <b style="color:var(--sev-hig)">⚠ This edit removes inline inspection from prod-web and prod-api.</b><br>
+  Deleting this edge takes <span class="mono">gw-edge-01</span> out of the path for 2 services.
+  A change that reduces enforcement coverage cannot be applied as a routing change — it must be requested
+  as <span class="mono">ENFORCEMENT_DISABLE</span>, which requires two-person approval and carries a
+  mandatory expiry.
+  <div style="margin-top:10px;display:flex;gap:8px">
+    <span style="border:1px solid var(--accent);color:var(--accent);padding:5px 12px;border-radius:2px">Undo this edit</span>
+    <span style="border:1px solid var(--ink-600);padding:5px 12px;border-radius:2px">Continue and request ENFORCEMENT_DISABLE</span>
+  </div>
+</div>
+<p class="note" style="margin-top:10px">Coverage loss is shown <b>at the moment of the edit</b>, not at
+approval — an operator who learns at approval time has already built a change set around a false
+assumption. ADR-15 requires that any coverage-reducing change be expressed as
+<code class="mono">ENFORCEMENT_DISABLE</code> so it inherits four-eyes, monotonic sequencing and a mandatory
+TTL rather than routing around them. The operator can still do it; they cannot do it quietly.</p>
+
+<h2>6 · The nine states every view must define</h2>
 <div class="states">
   <div class="stc"><b>Loading · first</b><p>Static skeleton matching final layout. No shimmer.</p></div>
   <div class="stc"><b>Loading · refresh</b><p>Content stays; hairline progress at region top. Numbers never blank.</p></div>
