@@ -27,6 +27,9 @@ type CorrelationRule struct {
 	MinAlerts int           // alerts within the window to raise an incident (default 3)
 	MinRisk   float64       // ignore alerts below this risk (default 0)
 	MinHosts  int           // distinct originating agents to raise an incident (default 1 = no cross-host constraint)
+	// RecurrenceWindow bounds how far back a closed incident may be and still count as this one's
+	// predecessor (SOAR-2b). 0 = DefaultRecurrenceWindow.
+	RecurrenceWindow time.Duration
 }
 
 // Incident is a correlated group of alerts for one subject — what an operator triages.

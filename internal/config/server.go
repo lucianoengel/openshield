@@ -59,6 +59,8 @@ var ServerFields = []Field{
 		Description: "Alerts within the window needed to raise a burst incident."},
 	{Key: "OPENSHIELD_CORRELATE_MIN_DOMAINS", Scope: ScopeDynamic, Kind: KindInt, Default: "2",
 		Description: "Distinct domains needed to raise a cross-domain incident (XDR-4)."},
+	{Key: "OPENSHIELD_INCIDENT_RECURRENCE_WINDOW", Scope: ScopeDynamic, Kind: KindDuration, Default: "168h",
+		Description: "How far back a closed incident may be and still count as the predecessor of a new one for the same subject or entity (SOAR-2b). Longer makes recurrence counts span more history; too long turns them into a measure of how long the subject has existed."},
 	{Key: "OPENSHIELD_INTENT_BLAST_RADIUS", Scope: ScopeDynamic, Kind: KindInt, Default: "10",
 		Description: "Maximum subjects one response-intent publication may target (SOAR-7). The failure that matters is not one wrong containment but a fleet-wide one. Zero removes the ceiling, which is a deliberate choice an operator should have to make."},
 	{Key: "OPENSHIELD_APPROVAL_EXPIRY_INTERVAL", Scope: ScopeDynamic, Kind: KindDuration, Default: "5m",

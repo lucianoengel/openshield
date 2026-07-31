@@ -625,6 +625,50 @@ time-to-resolve unmeasurable, and those metrics are the point of recording the l
 
 <!-- restored from 2026-07-26-soar2-scheduled-correlation -->
 
+### Requirement: An incident raised after a close is linked to the one it recurs from
+
+Reopening SHALL remain impossible as a lifecycle transition, for the reason above. When a new incident is
+raised for a subject or entity that already had one which has since left `open`, the control plane SHALL
+record which incident it recurs from and how many times the trouble has now returned, and SHALL make both
+readable on the incident and as a chain reachable from ANY member of it.
+
+The gap this closes is not the refused transition. It is that a recurrence — the strongest available
+evidence that a previous close was premature — arrived indistinguishable from first-time trouble, on the
+page that decides how it gets handled. A first-occurrence incident asks "what is this?"; the fourth
+return in a week asks "why does closing this not make it stop?", and those warrant opposite responses.
+
+The link SHALL be established only when an incident is genuinely raised, never when an ongoing one is
+re-correlated: correlation runs on a clock, and an unresolved incident must not accumulate a recurrence
+count simply by staying unresolved. The predecessor SHALL be scoped to the same subject (or entity, for
+the cross-domain rule) and SHALL be bounded by a configurable window — without a bound the count stops
+being a statement about a recurrence and becomes one about how long the subject has existed.
+
+A link that cannot be established SHALL be counted and surfaced. The incident is intact and an operator
+will see it; what is missing is only the knowledge that it has happened before, which makes the product
+look calmer than it is.
+
+#### Scenario: Trouble that returns after a close is linked and counted
+- **WHEN** an incident is closed and the same burst raises a new incident for that subject
+- **THEN** the new incident names the closed one as its predecessor and reports one recurrence
+- **AND** a further close-and-return reports two, counted from the predecessor rather than flagged
+
+#### Scenario: A re-correlated ongoing incident is not a recurrence
+- **WHEN** the correlation loop re-materializes an incident that is still open
+- **THEN** its recurrence count is unchanged
+
+#### Scenario: The predecessor is scoped and bounded
+- **WHEN** the most recent closed incident belongs to a different subject, or is older than the window
+- **THEN** the new incident is recorded as a first occurrence, not as a recurrence of it
+
+#### Scenario: The chain reads the same from any member
+- **WHEN** the chain is requested for the oldest, a middle, or the newest incident in it
+- **THEN** the same complete chain is returned, oldest first
+
+#### Scenario: A recurrence is announced as one
+- **WHEN** a recurrence is raised and a notification sink is configured
+- **THEN** the notification states that it is a recurrence, which occurrence it is, and how long after
+  the predecessor it returned
+
 ### Requirement: The incidents read surface can select a correlation rule
 
 The incidents endpoint SHALL accept an optional rule selector so an operator can ask for the

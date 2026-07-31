@@ -90,6 +90,7 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"openshield_operator_role_changes_total", "Operator role grants and revocations applied by this process — privilege changes are exactly what an audit reviews.", OperatorRoleChanges()},
 			{"openshield_skewed_events_total", "Events rejected for an implausible future timestamp — a non-zero value means an endpoint's clock is wrong or an agent is back-dating, and either way its telemetry is not where the timeline puts it.", SkewedEvents()},
 			{"openshield_notify_missing_sink_total", "Routing rules naming a sink that is not configured (SOAR-9) — load validation refuses such a table, so a non-zero value means it changed under a running process and those notifications went nowhere the rule intended.", s.NotifyMissingSink()},
+			{"openshield_recurrence_link_failures_total", "Incidents raised without the link to the one they recur from (SOAR-2b) — the incident is intact, but it pages as first-time trouble when it is the fourth return of something a responder already closed.", RecurrenceLinkFailures.Load()},
 		}
 		// LISTENER REFUSALS, appended only when a listener is actually running. These count what was
 		// turned away BEFORE it became a countable event, so they cannot be derived from the ingest

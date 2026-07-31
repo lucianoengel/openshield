@@ -31,6 +31,11 @@ type StoredIncident struct {
 	LastSeen       time.Time  `json:"last_seen"`
 	AcknowledgedBy string     `json:"acknowledged_by,omitempty"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	// SOAR-2b: which incident this one recurs from (0 = none) and how many times the trouble has now
+	// come back. Carried on the LIST response, not only the chain endpoint: an operator scanning
+	// incidents needs to see "this is the fourth time" without asking a second question per row.
+	RecurrenceOf    int64 `json:"recurrence_of,omitempty"`
+	RecurrenceCount int   `json:"recurrence_count"`
 }
 
 // MaterializeIncidents runs the correlation rule and persists each computed incident, upserting the
@@ -62,7 +67,15 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 			return 0, err
 		}
 		if inserted {
-			s.notifyIncident(ctx, id, inc, now)
+			// SOAR-2b: link to the predecessor BEFORE paging, so the page can say "this is the third
+			// time" rather than leaving the operator to discover it. A link failure is logged by the
+			// caller of MaterializeIncidents via the returned error path only if it is a DB failure;
+			// here it degrades to an unlinked incident, which is strictly what we had before.
+			rec, err := s.linkRecurrence(ctx, id, "ueba_burst", inc.SubjectID, nil, rule.RecurrenceWindow, now)
+			if err != nil {
+				RecurrenceLinkFailures.Add(1)
+			}
+			s.notifyIncident(ctx, id, inc, now, rec)
 		}
 	}
 	return len(incidents), nil
@@ -74,16 +87,29 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 // subject (raised after the previous one left the open state, hence a new autoincrement id) pages
 // again. Delivery is best-effort and off-ingest (emit queues; a nil/absent sink is a no-op): a page
 // never fails materialization — the incidents row is the record, the notification is an additive copy.
-func (s *Server) notifyIncident(ctx context.Context, id int64, inc Incident, now time.Time) {
+func (s *Server) notifyIncident(ctx context.Context, id int64, inc Incident, now time.Time, rec Recurrence) {
 	s.emit(ctx, notify.Notification{
 		Kind:      notify.KindIncident,
 		Subject:   inc.SubjectID,
 		RiskScore: inc.MaxRisk,
 		At:        now,
 		ID:        fmt.Sprintf("inc_%d", id),
-		Detail: fmt.Sprintf("%s incident: %d alerts across %d host(s), peak risk %.2f",
-			inc.Severity, inc.AlertCount, inc.HostCount, inc.MaxRisk),
+		Detail: fmt.Sprintf("%s incident: %d alerts across %d host(s), peak risk %.2f%s",
+			inc.Severity, inc.AlertCount, inc.HostCount, inc.MaxRisk, recurrenceSuffix(rec)),
 	})
+}
+
+// recurrenceSuffix renders a recurrence for a human, and renders nothing at all for a first occurrence.
+//
+// It goes in the page rather than only in the API because the page is where the decision gets made. Two
+// incidents that read identically get triaged identically, and "this came back 20 minutes after we
+// closed it" is the single most useful sentence available at that moment.
+func recurrenceSuffix(rec Recurrence) string {
+	if rec.Count == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" — RECURRENCE #%d (incident %d, %s earlier)",
+		rec.Count, rec.Of, rec.Since.Round(time.Minute))
 }
 
 // RecentIncidents returns materialized incidents, most recently active first.
@@ -96,7 +122,7 @@ func (s *Server) RecentIncidents(ctx context.Context, limit int) ([]StoredIncide
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen,
-		        acknowledged_by, acknowledged_at
+		        acknowledged_by, acknowledged_at, COALESCE(recurrence_of, 0), recurrence_count
 		   FROM incidents ORDER BY last_seen DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -106,7 +132,8 @@ func (s *Server) RecentIncidents(ctx context.Context, limit int) ([]StoredIncide
 	for rows.Next() {
 		var i StoredIncident
 		if err := rows.Scan(&i.ID, &i.SubjectID, &i.State, &i.AlertCount, &i.MaxRisk, &i.HostCount,
-			&i.FirstSeen, &i.LastSeen, &i.AcknowledgedBy, &i.AcknowledgedAt); err != nil {
+			&i.FirstSeen, &i.LastSeen, &i.AcknowledgedBy, &i.AcknowledgedAt,
+			&i.RecurrenceOf, &i.RecurrenceCount); err != nil {
 			return nil, err
 		}
 		i.Severity = Severity(i.MaxRisk)

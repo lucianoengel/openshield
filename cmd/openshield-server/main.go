@@ -224,12 +224,15 @@ func main() {
 			func() time.Duration { return cfg.Duration("OPENSHIELD_CORRELATE_INTERVAL") },
 			func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
 				window := cfg.Duration("OPENSHIELD_CORRELATE_WINDOW")
+				recur := cfg.Duration("OPENSHIELD_INCIDENT_RECURRENCE_WINDOW")
 				return controlplane.CorrelationRule{
-						Window:    window,
-						MinAlerts: cfg.Int("OPENSHIELD_CORRELATE_MIN_ALERTS"),
+						Window:           window,
+						MinAlerts:        cfg.Int("OPENSHIELD_CORRELATE_MIN_ALERTS"),
+						RecurrenceWindow: recur,
 					}, controlplane.CrossDomainRule{
-						Window:     window,
-						MinDomains: cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
+						Window:           window,
+						MinDomains:       cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
+						RecurrenceWindow: recur,
 					}
 			}, nil)
 		fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation loop ACTIVE (interval read live "+

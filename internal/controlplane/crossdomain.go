@@ -36,6 +36,9 @@ type CrossDomainRule struct {
 	// Sequence is an optional ORDERED domain sequence (e.g. ueba→hips→nips) that the entity's alerts
 	// must contain as a subsequence. Empty = no ordering constraint (the plain multi-domain rule).
 	Sequence []string
+	// RecurrenceWindow bounds how far back a closed incident may be and still count as this one's
+	// predecessor (SOAR-2b). 0 = DefaultRecurrenceWindow.
+	RecurrenceWindow time.Duration
 }
 
 // CrossDomainIncident is a correlated multi-domain group of alerts for ONE entity.
@@ -279,7 +282,16 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 			}
 		}
 		if inserted {
-			s.notifyCrossDomainIncident(ctx, id, inc, now)
+			// SOAR-2b: same recurrence link as the burst rule, keyed by ENTITY — the key this rule
+			// already uses for open-incident uniqueness, so "the same trouble" means the same thing to
+			// both mechanisms.
+			entity := inc.EntityID
+			rec, err := s.linkRecurrence(ctx, id, "cross_domain", inc.SubjectID, &entity,
+				rule.RecurrenceWindow, now)
+			if err != nil {
+				RecurrenceLinkFailures.Add(1)
+			}
+			s.notifyCrossDomainIncident(ctx, id, inc, now, rec)
 		}
 	}
 	return len(incidents), nil
@@ -289,7 +301,8 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 // the breadth, which is the reason this incident exists at all. max_risk is deliberately not part of it:
 // unified alerts carry a severity bucket, not a continuous risk score, and reporting a 0.00 risk would
 // be a false statement about a signal this rule never computed.
-func (s *Server) notifyCrossDomainIncident(ctx context.Context, id int64, inc CrossDomainIncident, now time.Time) {
+func (s *Server) notifyCrossDomainIncident(ctx context.Context, id int64, inc CrossDomainIncident,
+	now time.Time, rec Recurrence) {
 	s.emit(ctx, notify.Notification{
 		Kind:    notify.KindIncident,
 		Subject: inc.SubjectID,
@@ -298,7 +311,8 @@ func (s *Server) notifyCrossDomainIncident(ctx context.Context, id int64, inc Cr
 		// dedup id (the two tables' autoincrements are one sequence, but the ids are not the same
 		// logical alert).
 		ID: fmt.Sprintf("xinc_%d", id),
-		Detail: fmt.Sprintf("%s cross-domain incident: %d alerts across %d domains (%s)",
-			inc.Severity, inc.AlertCount, inc.DomainCount, strings.Join(inc.Domains, ", ")),
+		Detail: fmt.Sprintf("%s cross-domain incident: %d alerts across %d domains (%s)%s",
+			inc.Severity, inc.AlertCount, inc.DomainCount, strings.Join(inc.Domains, ", "),
+			recurrenceSuffix(rec)),
 	})
 }
