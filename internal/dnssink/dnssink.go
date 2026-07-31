@@ -36,7 +36,11 @@ type Resolver struct {
 	// leaves upstream forwarding exactly as it was (plain dial, no mark) — required when there is no
 	// redirect installed and off non-linux platforms.
 	Mark int
-	Log  *slog.Logger
+	// Split, when set, answers catalogued service names with the ZTNA gateway's address (ZT-11), so a
+	// client reaches an internal service through the broker without any client configuration. It is
+	// consulted BEFORE the block list and before forwarding — see handle.
+	Split SplitHorizon
+	Log   *slog.Logger
 }
 
 func (r Resolver) timeout() time.Duration {
@@ -72,6 +76,28 @@ func (r Resolver) handle(query []byte, client net.Addr, pc net.PacketConn) {
 		// Cannot classify → forward (fail-open). Never drop or sinkhole on a parse failure.
 		r.forward(query, client, pc)
 		return
+	}
+	// ZT-11 BEFORE the block list, deliberately. A name that is both catalogued and on the IOC feed is
+	// a configuration mistake, and of the two possible readings — "send this user to the broker" and
+	// "this name is malware" — the one an operator explicitly wrote for THIS deployment wins. The
+	// alternative silently makes a catalogued service unreachable with no line naming the collision, so
+	// the collision is logged rather than resolved quietly.
+	if addr, ok := r.Split.Answer(q.Name); ok {
+		if r.Blocked != nil && r.Blocked(q.Name) && r.Log != nil {
+			r.Log.Warn("dnssink: a CATALOGUED service name is also on the threat feed — answering with "+
+				"the gateway address, because an explicitly catalogued service is a decision this "+
+				"deployment made. Check the feed.", slog.String("name", q.Name))
+		}
+		if resp := splitAnswer(query, q.QType, addr); resp != nil {
+			_, _ = pc.WriteTo(resp, client)
+			if r.Log != nil {
+				r.Log.Debug("dnssink: split-horizon answer", slog.String("name", q.Name),
+					slog.String("addr", addr))
+			}
+			return
+		}
+		// Could not build an answer → fall through and forward, never sinkhole. A client that gets no
+		// answer at all cannot tell a broken resolver from a blocked name.
 	}
 	if r.Blocked != nil && r.Blocked(q.Name) {
 		resp := nxdomain(query)

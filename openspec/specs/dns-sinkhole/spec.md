@@ -190,3 +190,56 @@ exfiltration it exists to detect, into the system's most copied and longest-reta
 - **WHEN** a DNS query encoding data in its subdomain labels is decided upon
 - **THEN** no audit entry may contain the encoded labels
 <!-- synced from nips3-dns-tunnel-signal -->
+
+### Requirement: Catalogued service names resolve to the gateway
+
+The resolver SHALL answer configured service names with a configured address — normally the ZTNA
+gateway's — so a client reaches an internal service THROUGH the broker with no client configuration.
+
+The bypass guard closes the wrong path and does nothing about the right one: the client still has to be
+TOLD to use the broker, which in practice means a hosts file, a VPN profile, or an internal DNS server
+somebody else maintains. Together the two make brokered access ordinary rather than opt-in — the guard
+makes going around it fail, and this makes going through it automatic.
+
+THIS IS CONVENIENCE, NOT ENFORCEMENT, and documentation SHALL NOT let the two be read as one control. A
+client that hardcodes an IP, caches an old answer, or uses DoH/DoT never asks this resolver anything. The
+firewall guard is what binds; this removes the reason anybody would need to work around it.
+
+A CATALOGUED NAME SHALL OUTRANK THE BLOCK LIST, and the collision SHALL be logged. Of the two readings —
+"send this user to the broker" and "this name is malware" — the one an operator explicitly wrote for this
+deployment wins; the alternative makes a catalogued service silently unreachable with nothing naming the
+cause.
+
+ONLY THE REQUESTED ADDRESS FAMILY SHALL BE ANSWERED. Returning an A record to an AAAA query is not merely
+useless: a dual-stack client reads it as "no AAAA" and may still reach the real address over IPv6, which
+is the direct path this exists to remove. An unmatched family SHALL get an empty NOERROR — the name
+exists, not in this family — never NXDOMAIN.
+
+Names SHALL match case-insensitively and with or without the trailing root dot, because resolver
+libraries differ about the dot and a table written one way answering nothing for the other looks exactly
+like the feature being off.
+
+The answer TTL SHALL be short. The address is infrastructure configuration, and a long TTL keeps clients
+sending traffic to a gateway that has moved with no way to shorten it after the fact.
+
+A MALFORMED TABLE ENTRY SHALL be refused, and a malformed table SHALL prevent the resolver from starting
+— the opposite of the fail-to-wire everything else here uses. The rest degrades toward "name resolution
+still works"; a half-loaded split table degrades toward "some clients silently reach protected services
+directly", which is the outcome the guard and this exist together to prevent.
+
+#### Scenario: A catalogued name resolves to the gateway
+- **WHEN** a client queries a configured service name
+- **THEN** it is answered locally with the configured address, and the sinkhole and forwarding still work
+  for everything else
+
+#### Scenario: Only the requested family is answered
+- **WHEN** a client asks for AAAA and only a v4 address is configured
+- **THEN** it receives an empty NOERROR rather than an A record
+
+#### Scenario: A catalogued name outranks the block list
+- **WHEN** a name is both catalogued and on the threat feed
+- **THEN** it is answered with the gateway address and the collision is logged
+
+#### Scenario: A malformed table refuses to start the resolver
+- **WHEN** the split-horizon configuration contains an entry that cannot be parsed
+- **THEN** the resolver does not start rather than answering for only some of the names

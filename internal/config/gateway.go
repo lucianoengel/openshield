@@ -123,6 +123,8 @@ var GatewayFields = []Field{
 		Description: "Cloud-service catalog (DLP-2). Unset leaves cloud-upload awareness inert."},
 	{Key: "OPENSHIELD_CASB_CATALOG_RELOAD", Scope: ScopeBootstrap, Kind: KindDuration, Default: "0s",
 		Description: "How often the CASB catalog is re-read. 0 disables reloading."},
+	{Key: "OPENSHIELD_DNS_SPLIT_HORIZON", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Comma-separated name=address pairs the DNS resolver answers locally (ZT-11), normally every catalogued service name pointing at this gateway — so a client reaches an internal service through the broker with no client configuration. CONVENIENCE, NOT ENFORCEMENT: a client that hardcodes an IP, caches an old answer or uses DoH/DoT never asks. The bypass guard (OPENSHIELD_ZTNA_PROTECTED, on the agent) is what binds. A malformed entry refuses to start the resolver rather than leaving some names resolving to their real addresses."},
 	{Key: "OPENSHIELD_TPROXY_LISTEN", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Address for the NIPS-1 transparent inline data plane. Empty disables it."},
 	{Key: "OPENSHIELD_TPROXY_INSTALL_RULES", Scope: ScopeBootstrap, Kind: KindString, Default: "",

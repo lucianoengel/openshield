@@ -72,6 +72,66 @@ func dnsQuery(t *testing.T, server, name string) (rcode int, answers int) {
 	return int(buf[3] & 0x0f), int(binary.BigEndian.Uint16(buf[6:8]))
 }
 
+// dnsQueryAddr is dnsQuery plus the first A record's ADDRESS.
+//
+// Counting answers is not enough anywhere the alternative to a local answer is a FORWARD: a stub upstream
+// that answers everything returns one answer too, so an assertion on the count passes identically whether
+// the resolver answered locally or relayed. The address is the only thing that distinguishes them, and
+// this exists because that exact weak assertion let a mutation through.
+func dnsQueryAddr(t *testing.T, server, name string) (rcode int, addr string) {
+	t.Helper()
+	var q []byte
+	q = append(q, 0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0)
+	for _, label := range strings.Split(name, ".") {
+		q = append(q, byte(len(label)))
+		q = append(q, label...)
+	}
+	q = append(q, 0x00, 0x00, 0x01, 0x00, 0x01)
+
+	conn, err := net.DialTimeout("udp", server, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dialling %s: %v", server, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(q); err != nil {
+		t.Fatalf("querying: %v", err)
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("no answer from %s for %q: %v", server, name, err)
+	}
+	if n < 12 {
+		t.Fatalf("short DNS response (%d bytes)", n)
+	}
+	rcode = int(buf[3] & 0x0f)
+	if binary.BigEndian.Uint16(buf[6:8]) == 0 {
+		return rcode, ""
+	}
+	// Skip the question, then read the first record's RDATA.
+	off := 12
+	for off < n {
+		l := int(buf[off])
+		off++
+		if l == 0 {
+			break
+		}
+		off += l
+	}
+	off += 4 // QTYPE + QCLASS
+	if off+12 > n {
+		return rcode, ""
+	}
+	off += 2 + 2 + 2 + 4 // NAME pointer, TYPE, CLASS, TTL
+	rdlen := int(binary.BigEndian.Uint16(buf[off : off+2]))
+	off += 2
+	if off+rdlen > n || rdlen == 0 {
+		return rcode, ""
+	}
+	return rcode, net.IP(buf[off : off+rdlen]).String()
+}
+
 // TestTheDNSSinkholeRefusesAKnownBadDomainAndForwardsTheRest is NIPS-8's core claim.
 func TestTheDNSSinkholeRefusesAKnownBadDomainAndForwardsTheRest(t *testing.T) {
 	requireNetAdmin(t)
@@ -557,4 +617,62 @@ func vmListener(t *testing.T, host string) string {
 		}
 	}()
 	return ln.Addr().String()
+}
+
+// SPLIT-HORIZON ANSWERS FROM THE SHIPPED GATEWAY (ZT-11).
+//
+// The package tests prove the resolver answers. What only the binary proves is that the configuration
+// reaches it — and that the resolver still SINKHOLES and still FORWARDS, because the split branch sits
+// in front of both and a mistake there disables the sinkhole for everything.
+//
+// Not root-gated by nature: it binds an ephemeral UDP port, not :53. It lives here because it needs the
+// same canned-upstream fixture as the other DNS scenarios.
+func TestTheGatewayAnswersCataloguedNamesWithItsOwnAddress(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+
+	upstream := startStubDNSAt(t, "127.0.0.1:0")
+	feed := filepath.Join(work, "ioc.feed")
+	if err := os.WriteFile(feed, []byte("domain evil.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sink := "127.0.0.1:" + freePort(t)
+
+	gw := Start(t, "openshield-gateway", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_LISTEN=127.0.0.1:" + freePort(t),
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_IOC_FEED=" + feed,
+		"OPENSHIELD_DNS_SINK_LISTEN=" + sink,
+		"OPENSHIELD_DNS_UPSTREAM=" + upstream,
+		"OPENSHIELD_DNS_SPLIT_HORIZON=payroll.corp.example=10.9.9.9",
+	})
+	gw.WaitForOutput("DNS SPLIT HORIZON ACTIVE", 90*time.Second)
+	gw.WaitForOutput("preventive DNS resolver ACTIVE", 30*time.Second)
+
+	// 1. THE CATALOGUED NAME resolves to the gateway address, with no client configuration.
+	rcode, addr := dnsQueryAddr(t, sink, "payroll.corp.example")
+	if rcode != 0 || addr != "10.9.9.9" {
+		t.Fatalf("payroll.corp.example resolved to rcode=%d addr=%q, want NOERROR 10.9.9.9 — the "+
+			"ADDRESS is the assertion, not the answer count: a forwarded query returns one answer too, "+
+			"so counting cannot tell a local answer from a relayed one. Without this a client still has "+
+			"to be told about the broker by a hosts file or a VPN profile\n%s", rcode, addr, gw.Output())
+	}
+
+	// 2. THE SINKHOLE STILL WORKS. The split branch sits in front of it, so a mistake there disables
+	// blocking for every domain — silently, because a forwarded query still gets an answer.
+	if rc, _ := dnsQuery(t, sink, "evil.example"); rc != 3 {
+		t.Fatalf("a feed-listed domain got rcode %d, want NXDOMAIN — the split-horizon branch runs "+
+			"before the block list, so a mistake there turns the sinkhole off for everything\n%s",
+			rc, gw.Output())
+	}
+
+	// 3. AND ORDINARY NAMES STILL FORWARD, so the resolver has not become a thing that only answers
+	// what it was told about.
+	if rc, ans := dnsQuery(t, sink, "good.example"); rc != 0 || ans == 0 {
+		t.Fatalf("an ordinary name got rcode=%d with %d answer(s), want the upstream's answer\n%s",
+			rc, ans, gw.Output())
+	}
 }

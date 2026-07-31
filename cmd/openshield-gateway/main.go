@@ -922,7 +922,31 @@ func applyDNSSink(ctx context.Context, gw *gateway.Gateway, log *slog.Logger) {
 	if redirect && scope != dnsredirect.ScopeForwarded { // local/both need the loop-break mark
 		mark = envMark("OPENSHIELD_DNS_REDIRECT_MARK", 0x1d5)
 	}
-	r := dnssink.Resolver{Upstream: upstream, Blocked: gw.BlockedDomain, Mark: mark, Log: log}
+	// ZT-11: split horizon. Catalogued service names answer with the gateway's own address, so a client
+	// reaches an internal service THROUGH the broker with no client configuration at all — the other
+	// half of the bypass guard (ZT-10), which only makes going around it fail.
+	//
+	// A MALFORMED TABLE STOPS THE RESOLVER FROM STARTING, which is the opposite of every other
+	// fail-to-wire here and is deliberate. The rest of this function degrades toward "name resolution
+	// still works"; a half-loaded split table degrades toward "some clients silently reach protected
+	// services directly", which is the exact outcome ZT-10 and ZT-11 exist together to prevent.
+	var split dnssink.SplitHorizon
+	if spec := strings.TrimSpace(os.Getenv("OPENSHIELD_DNS_SPLIT_HORIZON")); spec != "" {
+		parsed, perr := dnssink.ParseSplitHorizon(spec)
+		if perr != nil {
+			pc.Close()
+			log.Error("gateway: DNS split horizon is malformed — refusing to start the resolver rather "+
+				"than answering for SOME catalogued services and letting the rest resolve to their real "+
+				"addresses, past the broker", slog.String("err", perr.Error()))
+			return
+		}
+		split = parsed
+		log.Warn("gateway: DNS SPLIT HORIZON ACTIVE — catalogued names answer with the gateway address. "+
+			"This is convenience, NOT enforcement: a client that hardcodes an IP, caches an old answer "+
+			"or uses DoH/DoT never asks this resolver. The bypass guard is what binds.",
+			slog.Int("names", len(split)))
+	}
+	r := dnssink.Resolver{Upstream: upstream, Blocked: gw.BlockedDomain, Mark: mark, Split: split, Log: log}
 	go func() {
 		if err := r.Serve(ctx, pc); err != nil && ctx.Err() == nil {
 			log.Error("gateway: DNS sinkhole stopped", slog.String("err", err.Error()))
