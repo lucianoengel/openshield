@@ -44,6 +44,17 @@ var AgentFields = []Field{
 		Description: "How long the exec gate waits for a verdict before falling back. Fail-open by design (D17): a dead engine must not wedge every exec on the host."},
 	{Key: "OPENSHIELD_EXEC_BUDGET", Scope: ScopeBootstrap, Kind: KindDuration, Default: "500ms",
 		Description: "Total time budget for an exec decision. Exceeding it allows the exec, loudly."},
+	// ZT-10 — the endpoint bypass guard. Both of the first two are required to turn it on, because
+	// either alone is a configuration that cannot work: a gateway with nothing protected guards
+	// nothing, and protected ranges with no gateway block the only permitted path.
+	{Key: "OPENSHIELD_ZTNA_PROTECTED", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Comma-separated IPs/CIDRs (v4 and v6) reachable ONLY through the ZTNA gateway (ZT-10). Needs CAP_NET_ADMIN. Unset disables the guard. This is the ENDPOINT half of bypass prevention: the network half — the protected network accepting only the gateway — is where enforcement binds, and root on this machine can remove these rules (D16)."},
+	{Key: "OPENSHIELD_ZTNA_GATEWAY_ADDR", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "The ZTNA gateway's address, exempted from the bypass guard. REQUIRED when OPENSHIELD_ZTNA_PROTECTED is set: a guard that does not exempt the gateway blocks the only permitted path, which is an outage rather than enforcement."},
+	{Key: "OPENSHIELD_ZTNA_BYPASS_ALLOW", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Further destinations exempted from the bypass guard. THE CONTROL PLANE BELONGS HERE if it sits inside a protected range — otherwise the agent's own telemetry is rejected, the agent goes silent, and a silent agent is exactly the signal a compromised endpoint produces."},
+	{Key: "OPENSHIELD_ZTNA_BYPASS_REPORT_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "1m",
+		Description: "How often the count of rejected bypass attempts is reported, and only when it has moved. A quiet endpoint says nothing."},
 }
 
 // WorkerFields declares what cmd/openshield-worker reads: the sandboxed parser's indexes and rules.

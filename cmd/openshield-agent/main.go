@@ -59,6 +59,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ZT-10: the endpoint bypass guard is independent of both gates — an operator may want the fence
+	// without exec or file-open prevention — so it is installed before either is considered, and its
+	// presence counts as a configured gate below.
+	ctxGuard, stopGuard := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopGuard()
+	guarding := startBypassGuard(ctxGuard)
+
 	dirs := splitEnv("OPENSHIELD_EXEC_MONITOR_DIRS")
 	if len(dirs) == 0 {
 		// THE FILE-OPEN GATE CAN RUN ALONE (B2). The two gates are independent — an operator may want
@@ -71,6 +78,14 @@ func main() {
 				logf("file-open gate: %v", err)
 				os.Exit(1)
 			}
+			return
+		}
+		if guarding {
+			// The guard is the whole configuration: a fenced endpoint with no exec or file-open gate is
+			// a legitimate deployment, not a misconfigured one. Wait for the signal so the teardown on
+			// clean shutdown actually runs.
+			logf("running with the ZTNA bypass guard alone (no exec or file-open gate configured)")
+			<-ctxGuard.Done()
 			return
 		}
 		logf("no gate configured. Set OPENSHIELD_EXEC_MONITOR_DIRS (comma-separated paths) + " +

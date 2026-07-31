@@ -681,3 +681,69 @@ bearer token, so it would need an authentication design of its own rather than i
 #### Scenario: A failed re-authorization leaves the tunnel up
 - **WHEN** the pipeline is unavailable during a re-authorization of an established tunnel
 - **THEN** the tunnel continues to carry traffic
+
+### Requirement: An endpoint can be fenced so protected services are reachable only through the gateway
+
+The endpoint agent SHALL be able to install firewall rules that REJECT traffic to configured protected
+ranges except to the ZTNA gateway, and SHALL count the attempts it rejected.
+
+Without it the broker's guarantees do not bind. It authenticates a device and a user, checks posture and
+risk and admits or refuses per service — and none of that matters if a client can open a socket to the
+database's address directly. A gate that can be walked around is a suggestion, and every property the
+broker enforces is then enforced only on people who choose to use it.
+
+WHAT THIS CLAIMS AND WHAT IT DOES NOT. This is the ENDPOINT half. The network half — the protected network
+accepting connections only from the gateway — is where enforcement really binds and lives outside this
+product. And it is NOT effective against root: a user with root on their own machine deletes these rules,
+exactly as the threat model has said since D16. Against a careless or curious insider it closes the path;
+against a determined one with root it raises the cost and leaves a record. Documentation SHALL NOT present
+it as unbypassable.
+
+THE EXEMPTIONS SHALL BE ORDERED BEFORE THE REJECTS. The gateway normally sits inside the range it fronts,
+so an exemption evaluated after the rejects never matches and the endpoint loses the protected services
+entirely — through the gateway or otherwise. That failure arrives looking exactly like the feature working.
+
+The hook into the outbound chain SHALL be installed only after the chain is populated, or a window exists
+at startup in which every protected destination is reachable.
+
+Further destinations SHALL be exemptable, and the CONTROL PLANE belongs among them whenever it sits inside
+a protected range: otherwise the agent's own telemetry is rejected, the agent goes silent, and a silent
+agent is precisely the signal a compromised endpoint produces. The guard would be manufacturing its own
+alarm.
+
+BOTH ADDRESS FAMILIES SHALL be enforced. A rule installed for IPv4 does nothing to IPv6 traffic, and a
+dual-stack client reaches an unguarded v6 range by preferring AAAA rather than by attacking anything. A
+protected range whose firewall backend is unavailable SHALL be a fatal error, never a skip.
+
+A destination that cannot be resolved to a firewall rule SHALL be refused rather than skipped, a
+configuration with no gateway or nothing protected SHALL be refused, and installation SHALL be
+idempotent so a restarting agent does not accumulate rules — accumulation multiplies the attempt count
+and inflates the one number an operator acts on.
+
+REJECTED ATTEMPTS ARE THE DETECTION HALF and are worth more than the blocking: a rejected connection to a
+protected service is a person or a process going around the broker, which is a finding whether or not it
+succeeded. A count that cannot be READ SHALL be reported as a failure and never as zero — "no attempts"
+and "we could not tell" are opposite answers to the only question it is asked.
+
+A guard that is configured and cannot be installed SHALL stop the agent rather than continue. Every other
+failure in that binary fails open toward the availability of a merely-unmonitored machine; this one failing
+quietly leaves an endpoint an operator believes is fenced and is not.
+
+#### Scenario: Direct traffic is rejected and the gateway still works
+- **WHEN** the guard is installed with the gateway inside the protected range
+- **THEN** a direct connection to a protected address is rejected
+- **AND** a connection to the gateway still succeeds
+- **AND** the rejected attempt is counted
+
+#### Scenario: Removal restores the endpoint
+- **WHEN** the guard is removed
+- **THEN** the protected address is directly reachable again
+- **AND** removing twice is not an error
+
+#### Scenario: Reinstalling does not accumulate rules
+- **WHEN** the guard is installed repeatedly, as a restarting agent would
+- **THEN** the chain holds one rule per protected range and one hook
+
+#### Scenario: A configuration that cannot work is refused
+- **WHEN** there is no gateway, nothing protected, or a destination that is not an address or CIDR
+- **THEN** installation fails rather than reporting success over a guard with a hole in it
