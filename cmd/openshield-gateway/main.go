@@ -619,7 +619,12 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	degraded = append(degraded,
 		rejectionCounter{"tunnels_revoked", ap.TunnelsRevoked},
 		rejectionCounter{"tunnels_refused", ap.TunnelsRefused},
-		rejectionCounter{"tunnel_dial_failures", ap.TunnelDialFailures})
+		rejectionCounter{"tunnel_dial_failures", ap.TunnelDialFailures},
+		// ZT-12: the same three for SOCKS. A rising refusal count on a mutually-authenticated listener
+		// is somebody presenting tickets they do not hold.
+		rejectionCounter{"socks_revoked", ap.SOCKSRevoked},
+		rejectionCounter{"socks_refused", ap.SOCKSRefused},
+		rejectionCounter{"socks_dial_failures", ap.SOCKSDialFailures})
 	go reportRejections(ctx,
 		log,
 		"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+
@@ -627,8 +632,45 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
 		degraded...)
 
+	// ZT-12: SOCKS5, for the tooling that does not speak HTTP proxying — ssh's ProxyCommand, database
+	// clients, anything pointed at a system-wide proxy setting. It listens on its OWN port with the SAME
+	// mutual TLS, and its user credential is a ticket minted on the HTTP surface below.
+	//
+	// The ticket store is created whenever SOCKS is enabled, and ONLY then: /ticket answers 404 without
+	// one, so a deployment that has not turned SOCKS on does not hand out credentials for a listener
+	// that is not running.
+	socksAddr := strings.TrimSpace(os.Getenv("OPENSHIELD_SOCKS_LISTEN"))
+	if socksAddr != "" {
+		ap.SetTicketStore(&gateway.TicketStore{TTL: envDuration("OPENSHIELD_TICKET_TTL", gateway.DefaultTicketTTL)})
+		sln, lerr := tls.Listen("tcp", socksAddr, &tls.Config{
+			Certificates: []tls.Certificate{kp},
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    clientPool,
+			MinVersion:   tls.VersionTLS12,
+		})
+		if lerr != nil {
+			// FATAL, unlike the fail-to-wire elsewhere in this binary. An operator who configured a
+			// SOCKS port and got a gateway without one would hand out tickets against a listener that
+			// does not exist, and every client would fail in a way that looks like a network problem.
+			fatal(log, "SOCKS listener", lerr)
+		}
+		go func() {
+			if serr := ap.ServeSOCKS(ctx, sln); serr != nil && ctx.Err() == nil {
+				log.Error("gateway: SOCKS listener stopped", slog.String("err", serr.Error()))
+			}
+		}()
+		log.Warn("gateway: ZT-12 SOCKS5 ACTIVE — mutual TLS for the DEVICE, an access ticket for the "+
+			"USER (POST /ticket to mint one). CONNECT only: BIND and UDP ASSOCIATE are refused. The "+
+			"bytes are brokered, NOT inspected.", slog.String("listen", socksAddr))
+	}
+
+	// The access proxy handles everything except the ticket endpoint, which needs its own route.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ticket", ap.TicketHandler)
+	mux.Handle("/", ap)
+
 	srv := &http.Server{
-		Addr: listen, Handler: ap, ReadHeaderTimeout: 10 * time.Second,
+		Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{kp},
 			ClientAuth:   tls.RequireAndVerifyClientCert,

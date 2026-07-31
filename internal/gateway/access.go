@@ -65,6 +65,11 @@ type AccessProxy struct {
 	// tunnels counts CONNECT outcomes (ZT-9); recheck is how often a live tunnel is re-authorized.
 	tunnels tunnelCounters
 	recheck time.Duration
+
+	// socks counts SOCKS5 outcomes (ZT-12); tickets is the store its user credential is redeemed
+	// against. A nil store means the SOCKS listener refuses everything — see handleSOCKS.
+	socks   socksCounters
+	tickets *TicketStore
 }
 
 // SetAttestationVerifier enables hardware-attestation-aware access (ZT-1): the access

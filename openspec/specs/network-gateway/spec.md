@@ -747,3 +747,70 @@ quietly leaves an endpoint an operator believes is fenced and is not.
 #### Scenario: A configuration that cannot work is refused
 - **WHEN** there is no gateway, nothing protected, or a destination that is not an address or CIDR
 - **THEN** installation fails rather than reporting success over a guard with a hole in it
+
+### Requirement: SOCKS5 reaches catalogued services with a device-bound access ticket
+
+The access broker SHALL offer a SOCKS5 listener for tooling that does not speak HTTP proxying — ssh's
+ProxyCommand, database clients, anything pointed at a system-wide proxy setting — reaching the same
+catalogued services under the same policy.
+
+Leaving it out meant those users had a VPN beside the gate, and a Zero-Trust gate with a VPN next to it
+is a VPN.
+
+SOCKS5 HAS NOWHERE TO PUT EITHER CREDENTIAL, and that SHALL be answered rather than waived. Its only
+credential channel is RFC 1929's username/password, capped at 255 bytes, which fits no certificate and no
+JWT. Therefore:
+
+- the DEVICE credential SHALL be the mutual-TLS client certificate on the connection, as on the HTTP
+  path;
+- the USER credential SHALL be a short-lived ACCESS TICKET minted on the HTTP access surface — where the
+  full dual credential is already checked — and presented as the SOCKS password.
+
+A TICKET SHALL BE BOUND TO THE DEVICE IT WAS ISSUED TO, and redeeming it SHALL require presenting that
+same certificate. A ticket is a bearer credential and bearer credentials get stolen; the binding is what
+makes the theft worthless. Redemption SHALL compare in constant time and SHALL return ONE error for
+unknown, expired and wrong-device — distinguishing them tells the holder of a stolen ticket the only
+thing they lack.
+
+Tickets SHALL expire. The alternative is a credential outliving the session, the posture check and the
+risk score that justified it. They SHALL NOT be consumed on redemption: a session credential is not a
+nonce, and forcing a round trip per connection encourages holding something longer-lived instead.
+
+WITHOUT A TICKET STORE THE LISTENER SHALL REFUSE EVERYTHING. A SOCKS proxy authenticating only the device
+would be a weaker door into the same services the HTTP path guards with two credentials, and the weaker
+door is the one that gets used. A client that does not offer username/password SHALL be refused rather
+than falling back to no authentication.
+
+ONLY CONNECT SHALL BE SUPPORTED. BIND asks the gateway to open a listening socket into the protected
+network on a client's say-so; UDP ASSOCIATE is a second data path with its own decision points. Both SHALL
+be refused with the protocol's own "command not supported" so a client is told rather than left to time
+out.
+
+The target SHALL be resolved through the catalogue and the ADDRESS SHALL come from it, never from the
+request — the same rule as the CONNECT tunnel, and for the same reason. Sessions SHALL be re-authorized on
+the same clock, and the bytes SHALL be described as brokered and NOT inspected.
+
+The ticket endpoint SHALL NOT issue when the SOCKS listener is not configured: handing out credentials for
+a listener that is not running produces failures that look like a network problem.
+
+#### Scenario: A ticket minted over HTTPS opens a SOCKS tunnel
+- **WHEN** a client mints a ticket on the access surface and presents it over SOCKS5 with the same
+  certificate
+- **THEN** it reaches the catalogued service and bytes make a round trip
+
+#### Scenario: A ticket is useless on another device
+- **WHEN** a different device presents a valid ticket issued to another
+- **THEN** authentication is refused and the refusal is counted
+
+#### Scenario: An expired ticket is refused
+- **WHEN** a ticket is presented after its TTL
+- **THEN** authentication is refused
+
+#### Scenario: Unauthenticated and unsupported requests are refused
+- **WHEN** no ticket store is configured, or a client offers only "no authentication", or asks for BIND
+  or UDP ASSOCIATE
+- **THEN** each is refused, the last with the protocol's command-not-supported reply
+
+#### Scenario: A valid ticket still goes through the policy
+- **WHEN** a ticket names a user the policy does not authorize for the service
+- **THEN** the tunnel is refused

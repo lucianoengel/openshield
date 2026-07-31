@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -400,4 +402,152 @@ func TestAnH2OnlyClientTransitsTheShippedGateway(t *testing.T) {
 		t.Fatalf("the shipped gateway negotiated %q with a client that offered only h2", got)
 	}
 	gw.WaitForOutput("intercepting HTTPS over HTTP/2", 30*time.Second)
+}
+
+// TestSSHStyleToolingReachesAServiceOverSOCKS (ZT-12).
+//
+// The package tests prove the protocol and the ticket binding. What only the shipped binary proves is
+// the round trip an operator actually performs: mint a ticket over the HTTPS access surface, then use it
+// on a DIFFERENT port speaking a DIFFERENT protocol — and have both halves agree about which device is
+// which.
+//
+// That agreement is the whole design. The ticket names the USER; the certificate on the SOCKS connection
+// proves the DEVICE; neither alone is the dual credential the HTTP path checks directly.
+func TestSSHStyleToolingReachesAServiceOverSOCKS(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	p := newPKI(t)
+	db := echoService(t)
+	work := t.TempDir()
+
+	policyPath := filepath.Join(work, "access.rego")
+	if err := os.WriteFile(policyPath, []byte(accessPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := p.serverMaterial(t)
+	httpsAddr := "127.0.0.1:" + freePort(t)
+	socksAddr := "127.0.0.1:" + freePort(t)
+
+	gw := Start(t, "openshield-gateway", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_ACCESS_MODE=1",
+		"OPENSHIELD_ACCESS_LISTEN=" + httpsAddr,
+		"OPENSHIELD_ACCESS_CLIENT_CA=" + p.caPEM,
+		"OPENSHIELD_ACCESS_SERVER_CERT=" + m.Cert,
+		"OPENSHIELD_ACCESS_SERVER_KEY=" + m.Key,
+		"OPENSHIELD_ACCESS_POLICY=" + policyPath,
+		"OPENSHIELD_ACCESS_CATALOG=db=tcp://" + db,
+		"OPENSHIELD_SOCKS_LISTEN=" + socksAddr,
+	})
+	gw.WaitForOutput("SOCKS5 ACTIVE", 90*time.Second)
+	waitTCP(t, httpsAddr, 60*time.Second)
+	waitTCP(t, socksAddr, 60*time.Second)
+
+	caPEM, err := os.ReadFile(p.caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("CA did not parse")
+	}
+	finance := p.leafCert(t, "client", "finance-app", "--group", "finance")
+
+	// 1. MINT A TICKET over the HTTPS surface, where the dual credential is already checked.
+	httpClient := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{
+			Certificates: []tls.Certificate{finance}, RootCAs: pool,
+			ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12,
+		},
+	}}
+	code, body := do(t, httpClient, http.MethodPost, "https://"+httpsAddr+"/ticket", nil)
+	if code != http.StatusOK {
+		t.Fatalf("POST /ticket = %d: %s\n%s", code, body, gw.Output())
+	}
+	var minted struct {
+		Ticket    string `json:"ticket"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal([]byte(body), &minted); err != nil {
+		t.Fatalf("decoding the ticket: %v (%s)", err, body)
+	}
+	if minted.Ticket == "" || minted.ExpiresIn <= 0 {
+		t.Fatalf("the ticket response carries no usable credential: %s", body)
+	}
+
+	// 2. USE IT OVER SOCKS5, on the other port, and get a byte round trip to the database.
+	conn, rep := integrationSocksDial(t, socksAddr, finance, pool, minted.Ticket, "db")
+	if rep != 0x00 {
+		t.Fatalf("SOCKS reply = 0x%02x, want success — a ticket minted on one surface must be "+
+			"redeemable on the other, or the two halves of the credential never meet\n%s",
+			rep, gw.Output())
+	}
+	if _, err := conn.Write([]byte("SELECT 1\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil || got != "echo:SELECT 1\n" {
+		t.Fatalf("the SOCKS tunnel returned %q (%v) — a success reply followed by no bytes looks like a "+
+			"working tunnel until somebody uses it\n%s", got, err, gw.Output())
+	}
+
+	// 3. THE SAME TICKET FROM A DIFFERENT DEVICE IS REFUSED, which is what makes handing one out safe.
+	other := p.leafCert(t, "client", "sales-app", "--group", "finance") // same ROLE, different DEVICE
+	if _, rep := integrationSocksDial(t, socksAddr, other, pool, minted.Ticket, "db"); rep == 0x00 {
+		t.Fatalf("a ticket issued to one device was redeemed by another — the binding is the only "+
+			"thing that makes a bearer credential safe to hand out\n%s", gw.Output())
+	}
+}
+
+// integrationSocksDial speaks SOCKS5 by hand against the shipped listener.
+func integrationSocksDial(t *testing.T, addr string, cert tls.Certificate, pool *x509.CertPool,
+	ticket, target string) (net.Conn, byte) {
+	t.Helper()
+	conn, err := tls.Dial("tcp", addr, &tls.Config{
+		Certificates: []tls.Certificate{cert}, RootCAs: pool,
+		ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatalf("dialling SOCKS: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
+
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x02}); err != nil {
+		t.Fatal(err)
+	}
+	sel := make([]byte, 2)
+	if _, err := io.ReadFull(conn, sel); err != nil {
+		t.Fatalf("reading the method selection: %v", err)
+	}
+	if sel[1] != 0x02 {
+		return conn, 0xFF
+	}
+	auth := []byte{0x01, 0x04}
+	auth = append(auth, "user"...)
+	auth = append(auth, byte(len(ticket)))
+	auth = append(auth, ticket...)
+	if _, err := conn.Write(auth); err != nil {
+		t.Fatal(err)
+	}
+	ar := make([]byte, 2)
+	if _, err := io.ReadFull(conn, ar); err != nil {
+		t.Fatalf("reading the auth reply: %v", err)
+	}
+	if ar[1] != 0x00 {
+		return conn, 0xFE
+	}
+	req := []byte{0x05, 0x01, 0x00, 0x03, byte(len(target))}
+	req = append(req, target...)
+	req = append(req, 0x15, 0x38) // port 5432 — nothing listens there; the catalogue supplies the address
+	if _, err := conn.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		t.Fatalf("reading the SOCKS reply: %v", err)
+	}
+	return conn, reply[1]
 }
