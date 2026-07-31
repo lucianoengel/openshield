@@ -313,3 +313,91 @@ func fingerprintFromLog(t *testing.T, gw *Process) string {
 	}
 	return ""
 }
+
+// TestAnH2OnlyClientTransitsTheShippedGateway (D433).
+//
+// The package tests prove the interception path negotiates h2 and inspects it. What only the shipped
+// binary proves is that the interception CA an operator mints, loaded through the environment into the
+// real process, produces a leaf an h2 client accepts — and that the ALPN offer survives the wiring in
+// between.
+//
+// The client offers ONLY h2, by hand, because an http.Transport negotiates on its own and would silently
+// downgrade to HTTP/1.1: the downgrade is exactly the behaviour that made this gap invisible.
+func TestAnH2OnlyClientTransitsTheShippedGateway(t *testing.T) {
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	work := t.TempDir()
+
+	if out, err := runCapture(t, "openshield-provision", nil, "intercept-ca", "--out", work); err != nil {
+		t.Fatalf("intercept-ca: %v\n%s", err, out)
+	}
+	// An origin only so the CONNECT has a real host:port to name. Its certificate is a throwaway the
+	// gateway has no reason to trust, so the FORWARD to it may fail — and that is fine, because the
+	// assertion is entirely on the CLIENT side of the interception, which is where h2 is negotiated and
+	// where the gap was.
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("origin"))
+	}))
+	t.Cleanup(origin.Close)
+
+	proxy := "127.0.0.1:" + freePort(t)
+	gw := Start(t, "openshield-gateway", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_LISTEN=" + proxy,
+		"OPENSHIELD_INTERCEPT_CA_CERT=" + filepath.Join(work, "intercept-ca.pem"),
+		"OPENSHIELD_INTERCEPT_CA_KEY=" + filepath.Join(work, "intercept-ca-key.pem"),
+	})
+	gw.WaitForOutput("interception", 90*time.Second)
+	waitTCP(t, proxy, 60*time.Second)
+
+	caPEM, err := os.ReadFile(filepath.Join(work, "intercept-ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("the interception CA did not parse")
+	}
+
+	originHost := strings.TrimPrefix(origin.URL, "https://")
+	conn, err := net.DialTimeout("tcp", proxy, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
+	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", originHost, originHost); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	status, err := br.ReadString('\n')
+	if err != nil || !strings.Contains(status, "200") {
+		t.Fatalf("the CONNECT was refused: %q (%v)", strings.TrimSpace(status), err)
+	}
+	for {
+		line, lerr := br.ReadString('\n')
+		if lerr != nil || line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+
+	host, _, _ := net.SplitHostPort(originHost)
+	tc := tls.Client(conn, &tls.Config{
+		RootCAs:    pool,
+		ServerName: host,
+		NextProtos: []string{"h2"}, // ONLY h2 — the gRPC shape
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tc.Handshake(); err != nil {
+		t.Fatalf("an h2-ONLY client could not complete the interception handshake: %v\n"+
+			"That is not an uninspected flow, it is a broken one — a deployment's only recourse is the "+
+			"do-not-intercept list, at which point gRPC becomes a channel this product has excluded "+
+			"itself from\n%s", err, gw.Output())
+	}
+	if got := tc.ConnectionState().NegotiatedProtocol; got != "h2" {
+		t.Fatalf("the shipped gateway negotiated %q with a client that offered only h2", got)
+	}
+	gw.WaitForOutput("intercepting HTTPS over HTTP/2", 30*time.Second)
+}

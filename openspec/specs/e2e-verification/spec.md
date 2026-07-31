@@ -214,3 +214,13 @@ SHALL skip visibly, naming what it needs, rather than being absent.
 - **THEN** direct traffic to a protected address is rejected, the gateway is still reachable, and the
   attempt is reported
 - **AND** a clean shutdown restores direct reachability
+
+#### Scenario: An h2-only client transits the shipped gateway
+- **WHEN** a client offering only `h2` opens a CONNECT through the real gateway with an operator-minted
+  interception CA
+- **THEN** the handshake completes with h2 negotiated, and the gateway reports intercepting over HTTP/2
+
+#### Scenario: A ransomware detection names the process, and not the engine
+- **WHEN** a process holds the canaries open and a mass change fires in the running engine
+- **THEN** that process is named as a suspect
+- **AND** the engine never names itself
