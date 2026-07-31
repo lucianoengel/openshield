@@ -208,7 +208,8 @@ func (s *Server) OperatorReadHandler() http.Handler {
 		writeJSON(w, events)
 	})
 
-	mux.HandleFunc("/logs", s.externalLogsHandler)                    // SIEM-4: search ingested third-party logs (CEF, CloudTrail)
+	mux.HandleFunc("/logs", s.externalLogsHandler)
+	mux.HandleFunc("/logs/fields", s.logFieldsHandler)                // SIEM-13: the canonical hunting vocabulary and what it covers                    // SIEM-4: search ingested third-party logs (CEF, CloudTrail)
 	mux.HandleFunc("/compliance/retention", s.retentionReportHandler) // SIEM-10: retention compliance report
 
 	mux.HandleFunc("/alerts/ack", s.alertAckHandler)

@@ -13,6 +13,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/connectors/cef"
 	"github.com/lucianoengel/openshield/internal/connectors/rfc5424"
 	"github.com/lucianoengel/openshield/internal/connectors/syslog"
+	"github.com/lucianoengel/openshield/internal/fieldmap"
 )
 
 // externalLogsHandler serves GET /logs — a filtered, bounded search over the ingested third-party
@@ -35,6 +36,25 @@ func (s *Server) externalLogsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, logs)
+}
+
+// logFieldsHandler serves GET /logs/fields — the canonical hunting vocabulary and what each name covers
+// in each source (SIEM-13).
+//
+// A normalisation nobody can enumerate is one an analyst has to learn from the source, which is the
+// situation it exists to end. Publishing the aliases alongside the names is also the honest half: it
+// shows exactly which sources a canonical name reaches, so "no results" can be read as "not covered
+// here" rather than mistaken for "did not happen".
+func (s *Server) logFieldsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	out := make(map[string][]string)
+	for _, c := range fieldmap.Canonical() {
+		out[c] = fieldmap.Aliases(c)
+	}
+	writeJSON(w, map[string]any{"canonical": fieldmap.Canonical(), "aliases": out})
 }
 
 // parseExternalLogFilter parses the /logs query params, rejecting ANY malformed value (SEC-8).
@@ -97,6 +117,11 @@ type ExternalLog struct {
 	// Fields are the parsed per-event key/values (CEF extensions, WEF EventData, CloudTrail's fields),
 	// stored as JSONB so an analyst can hunt on any of them across all sources (SIEM field-level hunting).
 	Fields map[string]string
+	// Normalized is Fields projected onto the canonical cross-vendor vocabulary (SIEM-13), computed at
+	// READ from the raw fields — never stored, so improving the map improves every log ever ingested
+	// rather than only the ones received afterwards. Additive: Fields is untouched and remains the
+	// stored truth. A canonical name a source does not carry is ABSENT, not blank.
+	Normalized map[string]string
 }
 
 // ExternalLogFilter narrows an external-log search. A zero Since/Until is unbounded on that side; an
@@ -166,8 +191,24 @@ func (s *Server) SearchExternalLogs(ctx context.Context, f ExternalLogFilter) ([
 	if f.FieldKey != "" && f.FieldValue != "" {
 		// A parameterized JSONB member match: `fields->>$key = $value`. The key is a bind param (the ->>
 		// operator takes it as text), so there is no SQL-injection surface. Two args in fixed order.
-		args = append(args, f.FieldKey, f.FieldValue)
-		conds = append(conds, fmt.Sprintf("fields->>$%d = $%d", len(args)-1, len(args)))
+		//
+		// SIEM-13: a CANONICAL key expands to every source-specific alias it covers, OR-ed together, so
+		// one query reaches CEF's `suser`, CloudTrail's `userIdentityArn` and Windows' `SubjectUserName`
+		// at once. A non-canonical key is passed through EXACTLY as before — an analyst who knows the
+		// vendor's own field name keeps the precise search they had, and nothing they wrote yesterday
+		// silently starts matching more.
+		keys := fieldmap.Aliases(f.FieldKey)
+		if keys == nil {
+			keys = []string{f.FieldKey}
+		}
+		args = append(args, f.FieldValue)
+		valArg := len(args)
+		var ors []string
+		for _, k := range keys {
+			args = append(args, k)
+			ors = append(ors, fmt.Sprintf("fields->>$%d = $%d", len(args), valArg))
+		}
+		conds = append(conds, "("+strings.Join(ors, " OR ")+")")
 	}
 	if !f.Since.IsZero() {
 		add("received_at >= $%d", f.Since)
@@ -197,6 +238,7 @@ func (s *Server) SearchExternalLogs(ctx context.Context, f ExternalLogFilter) ([
 		if len(fieldsJSON) > 0 {
 			_ = json.Unmarshal(fieldsJSON, &e.Fields) // a bad blob leaves Fields nil, never fails the read
 		}
+		e.Normalized = fieldmap.Canonicalize(e.Fields) // SIEM-13, derived — never stored
 		out = append(out, e)
 	}
 	return out, rows.Err()
