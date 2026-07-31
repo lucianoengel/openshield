@@ -89,6 +89,13 @@ const (
 	// UK National Insurance Number (DLP-7): the [prefix][6 digits][suffix] format with the official
 	// prefix-letter exclusions. No checksum, so context-REQUIRED (near a National-Insurance keyword).
 	DetectorType_DETECTOR_TYPE_UK_NINO DetectorType = 23
+	// A CAPTURED SCREEN (DLP-9). Unlike every value above it, this describes the CARRIER rather than
+	// anything found inside it: the content has the shape of a screenshot — an exact display resolution
+	// and the flat palette of rendered text — so a policy can act on "an image that looks like a captured
+	// document is leaving". It does NOT read the text. Reading it means OCR, and every general OCR engine
+	// is a large native image parser, which is the class D13/D72 exist to contain. A hit here says a
+	// screen was captured, never what was on it.
+	DetectorType_DETECTOR_TYPE_SCREEN_CAPTURE DetectorType = 24
 )
 
 // Enum value maps for DetectorType.
@@ -118,6 +125,7 @@ var (
 		21: "DETECTOR_TYPE_DRIVERS_LICENSE",
 		22: "DETECTOR_TYPE_AADHAAR",
 		23: "DETECTOR_TYPE_UK_NINO",
+		24: "DETECTOR_TYPE_SCREEN_CAPTURE",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":     0,
@@ -144,6 +152,7 @@ var (
 		"DETECTOR_TYPE_DRIVERS_LICENSE": 21,
 		"DETECTOR_TYPE_AADHAAR":         22,
 		"DETECTOR_TYPE_UK_NINO":         23,
+		"DETECTOR_TYPE_SCREEN_CAPTURE":  24,
 	}
 )
 
@@ -393,7 +402,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\x96\x05\n" +
+	"matchCount*\xb8\x05\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -419,7 +428,8 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x16DETECTOR_TYPE_PASSPORT\x10\x14\x12!\n" +
 	"\x1dDETECTOR_TYPE_DRIVERS_LICENSE\x10\x15\x12\x19\n" +
 	"\x15DETECTOR_TYPE_AADHAAR\x10\x16\x12\x19\n" +
-	"\x15DETECTOR_TYPE_UK_NINO\x10\x17B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x15DETECTOR_TYPE_UK_NINO\x10\x17\x12 \n" +
+	"\x1cDETECTOR_TYPE_SCREEN_CAPTURE\x10\x18B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once

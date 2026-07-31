@@ -17,12 +17,14 @@
 package classify
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"regexp"
 
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/screenshot"
 )
 
 // Detector matches one PII type. Scan returns the number of VALID matches and
@@ -73,9 +75,21 @@ func (c *Classifier) Classify(_ context.Context, r io.Reader) ([]*corev1.Detecto
 	// file placed in a .zip (even nested). extractContent recurses archive members (bounded by a shared
 	// byte budget + depth). A non-container (or one that fails to parse) is scanned as-is, so a
 	// mis-detection degrades to "scan raw", never "scan nothing".
+	var hits []*corev1.DetectorHit
+	// DLP-9: a screenshot of a spreadsheet is a document that walks past every detector below it — the
+	// bytes are a PNG, and the sensitive content is pixels that happen to look like characters. This runs
+	// on the ORIGINAL bytes, before extraction, because the image IS the content rather than a container
+	// holding some.
+	//
+	// It reports that the content has the SHAPE of a captured screen; it does not read the text (that
+	// means OCR, and every general OCR engine is a large native image parser — the class D13/D72 exist to
+	// contain). A hit says a screen was captured, never what was on it.
+	if hit := screenCaptureHit(text); hit != nil {
+		hits = append(hits, hit)
+	}
+
 	budget := int64(maxExtractBytes)
 	text = extractContent(text, 0, &budget)
-	var hits []*corev1.DetectorHit
 	for _, d := range c.detectors {
 		count, conf := d.Scan(text)
 		if count == 0 {
@@ -116,4 +130,42 @@ func stripNonDigits(b []byte) string {
 		}
 	}
 	return string(out)
+}
+
+// imageMagic are the leading bytes of the formats Go's standard library decodes here.
+//
+// The sniff exists so ordinary text is never handed to an image decoder, and so a FAILURE to decode
+// something that really is an image is distinguishable from content that was never an image at all.
+var imageMagic = [][]byte{
+	{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, // PNG
+	{0xff, 0xd8, 0xff},                            // JPEG
+	{'G', 'I', 'F', '8'},                          // GIF
+}
+
+// screenCaptureHit analyses image content and returns a hit when it looks like a captured screen.
+//
+// A CORRUPT IMAGE YIELDS NO SIGNAL, and that is a stated limit rather than a claim of cleanliness: the
+// text detectors still run over the same bytes, and ClassifyResponse carries one error field for the
+// whole classification, so failing everything because one image would not decode would turn a damaged
+// attachment into an unscannable file. What is NOT done here is pretending it was examined.
+func screenCaptureHit(content []byte) *corev1.DetectorHit {
+	isImage := false
+	for _, m := range imageMagic {
+		if bytes.HasPrefix(content, m) {
+			isImage = true
+			break
+		}
+	}
+	if !isImage {
+		return nil
+	}
+	a, err := screenshot.Analyze(content)
+	if err != nil || !a.Likely() {
+		return nil
+	}
+	return &corev1.DetectorHit{
+		DetectorType: corev1.DetectorType_DETECTOR_TYPE_SCREEN_CAPTURE,
+		Confidence:   a.Score,
+		Count:        1,
+	}
 }

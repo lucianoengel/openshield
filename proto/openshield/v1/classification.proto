@@ -70,6 +70,13 @@ enum DetectorType {
   // UK National Insurance Number (DLP-7): the [prefix][6 digits][suffix] format with the official
   // prefix-letter exclusions. No checksum, so context-REQUIRED (near a National-Insurance keyword).
   DETECTOR_TYPE_UK_NINO = 23;
+  // A CAPTURED SCREEN (DLP-9). Unlike every value above it, this describes the CARRIER rather than
+  // anything found inside it: the content has the shape of a screenshot — an exact display resolution
+  // and the flat palette of rendered text — so a policy can act on "an image that looks like a captured
+  // document is leaving". It does NOT read the text. Reading it means OCR, and every general OCR engine
+  // is a large native image parser, which is the class D13/D72 exist to contain. A hit here says a
+  // screen was captured, never what was on it.
+  DETECTOR_TYPE_SCREEN_CAPTURE = 24;
 }
 
 // LocalMatch holds matched content. Host-only.
