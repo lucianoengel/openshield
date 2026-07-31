@@ -107,176 +107,123 @@ opportunistically or after the UI.
 
 ## ✅ MVP infrastructure — the required queue (COMPLETE)
 
-**Every ticket in the five lanes below has shipped.** Lanes A (XDR), B (SOAR), C (Zero Trust), D
-(Platform) and E (Endpoint) are closed; the sole remaining 🟡 is PLAT-6's distribution work, which is a
-set of named trust/distribution decisions, not engineering left undone. The section is kept — rather than
-collapsed into the Done ledger — because each entry states the **residuals** its ticket deliberately did
-not close, and those residuals are the honest boundary of what the MVP claims.
+**Every ticket in lanes A–E has shipped.** The sole remaining 🟡 is PLAT-6's distribution work, which is a
+set of trust/distribution decisions rather than engineering left undone.
 
-**Do not re-propose anything here. The next work is Lane F · Console (PLAT-1, now decomposed and
-unparked), plus enrichment.** Start at `CONSOLE-1` — and read its preamble first: it is not a UI ticket, it
-is a shipped ZT-7 defect that makes SSO operators unable to acknowledge, transition, or read a timeline,
-and whose naive fix collapses four-eyes.
+**This section is now RESIDUALS ONLY.** What each ticket did, and the D-number that did it, is in the Done
+ledger below and in `git log`; repeating it here made 350 lines that went stale the moment a follow-up
+landed. What is *not* recoverable from either — and is the honest boundary of what the MVP claims — is what
+each ticket deliberately did **not** close. That is what is kept.
 
-Each ticket names the ADR it implements where one applies, and its `Accept` is the real-path test that
-closed it.
+**Do not re-propose anything here.** The next work is Lane F · Console, starting at `CONSOLE-1`.
 
-### Lane A · XDR — cross-domain correlation & coordinated response
+### Lane A · XDR
 
-The headline. Turns per-domain alerts into one correlated incident with a tamper-evident timeline and
-one-approval containment. **Spine: XDR-2 → XDR-4 → XDR-5 → (XDR-6 w/ SOAR-7) → XDR-7.**
-(XDR-1 entity graph + XDR-3 subject stamping already shipped — see Done ledger.)
+- **XDR-2 · Cross-domain alert normalization** — ✅ D213, D241. *Residual:* a detection that never reaches a
+  decision is not projected; the domain label is a coarse grouping hint (ZT denials land under `nips`, and
+  giving ZT its own domain needs the Event to distinguish access from egress — a contract change
+  deliberately not made for a label).
+- **XDR-4 · Cross-domain correlation rules** — ✅ D242. *Residual:* the sequence vocabulary is **domains,
+  not ATT&CK techniques** — techniques are Rego policy INPUT and are never persisted on an alert, so
+  technique-level sequences need a `Decision` contract change. Named, not faked. No alert-storm suppression
+  (see `CONSOLE-41`); no retro-correlation outside the window.
+- **XDR-5 · Incident timeline** — ✅ D243. *Residual:* no backfill for pre-existing alerts/incidents; the
+  timeline reports ledger COORDINATES and does not verify the chain (the anchor binary owns that); no
+  timeline for `ueba_burst` incidents (explicit 409, never an empty list); `unified_alerts` retention must
+  eventually cascade to the join.
+- **XDR-6 · Coordinated cross-domain response** — ✅ D254. *Residual:* a policy that does not read
+  `response_intent` is unaffected (data-not-command); the exec gate still fails open; an entity that never
+  crosses the gateway is not blocked by it.
+- **XDR-7 · Entity risk aggregation** — ✅ D255. *Residual:* a heuristic, not a calibrated probability;
+  stepwise on the correlation interval; sticky (no decay until a later ticket).
 
-- **XDR-2 · Cross-domain alert normalization** — ✅ **DONE (D213 inc 1, D241 inc 2)** — see Done ledger.
-  Increment 2 wired every remaining domain by projecting each VERIFIED non-`ALLOW` `Decision` at ingest,
-  so DLP, HIPS, network/DNS/SMTP and the ZT access proxy all write the unified table. *Residual, NOT
-  gating XDR-4:* a detection that never reaches a decision is not projected, and the domain label is a
-  coarse grouping hint (ZT denials land under `nips`; giving ZT its own domain needs the Event to
-  distinguish access from egress — a contract change deliberately not made for a label).
-- **XDR-4 · Cross-domain correlation rules** — ✅ **DONE (D242)** — see Done ledger. `CorrelateCrossDomain`
-  groups `unified_alerts` by **`entity_id`** (never a subject string) with a distinct-domain window rule +
-  an ORDERED domain-sequence rule, severity boosted per domain, materialized per entity and paging once;
-  `GET /incidents?rule=cross_domain` selects it, default unchanged. *Residual, NOT gating XDR-5:* the
-  sequence vocabulary is **domains, not ATT&CK techniques** — `internal/attack` techniques are Rego policy
-  INPUT (`internal/policy/mapping.go`) and are never persisted on an alert, so technique-level sequences
-  need a `Decision` contract change. Named, not faked. No alert-storm suppression; no retro-correlation
-  outside the window.
-- **XDR-5 · Incident timeline** — ✅ **DONE (D243)** — see Done ledger. `incident_alerts` join +
-  `unified_alerts.event_id`/`.decision_id` evidence references + `incidents.domains[]`;
-  `IncidentTimeline` orders by `detected_at` and resolves evidence against `audit_entries` in three
-  honest states (`resolved` with ledger coordinates / `unresolved` with the reference intact /
-  `derived` for a server-side alert); `GET /incidents/timeline?id=N` is analyst-tier and records the view.
-  *Residual, NOT gating XDR-6:* no backfill for pre-existing alerts/incidents; the timeline reports ledger
-  COORDINATES and does not verify the chain (the anchor binary owns that); no timeline for `ueba_burst`
-  incidents (explicit 409, never an empty list); `unified_alerts` retention must eventually cascade to the
-  join — a retention-ticket item.
-- **XDR-6 · Coordinated cross-domain response** — ✅ **DONE (D254)** — see Done ledger. One signed,
-  four-eyes-approved CONTAIN → gateway BLOCKs the entity's flows and the endpoint DENIES its execs, each by
-  its own local policy, both stamping the SAME intent id via `Context.Version` (the D27 field already
-  carried to the ledger — no hashed-column change). TTL expiry restores both. *Residual:* a policy that does
-  not read `response_intent` is unaffected (data-not-command); the exec gate still fails open; an entity
-  that never crosses the gateway is not blocked by it.
-- **XDR-7 · Entity risk aggregation** — ✅ **DONE (D255)** — see Done ledger. MAX-not-sum over every
-  domain's alerts, recency-weighted, published to EVERY alias of the entity; `RiskStore` raises but never
-  lowers. Proven over real signed pub/sub: a HIPS detection on a device raised the USER-keyed risk to 0.885.
-  *Residual:* a heuristic, not a calibrated probability; stepwise on the correlation interval; sticky
-  (no decay until a later ticket).
+### Lane B · SOAR (ADR-12)
 
-### Lane B · SOAR — orchestration & automated response (ADR-12)
+- **SOAR-2 · Scheduled correlation + escalation** — ✅ D250. *Residual:* no escalation timers (SOAR-9
+  shipped routing, not schedules); no reopen; no backfill outside the window.
+- **SOAR-3 · Generic four-eyes approval object** — ✅ D251. *Residual:* no approval POLICY and no N-of-M —
+  the caller decides.
+- **SOAR-4 · Playbook engine v1** — ✅ D256. *Residual:* **no actuation** (Tier-1 by construction; SOAR-7/8
+  own that); no DAG, no retries/backoff, no rate limit on playbook starts; `enrich` is local context
+  assembly, not threat intel; **the approval gate is a one-operator human-in-the-loop gate, NOT two-human
+  four-eyes, because the requester is the playbook.**
+- **SOAR-5 · Enrichment + threat-intel** — ✅ D257. *Residual:* no EPSS/KEV (both key off a CVE id and
+  nothing in the pipeline produces one); no geo/ASN (a licensed data file — a distribution decision); no
+  STIX (a large untrusted-JSON surface; an external converter is the right shape); no IOC ageing,
+  confidence or TLP; no retro-hunt when a feed lands; unsigned feeds still load when no key is configured
+  (warned, not silent); **a hit ANNOTATES, never enforces.**
+- **SOAR-6 · MTTA/MTTR** — ✅ D258. *Residual:* **no per-analyst aggregation** — deliberate, that is
+  workforce surveillance, and a test asserts no series names an operator; no SLA targets or breach alerting
+  (`CONSOLE-36`); no per-severity/domain split; contained-but-open is not counted as resolved.
+- **SOAR-7 · Response-Intent seam (Tier-2)** — ✅ D252. *Residual:* a consumer that ignores intents is
+  unaffected by design; **signing proves origin, not authority.**
+- **SOAR-8 · Integration runners v1 (Tier-3)** — ✅ D260 (b), D261 (a). *Residual:* no vendor API shapes; no
+  retries (an automatic retry of an irreversible call is how one failure becomes several); no rollback of a
+  partially-applied multi-action verb; the subject crosses as the PSEUDONYM and the deployer's receiver must
+  do the pseudonym→account join. ITSM sync is **polling, not a webhook** (sync-back lags one interval); only
+  `closed` is synced (mapping intermediate states would corrupt SOAR-6's metrics); **forward-only survives,
+  so a reopened ticket does NOT reopen its incident**; no comment/worklog sync.
+- **SOAR-9 · Notification routing** — ✅ D259. *Residual:* **no templating** — an injection surface into
+  whatever renders it; formatting belongs in the receiver. No escalation ladders, on-call schedules or
+  rotations; no per-sink rate limiting or digesting; **routing matches kind and severity ONLY, never a
+  subject** — which would be a re-identification surface and a way to route one person's alerts out of sight.
 
-The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 → SOAR-3 → SOAR-4 →
-(SOAR-5, SOAR-7) → SOAR-8.** (SOAR-1 incident→notify shipped, D220.)
+### Lane C · Zero Trust
 
-- **SOAR-2 · Scheduled correlation + escalation** — ✅ **DONE (D250)** — see Done ledger. `RunCorrelationLoop`
-  materializes both rules on a ticker inside the LEADER's context; incidents gain a forward-only attributed
-  lifecycle + `POST /incidents/transition`. *Residual:* it raises and pages, it does not ACT (SOAR-4/5/7/8);
-  no escalation timers (SOAR-9 shipped routing, not schedules); no reopen; no backfill outside the window.
-- **SOAR-3 · Generic four-eyes approval object** — ✅ **DONE (D251)** — see Done ledger. An `approvals`
-  table keyed by (subject_kind, subject_id); every condition in the UPDATE predicate so resolution is
-  atomic; expiry enforced in the predicate; one pending approval per subject; case closure rewired onto it.
-  *Residual:* no approval POLICY and no N-of-M (the caller decides). A pending request now NOTIFIES
-  (SOAR-9/D259), and SOAR-4's `wait-for-approval` plus SOAR-7's intents are live consumers — the
-  "one caller" residual is closed.
-- **SOAR-4 · Playbook engine v1 (server-side only)** — ✅ **DONE (D256)** — see Done ledger. A trigger
-  (severity floor / kinds / domains) plus an ORDERED LIST of steps from a closed registry refused at LOAD;
-  durable resumable run state whose already-done guard lives in the SQL claim; `wait-for-approval` is the
-  approvals object's first automation consumer; leader-only. *Residual, named:* **no actuation** (Tier-1 by
-  construction — SOAR-7/8 own that); no DAG, no retries/backoff, no rate limit on playbook starts;
-  `enrich` is local context assembly, not threat intel (SOAR-5); the approval gate is a one-operator
-  human-in-the-loop gate, NOT two-human four-eyes, because the requester is the playbook.
-- **SOAR-5 · Enrichment + threat-intel** — ✅ **DONE, increment 1 (D257)** — see Done ledger. Detached
-  ed25519 feed verification that runs BEFORE the parser (asserted by a parser-entry counter, not by the
-  refusal alone); a `ioc_indicators`/`ioc_feeds` store with snapshot-replace semantics; ONE matcher shared
-  with the inline NIPS engine; enrichment walking XDR-5's evidence references to observables the verified
-  events already carry. *Residual, named:* **no EPSS/KEV** (both key off a CVE id and nothing in the
-  pipeline produces one); **no geo/ASN** (a licensed GeoIP data file — a distribution decision); **no
-  STIX** (a large untrusted-JSON surface; an external converter is the right shape); no IOC ageing,
-  confidence or TLP; no retro-hunt when a feed lands; no signed URL fetch; unsigned feeds still load when
-  no key is configured (warned, not silent); and a hit ANNOTATES, never enforces.
-- **SOAR-6 · MTTA/MTTR + analyst metrics** — ✅ **DONE (D258)** — see Done ledger. Three durations kept
-  APART (detection latency = our lag, MTTA = the analyst's, MTTR = closed only), Prometheus histograms +
-  `GET /report/response`, every average reported next to its EXCLUDED population. No migration — SOAR-2's
-  forward-only lifecycle is what made `transitioned_at` readable as a closure time. Fixed a defect it
-  surfaced: a transition straight to `triaged` never stamped `acknowledged_at`. *Residual, named:* **no
-  per-analyst aggregation** (deliberate — that is workforce surveillance, and a test asserts no series
-  names an operator); no SLA targets or breach alerting; no per-severity/domain split; contained-but-open
-  is not counted as resolved; the aggregate is computed per scrape, not incrementally maintained.
-- **SOAR-7 · Response-Intent seam (Tier-2)** — ✅ **DONE (D252)** — see Done ledger. Closed 3-verb signed
-  TTL'd `ResponseIntent`; publication gated on four-eyes (bound to the intent id) + a blast-radius ceiling
-  refused as a whole; consumed as VERIFIED policy context with expiry evaluated on read. **This unblocks
-  XDR-6 and HIPS-3 inc 2b** — both now need only their enactment half. *Residual:* nothing enacts intents
-  yet; a consumer that ignores them is unaffected by design; signing proves origin, not authority.
-- **SOAR-8 · Integration runners v1 (Tier-3)** — ✅ **DONE — (b) D260, (a) D261.**
-  (b) The IdP responder ships: an intent subscriber with a per-connector CLOSED verb set, four-eyes
-  required for EVERY verb and re-checked by the runner, at-most-once claim, and a durable
-  intent-id→API-call record (the intent id also rides an `X-OpenShield-Intent` header so a receiver's
-  access log alone links the call to what authorized it). **This is the first OpenShield action that
-  cannot be undone — expiry restores nothing here**, unlike every other intent enactment.
-  *Residual, named:* no vendor API shapes (a generic authenticated JSON connector; a vendor adapter is a
-  per-vendor addition); no retries (an automatic retry of an irreversible call is how one failure becomes
-  several); no rollback of a partially-applied multi-action verb; the subject crosses as the PSEUDONYM
-  and the deployer's receiver must do the pseudonym→account join.
-  (a) ITSM sync ships (D261): one ticket per incident, a CLOSED set of remote statuses that mean closed
-  (anything else is ignored, never assumed closed), sync-back attributed to the connector — and
-  forward-only survives, so a reopened ticket does NOT reopen its incident. It gets its OWN table, because
-  a ticket is mutable/retryable/bidirectional while `runner_actions` records irreversible at-most-once
-  acts, and sharing would weaken the stronger guarantee. *Residual, named:* **polling, not a webhook**
-  (sync-back lags one interval; a webhook needs an inbound route a SaaS can reach — a separate decision);
-  no vendor API shapes; only `closed` is synced (mapping intermediate states would corrupt SOAR-6's
-  metrics); no comment/worklog sync or post-creation field updates.
-- **SOAR-9 · Notification routing/templating** — ✅ **DONE (D259)** — see Done ledger. An ordered
-  kind/severity → named-sink table with FIRST-MATCH-WINS (the only semantic that can express "critical to
-  the pager ONLY"); an unmatched notification goes to every sink and is COUNTED, so a table with a hole
-  over-notifies visibly rather than going silent. Also closes SOAR-3's residual: a pending approval now
-  notifies, which is what makes SOAR-4's `wait-for-approval` a gate rather than a deadlock. *Residual,
-  named:* **no templating** (an injection surface into whatever renders it; formatting belongs in the
-  receiver); no escalation ladders, on-call schedules, rotations or reminders (they need a schedule model
-  this does not have); no per-sink rate limiting or digesting; routing matches kind and severity ONLY —
-  never a subject, which would be a re-identification surface and a way to route one person's alerts out
-  of sight.
+- **ZT-4 · ZTNA client/connector model** — ✅ D249, extended by D427 (TCP CONNECT) and D428 (endpoint
+  bypass fencing). *Residual:* the NETWORK half — the protected network accepting only the gateway — lives
+  outside the product; no SOCKS; no split DNS.
 
-### Lane C · Zero Trust — the ZTNA client
+### Lane D · Platform
 
-- **ZT-4 · ZTNA client/connector model** — ✅ **DONE (D249)** — see Done ledger. `internal/ztna` brokers
-  application traffic to the access proxy over device-cert mTLS. *Residual, named:* it brokers but does not
-  PREVENT bypass (routing/firewall over the NIPS-1 plane is a separate ticket), HTTP(S) only (no
-  CONNECT/SOCKS for SSH/RDP/databases), and no split DNS.
+- **PLAT-2 · Durable ingest by default** (ADR-2) — ✅ D245. *Residual:* not loss-free (unspooled-unpublished
+  is gone; the stream's bounds still drop on a long outage); at-least-once, not exactly-once; non-telemetry
+  subjects stay core-NATS best-effort by design. **BREAKING:** a JetStream-less broker must enable it or opt
+  out.
+- **PLAT-5 · Config management beyond env vars** — ✅ D262, D263; all binaries declare their configuration
+  (D272/D273/D274) behind a whole-tree guard. *Residual, and larger than this entry used to admit:* **both
+  the gateway AND the endpoint agent are all-bootstrap**, so PLAT-5b's dynamic, cluster-wide configuration
+  reached only the server — a policy change on a hundred endpoints needs shell access on a hundred hosts.
+  Ticketed as `PLAT-5c`/`-5d`/`-5e`. No staged rollout; no keystore. **BREAKING:** a dynamic field set in
+  the environment no longer takes effect — it is reported, not silent (`OPENSHIELD_BREAKGLASS` is the
+  deliberate, reported override).
+- **PLAT-6 · Release, packaging & deploy** — 🟡 D264, D276 (signed SBOM), D277 (tag-triggered release that
+  proves reproducibility before publishing). *Remaining:* Sigstore/cosign + transparency log, `.deb`/`.rpm`,
+  macOS notarization — each a separate trust-or-distribution decision. **goreleaser and Helm are REFUSED,
+  not deferred (D276); do not re-propose them.** *Residual for the console:* the SBOM is derived from
+  `debug/buildinfo`, so it would describe zero npm packages — `CONSOLE-15`.
+- **PLAT-9 · Operational lifecycle & recovery** — ✅ D265–D270, D275, D277, D278. *Residuals:* the control
+  plane **cannot CONFIRM a fleet is disabled** — publication is best-effort and an agent offline past the
+  TTL never applies it; D270 made each agent's actual enforcement state answerable, with the honest limit
+  that **silence is not compliance**. Migrations are **FORWARD-ONLY**: rolling the binary back is supported,
+  rolling the schema back is not (a skew is reported loudly and still STARTS, because refusing would turn a
+  rollback into an outage). `restore-verify` verifies but does not back up or restore, and anchor cadence
+  bounds what completeness can prove — **"I cannot tell" is a FAILURE**, because a truncated ledger hashes
+  perfectly and only an anchor detects it. The kill switch's fleet path reaches only components that read
+  the config store — **endpoint agents do not**, which is what `PLAT-5c` closes. No throughput figures are
+  published because no load exercise has been run.
 
-### Lane D · Platform — durability, config, packaging, operability
+### Lane E · Endpoint
 
-- **PLAT-2 · Durable ingest by default** (ADR-2) — ✅ **DONE (D245)** — see Done ledger. Durable ingest is
-  the default (opt-out `OPENSHIELD_JETSTREAM=0`), all THREE producers switch through one helper (before this,
-  only the *simulator* was durable — the engine and gateway published at-most-once), and an unavailable
-  JetStream fails fast on both producer and consumer rather than silently degrading. *Residual, honest:* not
-  loss-free (unspooled-unpublished is gone; the stream's bounds still drop on a long outage), at-least-once
-  not exactly-once, and the non-telemetry subjects stay core-NATS best-effort by design. **BREAKING:** a
-  JetStream-less broker must enable it or opt out — a PLAT-9 runbook item.
-- **PLAT-5 · Config management beyond env vars** — ✅ **DONE, server (D262 + D263)** — see Done ledger. Typed
-  fields declared ONCE and used for both reading and describing, so the schema is derived rather than
-  maintained beside the code — **because config will eventually be set mostly in the UI (PLAT-1), and a
-  hand-written schema drifts silently from what the binary reads.** Secrets are a KIND and are never
-  readable back (not in the schema, the effective output, the printed form, or a validation error);
-  errors are field-scoped and all reported at once; sources are an interface, env → file → default.
-  `openshield-server config` prints the effective values with their origin. **D263 then made the model
-  enterprise-shaped:** every field declares a SCOPE — bootstrap (env/file, ~16 fields: reach-the-database
-  settings) vs dynamic (**the database is the only source**, cluster-wide, ~33 fields) — with revisions
-  carrying author/diff/rollback, validation at save, and LIVE APPLY (a watcher swaps an immutable
-  snapshot; loops read parameters per tick). **Secrets are never stored**, so a config-DB dump is not a
-  credential dump. *Residual, named:* no UI yet (this is the model and the API it will call); the
-  ~~binaries still using the old helpers~~ — **ALL binaries now declare their configuration (D274)**; a
-  whole-tree guard reads `cmd/` so a new one cannot be missed. The GATEWAY (D272) and
-  the privileged AGENT + sandboxed WORKER (D273) adopted the package; the latter proves it works at the
-  tightest boundary, being stdlib-only so the agent's dependency ban and the worker's seccomp filter both
-  still hold. The gateway is declared
-  ALL-BOOTSTRAP because a network appliance's settings are node-local, so it needs no database
-  credentials and a future fleet-wide gateway setting belongs on the signed channel; no per-node dynamic
-  values; no staged rollout; no keystore. **That "future signed channel" is now ticketed as `PLAT-5c`, and
-  the residual is larger than this entry implied: the ENDPOINT AGENT has no dynamic scope either.** Both
-  are all-bootstrap, so PLAT-5b's dynamic, cluster-wide configuration reached only the server — meaning a
-  policy change on a hundred endpoints requires shell access on a hundred hosts. Named here because the
-  entry above reads as though only the gateway were outstanding.
-  **BREAKING:** a dynamic field set in the environment no longer takes effect — it is reported, not
-  silent (`OPENSHIELD_BREAKGLASS` is the deliberate, reported override).
+- **HIPS-3 inc 2a · Exec-gate IPC bridge** — ✅ D244 (VM-proven, kernel 6.8). *Residual:* the gate fails
+  open by design, so a verdict that misses its deadline allows.
+- **HIPS-3 inc 2b · Intent-driven inline `DENY_EXEC`** — ✅ D253 (VM-proven). *Residual:* a policy that does
+  not read `response_intent` is unaffected (data-not-command); the gate still fails open, so containment
+  depends on a live engine.
+- **DLP-2a · Clipboard exfil producer** — ✅ D246, mediation D247 (VM-proven on X11). *Residual:* **Wayland
+  stays observe-only** — its protocol cannot identify a paste's destination.
+- **DLP-2b · Print exfil producer** — ✅ D248 (real-spooler proven). *Residual:* chain placement determines
+  detection quality (text vs raster); only the head of a huge job is classified; no CUPS-bypassing paths; no
+  watermark/redact; install is a root step.
+
+---
+
+## 🔧 Lane D (continued) · Platform — OPEN
+
+Three tickets that are **not** part of the completed queue above. `PLAT-5c` gates `TOPO-4` and is what makes
+`CONSOLE-21`'s configuration UI able to change anything on an endpoint or gateway rather than only display
+it.
+
 - **PLAT-5c · Configuration DELIVERY to endpoints and gateways — PLAT-5b is half-finished** — new work · L.
   *Owner correction, 2026-07-31: "configurations SHOULD be delivered to the node, we can't assume we need
   direct access to endpoints."* Correct, and the tree agrees more than the earlier plan admitted.
@@ -365,91 +312,6 @@ The other headline. All three ADR-12 tiers are owner-approved. **Spine: SOAR-2 �
   the fleet runs the old config *and* advance the rollout. Fix: the ack is **signed by the enrolled agent
   key and carries the hash of the effective values**, not a revision number — and the UI renders
   **"acked" and "verified in effect" as different states**, because an ack proves receipt, never effect.
-- **PLAT-6 · Release, packaging & deploy** — 🟡 **increment 1 DONE (D264)** — see Done ledger. `make
-  release` builds every command reproducibly (`-trimpath`, `CGO_ENABLED=0`, `-buildvcs=false`) and emits a
-  SHA-256 manifest signed with a detached ed25519 signature; `make verify-release` re-checks every digest,
-  the signature, and **files present that the manifest does not name**. Reproducibility is asserted by a
-  test that builds twice, because without it a signature attests only that the signer had *a* binary.
-  `deploy/` already carried the systemd/install path. **D276 adds a SIGNED SBOM** — written before the
-  manifest so the signature covers it, and generated from the BINARIES (`debug/buildinfo`) so it describes
-  what shipped rather than what go.mod intended. **D277 adds tag-triggered release automation** that VERIFIES and proves
-  reproducibility before publishing. *Remaining:* Sigstore/cosign + transparency log, .deb/.rpm, macOS
-  notarization — each a separate trust or distribution decision rather than leftover work. **goreleaser and Helm are REFUSED, not deferred** (D276):
-  goreleaser would replace working tested code with a toolchain for conveniences not needed, and a Helm
-  chart would contradict the compose/systemd footprint this project documents.
-- **PLAT-9 · Operational lifecycle & recovery** — ✅ **DONE.** **emergency disable (D265), verified restore (D266)
-  schema-skew reporting (D267), the RUNBOOK + footprint (D268), the ENDPOINT fleet-wide disable (D269),
-  fleet acknowledgement (D270/D271), the wire-version contract + upgrade ORDER (D275) and the
-  backup/restore DRILL + node-recovery table (D277) all DONE, and the drill is now RUN end-to-end against
-  real pg_dump/pg_restore with truncation detection proven (D278). **PLAT-9 is complete.**
-  D269 closes the gap D265 named about itself: a signed `FleetControl` (its own two-verb vocabulary, NOT
-  a fourth IntentVerb) bounded by a monotonic sequence (replay), a mandatory TTL (duration) and four-eyes
-  on every disable. *Residual:* the control plane cannot CONFIRM a fleet is disabled — publication is
-  best-effort and an agent offline past the TTL never applies it. **D270 closes the reporting half:** the
-  heartbeat now carries each agent's ACTUAL enforcement state and applied sequence, so "how many are
-  still enforcing?" is answerable — with the honest limit that SILENCE IS NOT COMPLIANCE (absence stays
-  the overdue mechanism's job).
-  D267 fixed a real rollback defect: `fullyMigrated`'s `applied >= want` let a rolled-back binary run
-  SILENTLY against a newer schema. It now reports the skew (loudly, plus a gauge) and still STARTS —
-  refusing would turn a rollback into an outage. Migrations are FORWARD-ONLY: rolling the BINARY back is
-  supported, rolling the SCHEMA back is not.
-  `openshieldctl restore-verify` is the post-restore gate: the witness key is MANDATORY and "I cannot
-  tell" is a FAILURE, because a truncated ledger is internally CONSISTENT (it hashes perfectly and stops
-  early) and only an anchor detects that. It reports the tail an anchor cannot cover, and separates
-  verified / damaged / undetermined. *Residual:* it verifies, it does not back up or restore; anchor
-  cadence bounds what completeness can prove.
-  `core.KillSwitch` is consulted by BOTH enforcement call sites, sits between the Decision and the
-  Enforcer (so detection and the ledger continue — stop acting, keep seeing), fails TOWARD enforcing (an
-  unreadable source never disables the product), counts every suppression with its reason, and is engaged
-  either by a local break-glass file or by a dynamic setting that propagates fleet-wide via PLAT-5b's
-  watcher. *Residual, named:* the fleet path reaches only components that read the config store —
-  **endpoint agents do not**, so their fleet-wide disable needs the signed channel (increment 2).
-  **The original scope — and every part of it is now delivered**, kept here as the record of what the
-  ticket promised: the question a CISO asks first is *how do I run this?*, and the roadmap once answered
-  only "packaging." Delivered: rolling agent + server upgrade with version-skew tolerance and **rollback**
-  (D275, and migrations are forward-only — rolling the BINARY back is supported, rolling the SCHEMA back
-  is not); a fleet-wide **emergency disable** that fails toward enforcing and is itself ledgered (D265,
-  D269); **backup + verified restore** of the Postgres system-of-record and the per-agent ledger, with the
-  restore re-verifying the hash chain and anchors rather than only the bytes (D266, D277, D278); node/DB
-  recovery and a DR runbook; and a documented **deployment footprint** — a compose/systemd product, not a
-  50-node cluster, stated so operators can size it, and publishing **no** throughput figures because no
-  load exercise has been run (D268, [`runbook.md`](runbook.md)). *Accept, met: an upgrade rolls forward
-  and back with no ledger gap; a restored backup re-verifies its chain + anchors; emergency-disable flips
-  the fleet to observe-only within one interval and writes a ledger entry.*
-
-*(Cross-platform Windows/macOS observe is **enrichment**, not MVP — MVP is Linux-first; see the
-enrichment backlog. Enforcement everywhere stays owner-gated per ADR-11.)*
-
-### Lane E · Endpoint — enactment & exfil channels
-
-Makes containment bite where the process runs, and makes the DLP domain watch the channels users
-actually exfiltrate through (not just directories). Lane E's HIPS-3 inc 2 is a hard dependency of XDR-6.
-(DLP-2 is split: 2a/2b clipboard+print are MVP here; screenshot + CASB refinements stay DLP-2 in enrichment.)
-
-- **HIPS-3 increment 2a · The exec-gate IPC bridge** — ✅ **DONE (D244, VM-proven on kernel 6.8)** — see
-  Done ledger. `internal/agent/execipc` is a parser-free hand-rolled transport (the privileged binary still
-  carries no protobuf/`corev1`, now CI-enforced); the client is only a `watchdog.Evaluator`, so the existing
-  budget/fail-open stays the single source of truth; hardening shipped and tested (verdict cache, per-path
-  circuit breaker, deadline-aware connection lock, bounded in-flight). Five mutations verified failing,
-  including "always allow" against the real kernel.
-- **HIPS-3 increment 2b · Intent-driven inline `DENY_EXEC`** — ✅ **DONE (D253, VM-proven)** — see Done
-  ledger. The intent is a CLOSED enum field on `core.Context`; the engine resolves it via the existing
-  `ResolveContext` hook; a real OPA policy refuses a CONTAINed entity's exec with EPERM, and lifting the
-  containment restores execution. *Residual:* a policy that does not read `response_intent` is unaffected
-  (data-not-command), and the gate still fails open, so containment depends on a live engine.
-- **DLP-2a · Clipboard exfil producer** — ✅ **DONE (D246)** — see Done ledger. `internal/clipboard` +
-  `EVENT_KIND_CLIPBOARD_COPY` + `ChannelClipboard`; content goes to the sandboxed worker, the Event is
-  content-free (proven on the serialized bytes), real X11 capture VM-proven under Xvfb. *Residual, honest:*
-  POLLED (a copy replaced inside one interval is missed), TEXT ONLY, needs `wl-paste`/`xclip`, the engine
-  holds the bytes in memory to forward them (same trade as the gateway's bodies), and it does NOT block a
-  paste. Event-driven capture (XFIXES / `wl-paste --watch`) and Windows/macOS (PLAT-7) stay deferred.
-- **DLP-2b · Print exfil producer** — ✅ **DONE (D248)** — see Done ledger. A CUPS filter decides the job
-  before it prints (non-zero exit aborts it); the job is classified in the sandboxed worker; `PrintSubject`
-  omits the title deliberately. Real-spooler proven. *Residual:* chain placement determines detection
-  quality (text vs raster), only the head of a huge job is classified, no CUPS-bypassing paths, no
-  watermark/redact, install is a root step.
-*(Lane E's MVP items — HIPS-3 inc 2a/2b, DLP-2a, DLP-2b — are all ✅ above. **Lane E is complete**, and
-with it the MVP queue.)*
 
 ---
 
@@ -1048,121 +910,8 @@ adjacent work.
   *(Full-pipeline inline `DENY_EXEC` is MVP — Lane E, HIPS-3 inc 2.)*
 
 ### Privileged tests — found by asking why coverage stalled at 52.7% (D381)
-- **KERNEL-1 · The dnsredirect kernel tests were FLAKY under real root, and ran nowhere** — ✅ **DONE (D382).**
-  Root-gated tests skip on every developer machine and in CI, so this suite executed only when somebody
-  remembered the VM. Run there, it passed test-by-test, passed the FIRST package run, and failed the next —
-  a different test each time, always `connection refused` against the canned upstream.
-  **The cause was CONNTRACK.** A nat REDIRECT decision is cached PER FLOW, and removing the rule does not
-  flush the entries it created — a UDP entry outlives the test by ~30s. A later query whose source port
-  collided with an earlier one was still DNAT'd to a resolver port that had since closed. So the damage was
-  done by the PREVIOUS run, which is why nothing in the current one explained it. Clearing both rule chains
-  (the transparent OUTPUT one and the forwarded PREROUTING one) was necessary and did not fix it, because
-  the leftover was never a rule.
-  Fixed by giving each test its OWN loopback upstream address — a different conntrack tuple, so no stale
-  entry can match — rather than flushing, which needs the `conntrack` tool a contributor may not have.
-  Four consecutive clean package runs under real root, where it previously failed two in three, and it is
-  now in the CI kernel job.
-  **The same shape was then found in the gateway (D389)** and closed: `internal/gateway` ships four
-  `*_kernel_test.go` files covering TPROXY redirect, SNI blocking, rule lifecycle and re-arm, and the
-  kernel job ran none of them — *"`internal/gateway` has kernel tests"* and *"CI runs `internal/gateway`'s
-  kernel tests"* look identical from the outside, which is why it survived as long as it did. Unlike the
-  DNS redirect, these were not broken when finally run: all five passed first time on a real kernel.
-  The job now builds and runs the open gate, `internal/dnsredirect` and `internal/gateway` under real root.
-  *Still outside that job:* `internal/dnssink`'s VM tests, and `internal/clipboard/x11` — which needs only
-  `xvfb-run`, not root, so it is gated on a display rather than on privilege (and whose tests leaked
-  children that pinned two cores for an hour until D393).
-
 ### Broker lifecycle — found by the offline-queue recovery test (D367)
-- **Endpoint partition + ping detection: ✅ DONE (D369).** A container-based scenario removes the AGENT's
-  interface and rejoins it on a different IP. It found a second defect D368 could not help with: an endpoint
-  whose interface vanishes holds a TCP connection that is dead and looks open, and nats.go's keepalive
-  defaults (`PingInterval=2m` x 2) meant **four minutes** before anything noticed — `IsConnected()` stayed
-  true, so no reconnect was attempted and every spool drain timed out while the spool grew 4 -> 76 records.
-  You cannot reconnect a connection you do not know is broken. Now 20s x 2 (~40s), and the scenario went
-  from failing at 208s to passing at 66s. **All four of the enterprise assessment's unproven properties are now closed** — partition (D369),
-  offline-queue drain (D367/D370), clock skew (D377, narrowly — see below), and per-node limits under
-  contention (D378). D378's finding: the file-open gate's three discard counters — dropped AUDIT ROWS
-  (decisions not in the ledger, against D358), unclassified gated opens, and suppressor-declined opens —
-  were logged only at `ctx.Done()`. Every one fires under contention, which is exactly when nobody stops the
-  process to look, and a SIGKILLed or crashed engine never reported at all. Now on the existing
-  `reportDiscards` mechanism the listeners got in D348. *Residual:* it makes the loss visible, not
-  preventable; dropped audit rows are not recoverable (the counter says how many, not which); and the engine
-  still has no metrics endpoint by deliberate choice, so a scraper reads the log.
-  Clock skew is DONE (D377) with a narrower result than expected: liveness was already immune (SEC-3 reads
-  the control plane's own receipt time), and beaconing necessarily trusts the endpoint's clock. Only the
-  FUTURE direction is decidable — an event cannot be observed after it was received — and bounding the past
-  as well destroys detection outright, because every event spooled while an agent was offline (D40/D67) is
-  legitimately past-dated (measured: 1 detection to 0). So backward skew, and therefore the beaconing
-  evasion in its most likely form, is NOT closed and needs a time source the endpoint does not control. Also untested: a whole SEGMENT partitioning and reconnecting together, which
-  is what the D368 jitter is for.
-- **Reconnect forever: ✅ DONE (D368).** Every long-lived process ran on nats.go's defaults
-  (`MaxReconnects=60` x `ReconnectWait=2s` ~= two minutes, then a permanent close with the process still
-  running). Measured: a 4s outage recovered fully, a 150s one never did. The agent case is the one that
-  matters — it kept producing into the spool that exists to prevent silent loss and could never drain it,
-  so the spool filled to its ceiling and began dropping the OLDEST records. `natsx.ResilienceOptions` now
-  gives infinite reconnect + jitter + disconnect/reconnect logging to the agent, engine, gateway and
-  `controlplane.Run` (NOT `Connect`, which is for one-shot operator subcommands). *Residual:* "the agent is
-  running" no longer implies "connected" — the log line and the dead-man's-switch are what cover that.
-- **PLAT-10 · A broker that returns with empty JetStream state wedges the fleet, silently** — ✅ **DONE (D370)**. `Server.healIngest` polls the durable consumer every 15s and, on finding it or its stream gone, announces that ingest is DOWN, recreates the stream and resubscribes; repairs and repair failures counted separately. A POLL rather than a reconnect handler, because a stream can be deleted while the connection stays healthy and no handler would fire. Repair is narrow (only a missing consumer/stream) so a transient error never churns a working subscription. *Residual:* records published into the gap were REFUSED by the broker, not buffered — they return only as producers drain their spools; and a repair recreates the stream with its ORIGINAL config, overwriting any deliberate operator tuning. Original finding below.
-  **Reproduced, not theorised** (`Stack.RestoreBrokerEmpty` exists for it): stop the broker, bring one back
-  on the same port with a fresh JetStream store, and telemetry never resumes. Measured: rows frozen for
-  30s+ while the agent publishes every 500ms, and **the control plane logs nothing at all**. A
-  volume-backed restart of the same broker recovers fine (2 -> 120 rows), which is what makes this
-  specific and not a general "outage" story.
-  Cause: `natsx.EnsureTelemetryStream` is called from exactly two places —
-  `controlplane.Run` and `SignedPublisher.UseJetStream` — both at **process startup only**. A broker with
-  no stream therefore stays without one. The agent's publishes fail forever (`no response from stream`,
-  at least logged agent-side); the server's durable push consumer was deleted with the stream and it says
-  nothing. Every agent's spool then grows to its 10,000 ceiling and begins dropping the OLDEST records.
-  This is not exotic ops: `podman rm` + recreate the broker, or an orchestrator rescheduling it onto new
-  storage, produces it exactly.
-  **It needs BOTH halves and a half-fix is worse than none:** re-ensuring the stream from the agent on
-  reconnect recreates the stream while the control plane's consumer stays dead — so the stream exists,
-  publishes succeed, and still no row appears, which is harder to diagnose than the current failure. The
-  fix is a reconnect handler on the control plane that re-ensures the stream and RE-SUBSCRIBES (tear down
-  `sigSub`, resubscribe with the same durable), plus the agent-side re-ensure. **Minimum bar even if
-  self-healing is deferred: the server must say something** — a silent fleet-wide telemetry outage is a
-  direct D31 violation, and D31 is the reason the rest of this product is trustworthy.
-
 ### Data-at-rest discovery (DSPM) — from the enterprise gap assessment
-- **DSPM-1 · One object-store discovery connector** — ✅ **DONE (D371)**. `internal/connectors/objectstore`
-  sweeps an S3-compatible bucket on an interval, reads a bounded prefix of each object via a ranged GET, and
-  feeds the same pipeline everything else feeds; content goes to the sandboxed worker via the content store
-  and never onto the Event. No SDK — SigV4 hand-rolled over stdlib HMAC, so the twelve-direct-dependency tree
-  is unchanged AND the connector works against MinIO/Ceph/R2/Wasabi rather than only AWS. Proven against a
-  real MinIO, because a mocked S3 would agree with whatever the signer believes.
-  **THE FITNESS VERDICT (recorded in `sweep.go`, and it reversed the plan):** the producer seam
-  (`Next(ctx) (*corev1.Event, error)`) fits a pull/enumerate producer unchanged — that half held cleanly. The
-  proposal then said to avoid a contract change by carrying `s3://bucket/key` in
-  `FilesystemSubject.resolved_path`, and TRYING IT SHOWED THAT BACKWARDS: `Event.target` is a oneof that
-  exists so a producer can carry its own shape, and ClipboardSubject/PrintSubject are the precedent. So
-  `ObjectSubject` is idiomatic and the URI-in-a-path was the invasive option. Answer to "does the pipeline
-  absorb a new capability by adding a plugin?": **yes**, and this is the strongest evidence yet because the
-  producer shape was genuinely new rather than isomorphic — with the caveat that it survived because the
-  contract had a designed-in growth point, not because the contract never changes.
-  *Residual, and each is stated in the capability spec rather than implied:* no ACCESS CONTEXT (who can reach
-  the bucket) — that is the other half of what DSPM buyers mean; one store family only; a PREFIX per object,
-  so content past the ceiling is unexamined; no incremental since-last-sweep state, so every sweep
-  re-enumerates; read-only, no remediation.
-  **MinIO is in `compose.yaml` for DEV ONLY** — OpenShield scans an object store, it does not provide one,
-  and production points at whatever the operator already runs. **The largest name-versus-capability
-  gap in the product** ([`enterprise-gap-assessment.md`](enterprise-gap-assessment.md)): OpenShield
-  classifies data IN MOTION past an interposition point, and the only cloud surface that exists is
-  CloudTrail *log ingest* (`internal/connectors/cloudtrail`) plus AWS-key secret detection in
-  `internal/classify/secrets.go`. There is no S3, Azure Blob, GCS, M365/SharePoint or Google Workspace
-  enumeration, so the product cannot answer **"where is my sensitive data"** — the first question asked of
-  anything called a Data Security Platform. Data in a bucket is invisible until someone touches it on an
-  instrumented host.
-  Scope one store (S3 is the obvious first): enumerate objects, fetch a bounded prefix, feed the EXISTING
-  classifier, emit findings as Events with a store/bucket/key subject. **Not architecturally hard** — the
-  classifier, the boundary and the audit path all exist; it is absent because it was never queued.
-  **And it is the strongest available test of the D26/D69 fitness claim**, better than the S3 connector
-  T-014 dismissed as isomorphic: a discovery producer **pulls and enumerates on a schedule** rather than
-  being pushed events, which is a genuinely new producer *shape*. If that forces a core change, the
-  10-year claim needs revisiting — finding that out is the point.
-  *Honest scope note:* discovery without **access context** (who can reach this bucket) is half of what
-  DSPM buyers mean; the other half is a separate ticket and should not be implied by this one.
-
 ### Zero Trust
 - **ZT-5 · Policy admin + session recording** — **now scheduled as `CONSOLE-44` + `CONSOLE-45` in Lane F.**
   This entry said "ties to the UI (PLAT-1)" and the first console plan missed it: the access catalog is an
@@ -1171,47 +920,6 @@ adjacent work.
   effective-access matrix, `CONSOLE-45` the authoring and session termination. **Session RECORDING stays
   owner-gated and out of both** — it carries a DPIA weight this product should not assume, and it is a
   separate decision from policy administration.
-- **ZT-7 · Operator identity: SSO, and the role out of the certificate** — ✅ **DONE (D372, D373, D375, D379,
-  D380).** Rewritten as one entry: successive in-place edits had spliced the history mid-sentence and it had
-  stopped being readable.
-
-  **The defect (D372).** The RBAC tier was stamped into the operator's client certificate and read from
-  there, so authorization was frozen for the certificate's lifetime — a demotion or removal did not take
-  effect until it expired, and there was no "revoke this operator now" primitive at all. The role now lives
-  in `operator_roles`, resolved server-side per request. Revocation is a ROW, not a delete (a delete falls
-  back to the certificate and restores it); a database error DENIES rather than falling back (fail-open is
-  right for enforcement per D17/D18 and wrong for authorization); `agent` is not grantable, so one
-  compromised endpoint is not a compromised console; no cache, because a TTL sells back the immediacy.
-
-  **SSO (D373).** Operators may present an OIDC bearer token. **The token's claims do NOT decide the role** —
-  a group-to-tier mapping reintroduces the defect with a shorter fuse. Consequence: an SSO operator has no
-  certificate and therefore no fallback, so they are strict by construction while certificate holders
-  migrate.
-
-  **It shipped unusable, and an INTEGRATION test found it (D375).** The HTTP surface required a client
-  certificate at the handshake, so an SSO operator was refused before the token was read; the feature could
-  not run in any deployment. Package tests could not see it — they drive a handler with a synthesised TLS
-  state. Fixed with `VerifyClientCertIfGiven` scoped to SSO-enabled deployments. The assertion guarding that
-  relaxation was itself VACUOUS at first (a client from a second PKI fails the handshake client-side, so it
-  passed against a mutant with no server-side verification at all) — when asserting one side rejects
-  something, the other side must have no reason to fail.
-
-  **Sender-constraining (D379).** A token carrying `cnf.jkt` needs a DPoP proof bound to method and URI,
-  single-use and fresh; a bound token reaching a verifier that cannot check proofs is REFUSED, not
-  downgraded; `OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP` refuses UNBOUND tokens (off by default — on before the
-  issuer binds locks everyone out).
-
-  **SCIM (D380).** Deactivation revokes IMMEDIATELY on the credential already held, as a row, accepting all
-  four provider dialects, behind its OWN constant-time token — an operator credential reaching it would let
-  an analyst deactivate an admin. **Provisioning grants NOTHING**, so this closes the LEAVER half of
-  joiner/mover/leaver and the joiner half still ends with `operator-role set`.
-
-  **Residual, and each is stated rather than implied:** no JIT provisioning; the SCIM subset is
-  userName/active with one filter shape and no groups, bulk, `/Me` or schema discovery, so a provider
-  requiring `ServiceProviderConfig` may refuse to connect, and none of it is tested against a real IdP;
-  `htu` comes from the Host header, so a proxy rewriting it breaks proofs; DPoP replay rejection is bounded
-  by a cache; no four-eyes on a grant (SOAR has it, this does not); and certificate revocation proper is
-  unchanged — revoking authorization leaves the identity able to authenticate, just unable to do anything.
 - **ZT-6 · SAML** — P · L. Only after OIDC proves the SSO seam. Note ZT-7 is the *operator* half; ZT-6 and
   the existing OIDC are the *subject* half, and conflating them is how the SSO gap stayed invisible.
 
@@ -1232,36 +940,6 @@ engineer) checks *before betting on the platform*. Each is cheap relative to its
 mostly independent of the lanes above. Surfaced by an external architecture review (2026-07-24).
 
 **Gate the "call it shippable" line — do before or alongside the MVP:**
-
-- **`THREAT_MODEL.md` — first-class, consolidated** — ✅ **DONE (D302).** Extended the EXISTING
-  `docs/threat-model.md` rather than adding a competing root-level file: the endpoint half was already
-  there and honest, and the gap was the PLATFORM half. Eight boundaries, each naming the guard and the
-  test that proves it, each stating its limit. Guarded by doccheck. Original scope note: The trust boundaries are today *inferable* from
-  D14, the ADRs, and `intake.md`, but never stated in one place. Write who is trusted vs not and exactly
-  what each buys an attacker: compromised server, compromised gateway, compromised agent, compromised
-  admin, offline endpoint, replay, malicious insider, supply chain. Tie every boundary to the guard that
-  holds it (ledger forward-secrecy, closed action set D14, signed intents ADR-12, four-eyes SOAR-3).
-- **`INVARIANTS.md` — lightweight proofs** — ✅ **DONE (D298).** Five invariants, each naming the test
-  that fails when it regresses, each MUTATION-VERIFIED (the enforcement removed and the failure observed),
-  each with its honest limit stated. A doccheck guard fails the build if a named test stops existing.
-  Original scope note: On-brand with the project's ethos and backed by the
-  existing mutation harness. State and argue the load-bearing invariants, each with the test that catches a
-  regression: (1) *a compromised server can never cause arbitrary endpoint code execution* (closed action
-  set D14 + closed intent vocabulary ADR-12); (2) *no policy evaluation runs in privileged code* (the
-  privilege-split worker; the exec-gate IPC decider preserves this even for HIPS-3 inc 2); (3) *evidence
-  cannot be rewritten below an anchor* (forward-secure hash chain + external anchoring).
-- **Performance/latency budget in CI** — ✅ **DONE (D301).** `TestTheExecDecisionFitsInThePermissionWindow`
-  measures the real path (real worker subprocess, real policy) and fails the build when p99 exceeds the
-  IPC client's timeout — the deadline that actually decides whether a verdict is delivered. Writing it
-  found that the engine-backed exec gate produced events with NO provenance, so every decision failed
-  validation and fail-opened. Original scope note: The fanotify and exec permission-window budgets are a
-  *correctness* property (an over-budget verdict trips the HIPS-3 inc 2 / fail-open path), so a regression
-  benchmark that fails CI when the window is blown gates the same way the invariants do — it is not a
-  nice-to-have. (Fuzz / property / golden-trace tests below are separate and parallel.)
-
-**🔴 Live defects found while security-reviewing the console plan (2026-07-31). None is a console problem —
-each is exploitable in the shipped product today, and they are listed here because the review that found
-them was looking somewhere else.**
 
 - **SEC-A · No configuration field declares a bound, and four dynamic fields already neuter the product** —
   new work · M. `grep "Validate:" internal/config/*.go` outside tests returns **zero**: the entire per-field
@@ -1470,7 +1148,17 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   server-side NATS loss; purge/tombstone honors legal holds; non-owner ledger DB role wired
   (`openshield_app`); no-follow safe reader; operator-search validation; access-proxy header hygiene;
   DSAR (PLAT-8); Prometheus metrics behind constant-time bearer auth (PLAT-4/4b).
-- **Identity / Zero Trust:** IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
+- **Assurance & docs:** `docs/threat-model.md` consolidated — eight boundaries, each naming its guard and
+  the test that holds it, each stating its limit (D302); `INVARIANTS.md` — five invariants, each
+  MUTATION-VERIFIED and each with its honest limit (D298); performance/latency budget in CI — the real-path
+  exec decision fails the build when p99 exceeds the IPC deadline that decides whether a verdict is
+  delivered (D301); the dnsredirect kernel tests de-flaked and actually running under real root (D382).
+- **Broker lifecycle:** reconnect-forever on every long-lived process, replacing nats.go's give-up defaults
+  (D368); endpoint partition + ping detection (D369); PLAT-10 — a broker returning with empty JetStream
+  state no longer wedges the fleet silently, repaired by a POLL rather than a reconnect handler because a
+  stream can be deleted while the connection stays healthy (D370).
+- **DSPM:** DSPM-1 object-store discovery connector (D371).
+- **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers
   (D179). **ZT-1 full hardware attestation chain (D183–191):** AK quote → EK→AK credential activation →
@@ -1642,42 +1330,20 @@ The core does not change: `core.Dispatcher`, `State`, `Stage`, `Registry`, the
 stays in the classifying process; only type+count+metadata cross). If any work forces a core change, that
 is the signal to stop and re-run the D26/D69 fitness tests.
 
-### The five tensions (T1–T5) — status
+### The five tensions (T1–T5) — all resolved
 
-- **T1 — Does the closed action set (D14) expand?** *Resolved: one typed verb per capability, never a
-  parameterised framework.* `KILL_PROCESS` landed; `DENY_EXEC` logic landed (T1-gated). The full-pipeline
-  inline `DENY_EXEC` (HIPS-3 inc 2) is owner-approved via the MVP prevent-inline decision — it wires the
-  already-sanctioned `DENY_EXEC` verb through the dynamic exec-gate path; it is NOT a new Action-set entry,
-  so no further per-verb gate is outstanding.
-- **T2 — Does risk flow back to enforcement?** *Resolved in code:* the server computes+publishes risk;
-  the endpoint/gateway reads it as typed Policy context (D28) and decides locally. The server informs;
-  it never actuates (D14 preserved). XDR-7 extends this per-entity across domains.
-- **T3 — One product or a platform (DLP → XDR)?** *Resolved: the platform bet is made — OpenShield is an
-  XDR.* Detection-and-response spans endpoint, network, and identity on one pipeline. DLP is one classify-
-  domain. The discipline is **"keep each domain credible — depth beats shallow breadth"**; new domains
-  enter as explicit, separately-scoped bets, never a core change.
-- **T4 — Categories that do NOT fit (NAC/VPN).** *Resolved by the owner: PARKED (ADR-0).*
-- **T5 — Does SOAR make the server a controller?** *Resolved (ADR-12), tiered:* server-side playbooks over
-  a closed step registry (every step ledgered) land now; live containment goes through a signed, closed-
-  vocabulary Response-Intent the endpoint's *local* policy enacts; third-party actuation is off-pipeline
-  intent-subscriber runners with least-privilege creds + non-waivable four-eyes. Arbitrary endpoint
-  command execution and remote content pull are permanently out.
+Kept as one line each so a closed fork is not reopened by someone who did not see it close. The reasoning
+is in `docs/decisions.md` and the ADRs above.
 
-### Phased plan (original design sequence, for context)
+- **T1 — Does the closed action set (D14) expand?** *Resolved:* one typed verb per capability, never a
+  parameterised framework. No per-verb gate is outstanding.
+- **T2 — Does risk flow back to enforcement?** *Resolved in code:* the server computes and publishes risk;
+  the endpoint and gateway read it as typed Policy context (D28) and decide locally. **The server informs;
+  it never actuates.**
+- **T3 — One product or a platform?** *Resolved:* the platform bet is made — OpenShield is an XDR, DLP is
+  one classify-domain. The discipline is **depth beats shallow breadth**; new domains enter as explicit,
+  separately-scoped bets, never a core change.
+- **T4 — Categories that do NOT fit (NAC/VPN).** *Resolved by the owner: PARKED* — ADR-0.
+- **T5 — Does SOAR make the server a controller?** *Resolved, tiered* — ADR-12. Arbitrary endpoint command
+  execution and remote content pull are permanently out.
 
-Ordered by leverage-per-architectural-risk; A/C/D/E/F have largely landed.
-
-- **Phase A — Identity & Zero-Trust foundation.** Identity producer at the proxy; identity+posture as
-  typed Policy context; close the risk loop (T2). *Landed; ZT-4 client remains (MVP Lane C).*
-- **Phase B — Inline prevention.** Two-tier classify in the fanotify permission window; inline `BLOCK`
-  for files. *The endpoint DLP inline-block window is still the open bet.*
-- **Phase C — Network breadth & transparent inline.** Transparent/inline connector (ADR-8); DNS/SMTP
-  landed; NIPS-2 signatures landed. *Largely landed; enrichment increments remain.*
-- **Phase D — Detection depth.** Document parsing, national-ID detectors, signed detectors, EDM. *Largely
-  landed; OCR remains (enrichment).*
-- **Phase E — HIPS.** Exec producer + behavioral classifier + `KILL_PROCESS`/`DENY_EXEC`. *Runs end-to-
-  end; real-time eBPF/LSM hooks are enrichment.*
-- **Phase F — SIEM/analytics depth.** Search API, correlation, case workflow, log ingest. *Landed;
-  cross-domain correlation is the XDR lane; dashboards are the UI.*
-- **Cross-platform — external-gated, post-MVP.** Portable all-Go core; per-OS producers/enforcers. MVP is
-  Linux-first; Windows/macOS is enrichment (PLAT-7). *Owner drives cert/entitlement procurement.*
