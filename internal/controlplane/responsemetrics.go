@@ -99,7 +99,15 @@ SELECT
            FILTER (WHERE state = 'closed' AND transitioned_at IS NOT NULL), 0)         AS res_p50,
   coalesce(percentile_disc(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM transitioned_at - created_at))
            FILTER (WHERE state = 'closed' AND transitioned_at IS NOT NULL), 0)         AS res_p90
-FROM incidents`
+FROM incidents
+-- SOAR-10: BACKFILLED incidents are excluded from every measurement here, and this is not a filter of
+-- convenience. Their created_at is when the backfill ran, so a backfilled incident's detection latency
+-- is the age of the alert and its time-to-acknowledge starts from a moment no analyst could have acted
+-- on. Averaged in, one backfill would move the fleet's measured response arbitrarily far in either
+-- direction depending only on how far back somebody reached. They are not counted as EXCLUDED either:
+-- "excluded" here means an incident that could have contributed and did not, which is a statement about
+-- the response process. A backfilled incident was never part of that process at all.
+WHERE NOT backfilled`
 	var r ResponseReport
 	var d, a, x Duration
 	if err := s.pool.QueryRow(ctx, q).Scan(&r.Incidents,
@@ -174,7 +182,9 @@ func (s *Server) responseHistograms(ctx context.Context) (string, error) {
 // bucketCounts returns, for each bound, how many observations are <= it (cumulative, as Prometheus
 // histograms require).
 func (s *Server) bucketCounts(ctx context.Context, where, expr string) ([]int, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+expr+` FROM incidents WHERE `+where)
+	// The same backfill exclusion as ResponseMetrics: the histogram and the summary must describe the
+	// same population, or an operator comparing them finds a discrepancy nothing explains.
+	rows, err := s.pool.Query(ctx, `SELECT `+expr+` FROM incidents WHERE NOT backfilled AND `+where)
 	if err != nil {
 		return nil, err
 	}

@@ -90,6 +90,11 @@ type Server struct {
 	DroppedMessages atomic.Int64
 
 	// notifier delivers alerts to a human (D83). Default Nop (delivery off);
+	// backfilling is non-zero while a retrospective correlation run is in progress (SOAR-10), which
+	// suppresses paging. A COUNTER rather than a bool so two concurrent backfills cannot have the
+	// first to finish un-silence the second — the pager would then ring for a range still being
+	// replayed, which is the one outcome the suppression exists to prevent.
+	backfilling atomic.Int64
 	// SetNotifier turns it on. notifiedOverdue dedups overdue notifications so a
 	// silent agent alerts once, not every check.
 	notifier        notify.Notifier

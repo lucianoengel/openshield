@@ -257,8 +257,8 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 		var inserted bool
 		if err := s.pool.QueryRow(ctx,
 			`INSERT INTO incidents (kind, subject_id, entity_id, state, alert_count, max_risk, host_count,
-			                        domain_count, domains, first_seen, last_seen)
-			 VALUES ('cross_domain',$1,$2,'open',$3,0,0,$4,$5,$6,$7)
+			                        domain_count, domains, first_seen, last_seen, backfilled)
+			 VALUES ('cross_domain',$1,$2,'open',$3,0,0,$4,$5,$6,$7,$8)
 			 ON CONFLICT (entity_id) WHERE state = 'open' AND kind = 'cross_domain'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, domain_count = EXCLUDED.domain_count,
 			              domains = EXCLUDED.domains,
@@ -266,7 +266,7 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()
 			 RETURNING id, (xmax = 0) AS inserted`,
 			inc.SubjectID, inc.EntityID, inc.AlertCount, inc.DomainCount, inc.Domains,
-			inc.FirstSeen, inc.LastSeen).
+			inc.FirstSeen, inc.LastSeen, s.quiet()).
 			Scan(&id, &inserted); err != nil {
 			return 0, err
 		}
@@ -281,7 +281,7 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 				return 0, err
 			}
 		}
-		if inserted {
+		if inserted && !s.quiet() { // SOAR-10: backfilled incidents are recorded, never paged
 			// SOAR-2b: same recurrence link as the burst rule, keyed by ENTITY — the key this rule
 			// already uses for open-incident uniqueness, so "the same trouble" means the same thing to
 			// both mechanisms.

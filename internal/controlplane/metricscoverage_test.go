@@ -30,6 +30,13 @@ import (
 // renderedElsewhere maps a counter's declared name to why metrics.go does not name it directly. A counter
 // fronted by an accessor is rendered through that accessor; the guard cannot see through the call, so the
 // reason records which one.
+//
+// ONE ENTRY IS NOT A COUNTER AT ALL. `backfilling` is an atomic.Int64 used as a re-entrant flag — the
+// depth of nested backfill runs — and rendering "how many backfills are in flight" as a metric would be
+// reporting an implementation detail as an operational signal. It is here because the guard matches on
+// TYPE (atomic.Int64) rather than on intent, which is the right trade: catching a real metric that nobody
+// renders matters more than never asking about a flag, and the alternative is a guard that can be evaded
+// by choosing a name. The cost is this comment, once.
 var renderedElsewhere = map[string]string{
 	"repairs":             "ingestHealth field, rendered via s.IngestRepairs()",
 	"failed":              "ingestHealth field, rendered via s.IngestRepairFailures()",
@@ -37,6 +44,7 @@ var renderedElsewhere = map[string]string{
 	"scimDeprovisioned":   "package var, rendered via ScimDeprovisioned()",
 	"operatorRoleChanges": "package var, rendered via OperatorRoleChanges()",
 	"skewedEvents":        "package var, rendered via SkewedEvents()",
+	"backfilling":         "NOT a metric: a re-entrant flag counting in-flight backfill runs (SOAR-10), read by quiet()",
 }
 
 func TestEveryCounterReachesTheMetricsEndpoint(t *testing.T) {

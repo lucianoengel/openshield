@@ -754,3 +754,64 @@ role gate is per-path.
 - **WHEN** an analyst lists or runs a saved search
 - **THEN** it succeeds
 - **AND** WHEN the same analyst tries to author one, it is refused
+
+### Requirement: Correlation can be replayed over a historical range
+
+The control plane SHALL support running both correlation rules over an operator-specified historical
+range, stepping by the rule's own window.
+
+Correlation runs on a clock over a look-back window, so alerts outside it are never correlated — and the
+ones that matter most are exactly the ones that fell outside because correlation was NOT RUNNING: a leader
+outage, an interval left at zero, a deployment gap. Those alerts sit in the store forever, individually
+visible and never joined, and the incident that should have paged somebody does not exist. Nothing reports
+its absence, because nothing knows it was supposed to be there.
+
+The step SHALL be the window itself. A smaller step correlates overlapping sets; a larger one leaves gaps
+between them — a gap in the job whose purpose is closing gaps.
+
+A BACKFILLED INCIDENT SHALL NOT PAGE. Replaying a month would page the SOC for hundreds of incidents that
+are long over, at which point the pager is muted and the next live incident is muted with it. The evidence
+is written; the alarm is not rung for something nobody can respond to any more. Paging SHALL be restored
+when the run ends, including when it fails part way.
+
+A BACKFILLED INCIDENT SHALL BE MARKED, and marked BY THE INSERT that raises it rather than by a sweep
+afterwards. Only the code inserting an incident knows whether the run that raised it was retrospective; a
+sweep has to guess from timestamps, and a wrong guess relabels incidents raised live.
+
+BACKFILLED INCIDENTS SHALL BE EXCLUDED FROM THE RESPONSE METRICS, and SHALL NOT be counted among the
+EXCLUDED population either. Their `created_at` is when the backfill ran, so detection latency would be the
+age of the alert and time-to-acknowledge would start from a moment no analyst could have acted on —
+averaged in, one backfill would move the fleet's measured response arbitrarily far in either direction
+depending only on how far back somebody reached. "Excluded" means an incident that could have contributed
+and did not, which is a statement about the response process; a backfilled incident was never part of it.
+
+A run SHALL be idempotent, by the same partial-unique-on-open indexes live correlation relies on: running
+the same backfill twice must be safe, because the reason to run one is usually that nobody is sure what
+was missed.
+
+An empty, inverted, or excessively long range SHALL be REFUSED rather than truncated. A backfill that
+quietly covered part of a range and reported success has the same shape as the gap it was run to close.
+
+A partial result SHALL be returned alongside a failure, so an operator knows where to resume.
+
+#### Scenario: A burst older than the live window is correlated
+- **WHEN** alerts fall outside every live look-back and the range covering them is replayed
+- **THEN** the incident is raised
+
+#### Scenario: A backfilled incident does not page, and live paging resumes
+- **WHEN** a backfill raises incidents
+- **THEN** no notification is delivered for them
+- **AND** a live incident raised afterwards still pages
+
+#### Scenario: A backfilled incident is marked and left out of the metrics
+- **WHEN** a backfill raises an incident
+- **THEN** it is marked as backfilled
+- **AND** the response report's incident count and excluded count are both unchanged
+
+#### Scenario: A live incident is not relabelled
+- **WHEN** a backfill covering an earlier range runs after an incident was raised live
+- **THEN** the live incident is not marked as backfilled
+
+#### Scenario: An unusable range is refused
+- **WHEN** a range is empty, inverted, or would take more steps than the bound allows
+- **THEN** it is refused rather than partially covered

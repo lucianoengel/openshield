@@ -55,18 +55,25 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 		var id int64
 		var inserted bool
 		if err := s.pool.QueryRow(ctx,
-			`INSERT INTO incidents (kind, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen)
-			 VALUES ('ueba_burst',$1,'open',$2,$3,$4,$5,$6)
+			`INSERT INTO incidents (kind, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen, backfilled)
+			 VALUES ('ueba_burst',$1,'open',$2,$3,$4,$5,$6,$7)
 			 ON CONFLICT (kind, subject_id) WHERE state = 'open'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, max_risk = EXCLUDED.max_risk,
 			              host_count = EXCLUDED.host_count, last_seen = EXCLUDED.last_seen,
 			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()
 			 RETURNING id, (xmax = 0) AS inserted`,
-			inc.SubjectID, inc.AlertCount, inc.MaxRisk, inc.HostCount, inc.FirstSeen, inc.LastSeen).
+			inc.SubjectID, inc.AlertCount, inc.MaxRisk, inc.HostCount, inc.FirstSeen, inc.LastSeen,
+			s.quiet()).
 			Scan(&id, &inserted); err != nil {
 			return 0, err
 		}
 		if inserted {
+			// SOAR-10: a backfilled incident is recorded and NOT paged. A month of backfill would page
+			// the SOC for hundreds of incidents that are long over, at which point the pager is muted
+			// and the next live incident is muted with it.
+			if s.quiet() {
+				continue
+			}
 			// SOAR-2b: link to the predecessor BEFORE paging, so the page can say "this is the third
 			// time" rather than leaving the operator to discover it. A link failure is logged by the
 			// caller of MaterializeIncidents via the returned error path only if it is a DB failure;

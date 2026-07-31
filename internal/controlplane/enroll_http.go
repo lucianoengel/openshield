@@ -120,6 +120,10 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// drill-down question asked across incidents instead of within one, and carries the same
 		// closed-vocabulary metadata with no evidence content.
 		mux.Handle("/incidents/recurrences", s.requireTier(RoleAnalyst, opRead))
+		// SOAR-10: backfill correlates a historical range and WRITES incidents. ADMIN, not responder:
+		// it is the only read-surface route that manufactures incidents in bulk, and a wide range is a
+		// heavy job against the database the live pipeline is using.
+		mux.Handle("/correlate/backfill", s.requireTier(RoleAdmin, opRead))
 		mux.Handle("/overdue", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/subject", s.requireTier(RoleAnalyst, opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
 		// D290: cases and approvals. Reading an investigation is the ANALYST tier and records the view
