@@ -299,10 +299,13 @@ upcoming and is now built, tested, and in the capability table above:
 - 🔍 **Endpoint depth** — eBPF/LSM hooks. (The JIT W+X allowlist shipped; per-process ransomware attribution
   has since shipped, opportunistically: it names the processes holding the tree open, and says so when
   it could not look)
-- 🔎 **Detection breadth** — OCR, more national IDs, more log formats (LEEF, a native Sysmon schema),
-  and access context for data-at-rest discovery
-- 🔐 **Zero-Trust reach** — SOCKS5 and split DNS. SOCKS carries no place for a client certificate or a
-  bearer token, so it needs an authentication design of its own rather than a switch
+- 🔎 **Detection breadth** — OCR, more national IDs, and access context for data-at-rest discovery.
+  (LEEF and a native Sysmon schema have since shipped.) OCR is the one item here that is a DECISION
+  rather than work: every usable engine is a native image parser, which is the exact class the
+  privilege split exists to contain
+- 🔐 **Zero-Trust reach** — continuous posture re-evaluation inside a long-lived tunnel, beyond the
+  per-decision re-authorization that ships today. (SOCKS5 with device-bound tickets and split-horizon
+  DNS have since shipped)
 - 📦 **Distribution** — Sigstore/cosign and a transparency log, `.deb`/`.rpm`, macOS notarization
 
 <sub>The detailed engineering plan and design-decision records are maintained in
