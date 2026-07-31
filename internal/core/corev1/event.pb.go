@@ -501,10 +501,20 @@ type NetworkSubject struct {
 	Protocol string                 `protobuf:"bytes,6,opt,name=protocol,proto3" json:"protocol,omitempty"` // tcp | udp | ...
 	// L7 metadata, present when the gateway terminates TLS / sees plaintext. This
 	// is METADATA (a policy decides on it), NOT the body.
-	SniHost       string           `protobuf:"bytes,7,opt,name=sni_host,json=sniHost,proto3" json:"sni_host,omitempty"` // TLS SNI / HTTP Host
-	HttpMethod    string           `protobuf:"bytes,8,opt,name=http_method,json=httpMethod,proto3" json:"http_method,omitempty"`
-	HttpPath      string           `protobuf:"bytes,9,opt,name=http_path,json=httpPath,proto3" json:"http_path,omitempty"`
-	Direction     NetworkDirection `protobuf:"varint,10,opt,name=direction,proto3,enum=openshield.v1.NetworkDirection" json:"direction,omitempty"`
+	SniHost    string           `protobuf:"bytes,7,opt,name=sni_host,json=sniHost,proto3" json:"sni_host,omitempty"` // TLS SNI / HTTP Host
+	HttpMethod string           `protobuf:"bytes,8,opt,name=http_method,json=httpMethod,proto3" json:"http_method,omitempty"`
+	HttpPath   string           `protobuf:"bytes,9,opt,name=http_path,json=httpPath,proto3" json:"http_path,omitempty"`
+	Direction  NetworkDirection `protobuf:"varint,10,opt,name=direction,proto3,enum=openshield.v1.NetworkDirection" json:"direction,omitempty"`
+	// JA3 client fingerprint of the TLS ClientHello (NIPS-9): an MD5 over the offered
+	// version, ciphers, extensions and curves. It identifies the CLIENT STACK, which is
+	// what makes it useful where SNI is not — a malware family keeps its fingerprint
+	// across every domain it rotates through, and encrypted-SNI or a domain nobody has
+	// seen before leaves this as the only metadata worth matching.
+	//
+	// It is a fingerprint of a handshake, not of a person: the same value is shared by
+	// every client built on the same library at the same version, so it is a WEAK
+	// signal on its own and is deliberately not an identifier (D23 is unaffected).
+	Ja3           string `protobuf:"bytes,11,opt,name=ja3,proto3" json:"ja3,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -607,6 +617,13 @@ func (x *NetworkSubject) GetDirection() NetworkDirection {
 		return x.Direction
 	}
 	return NetworkDirection_NETWORK_DIRECTION_UNSPECIFIED
+}
+
+func (x *NetworkSubject) GetJa3() string {
+	if x != nil {
+		return x.Ja3
+	}
+	return ""
 }
 
 // Event is what a producer emits. It carries metadata and references only —
@@ -1179,7 +1196,7 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1d\n" +
 	"\n" +
 	"product_id\x18\x02 \x01(\tR\tproductId\x12)\n" +
-	"\x10serial_pseudonym\x18\x03 \x01(\tR\x0fserialPseudonym\"\xc1\x02\n" +
+	"\x10serial_pseudonym\x18\x03 \x01(\tR\x0fserialPseudonym\"\xd3\x02\n" +
 	"\x0eNetworkSubject\x12\x17\n" +
 	"\aflow_id\x18\x01 \x01(\tR\x06flowId\x12\x15\n" +
 	"\x06src_ip\x18\x02 \x01(\tR\x05srcIp\x12\x19\n" +
@@ -1192,7 +1209,8 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"httpMethod\x12\x1b\n" +
 	"\thttp_path\x18\t \x01(\tR\bhttpPath\x12=\n" +
 	"\tdirection\x18\n" +
-	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\"\xec\x05\n" +
+	" \x01(\x0e2\x1f.openshield.v1.NetworkDirectionR\tdirection\x12\x10\n" +
+	"\x03ja3\x18\v \x01(\tR\x03ja3\"\xec\x05\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12!\n" +

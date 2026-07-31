@@ -230,6 +230,12 @@ jobs:
           # on the CAP_SYS_ADMIN boundary: its reader is the privileged process, and its peer is the worker
           # that just parsed an attacker's file.
           go test -run '^$' -fuzz '^FuzzReadFrame$' -fuzztime=100000x ./internal/agent/ipc/
+          # NIPS-9: the JA3 parser walks attacker-controlled length fields in a TLS ClientHello, on the
+          # gateway's hot path, before anything has authenticated. A crash there is a remote denial of
+          # service against the network plane reachable by anyone who can open a TCP connection through
+          # it — the same exposure as the decoders above, in a process that is not privilege-separated.
+          # The gateway test binary links the pipeline, so the budget matches execipc's, not openipc's.
+          go test -run '^$' -fuzz '^FuzzJA3$' -fuzztime=3000x ./internal/gateway/
 
   ledger:
     # The audit ledger's storage layer is tested against a REAL PostgreSQL.

@@ -41,6 +41,13 @@ const (
 	// engine), matched in the sandboxed worker. The indicator id is the rule id;
 	// the matched bytes never cross the classification boundary.
 	ThreatCategory_THREAT_CATEGORY_CONTENT_SIGNATURE ThreatCategory = 4
+	// The flow's TLS CLIENT fingerprint (JA3) matched a known-bad one — the only
+	// category here that describes the client rather than the destination, and so the
+	// only one that still says something when the domain is new, rotated or encrypted
+	// away. Weaker than the others by nature: a JA3 identifies a TLS library at a
+	// version, shared by every program built on it, so a match is evidence and not
+	// proof. Its confidence is reported below 1.0 to say so.
+	ThreatCategory_THREAT_CATEGORY_JA3 ThreatCategory = 5
 )
 
 // Enum value maps for ThreatCategory.
@@ -51,6 +58,7 @@ var (
 		2: "THREAT_CATEGORY_IOC_IP",
 		3: "THREAT_CATEGORY_URI_SIGNATURE",
 		4: "THREAT_CATEGORY_CONTENT_SIGNATURE",
+		5: "THREAT_CATEGORY_JA3",
 	}
 	ThreatCategory_value = map[string]int32{
 		"THREAT_CATEGORY_UNSPECIFIED":       0,
@@ -58,6 +66,7 @@ var (
 		"THREAT_CATEGORY_IOC_IP":            2,
 		"THREAT_CATEGORY_URI_SIGNATURE":     3,
 		"THREAT_CATEGORY_CONTENT_SIGNATURE": 4,
+		"THREAT_CATEGORY_JA3":               5,
 	}
 )
 
@@ -566,13 +575,14 @@ const file_openshield_v1_threat_proto_rawDesc = "" +
 	"\tissued_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
-	"\x06reason\x18\a \x01(\tR\x06reason*\xb7\x01\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason*\xd0\x01\n" +
 	"\x0eThreatCategory\x12\x1f\n" +
 	"\x1bTHREAT_CATEGORY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aTHREAT_CATEGORY_IOC_DOMAIN\x10\x01\x12\x1a\n" +
 	"\x16THREAT_CATEGORY_IOC_IP\x10\x02\x12!\n" +
 	"\x1dTHREAT_CATEGORY_URI_SIGNATURE\x10\x03\x12%\n" +
-	"!THREAT_CATEGORY_CONTENT_SIGNATURE\x10\x04*\x82\x01\n" +
+	"!THREAT_CATEGORY_CONTENT_SIGNATURE\x10\x04\x12\x17\n" +
+	"\x13THREAT_CATEGORY_JA3\x10\x05*\x82\x01\n" +
 	"\n" +
 	"IntentVerb\x12\x1b\n" +
 	"\x17INTENT_VERB_UNSPECIFIED\x10\x00\x12 \n" +

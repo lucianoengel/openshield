@@ -255,3 +255,61 @@ implementation instead of one per consumer.
 - **THEN** the rebuilt feed matches exactly the same observables as the original
 
 <!-- restored from 2026-07-26-soar5-signed-ti-enrichment -->
+
+### Requirement: A flow's TLS client fingerprint is computed and matchable as an indicator
+
+The gateway SHALL compute the JA3 fingerprint of a TLS ClientHello it observes, carry it as flow metadata
+through the pipeline, and support `ja3` as an indicator kind in the IOC feed.
+
+Every other indicator this engine matches describes the DESTINATION — the domain, the IP, the URI. All
+three fail together against a family that rotates domains daily, registers a name nobody has seen, or
+encrypts the SNI. A JA3 describes the CLIENT, which is the part an operator does not rewrite between
+campaigns because rewriting it means rebuilding against a different TLS stack.
+
+GREASE values (RFC 8701) SHALL be excluded from the fingerprint. Clients inject those reserved code points
+randomly on every connection by design, so including them would make the same client fingerprint
+differently every time: the feature would appear to work, never match once, and there would be nothing to
+see.
+
+The fingerprint SHALL be computed from the same peeked bytes as the SNI — one peek, two signals, no extra
+latency — and MD5 SHALL be used because JA3 is an interoperable identifier. A different hash would produce
+fingerprints matching no other tool's feed, which is the whole point of having one.
+
+A JA3 MATCH SHALL BE REPORTED AS WEAKER THAN A DESTINATION MATCH. A domain or an IP identifies a specific
+endpoint somebody chose to list; a JA3 identifies a TLS library at a version, shared by every program
+built on it. A match is evidence and not proof, and reporting it at the same confidence would put a
+legitimate application on the same stack one policy rule away from being blocked, with no way for a policy
+author to tell the two kinds apart. Documentation SHALL describe it as a corroborating axis rather than a
+standalone block list.
+
+A malformed `ja3` indicator SHALL be refused when the feed is loaded. Stored instead, it would sit in the
+feed looking like coverage and never fire once — a detection gap that reports itself as a detection.
+Fingerprint case SHALL be normalised rather than refused, because analysts paste digests from reports in
+whatever case the report used.
+
+The parser SHALL return cleanly for ANY input and SHALL be fuzzed. It walks attacker-controlled length
+fields on the gateway's hot path before anything has authenticated, so a crash is a remote denial of
+service against the network plane reachable by anyone who can open a connection through it.
+
+The fingerprint SHALL NOT be treated as an identifier of a person (D23): it says nothing about who is at
+the keyboard.
+
+#### Scenario: A listed fingerprint blocks a flow to an unlisted destination
+- **WHEN** a flow's client fingerprint is on the feed and its domain, IP and path are on nothing
+- **THEN** the threat match is recorded and the policy can block it
+
+#### Scenario: An unlisted fingerprint does not block
+- **WHEN** a flow's fingerprint is not on the feed
+- **THEN** no JA3 match is recorded
+
+#### Scenario: GREASE does not change the fingerprint
+- **WHEN** the same ClientHello is fingerprinted with and without GREASE values
+- **THEN** both produce the same fingerprint
+
+#### Scenario: A JA3 match is reported below a destination match
+- **WHEN** a JA3 match and a domain match are both produced
+- **THEN** the JA3 match carries the lower confidence
+
+#### Scenario: A malformed fingerprint indicator is refused at load
+- **WHEN** a feed carries a `ja3` entry that is not a 32-character hex digest
+- **THEN** loading fails rather than storing an indicator that can never match

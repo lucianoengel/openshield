@@ -100,6 +100,16 @@ message NetworkSubject {
   string http_method = 8;
   string http_path = 9;
   NetworkDirection direction = 10;
+  // JA3 client fingerprint of the TLS ClientHello (NIPS-9): an MD5 over the offered
+  // version, ciphers, extensions and curves. It identifies the CLIENT STACK, which is
+  // what makes it useful where SNI is not — a malware family keeps its fingerprint
+  // across every domain it rotates through, and encrypted-SNI or a domain nobody has
+  // seen before leaves this as the only metadata worth matching.
+  //
+  // It is a fingerprint of a handshake, not of a person: the same value is shared by
+  // every client built on the same library at the same version, so it is a WEAK
+  // signal on its own and is deliberately not an identifier (D23 is unaffected).
+  string ja3 = 11;
 }
 
 // Event is what a producer emits. It carries metadata and references only —

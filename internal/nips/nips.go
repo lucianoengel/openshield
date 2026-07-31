@@ -26,6 +26,10 @@ const (
 	CategoryDomain Category = iota
 	CategoryIP
 	CategoryURI
+	// CategoryJA3 is a TLS CLIENT fingerprint match (NIPS-9) — the only category here that describes
+	// the client rather than the destination, and therefore the only one that still says something
+	// when the domain is new, rotated, or encrypted away.
+	CategoryJA3
 )
 
 // Match is one threat-intel hit. IndicatorID is an opaque feed identifier (the
@@ -43,6 +47,7 @@ type Feed struct {
 	ips     map[string]struct{} // exact IP
 	cidrs   []*net.IPNet
 	uris    []string
+	ja3     map[string]struct{} // TLS client fingerprints (NIPS-9), lower-case hex
 }
 
 // Match returns every threat hit for a flow's host, destination IP, and request
@@ -62,6 +67,35 @@ func (f *Feed) Match(host, dstIP, path string) []Match {
 		out = append(out, Match{Category: CategoryURI, IndicatorID: u, Confidence: 1.0})
 	}
 	return out
+}
+
+// MatchJA3 reports whether a TLS client fingerprint is on the feed (NIPS-9).
+//
+// Its confidence is 0.8, NOT the 1.0 the destination indicators carry, and the difference is a claim
+// about the world rather than a tuning choice. A domain or an IP identifies a specific endpoint somebody
+// chose to list. A JA3 identifies a TLS LIBRARY AT A VERSION, shared by every program built on it — so a
+// match is real evidence and is not, by itself, proof this flow is the malware. Reporting it as certain
+// would put a legitimate application built on the same stack one policy rule away from being blocked.
+func (f *Feed) MatchJA3(fingerprint string) (Match, bool) {
+	if f == nil || len(f.ja3) == 0 || fingerprint == "" {
+		return Match{}, false
+	}
+	fp := strings.ToLower(strings.TrimSpace(fingerprint))
+	if _, ok := f.ja3[fp]; !ok {
+		return Match{}, false
+	}
+	return Match{Category: CategoryJA3, IndicatorID: fp, Confidence: 0.8}, true
+}
+
+// isHex reports whether s is entirely lower-case hex digits.
+func isHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // matchDomain matches host exactly, or as a subdomain of a feed domain: a feed
@@ -181,6 +215,20 @@ func addIndicator(f *Feed, kind, indicator, where string) error {
 			return fmt.Errorf("nips: %s: bad CIDR %q: %w", where, indicator, err)
 		}
 		f.cidrs = append(f.cidrs, n)
+	case KindJA3:
+		// A JA3 indicator is an MD5 in hex. Anything else is refused at LOAD rather than stored to
+		// match nothing: a fingerprint with a stray space or a truncated digest would sit in the feed
+		// looking like coverage and never fire once, which is the shape of a detection gap that reports
+		// itself as a detection.
+		fp := strings.ToLower(strings.TrimSpace(indicator))
+		if len(fp) != ja3Len || !isHex(fp) {
+			return fmt.Errorf("nips: %s: ja3 indicator %q is not a 32-character hex MD5 — it would be "+
+				"stored, look like coverage, and never match", where, indicator)
+		}
+		if f.ja3 == nil {
+			f.ja3 = map[string]struct{}{}
+		}
+		f.ja3[fp] = struct{}{}
 	case KindURI:
 		// R34-13: a URI IOC is matched by substring, so a degenerate short token like "/" would match
 		// essentially every HTTP path — a feed typo that silently flags all traffic. Require a
@@ -191,7 +239,7 @@ func addIndicator(f *Feed, kind, indicator, where string) error {
 		}
 		f.uris = append(f.uris, indicator)
 	default:
-		return fmt.Errorf("nips: %s: unknown kind %q (want domain|ip|cidr|uri)", where, kind)
+		return fmt.Errorf("nips: %s: unknown kind %q (want domain|ip|cidr|uri|ja3)", where, kind)
 	}
 	return nil
 }
@@ -203,12 +251,16 @@ const (
 	KindIP     = "ip"
 	KindCIDR   = "cidr"
 	KindURI    = "uri"
+	KindJA3    = "ja3"
 )
+
+// ja3Len is the length of a JA3 fingerprint in hex (an MD5).
+const ja3Len = 32
 
 // Size reports the number of indicators loaded, for logging.
 func (f *Feed) Size() int {
 	if f == nil {
 		return 0
 	}
-	return len(f.domains) + len(f.ips) + len(f.cidrs) + len(f.uris)
+	return len(f.domains) + len(f.ips) + len(f.cidrs) + len(f.uris) + len(f.ja3)
 }

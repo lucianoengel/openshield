@@ -47,15 +47,18 @@ type classifier interface {
 // the gateway holds; it is classified in-process and NEVER placed in the Event,
 // the Decision, or the ledger (D10/D29).
 type Request struct {
-	FlowID    string
-	SrcIP     string
-	SrcPort   uint32
-	DstIP     string
-	DstPort   uint32
-	Protocol  string
-	Host      string
-	Method    string
-	Path      string
+	FlowID   string
+	SrcIP    string
+	SrcPort  uint32
+	DstIP    string
+	DstPort  uint32
+	Protocol string
+	Host     string
+	Method   string
+	Path     string
+	// JA3 is the flow's TLS client fingerprint (NIPS-9), when the gateway saw a ClientHello. Empty for
+	// every non-TLS flow and for the HTTP paths, which never see one.
+	JA3       string
 	Direction corev1.NetworkDirection
 	Body      []byte
 
@@ -180,6 +183,7 @@ func (g *Gateway) toEvent(r *Request) *corev1.Event {
 			SniHost:    r.Host,
 			HttpMethod: r.Method,
 			HttpPath:   r.Path,
+			Ja3:        r.JA3,
 			Direction:  r.Direction,
 		}},
 	}
@@ -279,6 +283,11 @@ func (s threatClassifyStage) Run(_ context.Context, st *core.State) (core.Outcom
 		return core.Continue(), nil
 	}
 	matches := s.feed.Match(ns.GetSniHost(), ns.GetDstIp(), ns.GetHttpPath())
+	// NIPS-9: the client fingerprint is matched on the SAME pass, so a flow to a domain nobody has
+	// listed still has one axis left to be caught on.
+	if m, ok := s.feed.MatchJA3(ns.GetJa3()); ok {
+		matches = append(matches, m)
+	}
 	if len(matches) == 0 {
 		return core.Continue(), nil
 	}
@@ -306,6 +315,8 @@ func threatCategoryProto(c nips.Category) corev1.ThreatCategory {
 		return corev1.ThreatCategory_THREAT_CATEGORY_IOC_IP
 	case nips.CategoryURI:
 		return corev1.ThreatCategory_THREAT_CATEGORY_URI_SIGNATURE
+	case nips.CategoryJA3:
+		return corev1.ThreatCategory_THREAT_CATEGORY_JA3
 	default:
 		return corev1.ThreatCategory_THREAT_CATEGORY_UNSPECIFIED
 	}

@@ -23,6 +23,13 @@ enum ThreatCategory {
   // engine), matched in the sandboxed worker. The indicator id is the rule id;
   // the matched bytes never cross the classification boundary.
   THREAT_CATEGORY_CONTENT_SIGNATURE = 4;
+  // The flow's TLS CLIENT fingerprint (JA3) matched a known-bad one — the only
+  // category here that describes the client rather than the destination, and so the
+  // only one that still says something when the domain is new, rotated or encrypted
+  // away. Weaker than the others by nature: a JA3 identifies a TLS library at a
+  // version, shared by every program built on it, so a match is evidence and not
+  // proof. Its confidence is reported below 1.0 to say so.
+  THREAT_CATEGORY_JA3 = 5;
 }
 
 // ThreatMatch is one threat-intel hit on a flow. It carries the category and a

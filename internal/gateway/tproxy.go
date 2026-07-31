@@ -23,7 +23,11 @@ const (
 // sandboxed content-signature engine (NIPS-2) so a malicious cleartext payload is dropped inline;
 // for a TLS flow it is the ClientHello (a handshake), which matches no content signature.
 type FlowHint struct {
-	SNI     string
+	SNI string
+	// JA3 is the TLS client fingerprint of the peeked ClientHello (NIPS-9), or "" if the flow did not
+	// start with one. It is computed from the SAME peeked bytes as the SNI — one peek, two signals,
+	// no extra latency on the flow.
+	JA3     string
 	Payload []byte
 }
 
@@ -58,7 +62,8 @@ func handleFlow(ctx context.Context, client net.Conn, origDst net.Addr, decide D
 	// upstream on splice, so an allowed flow is byte-for-byte transparent). A peek timeout/error
 	// yields no bytes and no SNI — the flow then decides on metadata and splices (fail-open).
 	peeked := peekInitial(client)
-	hint := FlowHint{SNI: extractSNI(peeked), Payload: peeked}
+	ja3, _ := ja3Of(peeked)
+	hint := FlowHint{SNI: extractSNI(peeked), JA3: ja3, Payload: peeked}
 
 	block, err := decide(ctx, origDst, client.RemoteAddr(), hint)
 	if err != nil {
@@ -71,7 +76,8 @@ func handleFlow(ctx context.Context, client net.Conn, origDst net.Addr, decide D
 	if block {
 		// Drop: closing the client (via defer) refuses the flow. No upstream dial, no bytes.
 		if log != nil {
-			log.Info("tproxy: flow dropped by policy", "dst", origDst.String(), "sni", hint.SNI, "src", client.RemoteAddr().String())
+			log.Info("tproxy: flow dropped by policy", "dst", origDst.String(), "sni", hint.SNI,
+				"ja3", hint.JA3, "src", client.RemoteAddr().String())
 		}
 		return
 	}
@@ -147,6 +153,7 @@ func NewTProxyServer(gw *Gateway, log *slog.Logger) *TProxyServer {
 			DstPort:   dstPort,
 			Protocol:  "tcp",
 			Host:      hint.SNI,     // the peeked SNI → the IOC domain match + host policy apply
+			JA3:       hint.JA3,     // the peeked ClientHello fingerprint → the IOC ja3 match (NIPS-9)
 			Body:      hint.Payload, // the peeked payload → the worker's content-signature engine (NIPS-2)
 			Direction: corev1.NetworkDirection_NETWORK_DIRECTION_EGRESS,
 		})
