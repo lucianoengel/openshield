@@ -48,6 +48,7 @@ func New() *Classifier {
 		iban{}, healthData{}, abaRouting{}, caSIN{}, npi{}, ukNHS{}, ein{},
 		passport{}, driversLicense{}, // DLP-7: context-gated weak-format identifiers
 		aadhaar{}, ukNINO{}, // DLP-7: India Aadhaar (Verhoeff) + UK NINO (context-gated)
+		esDNI{}, frNIR{}, // DLP-10: Spain DNI/NIE (context-gated) + France NIR (mod 97)
 	}}
 }
 

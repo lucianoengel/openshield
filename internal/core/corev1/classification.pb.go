@@ -96,6 +96,15 @@ const (
 	// is a large native image parser, which is the class D13/D72 exist to contain. A hit here says a
 	// screen was captured, never what was on it.
 	DetectorType_DETECTOR_TYPE_SCREEN_CAPTURE DetectorType = 24
+	// Spain DNI/NIE (DLP-10): 8 digits plus a check LETTER taken from a 23-entry table indexed by the
+	// number mod 23. A real check, but only 1-in-23 discrimination — far weaker than a CPF or an
+	// Aadhaar — so it is CONTEXT-REQUIRED: an unguarded detector would fire on roughly 4% of every
+	// 8-digit-plus-letter token in a corpus, which is a shape that occurs constantly.
+	DetectorType_DETECTOR_TYPE_ES_DNI DetectorType = 25
+	// France NIR / social-security number (DLP-10): 13 digits plus a 2-digit key equal to
+	// 97 - (n mod 97). Strong enough to stand alone — 1-in-97, over a 15-digit shape that is rare by
+	// accident.
+	DetectorType_DETECTOR_TYPE_FR_NIR DetectorType = 26
 )
 
 // Enum value maps for DetectorType.
@@ -126,6 +135,8 @@ var (
 		22: "DETECTOR_TYPE_AADHAAR",
 		23: "DETECTOR_TYPE_UK_NINO",
 		24: "DETECTOR_TYPE_SCREEN_CAPTURE",
+		25: "DETECTOR_TYPE_ES_DNI",
+		26: "DETECTOR_TYPE_FR_NIR",
 	}
 	DetectorType_value = map[string]int32{
 		"DETECTOR_TYPE_UNSPECIFIED":     0,
@@ -153,6 +164,8 @@ var (
 		"DETECTOR_TYPE_AADHAAR":         22,
 		"DETECTOR_TYPE_UK_NINO":         23,
 		"DETECTOR_TYPE_SCREEN_CAPTURE":  24,
+		"DETECTOR_TYPE_ES_DNI":          25,
+		"DETECTOR_TYPE_FR_NIR":          26,
 	}
 )
 
@@ -402,7 +415,7 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"confidence\x18\x03 \x01(\x01R\n" +
 	"confidence\x12\x1f\n" +
 	"\vmatch_count\x18\x04 \x01(\rR\n" +
-	"matchCount*\xb8\x05\n" +
+	"matchCount*\xec\x05\n" +
 	"\fDetectorType\x12\x1d\n" +
 	"\x19DETECTOR_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11DETECTOR_TYPE_CPF\x10\x01\x12\x15\n" +
@@ -429,7 +442,9 @@ const file_openshield_v1_classification_proto_rawDesc = "" +
 	"\x1dDETECTOR_TYPE_DRIVERS_LICENSE\x10\x15\x12\x19\n" +
 	"\x15DETECTOR_TYPE_AADHAAR\x10\x16\x12\x19\n" +
 	"\x15DETECTOR_TYPE_UK_NINO\x10\x17\x12 \n" +
-	"\x1cDETECTOR_TYPE_SCREEN_CAPTURE\x10\x18B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x1cDETECTOR_TYPE_SCREEN_CAPTURE\x10\x18\x12\x18\n" +
+	"\x14DETECTOR_TYPE_ES_DNI\x10\x19\x12\x18\n" +
+	"\x14DETECTOR_TYPE_FR_NIR\x10\x1aB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_classification_proto_rawDescOnce sync.Once

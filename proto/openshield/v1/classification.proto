@@ -77,6 +77,15 @@ enum DetectorType {
   // is a large native image parser, which is the class D13/D72 exist to contain. A hit here says a
   // screen was captured, never what was on it.
   DETECTOR_TYPE_SCREEN_CAPTURE = 24;
+  // Spain DNI/NIE (DLP-10): 8 digits plus a check LETTER taken from a 23-entry table indexed by the
+  // number mod 23. A real check, but only 1-in-23 discrimination — far weaker than a CPF or an
+  // Aadhaar — so it is CONTEXT-REQUIRED: an unguarded detector would fire on roughly 4% of every
+  // 8-digit-plus-letter token in a corpus, which is a shape that occurs constantly.
+  DETECTOR_TYPE_ES_DNI = 25;
+  // France NIR / social-security number (DLP-10): 13 digits plus a 2-digit key equal to
+  // 97 - (n mod 97). Strong enough to stand alone — 1-in-97, over a 15-digit shape that is rare by
+  // accident.
+  DETECTOR_TYPE_FR_NIR = 26;
 }
 
 // LocalMatch holds matched content. Host-only.

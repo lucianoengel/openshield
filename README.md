@@ -299,8 +299,8 @@ upcoming and is now built, tested, and in the capability table above:
 - 🔍 **Endpoint depth** — eBPF/LSM hooks. (The JIT W+X allowlist shipped; per-process ransomware attribution
   has since shipped, opportunistically: it names the processes holding the tree open, and says so when
   it could not look)
-- 🔎 **Detection breadth** — OCR, cropped-window screenshot recognition, more national IDs, and access
-  context for data-at-rest discovery. (LEEF, a native Sysmon schema, and full-screen capture detection
+- 🔎 **Detection breadth** — OCR, cropped-window screenshot recognition, Italy's Codice Fiscale, and
+  access context for data-at-rest discovery. (LEEF, a native Sysmon schema, and full-screen capture detection
   have since shipped.) OCR remains a DECISION rather than work: every general engine is a native image
   parser, the exact class the privilege split exists to contain. The promising route is not Tesseract
   but ONNX detection+recognition models over Go's own memory-safe image decoders, which removes the C
