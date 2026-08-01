@@ -147,6 +147,11 @@ var EngineFields = []Field{
 		Description: "Override for the sysfs USB root. Empty uses /sys/bus/usb/devices; set only to point at a fixture tree."},
 	{Key: "OPENSHIELD_USB_PSEUDONYM_KEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
 		Description: "Key file that pseudonymises USB serials (D23). Unset generates an EPHEMERAL key, so pseudonyms are stable only for one process lifetime and the same device reads as new after a restart."},
+	// PLAT-6 inc 3 — the endpoint asks, about itself, the question this product asks about everything else.
+	{Key: "OPENSHIELD_RELEASE_PUBKEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "Public key (raw ed25519, obtained OUT OF BAND) the engine verifies its OWN installation against at startup, re-hashing every installed binary against the signed manifest the package carried. Unset means no check runs and the engine says nothing — most source installs have no manifest, and warning on every start would train operators to ignore the line that matters. It never refuses to start on a mismatch: the check runs inside a binary that may itself be the tampered one, so exiting costs a real attacker nothing while turning a partial upgrade into an outage. DETECTION, not prevention, and not effective against root (D16) — what tampering costs is the signing key, which is not on the endpoint."},
+	{Key: "OPENSHIELD_INSTALL_PREFIX", Scope: ScopeBootstrap, Kind: KindString, Default: "/",
+		Description: "Installation root for self-verification. Only useful for testing a staged install tree; production is /."},
 	{Key: "OPENSHIELD_MEMSCAN_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "0s",
 		Description: "How often to scan for memory injection. 0 disables it."},
 	{Key: "OPENSHIELD_MEMSCAN_JIT_ALLOW", Scope: ScopeBootstrap, Kind: KindPath, Default: "",

@@ -41,6 +41,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/clipboard"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/debpkg"
 	"github.com/lucianoengel/openshield/internal/enforcers/encryptlocal"
 	"github.com/lucianoengel/openshield/internal/enforcers/process"
 	"github.com/lucianoengel/openshield/internal/enforcers/quarantine"
@@ -875,6 +876,7 @@ func main() {
 	}
 	go reportDegraded(ctx, log, envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute), degraded...)
 
+	selfVerify(log)
 	log.Info("engine observing", slog.String("worker", workerBin), slog.Int("dirs", opened))
 	for {
 		select {
@@ -1174,4 +1176,56 @@ func natsOptions(log *slog.Logger) []nats.Option {
 		return opts
 	}
 	return append(opts, nats.Secure(cfg.ClientConfig()))
+}
+
+// selfVerify checks this installation against the release it came from, once, at startup.
+//
+// D450 gave operators `openshieldctl verify-install`. A command nobody runs is a capability nobody has —
+// the same reasoning that put release verification in the CLI rather than in a README — so the engine
+// asks the question about itself every time it starts, and the answer lands in the log an operator or a
+// SIEM already reads.
+//
+// IT NEVER REFUSES TO START. Three reasons, and the first is the one that matters: this check runs INSIDE
+// a binary that may itself be the tampered one, so an attacker able to modify it can also delete this
+// call — exiting therefore costs a real attacker nothing while turning a partial upgrade into a fleet-wide
+// outage. Second, the endpoint is more useful running than stopped. Third, it is DETECTION (D16), and
+// detection reports.
+//
+// SILENT WHEN UNCONFIGURED, because most development installs come from source and have no manifest at
+// all; warning about that on every start would train operators to ignore the line that matters.
+func selfVerify(log *slog.Logger) {
+	keyPath := env("OPENSHIELD_RELEASE_PUBKEY", "")
+	if keyPath == "" {
+		return
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		log.Error("engine: self-verification is CONFIGURED but its key could not be read, so this "+
+			"endpoint is NOT checking whether its binaries are the published ones",
+			slog.String("key", keyPath), slog.String("err", err.Error()))
+		return
+	}
+	if len(key) != ed25519.PublicKeySize {
+		log.Error("engine: the self-verification key is not a raw ed25519 public key, so no check ran",
+			slog.Int("bytes", len(key)))
+		return
+	}
+	rep, err := debpkg.VerifyInstalled(env("OPENSHIELD_INSTALL_PREFIX", "/"), ed25519.PublicKey(key))
+	if err != nil {
+		log.Error("engine: self-verification could not run — this endpoint cannot show that its "+
+			"binaries are the published ones", slog.String("err", err.Error()))
+		return
+	}
+	if !rep.OK() {
+		log.Error("engine: THIS INSTALLATION DOES NOT MATCH THE RELEASE IT CLAIMS TO BE. Treat this host "+
+			"as suspect until explained: a partial upgrade looks like this, and so does tampering.",
+			slog.String("detail", rep.Error()), slog.String("release", rep.Version),
+			slog.String("commit", rep.Commit))
+		return
+	}
+	log.Info("engine: self-verification OK — every installed binary matches the signed release. "+
+		"DETECTION only: root here can replace a binary and the manifest beside it; what it cannot do "+
+		"without the signing key is make them agree.",
+		slog.Int("binaries", rep.Checked), slog.String("release", rep.Version),
+		slog.String("key", rep.KeyFinger))
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAReleaseBecomesAPackageDpkgInstalls closes the loop PLAT-6 left open.
@@ -187,7 +188,35 @@ func TestAReleaseBecomesAPackageDpkgInstalls(t *testing.T) {
 			"it:\n%s", tout)
 	}
 
-	// 5. AND REMOVAL LEAVES THE SERVICE USER ALONE. The engine owns forward-secure ledger state; deleting
+	// 5. THE ENGINE ASKS THE SAME QUESTION ABOUT ITSELF, EVERY TIME IT STARTS.
+	//
+	// A verification command nobody runs is a capability nobody has. The engine still has the tampered
+	// binary from the step above in place, so this proves the startup check REPORTS rather than merely
+	// existing — and that it does not refuse to start, because the check runs inside a binary that may
+	// itself be the tampered one and exiting would cost a real attacker nothing.
+	stack := StartStack(t)
+	migrateStack(t, stack)
+	eng := Start(t, "openshield-engine", []string{
+		"OPENSHIELD_DSN=" + stack.DSN,
+		"OPENSHIELD_WORKER_BIN=" + Binary(t, "openshield-worker"),
+		"OPENSHIELD_SIGNER_FILE=" + filepath.Join(work, "signer.state"),
+		"OPENSHIELD_WATCH_DIRS=" + t.TempDir(),
+		"OPENSHIELD_RELEASE_PUBKEY=" + pub,
+	})
+	eng.WaitForOutput("engine observing", 90*time.Second)
+	if !contains(eng.Output(), "DOES NOT MATCH THE RELEASE") {
+		t.Errorf("the engine started on an installation with a MODIFIED binary and said nothing about "+
+			"it. The check exists so an operator learns without having to remember to ask\n%s",
+			eng.Output())
+	}
+	if eng.Cmd.ProcessState != nil {
+		t.Errorf("the engine EXITED because self-verification failed. The check runs inside a binary "+
+			"that may itself be the tampered one, so exiting costs a real attacker nothing and turns a "+
+			"partial upgrade into an outage\n%s", eng.Output())
+	}
+	eng.Stop()
+
+	// 6. AND REMOVAL LEAVES THE SERVICE USER ALONE. The engine owns forward-secure ledger state; deleting
 	// its uid orphans those files and a reinstall cannot read its own history.
 	if rem, rerr := exec.Command(dpkg, "--purge", "openshield").CombinedOutput(); rerr != nil {
 		t.Fatalf("dpkg --purge: %v\n%s", rerr, rem)
