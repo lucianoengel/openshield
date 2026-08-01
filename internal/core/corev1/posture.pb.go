@@ -36,8 +36,21 @@ type PostureUpdate struct {
 	AgentPresent  bool                   `protobuf:"varint,4,opt,name=agent_present,json=agentPresent,proto3" json:"agent_present,omitempty"`
 	OsPatchTier   int32                  `protobuf:"varint,5,opt,name=os_patch_tier,json=osPatchTier,proto3" json:"os_patch_tier,omitempty"` // matches core.PatchTier
 	ComputedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=computed_at,json=computedAt,proto3" json:"computed_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The endpoint's own answer to "are my binaries the ones that were published" — its installed
+	// files re-hashed against the signed release manifest the package carried (PLAT-6 inc 3).
+	//
+	// It is SELF-REPORTED, exactly like disk_encrypted, and carries the same trust: a root attacker on
+	// the endpoint can report whatever it likes. Attested is the field that is NOT self-reported, and
+	// this does not pretend to be it. What this makes possible is a fleet-wide question — which hosts are
+	// running binaries nobody published — and an access policy that refuses those hosts at the gateway,
+	// where the compromised endpoint does not get a vote.
+	//
+	// THREE STATES, not a bool. "I did not check" must never be storable as either "verified" or
+	// "mismatched": the first would let an unconfigured endpoint satisfy a policy requiring integrity,
+	// and the second would deny every endpoint that simply has not been configured for it.
+	BinaryIntegrity int32 `protobuf:"varint,7,opt,name=binary_integrity,json=binaryIntegrity,proto3" json:"binary_integrity,omitempty"` // matches core.BinaryIntegrity
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PostureUpdate) Reset() {
@@ -112,11 +125,18 @@ func (x *PostureUpdate) GetComputedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *PostureUpdate) GetBinaryIntegrity() int32 {
+	if x != nil {
+		return x.BinaryIntegrity
+	}
+	return 0
+}
+
 var File_openshield_v1_posture_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_posture_proto_rawDesc = "" +
 	"\n" +
-	"\x1bopenshield/v1/posture.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf4\x01\n" +
+	"\x1bopenshield/v1/posture.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9f\x02\n" +
 	"\rPostureUpdate\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x1c\n" +
 	"\tcompliant\x18\x02 \x01(\bR\tcompliant\x12%\n" +
@@ -124,7 +144,8 @@ const file_openshield_v1_posture_proto_rawDesc = "" +
 	"\ragent_present\x18\x04 \x01(\bR\fagentPresent\x12\"\n" +
 	"\ros_patch_tier\x18\x05 \x01(\x05R\vosPatchTier\x12;\n" +
 	"\vcomputed_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"computedAtB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"computedAt\x12)\n" +
+	"\x10binary_integrity\x18\a \x01(\x05R\x0fbinaryIntegrityB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_posture_proto_rawDescOnce sync.Once

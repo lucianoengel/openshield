@@ -207,6 +207,39 @@ type DevicePosture struct {
 	// defeat the purpose. Absent/unverified attestation leaves it false (a
 	// policy requiring it fails closed).
 	Attested bool
+	// Binaries is the endpoint's own report of whether its installed files still match the signed
+	// release they came from. SELF-REPORTED (like Compliant and DiskEncrypted, unlike Attested), so a
+	// policy should weigh it as evidence rather than proof — its value is that tampering without the
+	// signing key leaves a mismatch, and that the answer becomes a fleet-wide fact instead of a log line
+	// on the host that was compromised.
+	Binaries BinaryIntegrity
+}
+
+// BinaryIntegrity is an endpoint's answer to "are my binaries the published ones".
+//
+// THREE STATES ON PURPOSE. A bool would have to fold "not checked" into one of the other two, and both
+// foldings are wrong: as "verified" it lets an unconfigured endpoint satisfy a policy that requires
+// integrity, and as "mismatch" it denies every endpoint nobody has configured yet. Unchecked is the zero
+// value, so a policy that requires BinariesVerified fails closed on a device that never answered (the
+// same discipline as HasPosture).
+type BinaryIntegrity int
+
+const (
+	BinariesUnchecked BinaryIntegrity = iota
+	BinariesVerified
+	BinariesMismatch
+)
+
+// String renders the state for policy input and logs.
+func (b BinaryIntegrity) String() string {
+	switch b {
+	case BinariesVerified:
+		return "VERIFIED"
+	case BinariesMismatch:
+		return "MISMATCH"
+	default:
+		return "UNCHECKED"
+	}
 }
 
 // PatchTier is a coarse OS-patch-currency band.

@@ -168,6 +168,13 @@ var EngineFields = []Field{
 
 // FleetAgentFields declares what cmd/openshield-fleet-agent reads: enrollment, publication and posture.
 var FleetAgentFields = []Field{
+	// PLAT-6 inc 3 — binary integrity as a POSTURE signal, so "which endpoints are running binaries
+	// nobody published" is a fleet-wide question answered at the gateway rather than a log line on the
+	// host that was compromised.
+	{Key: "OPENSHIELD_RELEASE_PUBKEY", Scope: ScopeBootstrap, Kind: KindPath, Default: "",
+		Description: "Public key (raw ed25519, obtained OUT OF BAND) this agent re-hashes its installed binaries against on every posture report, publishing VERIFIED, MISMATCH or UNCHECKED. Unset reports UNCHECKED, which is also what an unreadable key, a missing manifest (a source install) or a failed check report — none of those mean the binaries are wrong, and none mean they are right, so a policy requiring VERIFIED fails closed on all of them. SELF-REPORTED, with the trust that implies: root on this host can report anything. What it costs an attacker is the signing key, which is not on this machine — and the decision is made at the gateway, which a compromised endpoint does not control."},
+	{Key: "OPENSHIELD_INSTALL_PREFIX", Scope: ScopeBootstrap, Kind: KindString, Default: "/",
+		Description: "Installation root for binary-integrity reporting. Only useful for testing a staged install tree; production is /."},
 	{Key: "OPENSHIELD_AGENT_ID", Scope: ScopeBootstrap, Kind: KindString, Default: "fleet-agent",
 		Description: "Identity this fleet agent enrolls under."},
 	{Key: "OPENSHIELD_ENROLL_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "http://127.0.0.1:8080/enroll",

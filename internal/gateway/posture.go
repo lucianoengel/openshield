@@ -102,6 +102,7 @@ func (p *PostureSubscriber) Apply(data []byte) error {
 		DiskEncrypted: pu.GetDiskEncrypted(),
 		AgentPresent:  pu.GetAgentPresent(),
 		OSPatchTier:   core.PatchTier(pu.GetOsPatchTier()),
+		Binaries:      core.BinaryIntegrity(pu.GetBinaryIntegrity()),
 	})
 	return nil
 }

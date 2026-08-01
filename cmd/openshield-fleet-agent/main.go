@@ -31,7 +31,9 @@ import (
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 
 	"github.com/lucianoengel/openshield/internal/agent/identity"
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/debpkg"
 	"github.com/lucianoengel/openshield/internal/posture"
 	"github.com/lucianoengel/openshield/internal/pseudonym"
 	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
@@ -214,7 +216,14 @@ func main() {
 			}
 			_ = pub.PublishHeartbeat(ctx, &corev1.Heartbeat{AgentId: agentID, ObservedAt: timestamppb.Now()})
 			if postureKey != nil {
-				if err := posture.Publish(conn, postureSubject, posture.Detect(), postureKey); err != nil {
+				rep := posture.Detect()
+				// PLAT-6 inc 3: answer "are my binaries the published ones" as part of posture, so it
+				// becomes a fleet-wide fact and an access decision rather than a log line on the host
+				// that was compromised. Re-checked on every report rather than cached at startup: a
+				// binary can be replaced while the agent runs, and a cached answer would keep vouching
+				// for it.
+				rep.Binaries = binaryIntegrity()
+				if err := posture.Publish(conn, postureSubject, rep, postureKey); err != nil {
 					fmt.Fprintf(os.Stderr, "fleet-agent %s: posture publish failed: %v\n", agentID, err)
 				}
 			}
@@ -374,4 +383,47 @@ func setUpAttestation(ctx context.Context, conn *nats.Conn, agentID, subject str
 	fmt.Fprintf(os.Stderr, "fleet-agent %s: ZT-1 continuous attestation enabled (PCRs %v, every %s)\n",
 		agentID, pcrs, interval)
 	posture.AttestLoop(ctx, conn, tpm, ak, subject, pcrs, interval, nil)
+}
+
+// binaryIntegrity re-hashes this host's installed binaries against the signed release manifest the
+// package carried.
+//
+// UNCHECKED IS THE HONEST ANSWER when no key is configured, when there is no manifest (a source install),
+// or when the check itself could not run. None of those mean the binaries are wrong, and none of them
+// mean they are right — and core.BinariesUnchecked is the zero value precisely so a policy requiring
+// VERIFIED fails closed on all of them.
+//
+// SELF-REPORTED, with the trust that implies: root here can report anything. What it costs an attacker is
+// the signing key, which is not on this machine, so tampering without it shows up — and it shows up at
+// the GATEWAY, which the compromised endpoint does not control.
+func binaryIntegrity() core.BinaryIntegrity {
+	keyPath := os.Getenv("OPENSHIELD_RELEASE_PUBKEY")
+	if keyPath == "" {
+		return core.BinariesUnchecked
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		fmt.Fprintf(os.Stderr, "fleet-agent: release public key unusable (%v) — reporting binary "+
+			"integrity as UNCHECKED rather than guessing\n", err)
+		return core.BinariesUnchecked
+	}
+	rep, err := debpkg.VerifyInstalled(envOr("OPENSHIELD_INSTALL_PREFIX", "/"), ed25519.PublicKey(key))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fleet-agent: binary verification could not run (%v) — reporting "+
+			"UNCHECKED\n", err)
+		return core.BinariesUnchecked
+	}
+	if !rep.OK() {
+		fmt.Fprintf(os.Stderr, "fleet-agent: THIS INSTALLATION DOES NOT MATCH ITS RELEASE: %s\n",
+			rep.Error())
+		return core.BinariesMismatch
+	}
+	return core.BinariesVerified
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

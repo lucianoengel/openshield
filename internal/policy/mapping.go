@@ -93,6 +93,11 @@ func buildInput(st *core.State) map[string]interface{} {
 				"agent_present":  c.DevicePosture.AgentPresent,
 				"os_patch_tier":  int(c.DevicePosture.OSPatchTier),
 				"attested":       c.DevicePosture.Attested,
+				// PLAT-6 inc 3: the endpoint's own answer to whether its binaries are the published
+				// ones, as a NAME rather than a number so a policy reads
+				// `binary_integrity == "VERIFIED"` and an unconfigured endpoint ("UNCHECKED") never
+				// satisfies it by accident. Self-reported — weigh it as evidence, not proof.
+				"binary_integrity": c.DevicePosture.Binaries.String(),
 			},
 		}
 	}

@@ -19,4 +19,17 @@ message PostureUpdate {
   bool agent_present = 4;
   int32 os_patch_tier = 5; // matches core.PatchTier
   google.protobuf.Timestamp computed_at = 6;
+  // The endpoint's own answer to "are my binaries the ones that were published" — its installed
+  // files re-hashed against the signed release manifest the package carried (PLAT-6 inc 3).
+  //
+  // It is SELF-REPORTED, exactly like disk_encrypted, and carries the same trust: a root attacker on
+  // the endpoint can report whatever it likes. Attested is the field that is NOT self-reported, and
+  // this does not pretend to be it. What this makes possible is a fleet-wide question — which hosts are
+  // running binaries nobody published — and an access policy that refuses those hosts at the gateway,
+  // where the compromised endpoint does not get a vote.
+  //
+  // THREE STATES, not a bool. "I did not check" must never be storable as either "verified" or
+  // "mismatched": the first would let an unconfigured endpoint satisfy a policy requiring integrity,
+  // and the second would deny every endpoint that simply has not been configured for it.
+  int32 binary_integrity = 7; // matches core.BinaryIntegrity
 }

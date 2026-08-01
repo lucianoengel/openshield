@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/gateway"
 	"github.com/lucianoengel/openshield/internal/policy"
@@ -129,5 +130,41 @@ decision := {"action":"BLOCK","reason":"unattested device","confidence":0.9} if 
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK || !hit.Load() {
 		t.Errorf("compliant device = %d (hit %v), want 200 + reached", resp2.StatusCode, hit.Load())
+	}
+}
+
+// THE INTEGRITY SIGNAL SURVIVES THE CROSSING, and reaches policy under a name it can compare.
+//
+// The endpoint computes it, the gateway stores it, the policy reads it. A break anywhere in that chain
+// is silent: the gateway would simply see UNCHECKED for every device, an integrity policy would deny
+// everything, and the conclusion an operator draws is that the feature does not work rather than that
+// one field was dropped.
+//
+// Mutation (drop Binaries from the store.Set in Apply): every device reports UNCHECKED → FAIL.
+func TestBinaryIntegrityReachesTheGatewaysPostureStore(t *testing.T) {
+	for _, want := range []core.BinaryIntegrity{core.BinariesVerified, core.BinariesMismatch} {
+		store := gateway.NewPostureStore()
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sub := gateway.NewPostureSubscriber(store,
+			func(subject string) (ed25519.PublicKey, bool) { return pub, true })
+		data, err := posture.Build("subj", posture.Report{Compliant: true, Binaries: want}, priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sub.Apply(data); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := store.Get("subj")
+		if !ok {
+			t.Fatal("no posture stored")
+		}
+		if got.Binaries != want {
+			t.Fatalf("the gateway stored %v, want %v — the endpoint's answer did not survive the "+
+				"crossing, so every integrity policy would see UNCHECKED and deny everything",
+				got.Binaries, want)
+		}
 	}
 }

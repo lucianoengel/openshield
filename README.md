@@ -312,8 +312,11 @@ upcoming and is now built, tested, and in the capability table above:
   built FROM the signed manifest now ships — `openshieldctl package-deb` refuses a release directory
   that does not verify, so the package cannot become a second, unattested path onto a machine. The
   package CARRIES its signed manifest, so `openshieldctl verify-install --key <pub>` re-hashes every
-  installed binary against the release it came from. Detection, not prevention, and not effective
-  against root: what it costs an attacker is the signing key, which is not on the endpoint)
+  installed binary against the release it came from, and the engine asks the same question of itself
+  at every start. The answer also rides the **device-posture** report, so a Zero-Trust policy can
+  refuse a host running binaries nobody published — decided at the gateway, which the endpoint does
+  not control. Detection, not prevention, and self-reported: what it costs an attacker is the signing
+  key, which is not on the endpoint)
 
 <sub>The detailed engineering plan and design-decision records are maintained in
 [`docs/architecture-roadmap.md`](docs/architecture-roadmap.md).</sub>

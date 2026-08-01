@@ -32,6 +32,11 @@ type Report struct {
 	DiskEncrypted bool
 	AgentPresent  bool
 	OSPatchTier   core.PatchTier
+	// Binaries is whether this endpoint's installed files still match the signed release they came
+	// from. Detect leaves it UNCHECKED: answering it needs the operator's public key, which is a
+	// configuration the caller owns — and a posture detector that guessed would be asserting an
+	// integrity it never verified, which is the one thing this package is careful never to do.
+	Binaries core.BinaryIntegrity
 }
 
 // Detect gathers what the endpoint can HONESTLY observe (Linux best-effort):
@@ -86,12 +91,13 @@ func Build(subject string, r Report, priv ed25519.PrivateKey) ([]byte, error) {
 		return nil, fmt.Errorf("posture: empty subject")
 	}
 	payload, err := proto.Marshal(&corev1.PostureUpdate{
-		Subject:       subject,
-		Compliant:     r.Compliant,
-		DiskEncrypted: r.DiskEncrypted,
-		AgentPresent:  r.AgentPresent,
-		OsPatchTier:   int32(r.OSPatchTier),
-		ComputedAt:    timestamppb.Now(),
+		Subject:         subject,
+		Compliant:       r.Compliant,
+		DiskEncrypted:   r.DiskEncrypted,
+		AgentPresent:    r.AgentPresent,
+		OsPatchTier:     int32(r.OSPatchTier),
+		BinaryIntegrity: int32(r.Binaries),
+		ComputedAt:      timestamppb.Now(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("posture: marshalling update: %w", err)
