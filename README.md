@@ -284,7 +284,14 @@ upcoming and is now built, tested, and in the capability table above:
   backup/restore drill that is not finished until the ledger re-verifies
 - 🔑 **Operator identity** — SSO, sender-constrained tokens, and SCIM deactivation, with the
   authorization role out of the certificate and revocable server-side
-- 🗄️ **Data-at-rest discovery** — an object-store connector that answers "where is my sensitive data"
+- 🗄️ **Data-at-rest discovery** — an object-store connector that answers "where is my sensitive data",
+  and now also **who can read it**: bucket ACL, bucket policy, block-public-access and default encryption
+  are probed once per sweep and ride every discovered object, so a policy ranks the same file differently
+  depending on whether the internet can read the bucket it sits in. Three-valued on purpose: a credential
+  permitted to list objects but not to read the bucket's ACL yields **UNKNOWN**, never "private" — and each
+  refused probe is named, because a reassurance produced by having looked at nothing is this feature's most
+  expensive failure. The limits are bucket-level ACL and policy only; per-object ACLs are not read, and an
+  IAM identity-based policy granting access is invisible from the data plane entirely
 
 **Now — the operator surface.** The backend queue that had to come first is complete:
 - 🖼️ **The analyst UI**, deliberately last: the platform it displays had to exist first, and now does.
@@ -299,9 +306,12 @@ upcoming and is now built, tested, and in the capability table above:
 - 🔍 **Endpoint depth** — eBPF/LSM hooks. (The JIT W+X allowlist shipped; per-process ransomware attribution
   has since shipped, opportunistically: it names the processes holding the tree open, and says so when
   it could not look)
-- 🔎 **Detection breadth** — OCR, cropped-window screenshot recognition, Italy's Codice Fiscale, and
-  access context for data-at-rest discovery. (LEEF, a native Sysmon schema, and full-screen capture detection
-  have since shipped.) OCR remains a DECISION rather than work: every general engine is a native image
+- 🔎 **Detection breadth** — OCR, cropped-window screenshot recognition, and Italy's Codice Fiscale.
+  (LEEF, a native Sysmon schema, full-screen capture detection, Spain's DNI/NIE, France's NIR and access
+  context for data-at-rest discovery have since shipped.) Italy is deliberately absent rather than guessed:
+  its check letter comes from two 36-entry tables, and the tables reconstructible here matched exactly one
+  published worked example — which cannot rule out a single wrong entry, and a wrong entry misclassifies a
+  narrow, unpredictable slice of real identifiers forever. OCR remains a DECISION rather than work: every general engine is a native image
   parser, the exact class the privilege split exists to contain. The promising route is not Tesseract
   but ONNX detection+recognition models over Go's own memory-safe image decoders, which removes the C
   parser instead of sandboxing it

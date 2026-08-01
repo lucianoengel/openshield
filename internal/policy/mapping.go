@@ -200,6 +200,43 @@ func buildInput(st *core.State) map[string]interface{} {
 		// arrive as different event kinds.
 		event["exfil_channel"] = exfil.ChannelRemovable.String()
 	}
+	// AN OBJECT DISCOVERED AT REST (DSPM-1/DSPM-2), and this is the USB defect again (D313): ObjectSubject
+	// has existed since the discovery sweep shipped and `GetObject` had exactly ONE caller in the whole
+	// tree — a test. So the bucket and key never reached Rego, and sweep.go's own doc comment justified the
+	// structured subject by saying it spares "every policy that wants `bucket = finance-exports`" from
+	// parsing a string. That rule could not be written at all.
+	//
+	// THE EXPOSURE IS THE FIELD THAT RANKS THE FINDING. Sensitive data in a bucket is a fact; sensitive data
+	// in a bucket the internet can read is an incident, and only the policy layer can hold the opinion about
+	// which. It is exposed as a NAME rather than a number so a rule reads `exposure == "PUBLIC"` — and so
+	// that "UNSPECIFIED", meaning nobody could determine it, cannot be mistaken for the safe end of a scale.
+	// A policy that wants to treat not-knowing as a finding writes that; one that ignores the field is
+	// unaffected, which is what keeps this additive.
+	if ob := st.Event.GetObject(); ob != nil {
+		obj := map[string]interface{}{
+			"store":          ob.GetStore(),
+			"bucket":         ob.GetBucket(),
+			"key":            ob.GetKey(),
+			"size_bytes":     int(ob.GetSizeBytes()),
+			"bytes_examined": int(ob.GetBytesExamined()),
+		}
+		if ac := ob.GetAccess(); ac != nil {
+			obj["exposure"] = ac.GetExposure().String()
+			obj["encryption"] = ac.GetEncryption().String()
+			obj["blocked"] = ac.GetBlocked()
+			// Whether the access picture is COMPLETE, as a boolean a rule can gate on without walking a
+			// list of prose. The prose stays on the event for the analyst; the policy gets the predicate.
+			obj["access_complete"] = len(ac.GetUnchecked()) == 0
+		}
+		event["object"] = obj
+		// NO exfil_channel IS SET, and that is deliberate. The clipboard, print and USB arms above all
+		// assign one because each IS a movement of data off the endpoint. A discovery sweep is not: nothing
+		// left anywhere, somebody looked. Tagging it `cloud_sync` would have been the tidy-looking move and
+		// would have silently widened every existing "nothing sensitive to cloud sync" rule to fire on data
+		// that has been sitting still for two years — changing what an operator's already-written policy
+		// means without them touching it. Exposure is the ranking signal here; a channel would be a lie
+		// about what happened.
+	}
 	// For a process-exec event, expose the exec path, args, and parent path so a
 	// behavioral policy can decide on LOLBins and process lineage (Phase E, HIPS). Exec
 	// metadata only (D10/D29) — no process memory or file content.

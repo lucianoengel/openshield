@@ -50,6 +50,11 @@ type Sweeper struct {
 	objects []Object
 	i       int
 	listed  bool
+	// access is the bucket's access context, probed ONCE per sweep and carried on every event from it
+	// (DSPM-2). Once, because it is a property of the bucket rather than of the object: re-probing per
+	// object would multiply four requests by the object count to learn the same four facts, and a sweep
+	// that costs 4n requests to a rate-limited store is a sweep an operator turns off.
+	access Access
 	// content is where object bytes go for the sandboxed worker. It is a callback rather than a store
 	// reference so this package depends on nothing but the Event contract.
 	content func(eventID string, b []byte)
@@ -73,6 +78,11 @@ func NewSweeper(c *Client, content func(eventID string, b []byte)) *Sweeper {
 // server-side encryption key we do not hold) must not end a sweep over ten thousand others.
 func (s *Sweeper) Next(ctx context.Context) (*corev1.Event, error) {
 	if !s.listed {
+		// THE ACCESS PROBE RUNS BEFORE THE LISTING, so an event cannot exist without its access context.
+		// Probing lazily after the first object would leave that object — and only that object — carrying an
+		// unset exposure, and an UNSPECIFIED that means "not yet" is indistinguishable downstream from one
+		// that means "not permitted to look".
+		s.access = s.client.Access(ctx)
 		objs, err := s.client.List(ctx)
 		if err != nil {
 			return nil, err
@@ -114,7 +124,48 @@ func (s *Sweeper) toEvent(obj Object, examined int) *corev1.Event {
 			Key:           obj.Key,
 			SizeBytes:     obj.Size,
 			BytesExamined: int64(examined),
+			Access:        s.access.proto(),
 		}},
+	}
+}
+
+// proto renders the access context onto the event contract.
+//
+// The enums are mapped through an EXPLICIT switch rather than by casting the int, even though the two sets
+// happen to be numbered alike today. A cast makes the wire meaning of PUBLIC depend on the declaration order
+// of a Go const block, so inserting a value in the middle of one would silently relabel every stored
+// finding — and this is the field an operator acts on.
+func (a Access) proto() *corev1.ObjectAccess {
+	return &corev1.ObjectAccess{
+		Exposure:   exposureProto(a.Exposure),
+		Encryption: encryptionProto(a.Encryption),
+		Blocked:    a.Blocked,
+		Reasons:    a.Reasons,
+		Unchecked:  a.Unchecked,
+	}
+}
+
+func exposureProto(e Exposure) corev1.ObjectExposure {
+	switch e {
+	case ExposurePrivate:
+		return corev1.ObjectExposure_OBJECT_EXPOSURE_PRIVATE
+	case ExposureAuthenticated:
+		return corev1.ObjectExposure_OBJECT_EXPOSURE_AUTHENTICATED
+	case ExposurePublic:
+		return corev1.ObjectExposure_OBJECT_EXPOSURE_PUBLIC
+	default:
+		return corev1.ObjectExposure_OBJECT_EXPOSURE_UNSPECIFIED
+	}
+}
+
+func encryptionProto(e Encryption) corev1.ObjectEncryption {
+	switch e {
+	case EncryptionAbsent:
+		return corev1.ObjectEncryption_OBJECT_ENCRYPTION_ABSENT
+	case EncryptionPresent:
+		return corev1.ObjectEncryption_OBJECT_ENCRYPTION_PRESENT
+	default:
+		return corev1.ObjectEncryption_OBJECT_ENCRYPTION_UNSPECIFIED
 	}
 }
 
@@ -127,18 +178,22 @@ type Report struct {
 	Examined int
 	Skipped  int64
 	Bucket   string
+	// Access is the bucket's access context as this sweep established it. It is reported alongside coverage
+	// because the two answer the same question about trust: how much of what this says can be relied on.
+	Access Access
 }
 
 func (s *Sweeper) Report() Report {
-	return Report{Examined: s.i, Skipped: s.client.Skipped(), Bucket: s.client.cfg.Bucket}
+	return Report{Examined: s.i, Skipped: s.client.Skipped(), Bucket: s.client.cfg.Bucket, Access: s.access}
 }
 
 // String renders a report for an operator, stating coverage rather than implying it.
 func (r Report) String() string {
-	if r.Skipped == 0 {
-		return fmt.Sprintf("swept %s: %d object(s) examined, none skipped", r.Bucket, r.Examined)
+	head := fmt.Sprintf("swept %s: %d object(s) examined, none skipped", r.Bucket, r.Examined)
+	if r.Skipped > 0 {
+		head = fmt.Sprintf("swept %s: %d object(s) examined, %d NOT EXAMINED (bounds or read errors) — "+
+			"this sweep is PARTIAL and a clean result does not cover the whole bucket",
+			r.Bucket, r.Examined, r.Skipped)
 	}
-	return fmt.Sprintf("swept %s: %d object(s) examined, %d NOT EXAMINED (bounds or read errors) — "+
-		"this sweep is PARTIAL and a clean result does not cover the whole bucket",
-		r.Bucket, r.Examined, r.Skipped)
+	return head + "; " + r.Access.String()
 }

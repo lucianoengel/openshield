@@ -189,6 +189,57 @@ message ObjectSubject {
   string key = 3;
   int64 size_bytes = 4;      // the object's FULL size as the store reports it
   int64 bytes_examined = 5;  // how much was actually read — less than size_bytes means partial coverage
+  ObjectAccess access = 6;   // who can read it (DSPM-2) — absent when the sweep did not establish it
+}
+
+// ObjectExposure is who can read a bucket.
+//
+// THE ZERO VALUE IS "COULD NOT BE DETERMINED", NOT "PRIVATE", and that is the whole point of the enum
+// rather than a bool. A discovery credential often lists objects without being permitted to read the
+// bucket's ACL or policy, and a scanner that reports the resulting silence as "private" produces the one
+// answer nobody ever re-checks. A policy written against this must therefore treat UNSPECIFIED as a
+// question, not as an all-clear — and because UNSPECIFIED is the proto default, a policy that forgets to
+// gets no reassurance from a field that was never set.
+enum ObjectExposure {
+  OBJECT_EXPOSURE_UNSPECIFIED = 0;
+  OBJECT_EXPOSURE_PRIVATE = 1;
+  // Readable by any AUTHENTICATED principal of the store, which on a public cloud means any account in the
+  // world — not any account of yours. Kept apart from PUBLIC (S3's own block-public-access rules lump the
+  // two together) because they are different findings to whoever has to act on them.
+  OBJECT_EXPOSURE_AUTHENTICATED = 2;
+  OBJECT_EXPOSURE_PUBLIC = 3;
+}
+
+// ObjectEncryption is whether the bucket encrypts new objects by default. Three-valued for the same reason
+// ObjectExposure is: a probe that was refused is not a bucket that is unencrypted.
+enum ObjectEncryption {
+  OBJECT_ENCRYPTION_UNSPECIFIED = 0;
+  OBJECT_ENCRYPTION_ABSENT = 1;
+  OBJECT_ENCRYPTION_PRESENT = 2;
+}
+
+// ObjectAccess is the access context of the bucket an object was discovered in (DSPM-2).
+//
+// Discovery alone ranks nothing: a bucket of customer records the whole internet can read and one only a
+// service role can read produce identical findings, and an operator handed both has to check each by hand —
+// the work the sweep was supposed to have done. This is the field that turns a list into a queue.
+//
+// CONFIGURATION, NOT CONTENT. Everything here describes how the bucket is exposed, never what is in it; the
+// content-free rule (D10/D29) is untouched, and reasons/unchecked quote the store's own configuration
+// vocabulary rather than any object.
+message ObjectAccess {
+  ObjectExposure exposure = 1;
+  ObjectEncryption encryption = 2;
+  // True when a public grant EXISTS but a block-public-access setting neuters it — so the exposure reads
+  // private while the grant is still there to be re-enabled by removing one setting. Only the two settings
+  // that affect EXISTING access count (IgnorePublicAcls, RestrictPublicBuckets); the two that merely reject
+  // future calls change nothing about today, and counting them here would file a live exposure as safe.
+  bool blocked = 3;
+  // Why the exposure is what it is, in an operator's words, so a finding is actionable without re-probing.
+  repeated string reasons = 4;
+  // Each probe that could NOT run, and why. NON-EMPTY MEANS THIS PICTURE IS INCOMPLETE — the field exists
+  // so a partial answer cannot be mistaken for a clean one (D31).
+  repeated string unchecked = 5;
 }
 
 // PrintSubject is a print job the endpoint intercepted in the spooler's filter chain (DLP-2b).

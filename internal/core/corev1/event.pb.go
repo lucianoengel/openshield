@@ -220,6 +220,120 @@ func (NetworkDirection) EnumDescriptor() ([]byte, []int) {
 	return file_openshield_v1_event_proto_rawDescGZIP(), []int{2}
 }
 
+// ObjectExposure is who can read a bucket.
+//
+// THE ZERO VALUE IS "COULD NOT BE DETERMINED", NOT "PRIVATE", and that is the whole point of the enum
+// rather than a bool. A discovery credential often lists objects without being permitted to read the
+// bucket's ACL or policy, and a scanner that reports the resulting silence as "private" produces the one
+// answer nobody ever re-checks. A policy written against this must therefore treat UNSPECIFIED as a
+// question, not as an all-clear — and because UNSPECIFIED is the proto default, a policy that forgets to
+// gets no reassurance from a field that was never set.
+type ObjectExposure int32
+
+const (
+	ObjectExposure_OBJECT_EXPOSURE_UNSPECIFIED ObjectExposure = 0
+	ObjectExposure_OBJECT_EXPOSURE_PRIVATE     ObjectExposure = 1
+	// Readable by any AUTHENTICATED principal of the store, which on a public cloud means any account in the
+	// world — not any account of yours. Kept apart from PUBLIC (S3's own block-public-access rules lump the
+	// two together) because they are different findings to whoever has to act on them.
+	ObjectExposure_OBJECT_EXPOSURE_AUTHENTICATED ObjectExposure = 2
+	ObjectExposure_OBJECT_EXPOSURE_PUBLIC        ObjectExposure = 3
+)
+
+// Enum value maps for ObjectExposure.
+var (
+	ObjectExposure_name = map[int32]string{
+		0: "OBJECT_EXPOSURE_UNSPECIFIED",
+		1: "OBJECT_EXPOSURE_PRIVATE",
+		2: "OBJECT_EXPOSURE_AUTHENTICATED",
+		3: "OBJECT_EXPOSURE_PUBLIC",
+	}
+	ObjectExposure_value = map[string]int32{
+		"OBJECT_EXPOSURE_UNSPECIFIED":   0,
+		"OBJECT_EXPOSURE_PRIVATE":       1,
+		"OBJECT_EXPOSURE_AUTHENTICATED": 2,
+		"OBJECT_EXPOSURE_PUBLIC":        3,
+	}
+)
+
+func (x ObjectExposure) Enum() *ObjectExposure {
+	p := new(ObjectExposure)
+	*p = x
+	return p
+}
+
+func (x ObjectExposure) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ObjectExposure) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshield_v1_event_proto_enumTypes[3].Descriptor()
+}
+
+func (ObjectExposure) Type() protoreflect.EnumType {
+	return &file_openshield_v1_event_proto_enumTypes[3]
+}
+
+func (x ObjectExposure) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ObjectExposure.Descriptor instead.
+func (ObjectExposure) EnumDescriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{3}
+}
+
+// ObjectEncryption is whether the bucket encrypts new objects by default. Three-valued for the same reason
+// ObjectExposure is: a probe that was refused is not a bucket that is unencrypted.
+type ObjectEncryption int32
+
+const (
+	ObjectEncryption_OBJECT_ENCRYPTION_UNSPECIFIED ObjectEncryption = 0
+	ObjectEncryption_OBJECT_ENCRYPTION_ABSENT      ObjectEncryption = 1
+	ObjectEncryption_OBJECT_ENCRYPTION_PRESENT     ObjectEncryption = 2
+)
+
+// Enum value maps for ObjectEncryption.
+var (
+	ObjectEncryption_name = map[int32]string{
+		0: "OBJECT_ENCRYPTION_UNSPECIFIED",
+		1: "OBJECT_ENCRYPTION_ABSENT",
+		2: "OBJECT_ENCRYPTION_PRESENT",
+	}
+	ObjectEncryption_value = map[string]int32{
+		"OBJECT_ENCRYPTION_UNSPECIFIED": 0,
+		"OBJECT_ENCRYPTION_ABSENT":      1,
+		"OBJECT_ENCRYPTION_PRESENT":     2,
+	}
+)
+
+func (x ObjectEncryption) Enum() *ObjectEncryption {
+	p := new(ObjectEncryption)
+	*p = x
+	return p
+}
+
+func (x ObjectEncryption) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ObjectEncryption) Descriptor() protoreflect.EnumDescriptor {
+	return file_openshield_v1_event_proto_enumTypes[4].Descriptor()
+}
+
+func (ObjectEncryption) Type() protoreflect.EnumType {
+	return &file_openshield_v1_event_proto_enumTypes[4]
+}
+
+func (x ObjectEncryption) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ObjectEncryption.Descriptor instead.
+func (ObjectEncryption) EnumDescriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{4}
+}
+
 // Subject identifies WHO, pseudonymously. The mapping to a real identity lives
 // outside the event stream behind an audited lookup — the event stream is the
 // most widely copied, retained and queried artefact in the system (D23).
@@ -1031,6 +1145,7 @@ type ObjectSubject struct {
 	Key           string                 `protobuf:"bytes,3,opt,name=key,proto3" json:"key,omitempty"`
 	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`             // the object's FULL size as the store reports it
 	BytesExamined int64                  `protobuf:"varint,5,opt,name=bytes_examined,json=bytesExamined,proto3" json:"bytes_examined,omitempty"` // how much was actually read — less than size_bytes means partial coverage
+	Access        *ObjectAccess          `protobuf:"bytes,6,opt,name=access,proto3" json:"access,omitempty"`                                     // who can read it (DSPM-2) — absent when the sweep did not establish it
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1100,6 +1215,105 @@ func (x *ObjectSubject) GetBytesExamined() int64 {
 	return 0
 }
 
+func (x *ObjectSubject) GetAccess() *ObjectAccess {
+	if x != nil {
+		return x.Access
+	}
+	return nil
+}
+
+// ObjectAccess is the access context of the bucket an object was discovered in (DSPM-2).
+//
+// Discovery alone ranks nothing: a bucket of customer records the whole internet can read and one only a
+// service role can read produce identical findings, and an operator handed both has to check each by hand —
+// the work the sweep was supposed to have done. This is the field that turns a list into a queue.
+//
+// CONFIGURATION, NOT CONTENT. Everything here describes how the bucket is exposed, never what is in it; the
+// content-free rule (D10/D29) is untouched, and reasons/unchecked quote the store's own configuration
+// vocabulary rather than any object.
+type ObjectAccess struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Exposure   ObjectExposure         `protobuf:"varint,1,opt,name=exposure,proto3,enum=openshield.v1.ObjectExposure" json:"exposure,omitempty"`
+	Encryption ObjectEncryption       `protobuf:"varint,2,opt,name=encryption,proto3,enum=openshield.v1.ObjectEncryption" json:"encryption,omitempty"`
+	// True when a public grant EXISTS but a block-public-access setting neuters it — so the exposure reads
+	// private while the grant is still there to be re-enabled by removing one setting. Only the two settings
+	// that affect EXISTING access count (IgnorePublicAcls, RestrictPublicBuckets); the two that merely reject
+	// future calls change nothing about today, and counting them here would file a live exposure as safe.
+	Blocked bool `protobuf:"varint,3,opt,name=blocked,proto3" json:"blocked,omitempty"`
+	// Why the exposure is what it is, in an operator's words, so a finding is actionable without re-probing.
+	Reasons []string `protobuf:"bytes,4,rep,name=reasons,proto3" json:"reasons,omitempty"`
+	// Each probe that could NOT run, and why. NON-EMPTY MEANS THIS PICTURE IS INCOMPLETE — the field exists
+	// so a partial answer cannot be mistaken for a clean one (D31).
+	Unchecked     []string `protobuf:"bytes,5,rep,name=unchecked,proto3" json:"unchecked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObjectAccess) Reset() {
+	*x = ObjectAccess{}
+	mi := &file_openshield_v1_event_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObjectAccess) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObjectAccess) ProtoMessage() {}
+
+func (x *ObjectAccess) ProtoReflect() protoreflect.Message {
+	mi := &file_openshield_v1_event_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObjectAccess.ProtoReflect.Descriptor instead.
+func (*ObjectAccess) Descriptor() ([]byte, []int) {
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ObjectAccess) GetExposure() ObjectExposure {
+	if x != nil {
+		return x.Exposure
+	}
+	return ObjectExposure_OBJECT_EXPOSURE_UNSPECIFIED
+}
+
+func (x *ObjectAccess) GetEncryption() ObjectEncryption {
+	if x != nil {
+		return x.Encryption
+	}
+	return ObjectEncryption_OBJECT_ENCRYPTION_UNSPECIFIED
+}
+
+func (x *ObjectAccess) GetBlocked() bool {
+	if x != nil {
+		return x.Blocked
+	}
+	return false
+}
+
+func (x *ObjectAccess) GetReasons() []string {
+	if x != nil {
+		return x.Reasons
+	}
+	return nil
+}
+
+func (x *ObjectAccess) GetUnchecked() []string {
+	if x != nil {
+		return x.Unchecked
+	}
+	return nil
+}
+
 // PrintSubject is a print job the endpoint intercepted in the spooler's filter chain (DLP-2b).
 //
 // Content-free, and one field is content-free by DELIBERATE OMISSION: there is no job title. A document's
@@ -1118,7 +1332,7 @@ type PrintSubject struct {
 
 func (x *PrintSubject) Reset() {
 	*x = PrintSubject{}
-	mi := &file_openshield_v1_event_proto_msgTypes[9]
+	mi := &file_openshield_v1_event_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1130,7 +1344,7 @@ func (x *PrintSubject) String() string {
 func (*PrintSubject) ProtoMessage() {}
 
 func (x *PrintSubject) ProtoReflect() protoreflect.Message {
-	mi := &file_openshield_v1_event_proto_msgTypes[9]
+	mi := &file_openshield_v1_event_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1143,7 +1357,7 @@ func (x *PrintSubject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrintSubject.ProtoReflect.Descriptor instead.
 func (*PrintSubject) Descriptor() ([]byte, []int) {
-	return file_openshield_v1_event_proto_rawDescGZIP(), []int{9}
+	return file_openshield_v1_event_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PrintSubject) GetPrinter() string {
@@ -1244,14 +1458,23 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x10ClipboardSubject\x12\x1d\n" +
 	"\n" +
 	"byte_count\x18\x01 \x01(\rR\tbyteCount\x12%\n" +
-	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer\"\x95\x01\n" +
+	"\x0edisplay_server\x18\x02 \x01(\tR\rdisplayServer\"\xca\x01\n" +
 	"\rObjectSubject\x12\x14\n" +
 	"\x05store\x18\x01 \x01(\tR\x05store\x12\x16\n" +
 	"\x06bucket\x18\x02 \x01(\tR\x06bucket\x12\x10\n" +
 	"\x03key\x18\x03 \x01(\tR\x03key\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12%\n" +
-	"\x0ebytes_examined\x18\x05 \x01(\x03R\rbytesExamined\"\x8e\x01\n" +
+	"\x0ebytes_examined\x18\x05 \x01(\x03R\rbytesExamined\x123\n" +
+	"\x06access\x18\x06 \x01(\v2\x1b.openshield.v1.ObjectAccessR\x06access\"\xdc\x01\n" +
+	"\fObjectAccess\x129\n" +
+	"\bexposure\x18\x01 \x01(\x0e2\x1d.openshield.v1.ObjectExposureR\bexposure\x12?\n" +
+	"\n" +
+	"encryption\x18\x02 \x01(\x0e2\x1f.openshield.v1.ObjectEncryptionR\n" +
+	"encryption\x12\x18\n" +
+	"\ablocked\x18\x03 \x01(\bR\ablocked\x12\x18\n" +
+	"\areasons\x18\x04 \x03(\tR\areasons\x12\x1c\n" +
+	"\tunchecked\x18\x05 \x03(\tR\tunchecked\"\x8e\x01\n" +
 	"\fPrintSubject\x12\x18\n" +
 	"\aprinter\x18\x01 \x01(\tR\aprinter\x12\x19\n" +
 	"\bjob_user\x18\x02 \x01(\tR\ajobUser\x12\x1d\n" +
@@ -1284,7 +1507,16 @@ const file_openshield_v1_event_proto_rawDesc = "" +
 	"\x10NetworkDirection\x12!\n" +
 	"\x1dNETWORK_DIRECTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18NETWORK_DIRECTION_EGRESS\x10\x01\x12\x1d\n" +
-	"\x19NETWORK_DIRECTION_INGRESS\x10\x02B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x19NETWORK_DIRECTION_INGRESS\x10\x02*\x8d\x01\n" +
+	"\x0eObjectExposure\x12\x1f\n" +
+	"\x1bOBJECT_EXPOSURE_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17OBJECT_EXPOSURE_PRIVATE\x10\x01\x12!\n" +
+	"\x1dOBJECT_EXPOSURE_AUTHENTICATED\x10\x02\x12\x1a\n" +
+	"\x16OBJECT_EXPOSURE_PUBLIC\x10\x03*r\n" +
+	"\x10ObjectEncryption\x12!\n" +
+	"\x1dOBJECT_ENCRYPTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18OBJECT_ENCRYPTION_ABSENT\x10\x01\x12\x1d\n" +
+	"\x19OBJECT_ENCRYPTION_PRESENT\x10\x02B@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_event_proto_rawDescOnce sync.Once
@@ -1298,43 +1530,49 @@ func file_openshield_v1_event_proto_rawDescGZIP() []byte {
 	return file_openshield_v1_event_proto_rawDescData
 }
 
-var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_openshield_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_openshield_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_openshield_v1_event_proto_goTypes = []any{
 	(Purpose)(0),                  // 0: openshield.v1.Purpose
 	(EventKind)(0),                // 1: openshield.v1.EventKind
 	(NetworkDirection)(0),         // 2: openshield.v1.NetworkDirection
-	(*Subject)(nil),               // 3: openshield.v1.Subject
-	(*ParentAndName)(nil),         // 4: openshield.v1.ParentAndName
-	(*FilesystemSubject)(nil),     // 5: openshield.v1.FilesystemSubject
-	(*UsbSubject)(nil),            // 6: openshield.v1.UsbSubject
-	(*NetworkSubject)(nil),        // 7: openshield.v1.NetworkSubject
-	(*Event)(nil),                 // 8: openshield.v1.Event
-	(*ProcessSubject)(nil),        // 9: openshield.v1.ProcessSubject
-	(*ClipboardSubject)(nil),      // 10: openshield.v1.ClipboardSubject
-	(*ObjectSubject)(nil),         // 11: openshield.v1.ObjectSubject
-	(*PrintSubject)(nil),          // 12: openshield.v1.PrintSubject
-	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
+	(ObjectExposure)(0),           // 3: openshield.v1.ObjectExposure
+	(ObjectEncryption)(0),         // 4: openshield.v1.ObjectEncryption
+	(*Subject)(nil),               // 5: openshield.v1.Subject
+	(*ParentAndName)(nil),         // 6: openshield.v1.ParentAndName
+	(*FilesystemSubject)(nil),     // 7: openshield.v1.FilesystemSubject
+	(*UsbSubject)(nil),            // 8: openshield.v1.UsbSubject
+	(*NetworkSubject)(nil),        // 9: openshield.v1.NetworkSubject
+	(*Event)(nil),                 // 10: openshield.v1.Event
+	(*ProcessSubject)(nil),        // 11: openshield.v1.ProcessSubject
+	(*ClipboardSubject)(nil),      // 12: openshield.v1.ClipboardSubject
+	(*ObjectSubject)(nil),         // 13: openshield.v1.ObjectSubject
+	(*ObjectAccess)(nil),          // 14: openshield.v1.ObjectAccess
+	(*PrintSubject)(nil),          // 15: openshield.v1.PrintSubject
+	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
 }
 var file_openshield_v1_event_proto_depIdxs = []int32{
-	4,  // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
+	6,  // 0: openshield.v1.FilesystemSubject.parent_and_name:type_name -> openshield.v1.ParentAndName
 	2,  // 1: openshield.v1.NetworkSubject.direction:type_name -> openshield.v1.NetworkDirection
-	13, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
-	3,  // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
+	16, // 2: openshield.v1.Event.observed_at:type_name -> google.protobuf.Timestamp
+	5,  // 3: openshield.v1.Event.subject:type_name -> openshield.v1.Subject
 	0,  // 4: openshield.v1.Event.purpose:type_name -> openshield.v1.Purpose
 	1,  // 5: openshield.v1.Event.kind:type_name -> openshield.v1.EventKind
-	5,  // 6: openshield.v1.Event.filesystem:type_name -> openshield.v1.FilesystemSubject
-	6,  // 7: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
-	7,  // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
-	9,  // 9: openshield.v1.Event.process:type_name -> openshield.v1.ProcessSubject
-	10, // 10: openshield.v1.Event.clipboard:type_name -> openshield.v1.ClipboardSubject
-	12, // 11: openshield.v1.Event.print:type_name -> openshield.v1.PrintSubject
-	11, // 12: openshield.v1.Event.object:type_name -> openshield.v1.ObjectSubject
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	7,  // 6: openshield.v1.Event.filesystem:type_name -> openshield.v1.FilesystemSubject
+	8,  // 7: openshield.v1.Event.usb:type_name -> openshield.v1.UsbSubject
+	9,  // 8: openshield.v1.Event.network:type_name -> openshield.v1.NetworkSubject
+	11, // 9: openshield.v1.Event.process:type_name -> openshield.v1.ProcessSubject
+	12, // 10: openshield.v1.Event.clipboard:type_name -> openshield.v1.ClipboardSubject
+	15, // 11: openshield.v1.Event.print:type_name -> openshield.v1.PrintSubject
+	13, // 12: openshield.v1.Event.object:type_name -> openshield.v1.ObjectSubject
+	14, // 13: openshield.v1.ObjectSubject.access:type_name -> openshield.v1.ObjectAccess
+	3,  // 14: openshield.v1.ObjectAccess.exposure:type_name -> openshield.v1.ObjectExposure
+	4,  // 15: openshield.v1.ObjectAccess.encryption:type_name -> openshield.v1.ObjectEncryption
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_openshield_v1_event_proto_init() }
@@ -1361,8 +1599,8 @@ func file_openshield_v1_event_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_openshield_v1_event_proto_rawDesc), len(file_openshield_v1_event_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   10,
+			NumEnums:      5,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
