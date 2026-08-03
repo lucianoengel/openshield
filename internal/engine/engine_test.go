@@ -47,7 +47,13 @@ func requirePG(t *testing.T) {
 	lockDB(t)
 	p := mustPool(t)
 	defer p.Close()
-	_, _ = p.Exec(context.Background(), `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, schema_migrations CASCADE`)
+	// schema_migrations is dropped, so EVERY migration re-runs — which means every table a migration
+	// creates an index on has to go too, or the re-run applies an old constraint to rows written under
+	// a newer one. `incidents` is exactly that case: migration 018 creates a UNIQUE index on
+	// (subject_id) WHERE state='open', which 028 and 045 later replace, and rows written by the
+	// control-plane tests legitimately share a subject across two open incidents (XDR-4c hunts).
+	// Leaving it behind makes this test fail with a 23505 from a migration that is not even in force.
+	_, _ = p.Exec(context.Background(), `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, fleet_telemetry, peer_alerts, audit_entries, key_epochs, anchors, incident_annotations, incident_escalations, incident_alerts, incidents, schema_migrations CASCADE`)
 }
 
 func buildWorker(t *testing.T) string {

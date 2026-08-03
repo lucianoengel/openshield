@@ -177,6 +177,26 @@ type Engine struct {
 	// network-content event (an SMTP message) for worker classification. nil resolve = no content
 	// source (the default): network events are metadata-only (D134). Shared with classifyStage.
 	content *contentHolder
+
+	// exclusions is the PRIV-1 privacy exclusion set (D20): subjects the system must not observe at
+	// all. Empty by default — no exclusion is configured until an operator writes one, and an empty
+	// set changes nothing.
+	//
+	// It is consulted in ProcessObserved and NOWHERE ELSE. Process, the verdict entry, never applies
+	// it: an exclusion that suppressed an exec-permission decision would resolve to ALLOW, turning a
+	// break-time window into a nightly interval in which any binary runs. The requirement this
+	// implements says an exclusion is "a privacy control, not a user-invokable DLP evasion", and
+	// excluding a verdict would make it exactly that.
+	exclusions core.ExclusionSet
+
+	// excluded counts events an exclusion suppressed; exclusionsUnevaluable counts events an exclusion
+	// COULD NOT BE EVALUATED for, because the subject identity carries no path (two of the three
+	// fanotify forms do not — docs/spike-t005-fanotify.md). Those events ARE observed, which is the
+	// safe direction for detection and the unsafe one for a privacy promise, so the count is the whole
+	// point: it is what turns "personal folders are not observed" into a statement an operator can
+	// check rather than one they have to believe (D31 — a gap must never be silent).
+	excluded              atomic.Int64
+	exclusionsUnevaluable atomic.Int64
 }
 
 // New assembles the pipeline: classify (via the worker) → policy → decide, with
@@ -199,6 +219,21 @@ func New(w classifier, policy core.Stage, ledger core.Ledger, logger *slog.Logge
 // network connector (e.g. SMTP) delivers a message with a body, the resolver returns that body so
 // the classify stage sends it to the sandboxed worker. Without it, network events are metadata-only.
 func (e *Engine) SetContentResolver(r ContentResolver) { e.content.resolve = r }
+
+// SetExclusions installs the privacy exclusion set (PRIV-1). Empty = nothing is excluded, which is
+// the default and the pre-existing behaviour.
+func (e *Engine) SetExclusions(s core.ExclusionSet) { e.exclusions = s }
+
+// Excluded reports how many observed events an exclusion suppressed.
+func (e *Engine) Excluded() int64 { return e.excluded.Load() }
+
+// ExclusionsUnevaluable reports how many observed events carried no resolvable path while a PATH
+// exclusion was configured — events that were observed because the exclusion could not be evaluated.
+//
+// An operator reading a non-zero number here is reading the exact size of the hole in the privacy
+// claim they made. A time-window exclusion is never unevaluable (it needs only the timestamp), so
+// this counter is specifically about the personal-folder half being conditional on coverage mode.
+func (e *Engine) ExclusionsUnevaluable() int64 { return e.exclusionsUnevaluable.Load() }
 
 // SetIntentResolver installs the source of the coordinated-response verb in effect for an event's subject
 // (SOAR-7 / HIPS-3 inc 2b), so the local policy can refuse a CONTAINed entity's next exec INLINE rather
@@ -281,6 +316,82 @@ func (e *Engine) attribute(ev *corev1.Event) error {
 // deliberate: the Decision is recorded (by the dispatcher's audit sink) BEFORE
 // enforcement is attempted, so the trail shows what was decided even if
 // enforcement fails or the process dies mid-enforce.
+// ProcessObserved is the entry for producers that OBSERVE — the fanotify file path, the print and
+// SMTP sources, the discovery sweep. It applies the privacy exclusion set (PRIV-1) and then hands off
+// to Process. A suppressed event returns (nil, nil): no classification ran, so no content was read,
+// and there is nothing to decide about.
+//
+// THE SPLIT FROM Process IS THE SECURITY BOUNDARY, not a convenience. Process is the entry for
+// producers that need a VERDICT they will act on — the exec gate, the clipboard mediator — where a
+// nil decision necessarily resolves to allow. An exclusion applied there would not stop observation,
+// it would change the outcome, and a break-time window would become a nightly interval in which any
+// binary runs, reachable by any user willing to wait until 12:00. The requirement this implements
+// says an exclusion is "a privacy control, not a user-invokable DLP evasion"; suppressing a verdict
+// is that evasion.
+//
+// A producer added later that calls Process rather than this gets the NON-excluded behaviour. That
+// is the correct default to forget: the cost is observing something that could have been excluded,
+// not opening a hole an attacker can walk through.
+func (e *Engine) ProcessObserved(ctx context.Context, ev *corev1.Event) (*corev1.Decision, error) {
+	if e.isExcluded(ev) {
+		e.excluded.Add(1)
+		return nil, nil
+	}
+	return e.Process(ctx, ev)
+}
+
+// isExcluded evaluates the exclusion set against an event, BEFORE classification — so an excluded
+// subject's bytes are never read (the classify stage is what resolves content, and Dispatch is what
+// invokes it).
+//
+// The two halves behave differently and the difference is load-bearing:
+//
+//   - A TIME window needs only the event's timestamp, so it applies to every observed event whatever
+//     identity form the subject carries. The break-time control is complete.
+//   - A PATH prefix needs a resolved path, and two of the three fanotify subject identities carry
+//     none (docs/spike-t005-fanotify.md). For those the exclusion CANNOT BE EVALUATED. The event is
+//     observed — the safe direction for detection — and the fact is counted, because the alternative
+//     is an operator telling a works council that personal folders are unobserved while some of them
+//     are being read.
+func (e *Engine) isExcluded(ev *corev1.Event) bool {
+	// LOCAL time, explicitly. TimeWindow is documented as a daily LOCAL-time window and contains()
+	// compares t.Hour()*60+t.Minute() — but AsTime() returns UTC, so passing it straight through would
+	// evaluate a 12:00-13:00 lunch break against the UTC clock. The control would still "work": it
+	// would exclude observation for an hour a day, at the wrong hour, and nothing would look broken.
+	at := ev.GetObservedAt().AsTime().Local()
+	if !ev.GetObservedAt().IsValid() {
+		at = e.now()
+	}
+	// The time half first, and separately, because it is ALWAYS evaluable: an event carrying no path
+	// is still correctly excluded during a break window rather than counted as an unevaluable gap.
+	// Passing the empty path here matches no prefix — Excluded skips empty prefixes and no non-empty
+	// prefix is a prefix of "" — so this tests the windows alone.
+	if e.exclusions.Excluded("", at) {
+		return true
+	}
+	if len(e.exclusions.PathPrefixes) == 0 {
+		return false
+	}
+	path, err := core.ResolvedPath(ev)
+	if err == nil {
+		return e.exclusions.Excluded(path, at)
+	}
+	// Unevaluable — but only for a FILESYSTEM subject. A DNS query, a USB insert or an exec carries no
+	// path because it is not about a file, and a personal-folder exclusion was never going to apply to
+	// it; counting those would bury the real number under traffic that was never in scope and make the
+	// counter read as a far bigger hole than it is.
+	//
+	// What IS counted: a file event whose subject identity carries no path (two of the three fanotify
+	// forms — docs/spike-t005-fanotify.md), which is exactly the case where the operator's
+	// personal-folder claim cannot be checked. Note the bound on the exposure: the classify stage
+	// refuses a file event with no resolvable path, so no CONTENT is read for these either — what
+	// escapes the exclusion is the event's metadata, not the file's bytes.
+	if ev.GetFilesystem() != nil {
+		e.exclusionsUnevaluable.Add(1)
+	}
+	return false
+}
+
 func (e *Engine) Process(ctx context.Context, ev *corev1.Event) (*corev1.Decision, error) {
 	if err := e.attribute(ev); err != nil {
 		return nil, err

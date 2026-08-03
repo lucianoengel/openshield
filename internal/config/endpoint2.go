@@ -16,6 +16,10 @@ package config
 // policy that asks for it (D1). The defaults are the observe-only ones, so a deployment that configures
 // nothing watches its directories and breaks nothing.
 var EngineFields = []Field{
+	{Key: "OPENSHIELD_EXCLUDE_PATHS", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Comma-separated path PREFIXES the agent must not observe at all \u2014 personal folders agreed with a works council (PRIV-1/D20). Exclusion is applied before classification, so an excluded file's bytes are never read. It requires a coverage mode that yields RESOLVED PATHS: two of the three fanotify subject identities carry none, and an event with no path is observed and counted rather than silently excluded or silently observed. It never suppresses an enforcement verdict \u2014 an exclusion is a privacy control, not a way for a user to evade DLP."},
+	{Key: "OPENSHIELD_EXCLUDE_WINDOWS", Scope: ScopeBootstrap, Kind: KindString, Default: "",
+		Description: "Comma-separated daily local-time windows during which the agent observes nothing, as HH:MM-HH:MM (e.g. 12:00-13:00 for an agreed lunch break, PRIV-1/D20). Unlike a path exclusion this needs only the event's timestamp, so it applies whatever subject identity the event carries. A window that is malformed, empty, or crosses midnight is REFUSED at startup: a silently-dropped window is a control the operator believes is on."},
 	{Key: "OPENSHIELD_DSN", Scope: ScopeBootstrap, Kind: KindString, Default: "postgres://openshield:dev@127.0.0.1:55432/openshield?sslmode=disable",
 		Description: "Postgres connection for this endpoint's forward-secure ledger (D30)."},
 	{Key: "OPENSHIELD_AGENT_ID", Scope: ScopeBootstrap, Kind: KindString, Default: "engine",

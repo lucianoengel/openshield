@@ -163,6 +163,32 @@ func main() {
 	// entity (D195). Defaults to a stable id so events are always attributed.
 	eng.SetSubject(env("OPENSHIELD_AGENT_ID", "engine"))
 
+	// PRIV-1: the privacy exclusion set (D20) — personal folders and agreed break-time windows the
+	// agent must not observe at all. Empty unless the operator configures one, in which case nothing
+	// changes.
+	//
+	// FATAL on a malformed window, not skipped. A silently-dropped exclusion is worse than no
+	// exclusion at all: the operator wrote a lunch break into the configuration, told a works council
+	// about it, and the agent observed straight through it. Refusing to start is the only outcome
+	// that cannot be mistaken for the control working.
+	if excl, err := exclusionSet(); err != nil {
+		fatal(log, "reading the privacy exclusion set", err)
+	} else if len(excl.PathPrefixes) > 0 || len(excl.TimeWindows) > 0 {
+		eng.SetExclusions(excl)
+		log.Warn("PRIVACY EXCLUSIONS ACTIVE — the agent will NOT observe matching subjects, and will "+
+			"not contain a threat inside them either",
+			slog.Int("path_prefixes", len(excl.PathPrefixes)),
+			slog.Int("time_windows", len(excl.TimeWindows)))
+		if len(excl.PathPrefixes) > 0 {
+			log.Warn("path exclusions require a coverage mode that yields RESOLVED PATHS; an event " +
+				"whose subject identity carries none is OBSERVED and counted (engine reports " +
+				"exclusions_unevaluable) — check that number before stating that these folders are " +
+				"unobserved")
+		}
+		log.Warn("an exclusion never suppresses an enforcement verdict (the exec gate, the clipboard " +
+			"mediator, the print and mail deciders): it is a privacy control, not a way to evade DLP")
+	}
+
 	// HON-3: register the file enforcers so the endpoint can CONTAIN a detection, not only
 	// observe it. Observe-only by DEFAULT (D1) — registered ONLY when OPENSHIELD_ENFORCE is
 	// set, mirroring the gateway's opt-in flow enforcer.
@@ -874,6 +900,19 @@ func main() {
 	if eng.KillSwitch != nil {
 		degraded = append(degraded, discardCounter{"enforcement_suppressed", eng.KillSwitch.Suppressions.Load})
 	}
+	// PRIV-1: both exclusion counters are surfaced in the same channel, because both are numbers an
+	// operator has to be able to read.
+	//
+	// `excluded` says the privacy control is doing something — a configured exclusion that never fires
+	// is one that does not match what the operator thinks it matches.
+	//
+	// `exclusions_unevaluable` is the one that matters legally: it is the count of file events a PATH
+	// exclusion could not be evaluated against, which is the exact size of the hole in "personal
+	// folders are not observed". A privacy claim with an unmeasured gap is a false statement to a
+	// works council, and D31 says a gap must never be silent.
+	degraded = append(degraded,
+		discardCounter{"privacy_excluded", eng.Excluded},
+		discardCounter{"privacy_exclusions_unevaluable", eng.ExclusionsUnevaluable})
 	go reportDegraded(ctx, log, envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute), degraded...)
 
 	selfVerify(log)
@@ -903,7 +942,12 @@ func processOne(ctx context.Context, eng *engine.Engine, ev *corev1.Event, log *
 				slog.String("event", ev.GetEventId()), slog.Any("panic", r))
 		}
 	}()
-	dec, err := eng.Process(ctx, ev)
+	// PRIV-1: ProcessObserved, not Process — this is the OBSERVATION loop, so a configured privacy
+	// exclusion (a personal folder, a break-time window) suppresses the event before classification
+	// and nothing about it is read or recorded. The VERDICT entries (the exec gate, the clipboard
+	// mediator, the print and SMTP deciders) deliberately keep calling Process: suppressing a verdict
+	// would resolve to allow, which is the "user-invokable DLP evasion" an exclusion must never be.
+	dec, err := eng.ProcessObserved(ctx, ev)
 	if err != nil {
 		// A processing error is auditable, not silent (D17) — the engine's audit sink records the
 		// outcome; here we surface it operationally.
@@ -1228,4 +1272,20 @@ func selfVerify(log *slog.Logger) {
 		"without the signing key is make them agree.",
 		slog.Int("binaries", rep.Checked), slog.String("release", rep.Version),
 		slog.String("key", rep.KeyFinger))
+}
+
+// exclusionSet reads the PRIV-1 privacy exclusion set from configuration.
+//
+// Both halves are validated here rather than at first use: an exclusion that turns out to be
+// unparseable at 12:00 on a Tuesday is an exclusion that was not in force all morning, and nobody
+// would find out.
+func exclusionSet() (core.ExclusionSet, error) {
+	var s core.ExclusionSet
+	s.PathPrefixes = splitList(os.Getenv("OPENSHIELD_EXCLUDE_PATHS"))
+	windows, err := core.ParseTimeWindows(os.Getenv("OPENSHIELD_EXCLUDE_WINDOWS"))
+	if err != nil {
+		return core.ExclusionSet{}, err
+	}
+	s.TimeWindows = windows
+	return s, nil
 }

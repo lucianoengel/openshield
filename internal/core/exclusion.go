@@ -1,6 +1,9 @@
 package core
 
 import (
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,4 +51,68 @@ func (s ExclusionSet) Excluded(path string, at time.Time) bool {
 		}
 	}
 	return false
+}
+
+// ErrBadTimeWindow is a malformed or unusable exclusion window.
+var ErrBadTimeWindow = errors.New("core: invalid exclusion time window")
+
+// ParseTimeWindows parses a comma-separated list of `HH:MM-HH:MM` local-time windows.
+//
+// REFUSED, never skipped. A silently-dropped window is a control the operator believes is on: they
+// wrote a lunch break into the configuration, told a works council about it, and the agent observed
+// straight through it. There is no partial success here — the caller starts with no exclusions and
+// says why, rather than with some of them.
+//
+// A window that crosses midnight (23:00-02:00) is refused with its own message rather than split
+// automatically. TimeWindow.contains is a half-open [start, end) comparison on minutes since
+// midnight, so a crossing window matches NOTHING — the silent-failure shape again. Splitting it into
+// two windows is a decision the operator should make explicitly.
+func ParseTimeWindows(s string) ([]TimeWindow, error) {
+	var out []TimeWindow
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		start, end, ok := strings.Cut(part, "-")
+		if !ok {
+			return nil, fmt.Errorf("%w: %q is not HH:MM-HH:MM", ErrBadTimeWindow, part)
+		}
+		sm, err := parseHHMM(strings.TrimSpace(start))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q: %v", ErrBadTimeWindow, part, err)
+		}
+		em, err := parseHHMM(strings.TrimSpace(end))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q: %v", ErrBadTimeWindow, part, err)
+		}
+		if em == sm {
+			return nil, fmt.Errorf("%w: %q is empty — [start, end) excludes nothing when they are equal",
+				ErrBadTimeWindow, part)
+		}
+		if em < sm {
+			return nil, fmt.Errorf("%w: %q ends before it starts; a window crossing midnight matches "+
+				"nothing and must be written as two windows", ErrBadTimeWindow, part)
+		}
+		out = append(out, TimeWindow{StartMin: sm, EndMin: em})
+	}
+	return out, nil
+}
+
+// parseHHMM returns minutes since midnight. It refuses anything that is not exactly HH:MM in range,
+// including the shapes time.Parse would accept and quietly reinterpret.
+func parseHHMM(s string) (int, error) {
+	h, m, ok := strings.Cut(s, ":")
+	if !ok || len(h) != 2 || len(m) != 2 {
+		return 0, fmt.Errorf("%q is not HH:MM", s)
+	}
+	hh, herr := strconv.Atoi(h)
+	mm, merr := strconv.Atoi(m)
+	if herr != nil || merr != nil {
+		return 0, fmt.Errorf("%q is not numeric", s)
+	}
+	if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return 0, fmt.Errorf("%q is out of range", s)
+	}
+	return hh*60 + mm, nil
 }

@@ -16,7 +16,24 @@
   **pseudonymous** identifier (D23).
 - **Scope of monitoring:** _list the hosts, paths, and user populations covered._
 - **Exclusions configured:** _personal folders, break-time windows, and any other exclusion
-  lists — an excluded subject produces no event at all._
+  lists — an excluded subject produces no event at all._ Set them with
+  `OPENSHIELD_EXCLUDE_PATHS` (path prefixes) and `OPENSHIELD_EXCLUDE_WINDOWS`
+  (`HH:MM-HH:MM`, local time). Four things belong in this section, not in a footnote:
+  - A **path** exclusion needs a coverage mode that yields resolved paths. Where the subject
+    identity carries none, the exclusion cannot be applied; the agent observes the event and
+    counts it as `privacy_exclusions_unevaluable`. **Record that number.** A non-zero count is
+    the measured size of the gap in "these folders are not observed", and stating the exclusion
+    without it overstates the control.
+  - A **time** window needs only the event's timestamp, so it applies whatever identity the
+    event carries. This half is complete.
+  - An exclusion suppresses **observation**, never an enforcement verdict — an execution gate,
+    a clipboard mediator, a print or mail decider still decides. Otherwise a break window would
+    be a daily interval in which anything runs, which is a control users could invoke rather
+    than one the operator holds. Say so when describing the exclusion, because a reader will
+    otherwise assume the break window suspends everything.
+  - An excluded subject is also **not protected**: nothing inside an exclusion is classified,
+    so nothing there is contained either. That is the cost of the control and it is the
+    operator's to accept explicitly.
 
 ## 2. Necessity and proportionality
 
