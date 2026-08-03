@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,6 +57,10 @@ type Approval struct {
 	RequestedAt time.Time  `json:"requested_at"`
 	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
 	ExpiresAt   time.Time  `json:"expires_at"`
+	// Assurance is what four-eyes was worth on this deployment when this approval was RESOLVED
+	// (SEC-D): "strong", "weak", or empty for a row resolved before it was recorded. It is a fact about
+	// that moment, not about the configuration a reader happens to have now.
+	Assurance string `json:"assurance,omitempty"`
 }
 
 // DefaultApprovalTTL bounds how long a request stays live.
@@ -110,14 +115,23 @@ func (s *Server) ResolveApproval(ctx context.Context, id int64, approver string,
 	if approver == "" {
 		return ErrNoViewer
 	}
+	// SEC-D: what a second pair of eyes is WORTH here, decided now and written down.
+	//
+	// Only an APPROVAL is gated. A denial on a weak deployment must still land: refusing to record "no"
+	// because the identity model is not hardened would leave a pending high-impact request alive and
+	// approvable, which turns a hardening control into a way of keeping dangerous things pending.
+	assurance := AssessFourEyes()
+	if approve && !assurance.Strong() && RequireStrongFourEyes() {
+		return fmt.Errorf("%w: %s", ErrWeakFourEyes, strings.Join(assurance.Gaps, "; "))
+	}
 	state := ApprovalDenied
 	if approve {
 		state = ApprovalApproved
 	}
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE approvals SET state = $1, approver = $2, resolved_at = now()
+		`UPDATE approvals SET state = $1, approver = $2, resolved_at = now(), assurance = $4
 		  WHERE id = $3 AND state = 'pending' AND expires_at > now() AND requester <> $2`,
-		state, approver, id)
+		state, approver, id, assurance.Level)
 	if err != nil {
 		return err
 	}
@@ -153,10 +167,10 @@ func (s *Server) ApprovalFor(ctx context.Context, kind, subjectID string) (*Appr
 	var a Approval
 	var approver, reason *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, subject_kind, subject_id, state, requester, approver, reason, requested_at, resolved_at, expires_at
+		`SELECT id, subject_kind, subject_id, state, requester, approver, reason, requested_at, resolved_at, expires_at, assurance
 		   FROM approvals WHERE subject_kind=$1 AND subject_id=$2 ORDER BY id DESC LIMIT 1`, kind, subjectID).
 		Scan(&a.ID, &a.SubjectKind, &a.SubjectID, &a.State, &a.Requester, &approver, &reason,
-			&a.RequestedAt, &a.ResolvedAt, &a.ExpiresAt)
+			&a.RequestedAt, &a.ResolvedAt, &a.ExpiresAt, &a.Assurance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrApprovalNotFound
 	}

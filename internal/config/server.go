@@ -167,6 +167,8 @@ var ServerFields = []Field{
 	// into the operator roster.
 	{Key: "OPENSHIELD_SCIM_TOKEN", Scope: ScopeBootstrap, Kind: KindSecret, Default: "",
 		Description: "Bearer token the identity provider presents to the SCIM endpoint for operator deprovisioning (ZT-7). Empty disables SCIM. Note what SCIM does here: deactivating a user revokes their access immediately; CREATING one grants nothing, because the provider identifies and this product authorizes."},
+	{Key: "OPENSHIELD_FOUR_EYES_REQUIRE_STRONG", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
+		Description: "Refuse to APPROVE a four-eyes request unless operator identity is hardened — both OPENSHIELD_OPERATOR_ROLES_STRICT and OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP on (SEC-D). Off, every approval is still RECORDED with the assurance in force when it was resolved, so the audit trail never attests to a two-person control the deployment could not deliver. Denials are never gated: refusing to record a 'no' would keep a dangerous request pending and approvable."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
 		Description: "Refuse operator tokens that are not sender-constrained (ZT-7). A bound token is ALWAYS proof-checked; this decides whether an UNBOUND one is refused. Turn on once the issuer binds tokens — before that it locks every operator out. Without it, an issuer misconfiguration silently downgrades every operator to a stealable bearer token."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_DPOP_REPLAY_CACHE", Scope: ScopeBootstrap, Kind: KindInt, Default: "4096",

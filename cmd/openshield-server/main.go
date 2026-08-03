@@ -111,6 +111,20 @@ func main() {
 			"authorization still comes from `operator-role set`, so an SSO operator with no record has no "+
 			"access whatever their token claims.\n", issuer)
 	}
+	// SEC-D: say what this deployment's two-person control is actually worth, unprompted, every boot.
+	//
+	// Four-eyes compares an identity string, and two shipped defaults decide what an identity string is
+	// worth — whether an identity with no server-side row falls back to its certificate, and whether an
+	// unbound operator token is accepted. Both defaults are defensible; what was not is that four-eyes
+	// said nothing about them, so an approval recorded on a deployment where two credentials are two
+	// "operators" produced an audit trail attesting to a control that did not exist.
+	//
+	// Printed at every boot rather than only when weak: an operator who has hardened a deployment needs
+	// to be able to confirm it, and a message that appears only on failure is one nobody can use to
+	// verify success.
+	fmt.Fprintf(os.Stderr, "openshield-server: %s\n",
+		controlplane.FourEyesStartupNotice(controlplane.AssessFourEyes()))
+
 	// PLAT-5: validate EVERY declared field before doing anything. A malformed value now fails the boot
 	// with a precise, field-scoped error instead of silently falling back to a default — which is how a
 	// typo'd OPENSHIELD_CORRELATE_INTERVAL used to disable scheduled correlation with no signal at all.

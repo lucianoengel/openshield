@@ -1,0 +1,20 @@
+-- SEC-D: record what four-eyes was WORTH when each approval was resolved.
+--
+-- The approver<>requester comparison is sound; what it compares is an identity string, and two shipped
+-- defaults decide how much an identity string is worth. With OPENSHIELD_OPERATOR_ROLES_STRICT=0 an
+-- identity with no server-side row falls back to its certificate, so whoever holds two operator certs is
+-- both pairs of eyes. With OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP=0 two stolen bearer tokens are two
+-- operators.
+--
+-- Without this column the trail says only "alice requested, bob approved", which reads as two people
+-- whatever the deployment could actually distinguish. That is an audit record attesting to a control
+-- that may not have existed — the specific harm SEC-D names, and worse than not offering the control.
+--
+-- Recorded at RESOLUTION rather than derived at read time, because it is a fact about the moment the
+-- approval happened. A deployment that hardens next month must not retroactively make last month's
+-- approvals look strong, and one that loosens must not make them look weak.
+--
+-- Empty string for every existing row, meaning "resolved before this was recorded" — deliberately NOT
+-- backfilled as 'weak'. The historical deployment's configuration is unknown here, and guessing it
+-- would put a claim in the audit trail that nothing observed.
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS assurance TEXT NOT NULL DEFAULT '';

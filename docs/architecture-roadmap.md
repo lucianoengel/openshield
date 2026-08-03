@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D464.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D465.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D464)
+## What OpenShield is (status at a glance, through D465)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ and each of those is a separate trust-or-distribution decision rather than lefto
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
 
-**What has actually been shipping since (D440–D464), and why it is not the UI.** Two threads, both
+**What has actually been shipping since (D440–D465), and why it is not the UI.** Two threads, both
 deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
 fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
 and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
@@ -1037,15 +1037,20 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   unmatched caller and still serves the authorized one; a permissive policy never opens the port.* (Credit where due, and keep it: the Rego capability restriction is
   genuinely well built — nondeterministic builtins filtered wholesale by flag, `opa.runtime` denied,
   `AllowNet` empty, so `http.send` from an authored policy is not expressible.)
-- **SEC-D · Four-eyes is capped by two shipped defaults** — new work · S. `OPERATOR_ROLES_STRICT` defaults
-  to `0`, so an identity with no server-side record **falls back to the certificate** — whoever obtains two
-  operator certs is both pairs of eyes. `OPERATOR_OIDC_REQUIRE_DPOP` defaults to `0`, so two stolen bearer
-  tokens are two operators. `docs/threat-model.md:149` already concedes four-eyes is *"exactly as strong as
-  the CA's issuance discipline"*. Any feature adding a four-eyes gate — `CONSOLE-45` policy save, `PLAT-5c`
-  delivery — must **refuse to enable** unless both are hardened, and say so at startup, the way
-  `REQUIRE_DPOP` already refuses console login. *A control that documents two-person approval on a
-  deployment where four-eyes is one credential is worse than declining, because the audit trail then
-  attests to a control that did not exist.*
+- ~~**SEC-D · Four-eyes is capped by two shipped defaults**~~ — **SHIPPED D465; do not re-propose.**
+  `OPERATOR_ROLES_STRICT=0` lets an identity with no server-side record fall back to its certificate
+  (two operator certs are two operators) and `OPERATOR_OIDC_REQUIRE_DPOP=0` accepts an unbound token
+  (two stolen tokens are two operators) — and four-eyes said nothing about either, so the trail attested
+  to a control that may not have existed. **The defaults were not the defect and are unchanged**: their
+  migration argument (turning either on before a deployment has migrated locks every operator out) still
+  holds. What changed is that the control now says what it is worth. Every resolved approval RECORDS the
+  assurance in force at that moment — at resolution, so hardening later cannot retroactively make old
+  approvals look strong; every component STATES it at startup, naming each switch that is off and
+  confirming when hardened; and `OPENSHIELD_FOUR_EYES_REQUIRE_STRONG=1` refuses to GRANT what it cannot
+  attest to. **Denials are never gated** — refusing to record a "no" would keep the dangerous request
+  pending and approvable while blocking the operator trying to stop it. `AssessFourEyes` is the
+  primitive `CONSOLE-45` and `PLAT-5c` consult, so "must refuse unless hardened" is now expressible
+  rather than a note here. *Honest residual: this distinguishes two IDENTITIES, never two PEOPLE.*
 
 **🟠 UEBA has no maturity concept, and no operator surface at all (found 2026-07-31, by asking "where is
 the UEBA dashboard?"). The answer was that the dashboard is the second problem.**
