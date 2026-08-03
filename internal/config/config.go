@@ -97,11 +97,15 @@ type Field struct {
 	Kind        Kind
 	Default     string
 	Description string
-	// Validate is an optional extra constraint beyond parseability, returning why the value is refused.
+	// Bound is the operational range beyond parseability: the check, the range as a person reads it,
+	// and what a value outside it breaks. Nil means the Kind's parseability is the only constraint.
 	//
-	// It existed with no caller anywhere in the shipped tree until SEC-A, which is why "is this a
-	// duration" was the entire bound on values that decide whether anything is detected at all.
-	Validate func(raw string) error
+	// A plain `func(raw string) error` lived here with no caller anywhere in the shipped tree until
+	// SEC-A, which is why "is this a duration" was the entire bound on values that decide whether
+	// anything is detected at all. It became a struct when the schema had to be RENDERABLE (D467): a
+	// closure cannot be shown in a form, and declaring the range separately so it could be is how the
+	// form and the server start disagreeing.
+	Bound *Bound
 
 	// Sensitivity says which way a change to this field moves the deployment's ability to DETECT, so
 	// "this edit reduces coverage" is computable rather than something a reviewer has to know per key
@@ -376,8 +380,8 @@ func (r *Resolver) Validate() error {
 			errs = append(errs, newFieldError(f, raw, err.Error()+" (from "+origin+")"))
 			continue
 		}
-		if f.Validate != nil {
-			if err := f.Validate(raw); err != nil {
+		if f.Bound != nil {
+			if err := f.Bound.Check(raw); err != nil {
 				errs = append(errs, newFieldError(f, raw, err.Error()+" (from "+origin+")"))
 			}
 		}
@@ -465,6 +469,31 @@ type FieldDesc struct {
 	Default     string `json:"default,omitempty"`
 	Description string `json:"description"`
 	Secret      bool   `json:"secret"`
+
+	// Range and Why are the operational bound as a person reads it, and what a value outside it breaks
+	// (D467). Empty when the field has no bound beyond its Kind.
+	//
+	// Without these a schema-driven form offers no range and no help, so an operator learns the bound by
+	// typing a value and having it refused — and the refusal is the one place the consequence was
+	// written, which means the sentence explaining WHY reached them only after they had already chosen
+	// the wrong thing.
+	Range string `json:"range,omitempty"`
+	Why   string `json:"why,omitempty"`
+
+	// Sensitivity is which direction of change reduces what the deployment can detect, as a name
+	// ("raising_weakens", "lowering_weakens", "any_change_weakens"), or empty when the field does not
+	// gate detection or retention.
+	//
+	// The server remains authoritative on whether a given change weakened — it records that per change
+	// and alerts on it. This is the LABEL, so a form can say which way the dangerous direction runs
+	// BEFORE the change is made rather than after. A console that cannot show it is a console in which
+	// the most consequential settings look like all the others.
+	Sensitivity string `json:"sensitivity,omitempty"`
+
+	// ZeroDisables says the zero value turns the feature OFF rather than meaning "as often as possible".
+	// A form that does not say so presents the single most dangerous value as an ordinary end of the
+	// range — it is how OPENSHIELD_CORRELATE_INTERVAL=0s reads as the most aggressive setting available.
+	ZeroDisables bool `json:"zero_disables,omitempty"`
 }
 
 // Describe returns the schema, derived from the field declarations. This is the UI's data source.
@@ -472,7 +501,14 @@ func (r *Resolver) Describe() []FieldDesc {
 	out := make([]FieldDesc, 0, len(r.order))
 	for _, key := range r.order {
 		f := r.fields[key]
-		d := FieldDesc{Key: f.Key, Scope: f.Scope, Kind: f.Kind, Description: f.Description, Secret: f.Secret()}
+		d := FieldDesc{Key: f.Key, Scope: f.Scope, Kind: f.Kind, Description: f.Description, Secret: f.Secret(),
+			ZeroDisables: f.ZeroDisables}
+		if f.Bound != nil {
+			d.Range, d.Why = f.Bound.Range, f.Bound.Why
+		}
+		if f.Sensitivity != NotSensitive {
+			d.Sensitivity = f.Sensitivity.String()
+		}
 		if !f.Secret() {
 			// A secret's DEFAULT is not shown either: a default credential is a credential.
 			d.Default = f.Default
@@ -559,8 +595,8 @@ func (f Field) Check(raw string) error {
 	if err := parseFor(f, raw); err != nil {
 		return err
 	}
-	if f.Validate != nil {
-		return f.Validate(raw)
+	if f.Bound != nil {
+		return f.Bound.Check(raw)
 	}
 	return nil
 }

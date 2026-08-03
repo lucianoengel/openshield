@@ -52,7 +52,7 @@ var ServerFields = []Field{
 	{Key: "OPENSHIELD_BEACON_MIN_CONTACTS", Scope: ScopeDynamic, Kind: KindInt, Default: "8",
 		Description: "Contacts required before regularity is measured. Below about eight, 'regular' is not a measurement — three contacts give two intervals, and two intervals are always regular.",
 		Sensitivity: RaisingWeakens,
-		Validate: atLeastN(3, "below three contacts there are fewer than two intervals, and two "+
+		Bound: atLeastN(3, "below three contacts there are fewer than two intervals, and two "+
 			"intervals are always perfectly regular — the detector would report every destination")},
 	{Key: "OPENSHIELD_BEACON_MIN_REGULARITY", Scope: ScopeDynamic, Kind: KindString, Default: "0.85",
 		Description: "Regularity score (0-1) at or above which a destination is reported. Lowering it trades false positives for low-and-slow coverage; that dial is the operator's.",
@@ -63,7 +63,7 @@ var ServerFields = []Field{
 	{Key: "OPENSHIELD_CORRELATE_INTERVAL", Scope: ScopeDynamic, Kind: KindDuration, Default: "0s",
 		Description: "How often scheduled correlation runs (SOAR-2). Zero disables it — incidents are then raised only when an operator asks.",
 		Sensitivity: RaisingWeakens, ZeroDisables: true,
-		Validate: atMost(6*time.Hour, "scheduled correlation is how incidents get raised without an "+
+		Bound: atMost(6*time.Hour, "scheduled correlation is how incidents get raised without an "+
 			"operator asking; a sweep this rare means a multi-domain attack sits uncorrelated for most "+
 			"of a working day")},
 	{Key: "OPENSHIELD_CORRELATE_WINDOW", Scope: ScopeDynamic, Kind: KindDuration, Default: "1h",
@@ -135,7 +135,7 @@ var ServerFields = []Field{
 	{Key: "OPENSHIELD_OVERDUE_THRESHOLD", Scope: ScopeDynamic, Kind: KindDuration, Default: "15m",
 		Description: "Silence after which an agent is reported overdue (D50/D51).",
 		Sensitivity: RaisingWeakens,
-		Validate: between(time.Minute, 24*time.Hour, "this is the dead-man's-switch (D16): it is the "+
+		Bound: between(time.Minute, 24*time.Hour, "this is the dead-man's-switch (D16): it is the "+
 			"only thing that reports an agent someone killed. Below a minute every laptop lid-close "+
 			"pages someone; above a day a silenced endpoint is indistinguishable from one in a drawer "+
 			"for longer than most intrusions take")},
@@ -145,12 +145,12 @@ var ServerFields = []Field{
 	{Key: "OPENSHIELD_RETENTION_INTERVAL", Scope: ScopeDynamic, Kind: KindDuration, Default: "24h",
 		Description: "How often the fleet-aggregate retention purge runs.",
 		Sensitivity: RaisingWeakens,
-		Validate: atLeast(time.Minute, "a purge sweeping more often than once a minute is not a "+
+		Bound: atLeast(time.Minute, "a purge sweeping more often than once a minute is not a "+
 			"retention policy, it is a shredder running continuously against the evidence store")},
 	{Key: "OPENSHIELD_FLEET_RETENTION", Scope: ScopeDynamic, Kind: KindDuration, Default: "2160h",
 		Description: "How long fleet-aggregate telemetry is kept before purge (D81/D20).",
 		Sensitivity: LoweringWeakens,
-		Validate: atLeast(24*time.Hour, "the purge is a SANCTIONED delete path, and the ledger's hash "+
+		Bound: atLeast(24*time.Hour, "the purge is a SANCTIONED delete path, and the ledger's hash "+
 			"chain does not cover it — shortening this destroys evidence without leaving the tamper "+
 			"trace that deleting rows directly would")},
 	{Key: "OPENSHIELD_NOTIFY_DEDUPE_RETENTION", Scope: ScopeDynamic, Kind: KindDuration, Default: "24h",

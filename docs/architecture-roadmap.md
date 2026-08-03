@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D466.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D467.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D466)
+## What OpenShield is (status at a glance, through D467)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ and each of those is a separate trust-or-distribution decision rather than lefto
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
 
-**What has actually been shipping since (D440–D466), and why it is not the UI.** Two threads, both
+**What has actually been shipping since (D440–D467), and why it is not the UI.** Two threads, both
 deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
 fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
 and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
@@ -1327,6 +1327,17 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   whether it parsed. None of the four was a logic error; each was a correct check over a value that did
   not mean what the check assumed — which is also why all four were invisible to unit tests that
   construct their own inputs. **Look at the input, not the logic.**
+- **The enriched config schema reaches the console (D467).** SEC-A added an operational range and a
+  detection direction to `config.Field`, and `FieldDesc` — what `GET /config/schema` serves, and the only
+  thing `CONSOLE-21` renders from — carried neither. A schema-driven form would have shown the settings
+  that decide whether anything is detected at all looking exactly like the cosmetic ones: no range, no
+  help, no sign which direction is dangerous. `Validate func(string) error` became a `Bound` struct
+  carrying the check, the range as a person reads it and what exceeding it costs, **declared together**,
+  because the alternative is a renderable range that drifts from the check the server enforces — and it
+  drifts toward a form insisting a value is fine while the server refuses it. `/config/schema` also had
+  **no test at all**; it has one now, asserted at the HTTP boundary, because "the schema carries it" and
+  "the console can see it" are different claims and the gap between them is where D418's whole class of
+  defect lives.
 - **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers

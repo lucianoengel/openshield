@@ -217,7 +217,7 @@ func TestSecretIsNeverReadableBack(t *testing.T) {
 	// And a REJECTED secret must not appear in the error either: an error message is an output path like
 	// any other, and a rejected credential in a log is still a leaked credential.
 	sf := []config.Field{{Key: "T_SECRET2", Kind: config.KindSecret, Description: "cred",
-		Validate: func(string) error { return errBad }}}
+		Bound: &config.Bound{Range: "any", Why: "test", Check: func(string) error { return errBad }}}}
 	t.Setenv("T_SECRET2", secret)
 	if err := config.New(sf, config.EnvSource{}).Validate(); err == nil {
 		t.Fatal("the validator did not run")

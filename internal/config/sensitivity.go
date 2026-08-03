@@ -150,59 +150,91 @@ func (f Field) magnitude(raw string) (float64, bool) {
 // by design; the config schema is read by every binary including the privileged agent.
 const math_MaxFloat64 = 1.7976931348623157e+308
 
-// atLeast returns a Validate that refuses a duration below min, naming what breaks.
+// Bound is an operational range, the check that enforces it, and the sentence explaining what a value
+// outside it breaks — declared TOGETHER (SEC-A/D467).
 //
-// The message says what the value DOES rather than what it violates. "must be >= 1m" tells an operator a
-// rule; "a sweep this frequent will not finish before the next one starts" tells them why the rule
-// exists, which is the difference between a setting they fix and one they route around.
-func atLeast(min time.Duration, why string) func(string) error {
-	return func(raw string) error {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			return nil // parseability is the Kind's job; do not report it twice
-		}
-		if d != 0 && d < min {
-			return fmt.Errorf("%s is below the %s minimum: %s", raw, min, why)
-		}
-		return nil
-	}
+// One declaration, because the alternative is two: a `func(string) error` the server enforces and a
+// separate human-readable range a form renders. Those drift, and they drift silently in the direction
+// that matters — a UI offering a range wider than the server accepts produces a value an operator types,
+// submits, and has refused, with the form insisting it was fine.
+//
+// Why is not decoration either. It is the difference between a form that says "must be <= 6h" and one
+// that says what a longer sweep means, and an operator given only the rule routes around it.
+type Bound struct {
+	// Range is how the constraint reads to a person: "1m–24h", ">= 24h", "<= 6h", ">= 3". Never empty
+	// for a declared bound — a bound a UI cannot render is a bound an operator meets by trial and error.
+	Range string
+	// Why states the consequence of exceeding it.
+	Why string
+	// Check enforces it. Parseability is the Kind's job and is never re-reported here.
+	Check func(raw string) error
 }
 
-// atMost returns a Validate that refuses a duration above max.
-func atMost(max time.Duration, why string) func(string) error {
-	return func(raw string) error {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
+// atLeast bounds a duration below.
+func atLeast(min time.Duration, why string) *Bound {
+	return &Bound{
+		Range: ">= " + min.String(),
+		Why:   why,
+		Check: func(raw string) error {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				return nil // parseability is the Kind's job; do not report it twice
+			}
+			if d != 0 && d < min {
+				return fmt.Errorf("%s is below the %s minimum: %s", raw, min, why)
+			}
 			return nil
-		}
-		if d > max {
-			return fmt.Errorf("%s is above the %s maximum: %s", raw, max, why)
-		}
-		return nil
+		},
 	}
 }
 
-// between refuses a duration outside [min, max].
-func between(min, max time.Duration, why string) func(string) error {
+// atMost bounds a duration above.
+func atMost(max time.Duration, why string) *Bound {
+	return &Bound{
+		Range: "<= " + max.String(),
+		Why:   why,
+		Check: func(raw string) error {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				return nil
+			}
+			if d > max {
+				return fmt.Errorf("%s is above the %s maximum: %s", raw, max, why)
+			}
+			return nil
+		},
+	}
+}
+
+// between bounds a duration on both sides.
+func between(min, max time.Duration, why string) *Bound {
 	lo, hi := atLeast(min, why), atMost(max, why)
-	return func(raw string) error {
-		if err := lo(raw); err != nil {
-			return err
-		}
-		return hi(raw)
+	return &Bound{
+		Range: min.String() + "–" + max.String(),
+		Why:   why,
+		Check: func(raw string) error {
+			if err := lo.Check(raw); err != nil {
+				return err
+			}
+			return hi.Check(raw)
+		},
 	}
 }
 
-// atLeastN refuses an integer below min.
-func atLeastN(min int, why string) func(string) error {
-	return func(raw string) error {
-		n, err := strconv.Atoi(raw)
-		if err != nil {
+// atLeastN bounds an integer below.
+func atLeastN(min int, why string) *Bound {
+	return &Bound{
+		Range: fmt.Sprintf(">= %d", min),
+		Why:   why,
+		Check: func(raw string) error {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				return nil
+			}
+			if n < min {
+				return fmt.Errorf("%d is below the minimum of %d: %s", n, min, why)
+			}
 			return nil
-		}
-		if n < min {
-			return fmt.Errorf("%d is below the minimum of %d: %s", n, min, why)
-		}
-		return nil
+		},
 	}
 }
