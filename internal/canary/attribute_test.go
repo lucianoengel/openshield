@@ -247,9 +247,28 @@ func TestSuspectsAreRankedByOpenCountAndBounded(t *testing.T) {
 		if len(bounded.Suspects) != 1 {
 			t.Errorf("max=1 returned %d suspects", len(bounded.Suspects))
 		}
-		if bounded.Scanned != first.Scanned {
-			t.Errorf("bounding the RESULT changed the SCANNED count (%d vs %d) — the counts must "+
-				"describe the whole system, not the prefix that fitted", bounded.Scanned, first.Scanned)
+		// SCANNED DESCRIBES THE WALK, NOT THE RESULT — bounding the suspect list must not shrink it.
+		//
+		// This was asserted as exact equality against an earlier scan, and it failed in CI at 166 vs
+		// 165. Exact equality was never a property of the system: Scanned counts /proc entries on a
+		// LIVE machine, so two scans legitimately differ by whatever started or exited between them. It
+		// was a property of an idle developer laptop, and a test that depends on the machine being idle
+		// is a test that goes red for reasons unrelated to the code — which is how a suite stops being
+		// read.
+		//
+		// The claim is still worth pinning, and separating "the whole process table" from "at most
+		// max" does not need exactness: the mutation it defends against (counting suspects AFTER the
+		// bound is applied) drives Scanned to len(Suspects), which is 1 here. A tolerance well above
+		// process churn and far below that gap keeps the assertion decisive.
+		churn := first.Scanned/10 + 5
+		if diff := first.Scanned - bounded.Scanned; diff > churn {
+			t.Errorf("bounding the RESULT dropped the SCANNED count from %d to %d (more than the %d "+
+				"this machine's churn explains) — the counts must describe the whole system, not the "+
+				"prefix that fitted", first.Scanned, bounded.Scanned, churn)
+		}
+		if bounded.Scanned <= len(bounded.Suspects) {
+			t.Errorf("scanned=%d with %d suspect(s) returned — Scanned is reporting the result rather "+
+				"than the walk", bounded.Scanned, len(bounded.Suspects))
 		}
 	}
 }
