@@ -22,6 +22,7 @@ import (
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 
+	"github.com/lucianoengel/openshield/internal/attack"
 	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
@@ -192,6 +193,16 @@ func (s *Stage) Run(ctx context.Context, st *core.State) (core.Outcome, error) {
 		Action:         win.action,
 		Reason:         win.reason,
 		Confidence:     win.confidence,
+		// XDR-4b: the ATT&CK techniques the EVIDENCE supported, from the same derivation that built
+		// input.attack.techniques above — not from `rs`, the policy's own result.
+		//
+		// Reading a technique out of the policy result would be more flexible and would be wrong. A
+		// module here is composed from a default pack, zero or more compliance packs and a custom
+		// module (ADR-5), all operator-authored; if any of them could DECLARE a technique, then "what
+		// did this asset evidence?" would be answered by whatever the rules asserted, and the
+		// technique-sequence hunt in XDR-4b would correlate claims instead of signals. Policy decides
+		// what to do about signals; it never decides what the signals were.
+		Techniques: attack.IDs(attackSignals(st)),
 	}), nil
 }
 

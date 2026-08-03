@@ -248,3 +248,50 @@ func TestPhase1RecordsBlockWithoutEnforcing(t *testing.T) {
 		t.Error("enforcer was invoked during Phase 1 — enforcement must be deferred (D1)")
 	}
 }
+
+// XDR-4b: the technique vocabulary is closed, and the Decision contract enforces it.
+//
+// The vector this closes is the same one the confidence range closes: signature verification
+// establishes WHO sent a decision, not that what they sent is expressible in the contract. These ids
+// land in unified_alerts, which operators hunt over by technique — an enrolled-but-compromised agent
+// that could write arbitrary strings there could manufacture an attack chain that no signal
+// evidenced, and the correlation lane would report it as one.
+func TestADecisionCarryingATechniqueOutsideTheVocabularyIsRefused(t *testing.T) {
+	base := func(techs ...string) *corev1.Decision {
+		return &corev1.Decision{
+			Action:        corev1.Action_ACTION_ALERT,
+			Confidence:    0.5,
+			PolicyId:      "p",
+			PolicyVersion: "v1",
+			Techniques:    techs,
+		}
+	}
+	cases := []struct {
+		name    string
+		techs   []string
+		wantErr bool
+	}{
+		{"no techniques is a real answer, not a missing one", nil, false},
+		{"a derived technique", []string{"T1552"}, false},
+		{"a derived sub-technique", []string{"T1552", "T1567.002"}, false},
+		{"an invented id", []string{"T9999"}, true},
+		{"a real id this build cannot derive", []string{"T1486"}, true},
+		{"one bad id among good ones", []string{"T1552", "T9999", "T1218"}, true},
+		{"an empty id", []string{""}, true},
+		{"a parent this build deliberately does not roll up to", []string{"T1567"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := core.ValidateDecision(base(c.techs...), true)
+			if c.wantErr {
+				if !errors.Is(err, core.ErrUnknownTechnique) {
+					t.Fatalf("core.ValidateDecision(%v) = %v; want core.ErrUnknownTechnique", c.techs, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("core.ValidateDecision(%v) = %v; want nil", c.techs, err)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/lucianoengel/openshield/internal/attack"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
@@ -21,6 +22,7 @@ var (
 	ErrMissingConfidence = errors.New("decision: confidence is mandatory")
 	ErrConfidenceRange   = errors.New("decision: confidence out of range [0,1]")
 	ErrMissingPolicy     = errors.New("decision: policy identity required")
+	ErrUnknownTechnique  = errors.New("decision: technique id outside the ATT&CK vocabulary")
 
 	// ErrPathUnavailable is returned rather than an empty string, so a consumer
 	// that ignores the distinction fails loudly instead of treating a missing
@@ -166,6 +168,16 @@ func ValidateDecision(d *corev1.Decision, hasConfidence bool) error {
 	}
 	if d.GetPolicyId() == "" || d.GetPolicyVersion() == "" {
 		return ErrMissingPolicy
+	}
+	// XDR-4b: the technique vocabulary is closed, and it is checked for the same reason the
+	// confidence range is. Signature verification establishes WHO sent a decision, not that what
+	// they sent is expressible in the platform's contract — and these ids land in unified_alerts,
+	// a widely-read derived table that operators hunt over by technique. An id from outside the
+	// vocabulary would be a claim this build cannot trace back to any signal.
+	for _, id := range d.GetTechniques() {
+		if !attack.Known(id) {
+			return fmt.Errorf("%w: %q", ErrUnknownTechnique, id)
+		}
 	}
 	return nil
 }

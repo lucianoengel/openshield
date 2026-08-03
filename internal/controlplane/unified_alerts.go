@@ -20,6 +20,10 @@ type UnifiedAlert struct {
 	DedupKey   string
 	Status     string
 	DetectedAt time.Time
+	// Techniques are the ATT&CK ids the originating decision derived (XDR-4b). NULL in the table —
+	// an alert written before the column existed, or a server-side derivation with no decision —
+	// reads back as an empty slice, which means the same thing: no technique was derived.
+	Techniques []string
 }
 
 // AlertRecord is what a detector hands RecordUnifiedAlert. It is a struct rather than a parameter list
@@ -41,6 +45,12 @@ type AlertRecord struct {
 	// as its own state rather than as a blank field.
 	EventID    string
 	DecisionID string
+
+	// Techniques are the MITRE ATT&CK ids the decision's evidence supported (XDR-4b), carried through
+	// verbatim from the Decision — which derived them from signals, never from policy text. Empty is a
+	// real answer ("no signal mapped to a technique"), which is why it is stored as NULL rather than
+	// distinguished from absent.
+	Techniques []string
 }
 
 // RecordUnifiedAlert records a normalized alert keyed to the XDR entity graph (XDR-2). It resolves the
@@ -70,15 +80,27 @@ func (s *Server) RecordUnifiedAlert(ctx context.Context, a AlertRecord) error {
 	// string would collapse that distinction into a value that looks like a reference.
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO unified_alerts (entity_id, domain, subject_id, severity, title, dedup_key, detected_at,
-		                             event_id, decision_id)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''))
+		                             event_id, decision_id, techniques)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''),$10)
 		 ON CONFLICT (dedup_key) DO NOTHING`,
-		entityID, a.Domain, a.Subject, a.Severity, a.Title, a.DedupKey, at.UTC(), a.EventID, a.DecisionID)
+		entityID, a.Domain, a.Subject, a.Severity, a.Title, a.DedupKey, at.UTC(), a.EventID, a.DecisionID,
+		nilIfEmpty(a.Techniques))
 	if err != nil {
 		s.UnifiedAlertFailures.Add(1)
 		return fmt.Errorf("unified alert: insert: %w", err)
 	}
 	return nil
+}
+
+// nilIfEmpty writes an empty technique list as SQL NULL rather than as an empty array, so a row from
+// before XDR-4b and a row whose signals mapped to nothing read identically — because they mean the
+// same thing. Distinguishing them would invite a consumer to treat "{}" as "we checked and found
+// none" and NULL as "unknown", a difference this table cannot actually support.
+func nilIfEmpty(v []string) []string {
+	if len(v) == 0 {
+		return nil
+	}
+	return v
 }
 
 // entityForSubject keys a subject onto the entity the graph ALREADY knows for it, whatever alias kind
@@ -109,7 +131,8 @@ func (s *Server) entityForSubject(ctx context.Context, subjectKind, subject stri
 // correlation engine (XDR-4) reads to find a multi-domain attack on one asset.
 func (s *Server) AlertsForEntity(ctx context.Context, entityID int64) ([]UnifiedAlert, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT entity_id, domain, subject_id, severity, title, dedup_key, status, detected_at
+		`SELECT entity_id, domain, subject_id, severity, title, dedup_key, status, detected_at,
+		        coalesce(techniques, '{}')
 		   FROM unified_alerts WHERE entity_id = $1 ORDER BY detected_at DESC, id DESC`, entityID)
 	if err != nil {
 		return nil, err
@@ -119,7 +142,7 @@ func (s *Server) AlertsForEntity(ctx context.Context, entityID int64) ([]Unified
 	for rows.Next() {
 		var a UnifiedAlert
 		if err := rows.Scan(&a.EntityID, &a.Domain, &a.SubjectID, &a.Severity, &a.Title,
-			&a.DedupKey, &a.Status, &a.DetectedAt); err != nil {
+			&a.DedupKey, &a.Status, &a.DetectedAt, &a.Techniques); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

@@ -41,6 +41,56 @@ var (
 	tCommandInterpreter   = Technique{"T1059", "Command and Scripting Interpreter"}
 )
 
+// allTechniques is the CLOSED vocabulary: every technique this package can emit, and therefore the
+// only ids a Decision may legitimately carry (XDR-4b). Known() and Name() are both derived from it,
+// so the mapper and the contract validator cannot disagree about the vocabulary by construction.
+//
+// The failure mode this shape exists to prevent is silent and one-directional: if the validator's
+// set were maintained separately and the mapper started emitting a technique missing from it, every
+// decision carrying that technique would be REFUSED at projection and the alert would never reach
+// the stream. A dropped alert is indistinguishable from a quiet network.
+var allTechniques = []Technique{
+	tUnsecuredCredentials,
+	tAppLayerC2,
+	tExfilCloudStorage,
+	tExfilPhysicalMedium,
+	tSystemBinaryProxy,
+	tObfuscated,
+	tCommandInterpreter,
+}
+
+var techniqueByID = func() map[string]Technique {
+	m := make(map[string]Technique, len(allTechniques))
+	for _, t := range allTechniques {
+		m[t.ID] = t
+	}
+	return m
+}()
+
+// Known reports whether an id names a technique this build can actually derive. The Decision contract
+// uses it to refuse ids from outside the vocabulary, for the same reason it refuses an out-of-range
+// confidence: a producer that is enrolled is not thereby trusted to be correct, and unified_alerts is
+// a widely-read derived table.
+func Known(id string) bool { _, ok := techniqueByID[id]; return ok }
+
+// Name returns the display name for a technique id, and whether it is known.
+//
+// Only the ID crosses the contract; the name is looked up here, at display time, from THIS build's
+// table. MITRE renames techniques, and a name copied into a hash-chained ledger is frozen at the
+// moment of writing and cannot be corrected without breaking the chain.
+func Name(id string) (string, bool) {
+	t, ok := techniqueByID[id]
+	return t.Name, ok
+}
+
+// Vocabulary returns every technique this build can emit, sorted by id — for a test, and for an
+// operator asking what a technique-sequence hunt may name.
+func Vocabulary() []Technique {
+	out := append([]Technique(nil), allTechniques...)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // credentialDetectors are the detector types that evidence unsecured credentials.
 var credentialDetectors = map[corev1.DetectorType]bool{
 	corev1.DetectorType_DETECTOR_TYPE_PRIVATE_KEY:    true,

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lucianoengel/openshield/internal/attack"
 )
 
 // Correlation / rules engine (Phase F2). Peer-UEBA (D54) produces individual alerts; a
@@ -191,6 +193,21 @@ func (s *Server) crossDomainIncidents(w http.ResponseWriter, r *http.Request, q 
 				return
 			}
 			rule.Sequence = append(rule.Sequence, step)
+		}
+	}
+	// XDR-4b: the ATT&CK sequence, refused for the same reason as an unknown domain — a step naming a
+	// technique this build cannot derive would never match, and the operator would read the resulting
+	// empty list as "that attack chain did not happen" rather than as "you named something OpenShield
+	// does not emit".
+	if v := q.Get("technique_sequence"); v != "" {
+		for _, step := range strings.Split(v, ",") {
+			step = strings.TrimSpace(step)
+			if !attack.Known(step) {
+				http.Error(w, "bad technique_sequence: unknown technique "+strconv.Quote(step),
+					http.StatusBadRequest)
+				return
+			}
+			rule.TechniqueSequence = append(rule.TechniqueSequence, step)
 		}
 	}
 	if _, err := s.MaterializeCrossDomainIncidents(r.Context(), rule, time.Now()); err != nil {

@@ -124,9 +124,13 @@ each ticket deliberately did **not** close. That is what is kept.
   decision is not projected; the domain label is a coarse grouping hint (ZT denials land under `nips`, and
   giving ZT its own domain needs the Event to distinguish access from egress — a contract change
   deliberately not made for a label).
-- **XDR-4 · Cross-domain correlation rules** — ✅ D242. *Residual:* the sequence vocabulary is **domains,
-  not ATT&CK techniques** — techniques are Rego policy INPUT and are never persisted on an alert, so
-  technique-level sequences need a `Decision` contract change. Named, not faked. No alert-storm suppression
+- **XDR-4 · Cross-domain correlation rules** — ✅ D242; **the technique-vocabulary residual is closed
+  (XDR-4b, D455)**: the `Decision` contract change was made, so a rule can name an ordered ATT&CK
+  sequence (`T1552 → T1567.002`) alongside the domain sequence. The ids are DERIVED from signals and
+  refused by the contract if outside the closed vocabulary — a policy cannot declare one. *Residual:*
+  two steps cannot be satisfied by one alert (deliberate — a moment cannot evidence "then"), so a
+  chain that genuinely happens within a single event is not expressible as a sequence; no technique
+  weighting in severity; no backfill of alerts that predate the column; no alert-storm suppression
   (see `CONSOLE-41`); no retro-correlation outside the window.
 - **XDR-5 · Incident timeline** — ✅ D243. *Residual:* no backfill for pre-existing alerts/incidents; the
   timeline reports ledger COORDINATES and does not verify the chain (the anchor binary owns that); no

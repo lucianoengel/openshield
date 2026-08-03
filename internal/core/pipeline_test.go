@@ -333,6 +333,39 @@ func TestReplayDetectsDivergence(t *testing.T) {
 	}
 }
 
+// XDR-4b: the techniques are COMPARED, so a replay that reproduces the action but derives different
+// techniques is reported as a divergence. Order included — attack.Techniques sorts by id, so two runs
+// over the same signals cannot legitimately differ in order.
+func TestReplayDetectsATechniqueDivergence(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		aTech       []string
+		bTech       []string
+		wantDiverge bool
+	}{
+		{"identical", []string{"T1552", "T1567.002"}, []string{"T1552", "T1567.002"}, false},
+		{"both empty", nil, nil, false},
+		{"one more technique", []string{"T1552"}, []string{"T1552", "T1567.002"}, true},
+		{"one fewer", []string{"T1552", "T1567.002"}, []string{"T1552"}, true},
+		{"a different technique", []string{"T1552"}, []string{"T1218"}, true},
+		{"reordered", []string{"T1552", "T1567.002"}, []string{"T1567.002", "T1552"}, true},
+		{"present vs absent", []string{"T1552"}, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a, b := testDecision(), testDecision()
+			a.Techniques, b.Techniques = c.aTech, c.bTech
+			err := core.DecisionsEquivalent(a, b)
+			if c.wantDiverge && err == nil {
+				t.Fatalf("techniques %v vs %v compared equal — a replay could no longer prove the "+
+					"techniques were derived rather than asserted", c.aTech, c.bTech)
+			}
+			if !c.wantDiverge && err != nil {
+				t.Fatalf("techniques %v vs %v reported a divergence: %v", c.aTech, c.bTech, err)
+			}
+		})
+	}
+}
+
 func structFieldNames(v any) []string {
 	var out []string
 	rt := reflectTypeOf(v)

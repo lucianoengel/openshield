@@ -56,6 +56,23 @@ func DecisionsEquivalent(want, got *corev1.Decision) error {
 		return fmt.Errorf("replay: context_version %q != %q",
 			want.GetContextVersion(), got.GetContextVersion())
 	}
+	// COMPARED (XDR-4b). The techniques are a pure derivation of the same signals the policy saw —
+	// as deterministic as the action they were evaluated alongside — so a replay that reproduces the
+	// action but not the techniques is a real divergence, not noise. Excluding them would be the
+	// worse call for the reason this whole list is an allowlist: the techniques are what operators
+	// hunt over, and a silently unreplayed field is one nobody can prove was derived rather than
+	// asserted.
+	//
+	// Order is compared too. attack.Techniques sorts by id, so two runs over the same signals cannot
+	// legitimately differ in order; a difference means the derivation changed.
+	if len(want.GetTechniques()) != len(got.GetTechniques()) {
+		return fmt.Errorf("replay: techniques %v != %v", want.GetTechniques(), got.GetTechniques())
+	}
+	for i, id := range want.GetTechniques() {
+		if got.GetTechniques()[i] != id {
+			return fmt.Errorf("replay: techniques %v != %v", want.GetTechniques(), got.GetTechniques())
+		}
+	}
 	return nil
 }
 
@@ -64,7 +81,7 @@ func DecisionsEquivalent(want, got *corev1.Decision) error {
 // deliberately excluded. Without that assertion, a new field would default to
 // "not compared" and replay would silently cover less than it claims.
 var ReplayComparedFields = []string{
-	"action", "confidence", "reason", "policy_id", "policy_version", "context_version",
+	"action", "confidence", "reason", "policy_id", "policy_version", "context_version", "techniques",
 }
 
 // ReplayExcludedFields are non-deterministic by nature.

@@ -412,3 +412,85 @@ func TestAnActionOutsideTheClosedSetIsNotProjected(t *testing.T) {
 		t.Errorf("%d alert(s) were projected from an action this build does not know", got)
 	}
 }
+
+// TestATechniqueRidesTheDecisionIntoTheAlertStream (XDR-4b), through the REAL verified-ingest path:
+// a decision carrying derived ATT&CK ids lands in unified_alerts with them, and a decision carrying
+// an id from OUTSIDE the vocabulary is refused entirely rather than projected without it.
+//
+// The forgery half matters because the ids are what operators hunt over. A verified agent that could
+// write arbitrary strings into this column could manufacture an attack chain no signal evidenced, and
+// the technique-sequence rule would report it as one — the same vector the confidence clamp closes.
+//
+// Mutation: drop the technique loop from core.ValidateDecision → the forged id is projected → the
+// "no alert carries the forged technique" assertion FAILS.
+func TestATechniqueRidesTheDecisionIntoTheAlertStream(t *testing.T) {
+	url := embeddedNATS(t)
+	srv := runServer(t, url)
+	conn, err := nats.Connect(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	pub := signedAgent(t, srv, conn, "agent-xdr4b-techniques")
+	ctx := context.Background()
+	subject := pseudonym.Of("agent-xdr4b-techniques")
+
+	withTechniques := func(d *corev1.Decision, ids ...string) *corev1.Decision {
+		d.Techniques = ids
+		return d
+	}
+
+	// A well-formed decision carrying two derived techniques.
+	if err := pub.PublishEvent(ctx, kindEventFor("evt-tech-ok", subject, corev1.EventKind_EVENT_KIND_FILE_MODIFIED)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishDecision(ctx, withTechniques(
+		decisionFor("dec-tech-ok", "evt-tech-ok", corev1.Action_ACTION_BLOCK, 0.8),
+		"T1552", "T1567.002")); err != nil {
+		t.Fatal(err)
+	}
+
+	entityID := entityForAlias(t, xdr.KindDevice, subject)
+	var byDomain map[string]controlplane.UnifiedAlert
+	waitFor(t, func() bool {
+		byDomain = alertsByDomain(t, srv, entityID)
+		return len(byDomain) >= 1
+	})
+	dlp, ok := byDomain["dlp"]
+	if !ok {
+		t.Fatalf("no dlp alert for entity %d; domains present: %v", entityID, byDomain)
+	}
+	got := map[string]bool{}
+	for _, id := range dlp.Techniques {
+		got[id] = true
+	}
+	if !got["T1552"] || !got["T1567.002"] || len(dlp.Techniques) != 2 {
+		t.Fatalf("alert techniques = %v, want exactly [T1552 T1567.002] — the derivation must survive "+
+			"the Decision → contract → unified_alerts path intact", dlp.Techniques)
+	}
+
+	// THE FORGERY: a verified agent claiming a technique this build cannot derive.
+	before := srv.DecisionContractViolations.Load()
+	if err := pub.PublishEvent(ctx, kindEventFor("evt-tech-forged", subject, corev1.EventKind_EVENT_KIND_DNS_QUERY)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishDecision(ctx, withTechniques(
+		decisionFor("dec-tech-forged", "evt-tech-forged", corev1.Action_ACTION_BLOCK, 0.9),
+		"T1486")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return srv.DecisionContractViolations.Load() > before })
+
+	for _, a := range alertsByDomain(t, srv, entityID) {
+		for _, id := range a.Techniques {
+			if id == "T1486" {
+				t.Errorf("the forged technique %s reached the alert stream on %s/%s — an operator "+
+					"hunting that chain would find an incident no signal evidenced", id, a.Domain, a.Title)
+			}
+		}
+		if a.Domain == "nips" {
+			t.Errorf("the refused decision was projected anyway (%s) — a contract violation must "+
+				"drop the alert, not merely strip the field", a.Title)
+		}
+	}
+}

@@ -209,6 +209,10 @@ func (s *Server) projectDecisionAlert(ctx context.Context, payload []byte) {
 		DetectedAt:  at,
 		EventID:     d.GetEventId(),
 		DecisionID:  d.GetDecisionId(),
+		// XDR-4b: carried through only AFTER ValidateDecision above accepted every id against the
+		// closed vocabulary — so a technique in this table is one this build can trace back to a
+		// signal, not a string an enrolled producer chose.
+		Techniques: d.GetTechniques(),
 	})
 }
 

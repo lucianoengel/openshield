@@ -326,6 +326,12 @@ func TestIncidentsRuleSelection(t *testing.T) {
 		"/incidents?rule=cross_domain&window=notaduration", // malformed window
 		"/incidents?rule=cross_domain&min_severity=urgent", // not a severity bucket
 		"/incidents?rule=cross_domain&sequence=ueba,bogus", // a domain no producer emits
+		// XDR-4b: a technique this build cannot derive would silently never match, and the operator
+		// would read the empty list as "that attack chain did not happen".
+		"/incidents?rule=cross_domain&technique_sequence=T1552,T9999", // not a technique at all
+		"/incidents?rule=cross_domain&technique_sequence=T1552,T1486", // real ATT&CK, not derivable here
+		"/incidents?rule=cross_domain&technique_sequence=T1567",       // the parent of a derived sub-technique
+		"/incidents?rule=cross_domain&technique_sequence=t1552",       // case matters; the id is a key
 	} {
 		resp, err := op.Get("https://" + addr + path)
 		if err != nil {
@@ -349,7 +355,8 @@ func TestIncidentsRuleSelection(t *testing.T) {
 		}
 	}
 	// ...and so does a well-formed cross-domain request with a sequence.
-	resp, err := op.Get("https://" + addr + "/incidents?rule=cross_domain&min_domains=2&sequence=ueba,hips")
+	resp, err := op.Get("https://" + addr +
+		"/incidents?rule=cross_domain&min_domains=2&sequence=ueba,hips&technique_sequence=T1552,T1567.002")
 	if err != nil {
 		t.Fatal(err)
 	}

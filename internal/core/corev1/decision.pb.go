@@ -135,8 +135,24 @@ type Decision struct {
 	// retrofitting one into a hash-chained audit ledger (T-009) would mean a
 	// migration and a break in the chain's continuity.
 	ContextVersion string `protobuf:"bytes,9,opt,name=context_version,json=contextVersion,proto3" json:"context_version,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// MITRE ATT&CK technique ids the evidence behind this decision supported —
+	// e.g. "T1552", "T1567.002" (XDR-4b). Ids only, from a closed curated
+	// vocabulary; the display NAME is looked up per build, because MITRE renames
+	// techniques and a name frozen into a hash-chained ledger cannot be corrected.
+	//
+	// DERIVED, NEVER DECLARED. These are the ids the platform computed from its
+	// own content-free signals (detector types, threat categories, exfil channel,
+	// behavioural findings) — the same derivation the policy sees as
+	// input.attack.techniques. A policy is operator-authored text; it decides what
+	// to DO about signals and never what the signals WERE, so a technique is not
+	// read back out of a policy result.
+	//
+	// Empty means no signal mapped to a technique, which is a real answer and not
+	// a missing one — proto3 cannot distinguish the two for a repeated field, and
+	// here they are the same thing.
+	Techniques    []string `protobuf:"bytes,10,rep,name=techniques,proto3" json:"techniques,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Decision) Reset() {
@@ -232,11 +248,18 @@ func (x *Decision) GetContextVersion() string {
 	return ""
 }
 
+func (x *Decision) GetTechniques() []string {
+	if x != nil {
+		return x.Techniques
+	}
+	return nil
+}
+
 var File_openshield_v1_decision_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_decision_proto_rawDesc = "" +
 	"\n" +
-	"\x1copenshield/v1/decision.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd5\x02\n" +
+	"\x1copenshield/v1/decision.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf5\x02\n" +
 	"\bDecision\x12\x1f\n" +
 	"\vdecision_id\x18\x01 \x01(\tR\n" +
 	"decisionId\x12\x19\n" +
@@ -250,7 +273,11 @@ const file_openshield_v1_decision_proto_rawDesc = "" +
 	"\x0epolicy_version\x18\a \x01(\tR\rpolicyVersion\x129\n" +
 	"\n" +
 	"decided_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tdecidedAt\x12'\n" +
-	"\x0fcontext_version\x18\t \x01(\tR\x0econtextVersion*\xd1\x01\n" +
+	"\x0fcontext_version\x18\t \x01(\tR\x0econtextVersion\x12\x1e\n" +
+	"\n" +
+	"techniques\x18\n" +
+	" \x03(\tR\n" +
+	"techniques*\xd1\x01\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fACTION_ALLOW\x10\x01\x12\x10\n" +

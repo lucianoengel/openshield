@@ -63,4 +63,20 @@ message Decision {
   // retrofitting one into a hash-chained audit ledger (T-009) would mean a
   // migration and a break in the chain's continuity.
   string context_version = 9;
+  // MITRE ATT&CK technique ids the evidence behind this decision supported —
+  // e.g. "T1552", "T1567.002" (XDR-4b). Ids only, from a closed curated
+  // vocabulary; the display NAME is looked up per build, because MITRE renames
+  // techniques and a name frozen into a hash-chained ledger cannot be corrected.
+  //
+  // DERIVED, NEVER DECLARED. These are the ids the platform computed from its
+  // own content-free signals (detector types, threat categories, exfil channel,
+  // behavioural findings) — the same derivation the policy sees as
+  // input.attack.techniques. A policy is operator-authored text; it decides what
+  // to DO about signals and never what the signals WERE, so a technique is not
+  // read back out of a policy result.
+  //
+  // Empty means no signal mapped to a technique, which is a real answer and not
+  // a missing one — proto3 cannot distinguish the two for a repeated field, and
+  // here they are the same thing.
+  repeated string techniques = 10;
 }

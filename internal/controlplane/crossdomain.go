@@ -36,6 +36,11 @@ type CrossDomainRule struct {
 	// Sequence is an optional ORDERED domain sequence (e.g. ueba→hips→nips) that the entity's alerts
 	// must contain as a subsequence. Empty = no ordering constraint (the plain multi-domain rule).
 	Sequence []string
+	// TechniqueSequence is an optional ORDERED MITRE ATT&CK sequence (e.g. T1552→T1218→T1567.002)
+	// over the same alerts (XDR-4b). It composes with Sequence rather than replacing it — both
+	// constraints must hold — because they are different claims: one is about which detection planes
+	// fired, the other about what the adversary did.
+	TechniqueSequence []string
 	// RecurrenceWindow bounds how far back a closed incident may be and still count as this one's
 	// predecessor (SOAR-2b). 0 = DefaultRecurrenceWindow.
 	RecurrenceWindow time.Duration
@@ -43,14 +48,18 @@ type CrossDomainRule struct {
 
 // CrossDomainIncident is a correlated multi-domain group of alerts for ONE entity.
 type CrossDomainIncident struct {
-	EntityID    int64     `json:"entity_id"`
-	SubjectID   string    `json:"subject_id"` // a representative subject, for display only
-	AlertCount  int       `json:"alert_count"`
-	DomainCount int       `json:"domain_count"`
-	Severity    string    `json:"severity"` // max contributing bucket, escalated by domain breadth
-	Domains     []string  `json:"domains"`  // distinct domains, in first-seen order
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
+	EntityID    int64    `json:"entity_id"`
+	SubjectID   string   `json:"subject_id"` // a representative subject, for display only
+	AlertCount  int      `json:"alert_count"`
+	DomainCount int      `json:"domain_count"`
+	Severity    string   `json:"severity"` // max contributing bucket, escalated by domain breadth
+	Domains     []string `json:"domains"`  // distinct domains, in first-seen order
+	// Techniques are the distinct ATT&CK ids the contributing alerts carried, in first-seen order
+	// (XDR-4b). Omitted when none of them carried one — an incident of alerts whose signals mapped to
+	// no technique reports no techniques, rather than an empty list that reads as a checked result.
+	Techniques []string  `json:"techniques,omitempty"`
+	FirstSeen  time.Time `json:"first_seen"`
+	LastSeen   time.Time `json:"last_seen"`
 	// AlertIDs are the contributing unified alerts, in detection order (XDR-5). Recorded at
 	// materialization so an incident's evidence set is what the correlation ACTUALLY saw — recomputing it
 	// at read time would let the set silently shrink as alerts aged out of the window.
@@ -138,6 +147,53 @@ func matchesSequence(ordered, want []string) bool {
 	return false
 }
 
+// matchesTechniqueSequence reports whether `want` appears as an ORDERED subsequence over `perAlert`,
+// the entity's alerts in detection order, each carrying the technique ids that alert evidenced.
+//
+// The rule that is not obvious: TWO STEPS MAY NOT BE SATISFIED BY THE SAME ALERT, so the alert index
+// advances strictly. An alert routinely carries several techniques — copying a private key into a
+// cloud-sync folder evidences both T1552 and T1567.002 from ONE event — and set containment would
+// call that a match for "T1552 then T1567.002". It is not one. The sequence is an ordering claim, and
+// one alert is one moment: it cannot evidence "then". This is the same reasoning that made
+// matchesSequence reject a reversed domain order rather than accept the set.
+//
+// An empty `want` matches everything (no technique constraint requested).
+func matchesTechniqueSequence(perAlert [][]string, want []string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	step := 0
+	for _, techs := range perAlert {
+		for _, t := range techs {
+			if t == want[step] {
+				step++
+				break // this alert has spent its turn — the next step needs a LATER alert
+			}
+		}
+		if step == len(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitTechniques turns the space-joined per-alert aggregation back into a slice per alert.
+//
+// The join exists because `array_agg(techniques ORDER BY …)` over a TEXT[] column would build a
+// TWO-DIMENSIONAL array, and Postgres requires those to be rectangular. Measured, not assumed:
+// `SELECT array_agg(t) FROM (VALUES (ARRAY['a','b']), (ARRAY['c'])) v(t)` fails with
+// `ERROR: cannot accumulate arrays of different dimensionality`. So the moment one alert carries two
+// techniques and another carries one, the query errors at RUNTIME, on real data, having looked
+// perfectly reasonable in review. Aggregating `array_to_string(techniques, ' ')` yields a flat TEXT[]
+// instead — unambiguous because a technique id (T####[.###]) contains no spaces.
+func splitTechniques(joined []string) [][]string {
+	out := make([][]string, len(joined))
+	for i, j := range joined {
+		out[i] = strings.Fields(j)
+	}
+	return out
+}
+
 // distinctInOrder returns the distinct values of a sequence in first-seen order — the incident's domain
 // list, stable for display and for a test to assert against.
 func distinctInOrder(values []string) []string {
@@ -186,7 +242,8 @@ func (s *Server) CorrelateCrossDomain(ctx context.Context, rule CrossDomainRule,
 		        array_agg(domain   ORDER BY detected_at, id),
 		        array_agg(severity ORDER BY detected_at, id),
 		        (array_agg(subject_id ORDER BY detected_at, id))[1],
-		        array_agg(id ORDER BY detected_at, id)
+		        array_agg(id ORDER BY detected_at, id),
+		        array_agg(array_to_string(coalesce(techniques, '{}'), ' ') ORDER BY detected_at, id)
 		   FROM unified_alerts
 		  WHERE detected_at >= $1
 		    AND CASE severity WHEN 'critical' THEN 3 WHEN 'high' THEN 2 WHEN 'medium' THEN 1
@@ -204,14 +261,25 @@ func (s *Server) CorrelateCrossDomain(ctx context.Context, rule CrossDomainRule,
 			inc        CrossDomainIncident
 			domains    []string
 			severities []string
+			joinedTech []string
 		)
 		if err := rows.Scan(&inc.EntityID, &inc.AlertCount, &inc.DomainCount,
-			&inc.FirstSeen, &inc.LastSeen, &domains, &severities, &inc.SubjectID, &inc.AlertIDs); err != nil {
+			&inc.FirstSeen, &inc.LastSeen, &domains, &severities, &inc.SubjectID, &inc.AlertIDs,
+			&joinedTech); err != nil {
 			return nil, err
 		}
 		if !matchesSequence(domains, rule.Sequence) {
 			continue
 		}
+		perAlertTech := splitTechniques(joinedTech)
+		if !matchesTechniqueSequence(perAlertTech, rule.TechniqueSequence) {
+			continue
+		}
+		var flatTech []string
+		for _, t := range perAlertTech {
+			flatTech = append(flatTech, t...)
+		}
+		inc.Techniques = distinctInOrder(flatTech)
 		inc.Domains = distinctInOrder(domains)
 		inc.Severity = escalateSeverity(maxSeverity(severities), inc.DomainCount)
 		out = append(out, inc)
