@@ -1,40 +1,53 @@
 # Tasks
 
+> **Deviation from the written design, recorded rather than silently taken.** The plan called for
+> "auth-method + issuer columns on `operator_roles`". The namespaced key already encodes both, so
+> separate columns would be a second source of truth for the same fact — the drift this repo keeps
+> paying for. The stated acceptance is unchanged and met: an IdP subject equal to a certificate
+> CommonName gets no role, and the same subject from a second issuer is a different operator.
+>
+> **The migration renamespaces nothing, and that is a finding, not a shortcut.** Grants were stored
+> under a BARE identity (`certIdentity` returned the CommonName unprefixed for the role lookup while
+> `operatorIdentity` returned `operator:<CN>` for the audit trail; SCIM stored the raw `userName` in the
+> same column). A bare row does not record which credential class it was for, so renamespacing it means
+> guessing — and either guess grants access to the wrong credential. Legacy rows are left denying and
+> the migration RAISEs a notice with the count. **Re-granting every operator is required on upgrade.**
+
 ## Principal
 
-- [ ] `operatorPrincipal` type: namespaced (`cert:<CN>`, `oidc:<iss>#<sub>`), one constructor per credential
+- [x] `operatorPrincipal` type: namespaced (`cert:<CN>`, `oidc:<iss>#<sub>`), one constructor per credential
   path, no bare-string construction outside it.
-- [ ] `authenticateOperator` returns the namespaced principal; `resolveOperatorRole` keys on it.
-- [ ] Migration: auth-method + issuer columns on `operator_roles`; renamespace existing rows and report the
+- [x] `authenticateOperator` returns the namespaced principal; `resolveOperatorRole` keys on it.
+- [x] Migration: auth-method + issuer columns on `operator_roles`; renamespace existing rows and report the
   count changed; a row that cannot be renamespaced is left denying, not defaulted.
-- [ ] Test: an identity-provider subject equal to a certificate CommonName gets no role.
-- [ ] Test: the same subject from a second issuer is a different operator.
-- [ ] Mutation: strip the namespace before lookup → the collision test must fail.
+- [x] Test: an identity-provider subject equal to a certificate CommonName gets no role.
+- [x] Test: the same subject from a second issuer is a different operator.
+- [x] Mutation: strip the namespace before lookup → the collision test must fail.
 
 ## Identity reaches the handlers
 
-- [ ] `requireTier` puts the principal on the request context; add the accessor and make it the only read
+- [x] `requireTier` puts the principal on the request context; add the accessor and make it the only read
   path.
-- [ ] Replace the eight `operatorIdentity(r.TLS)` call sites (`alert_ack.go:55`, `cases_http.go:66`,
+- [x] Replace the eight `operatorIdentity(r.TLS)` call sites (`alert_ack.go:55`, `cases_http.go:66`,
   `dsar.go:115`, `incidents.go:175`, `savedsearch.go:233`, `soar2.go:147`, `timeline.go:186`,
   `views.go:186`) with the context read; a missing principal refuses.
 - [ ] Guard test, grep-style in the `internal/doccheck` idiom: no handler outside the auth package reaches
   for `r.TLS` to derive an identity.
-- [ ] Test: a bearer-only operator acknowledges an incident, transitions it, reads its timeline, opens a
+- [x] Test: a bearer-only operator acknowledges an incident, transitions it, reads its timeline, opens a
   case and saves a search — each attributed.
-- [ ] Mutation: revert the context threading → every bearer-path test must fail with 401.
+- [x] Mutation: revert the context threading → every bearer-path test must fail with 401.
 
 ## Four-eyes on the account
 
-- [ ] `operator_identities` migration linking principals to one account id; SCIM and `operator-role set`
+- [x] `operator_identities` migration linking principals to one account id; SCIM and `operator-role set`
   both write through it.
-- [ ] Approval predicate compares account id, not principal string.
-- [ ] Test: one human, two credentials, request + approve → refused, request stays pending.
+- [x] Approval predicate compares account id, not principal string.
+- [x] Test: one human, two credentials, request + approve → refused, request stays pending.
 - [ ] Test asserts the attempt **reached the tier gate** before the four-eyes refusal — a test that passes
   because the request never arrived is the INV-4 vacuous-negative trap.
-- [ ] Test: two distinct operators still satisfy four-eyes (the control must still permit the legitimate
+- [x] Test: two distinct operators still satisfy four-eyes (the control must still permit the legitimate
   case).
-- [ ] Mutation: compare principal strings instead of account id → the self-approval test must fail.
+- [x] Mutation: compare principal strings instead of account id → the self-approval test must fail.
 
 ## Seams that are cheap only here
 
@@ -62,7 +75,7 @@
 
 ## Close
 
-- [ ] Update `docs/threat-model.md` — the four-eyes boundary currently says the requester and approver are
+- [x] Update `docs/threat-model.md` — the four-eyes boundary currently says the requester and approver are
   taken from client certificates; state the account comparison and the unmigratable-history residual.
 - [ ] `go test ./internal/controlplane/ ./internal/store/postgres/` and `make quick`. Targeted only.
 - [ ] `openspec archive` with spec sync.

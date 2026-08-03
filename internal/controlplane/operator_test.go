@@ -118,8 +118,8 @@ func TestAuthenticatedViewRecordsCertIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(views) != 1 || views[0].Viewer != "operator:alice" {
-		t.Fatalf("recorded views = %+v, want one viewer 'operator:alice'", views)
+	if len(views) != 1 || views[0].Viewer != "cert:alice" {
+		t.Fatalf("recorded views = %+v, want one viewer 'cert:alice'", views)
 	}
 
 	// 3.3 — the legacy library path is distinguishable (unauthenticated:<user>).
@@ -130,7 +130,7 @@ func TestAuthenticatedViewRecordsCertIdentity(t *testing.T) {
 	var auth, unauth int
 	for _, v := range views {
 		switch {
-		case v.Viewer == "operator:alice":
+		case v.Viewer == "cert:alice":
 			auth++
 		case v.Viewer == "unauthenticated:bob":
 			unauth++

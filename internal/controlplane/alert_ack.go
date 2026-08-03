@@ -52,7 +52,7 @@ func (s *Server) alertAckHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	operator := operatorIdentity(r.TLS)
+	operator := operatorIdentity(r.Context())
 	if operator == "" {
 		http.Error(w, "client certificate required", http.StatusUnauthorized)
 		return

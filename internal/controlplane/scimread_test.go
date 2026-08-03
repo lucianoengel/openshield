@@ -43,11 +43,11 @@ func totalResults(t *testing.T, body map[string]any) int {
 
 func TestScimSearchFindsAnExistingUserSoTheProviderDoesNotDuplicateIt(t *testing.T) {
 	pool := requireDB(t)
-	s := controlplane.New(pool)
+	s := scimServer(t, pool)
 	ctx := context.Background()
 	const who = "search-hit@corp.example"
 	t.Setenv("OPENSHIELD_SCIM_TOKEN", "scim-secret")
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, scimP(who)) })
 
 	if rec := scimReq(t, s, http.MethodPost, scimUsersPath, "scim-secret",
 		`{"userName":"`+who+`","active":true}`); rec.Code != http.StatusCreated {
@@ -69,7 +69,7 @@ func TestScimSearchFindsAnExistingUserSoTheProviderDoesNotDuplicateIt(t *testing
 
 func TestScimSearchForAnUnknownUserIsEmptyRatherThanAnError(t *testing.T) {
 	pool := requireDB(t)
-	s := controlplane.New(pool)
+	s := scimServer(t, pool)
 	t.Setenv("OPENSHIELD_SCIM_TOKEN", "scim-secret")
 
 	code, body := scimSearchFor(t, s, "scim-secret", `userName eq "nobody-here@corp.example"`)
@@ -103,13 +103,13 @@ func TestScimSearchForAnUnknownUserIsEmptyRatherThanAnError(t *testing.T) {
 // cannot fail now, but it would be dishonest to count it among the mutation kills.
 func TestAnUnrecognisedFilterMatchesNothingRatherThanEveryone(t *testing.T) {
 	pool := requireDB(t)
-	s := controlplane.New(pool)
+	s := scimServer(t, pool)
 	ctx := context.Background()
 	const who = "filter-victim@corp.example"
 	t.Setenv("OPENSHIELD_SCIM_TOKEN", "scim-secret")
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, scimP(who)) })
 
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, scimP(who), "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,13 +140,13 @@ func TestAnUnrecognisedFilterMatchesNothingRatherThanEveryone(t *testing.T) {
 // slice offset is computed from the lowercased form.
 func TestFilterParsingHandlesCaseAndOddInput(t *testing.T) {
 	pool := requireDB(t)
-	s := controlplane.New(pool)
+	s := scimServer(t, pool)
 	ctx := context.Background()
 	const who = "case-test@corp.example"
 	t.Setenv("OPENSHIELD_SCIM_TOKEN", "scim-secret")
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, scimP(who)) })
 
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, scimP(who), "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,17 +187,17 @@ func TestFilterParsingHandlesCaseAndOddInput(t *testing.T) {
 
 func TestScimGetReportsWhetherTheOperatorIsStillActive(t *testing.T) {
 	pool := requireDB(t)
-	s := controlplane.New(pool)
+	s := scimServer(t, pool)
 	ctx := context.Background()
 	const who = "get-test@corp.example"
 	t.Setenv("OPENSHIELD_SCIM_TOKEN", "scim-secret")
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, scimP(who)) })
 
 	if rec := scimReq(t, s, http.MethodGet, scimUsersPath+"/"+who, "scim-secret", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("GET for an unknown user returned %d, want 404", rec.Code)
 	}
 
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, scimP(who), "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 	active := scimGetActive(t, s, who)
@@ -240,7 +240,7 @@ func scimGetActive(t *testing.T, s *controlplane.Server, who string) bool {
 // would hand the whole operator roster to anyone who could reach the port.
 func TestScimReadsNeedTheScimToken(t *testing.T) {
 	pool := requireDB(t)
-	s := controlplane.New(pool)
+	s := scimServer(t, pool)
 	t.Setenv("OPENSHIELD_SCIM_TOKEN", "scim-secret")
 
 	for _, tc := range []struct{ name, path, token string }{

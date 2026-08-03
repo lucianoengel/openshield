@@ -900,6 +900,13 @@ func operatorRole(dsn string, args []string) int {
 	usage := "usage: openshield-server operator-role set <identity> <analyst|responder|admin>\n" +
 		"       openshield-server operator-role revoke <identity>\n" +
 		"       openshield-server operator-role list\n\n" +
+		"<identity> is a NAMESPACED PRINCIPAL naming the credential that will present it (CONSOLE-1):\n" +
+		"  cert:<CommonName>          a CA-issued operator client certificate\n" +
+		"  oidc:<issuer>#<subject>    a verified operator bearer token\n" +
+		"  svc:<name>                 a machine principal; can never satisfy four-eyes\n\n" +
+		"A bare name is refused. The issuer is part of an SSO identity because a subject is unique only\n" +
+		"within one issuer — and without it, a provider that calls someone \"alice\" would inherit the\n" +
+		"grant made to the certificate whose CommonName is alice.\n\n" +
 		"Takes effect on the operator's NEXT REQUEST — the role is resolved server-side per request, not\n" +
 		"baked into their certificate."
 	if len(args) < 1 {

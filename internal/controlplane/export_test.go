@@ -130,3 +130,10 @@ func (s *Server) InsertFleetTelemetryForTest(t interface{ Fatalf(string, ...any)
 func PlausibleObservationTimeForTest(ev *corev1.Event, receivedAt time.Time, tolerance time.Duration) (time.Time, bool) {
 	return plausibleObservationTime(ev, receivedAt, tolerance)
 }
+
+// RequireTierForTestHandler wraps a real handler in the tier gate, so a test exercises the request
+// exactly as production builds it — including the authenticated principal the gate puts on the context
+// (CONSOLE-1). RequireTierForTest answers only the gate's own status code; this one lets the handler run.
+func RequireTierForTestHandler(s *Server, minRole string, h http.Handler) http.Handler {
+	return s.requireTier(minRole, h)
+}

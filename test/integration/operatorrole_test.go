@@ -55,7 +55,12 @@ func TestAnOperatorsRoleChangesWithoutANewCertificate(t *testing.T) {
 	stack, _, base := mtlsServer(t, p)
 
 	// A certificate that says RESPONDER, and it never changes.
+	//
+	// The GRANT names the credential class (CONSOLE-1): `cert:carol` is a role for whoever presents a
+	// certificate with that CommonName, and it is a different principal from an identity-provider
+	// subject that happens to also be called carol.
 	const who = "carol"
+	const principal = "cert:" + who
 	client := p.operator(t, "responder", who)
 
 	// `/alerts/ack` requires responder; `/alerts` requires analyst.
@@ -69,20 +74,20 @@ func TestAnOperatorsRoleChangesWithoutANewCertificate(t *testing.T) {
 	}
 
 	// RECORD THE ROLE, then demote. Both through the shipped CLI, against the running server.
-	operatorRoleCmd(t, stack, "set", who, "responder")
+	operatorRoleCmd(t, stack, "set", principal, "responder")
 	if code := opGet(t, client, base+respRoute); code == http.StatusForbidden {
 		t.Fatalf("a recorded responder was refused a responder route (403) — the server is not reading what " +
 			"the CLI wrote")
 	}
 
-	operatorRoleCmd(t, stack, "set", who, "analyst")
+	operatorRoleCmd(t, stack, "set", principal, "analyst")
 	// The demotion must be visible to the SAME client on the SAME certificate, with no restart of either
 	// side. Retried briefly only because the CLI and the server are separate processes; the server holds no
 	// cache, so this settles immediately in practice.
 	if code := eventuallyStatus(t, client, base+respRoute, http.StatusForbidden); code != http.StatusForbidden {
 		t.Fatalf("after `operator-role set %s analyst`, the responder route still returned %d. The SAME "+
 			"certificate was presented throughout — an authorization change that needs a new certificate is "+
-			"the defect ZT-7 exists to remove", who, code)
+			"the defect ZT-7 exists to remove", principal, code)
 	}
 	// And the tier they still hold works, so the demotion removed exactly what it should and no more.
 	if code := opGet(t, client, base+analystRoute); code == http.StatusForbidden {
@@ -90,7 +95,7 @@ func TestAnOperatorsRoleChangesWithoutANewCertificate(t *testing.T) {
 	}
 
 	// REVOCATION, also through the CLI, also on the same certificate.
-	operatorRoleCmd(t, stack, "revoke", who)
+	operatorRoleCmd(t, stack, "revoke", principal)
 	if code := eventuallyStatus(t, client, base+analystRoute, http.StatusForbidden); code != http.StatusForbidden {
 		t.Fatalf("a revoked operator still reached an analyst route (%d) holding a valid certificate. "+
 			"Revocation that waits for a certificate to expire is not revocation", code)
@@ -187,7 +192,10 @@ func TestAnSsoOperatorIsAuthorizedByTheServerAgainstTheRealBinary(t *testing.T) 
 		t.Errorf("a request with no credential got %d, want 401", code)
 	}
 
-	operatorRoleCmd(t, stack, "set", who, "analyst")
+	// The SSO grant names the ISSUER as well as the subject (CONSOLE-1): `sub` is unique only within an
+	// issuer, so a grant that omitted it would be inherited by anyone another trusted provider called by
+	// the same name — and by the certificate whose CommonName matches.
+	operatorRoleCmd(t, stack, "set", "oidc:"+issuer+"#"+who, "analyst")
 	if code := req(token); code != http.StatusOK {
 		t.Fatalf("a granted SSO operator was refused: %d", code)
 	}
@@ -210,7 +218,7 @@ func TestAnSsoOperatorIsAuthorizedByTheServerAgainstTheRealBinary(t *testing.T) 
 	}
 
 	// AND REVOCATION APPLIES TO THE TOKEN THEY ALREADY HOLD.
-	operatorRoleCmd(t, stack, "revoke", who)
+	operatorRoleCmd(t, stack, "revoke", "oidc:"+issuer+"#"+who)
 	deadline := time.Now().Add(30 * time.Second)
 	code := 0
 	for time.Now().Before(deadline) {

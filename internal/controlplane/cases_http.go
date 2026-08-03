@@ -63,7 +63,7 @@ func actor(w http.ResponseWriter, r *http.Request, method string) (string, bool)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return "", false
 	}
-	op := operatorIdentity(r.TLS)
+	op := operatorIdentity(r.Context())
 	if op == "" {
 		http.Error(w, "client certificate required", http.StatusUnauthorized)
 		return "", false

@@ -39,8 +39,13 @@ func TestTheConfigSchemaEndpointCarriesBoundsAndDirection(t *testing.T) {
 	}
 	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{parsed}}
 
+	// THROUGH THE REAL GATE. requireTier is what puts the authenticated principal on the request
+	// context (CONSOLE-1), and the handlers read it from there — so calling the inner mux directly
+	// would test a request that production never makes, and would answer 401 for a reason production
+	// never hits.
 	rr := httptest.NewRecorder()
-	srv.OperatorReadHandler().ServeHTTP(rr, req)
+	controlplane.RequireTierForTestHandler(srv, controlplane.RoleAdmin, srv.OperatorReadHandler()).
+		ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /config/schema = %d, body %q", rr.Code, rr.Body.String())
 	}

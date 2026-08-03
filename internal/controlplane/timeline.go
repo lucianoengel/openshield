@@ -183,7 +183,7 @@ func (s *Server) incidentTimelineHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	viewer := operatorIdentity(r.TLS)
+	viewer := operatorIdentity(r.Context())
 	if viewer == "" {
 		http.Error(w, "client certificate required", http.StatusUnauthorized)
 		return

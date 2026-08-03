@@ -77,11 +77,21 @@ func (s *Server) RequestApproval(ctx context.Context, kind, subjectID, requester
 	if ttl <= 0 {
 		ttl = DefaultApprovalTTL
 	}
+	// THE ACCOUNT IS RESOLVED AT REQUEST TIME AND STORED (CONSOLE-1). Four-eyes compares people, and the
+	// requester's credential is only one of possibly several a person holds.
+	requesterAccount, aerr := s.accountFor(ctx, requester)
+	if aerr != nil {
+		// Not a fallback to the raw principal: that would downgrade the comparison from people to
+		// credentials exactly when the linking table is unreadable, which is a fail-open on the control
+		// this table exists to make real.
+		return 0, fmt.Errorf("controlplane: resolving the requester's account: %w", aerr)
+	}
 	var id int64
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO approvals (subject_kind, subject_id, requester, reason, expires_at)
-		 VALUES ($1,$2,$3,$4, now() + $5::interval) RETURNING id`,
-		kind, subjectID, requester, reason, fmt.Sprintf("%d seconds", int(ttl.Seconds()))).Scan(&id)
+		`INSERT INTO approvals (subject_kind, subject_id, requester, requester_account, reason, expires_at)
+		 VALUES ($1,$2,$3,$4,$5, now() + $6::interval) RETURNING id`,
+		kind, subjectID, requester, requesterAccount, reason,
+		fmt.Sprintf("%d seconds", int(ttl.Seconds()))).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -124,14 +134,29 @@ func (s *Server) ResolveApproval(ctx context.Context, id int64, approver string,
 	if approve && !assurance.Strong() && RequireStrongFourEyes() {
 		return fmt.Errorf("%w: %s", ErrWeakFourEyes, strings.Join(assurance.Gaps, "; "))
 	}
+	// THE COMPARISON IS ON THE ACCOUNT, NOT THE CREDENTIAL STRING (CONSOLE-1).
+	//
+	// One human holding a certificate and an SSO login presents two different principals, and comparing
+	// those strings is satisfied by one person acting twice. The credential is still RECORDED — "alice
+	// approved it from a browser session" is a different fact from "alice approved it", and an
+	// investigation needs the second one — but it is not what the control compares.
+	//
+	// Still inside the UPDATE predicate, which is the property that made this a control rather than a
+	// check: two operators racing cannot both succeed, and moving the comparison into Go would
+	// reintroduce exactly the race the original got right.
+	approverAccount, aerr := s.accountFor(ctx, approver)
+	if aerr != nil {
+		return fmt.Errorf("controlplane: resolving the approver's account: %w", aerr)
+	}
 	state := ApprovalDenied
 	if approve {
 		state = ApprovalApproved
 	}
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE approvals SET state = $1, approver = $2, resolved_at = now(), assurance = $4
-		  WHERE id = $3 AND state = 'pending' AND expires_at > now() AND requester <> $2`,
-		state, approver, id, assurance.Level)
+		`UPDATE approvals SET state = $1, approver = $2, approver_account = $5, resolved_at = now(),
+		        assurance = $4
+		  WHERE id = $3 AND state = 'pending' AND expires_at > now() AND requester_account <> $5`,
+		state, approver, id, assurance.Level, approverAccount)
 	if err != nil {
 		return err
 	}
@@ -139,10 +164,11 @@ func (s *Server) ResolveApproval(ctx context.Context, id int64, approver string,
 		return nil
 	}
 	// Nothing moved — report which rule refused it.
-	var cur, requester string
+	var cur, requesterAccount string
 	var expires time.Time
 	if err := s.pool.QueryRow(ctx,
-		`SELECT state, requester, expires_at FROM approvals WHERE id = $1`, id).Scan(&cur, &requester, &expires); err != nil {
+		`SELECT state, requester_account, expires_at FROM approvals WHERE id = $1`, id).
+		Scan(&cur, &requesterAccount, &expires); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrApprovalNotFound
 		}
@@ -153,8 +179,10 @@ func (s *Server) ResolveApproval(ctx context.Context, id int64, approver string,
 		return fmt.Errorf("%w: already %s", ErrApprovalNotPending, cur)
 	case !expires.After(time.Now()):
 		return ErrApprovalExpired
-	case requester == approver:
-		// The security case, reported as the existing four-eyes error so callers keep one sentinel.
+	case requesterAccount == approverAccount:
+		// The security case, reported as the existing four-eyes error so callers keep one sentinel. It
+		// now also catches the case that motivated CONSOLE-1: two DIFFERENT credentials belonging to one
+		// person, which the old string comparison waved through.
 		return ErrFourEyes
 	default:
 		return ErrApprovalNotPending

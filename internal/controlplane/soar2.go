@@ -167,7 +167,7 @@ func (s *Server) incidentTransitionHandler(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	operator := operatorIdentity(r.TLS)
+	operator := operatorIdentity(r.Context())
 	if operator == "" {
 		http.Error(w, "client certificate required", http.StatusUnauthorized)
 		return

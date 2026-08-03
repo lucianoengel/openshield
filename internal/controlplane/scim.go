@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -43,6 +44,32 @@ var (
 	scimDeprovisioned atomic.Int64
 	scimProvisioned   atomic.Int64
 )
+
+// scimPrincipal turns a SCIM userName into the canonical principal that operator will LOG IN as
+// (CONSOLE-1).
+//
+// SCIM is the identity provider's provisioning channel, so a SCIM-provisioned operator authenticates
+// with a token from that same provider — their principal is `oidc:<issuer>#<userName>`, and the issuer
+// comes from the verifier this server is configured with rather than from anything the provider sends.
+//
+// WITHOUT A CONFIGURED OPERATOR OIDC VERIFIER THERE IS NO ISSUER, and provisioning is REFUSED rather
+// than recorded under a guessed namespace. A row nobody can ever log in as grants nothing, which is
+// harmless; the dangerous half is deactivation, which would then revoke a principal that does not exist
+// while the operator's real one keeps working — a deprovisioning that reports success and removes no
+// access. That is the failure D380 exists to prevent, so it fails closed and says why.
+func (s *Server) scimPrincipal(userName string) (string, error) {
+	v := s.operatorOIDCVerifier()
+	if v == nil {
+		return "", errors.New("controlplane: SCIM needs operator SSO configured — a provisioned identity " +
+			"is an identity-provider subject, and without the issuer it cannot be matched to the " +
+			"principal that operator logs in as")
+	}
+	p, err := oidcPrincipal(v.Issuer(), userName)
+	if err != nil {
+		return "", err
+	}
+	return p.String(), nil
+}
 
 // ScimDeprovisioned reports how many operators the identity provider has deactivated through SCIM.
 func ScimDeprovisioned() int64 { return scimDeprovisioned.Load() }
@@ -123,7 +150,12 @@ func (s *Server) scimCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// RECORDED WITH NO ROLE. The provider says this person exists; an administrator still decides what they
 	// may do. See the file comment — granting here would put authorization back in the credential path.
-	if err := s.recordOperatorIdentity(r.Context(), u.UserName, "scim"); err != nil {
+	principal, perr := s.scimPrincipal(u.UserName)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.recordOperatorIdentity(r.Context(), principal, "scim"); err != nil {
 		http.Error(w, "could not record the identity", http.StatusInternalServerError)
 		return
 	}
@@ -173,7 +205,12 @@ func (s *Server) scimReplace(w http.ResponseWriter, r *http.Request, id string) 
 
 // scimDelete is deprovisioning by the other verb some providers use. Same effect: revoked, not forgotten.
 func (s *Server) scimDelete(w http.ResponseWriter, r *http.Request, id string) {
-	if err := s.RevokeOperator(r.Context(), id, "scim"); err != nil {
+	principal, perr := s.scimPrincipal(id)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.RevokeOperator(r.Context(), principal, "scim"); err != nil {
 		http.Error(w, "could not revoke", http.StatusInternalServerError)
 		return
 	}
@@ -184,10 +221,17 @@ func (s *Server) scimDelete(w http.ResponseWriter, r *http.Request, id string) {
 
 // applyScimActive is the operation that matters: active=false revokes, immediately.
 func (s *Server) applyScimActive(ctx context.Context, w http.ResponseWriter, id string, active bool) {
+	// The provider addresses its own userName; the role table is keyed by the principal that operator
+	// logs in as. Responding with `id` keeps the provider's view of its own object intact.
+	principal, perr := s.scimPrincipal(id)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if !active {
 		// REVOKED, NOT DELETED. A revocation is a row (D372) — deleting would fall back to whatever the
 		// operator's certificate says, which would restore the access this call exists to remove.
-		if err := s.RevokeOperator(ctx, id, "scim"); err != nil {
+		if err := s.RevokeOperator(ctx, principal, "scim"); err != nil {
 			http.Error(w, "could not revoke", http.StatusInternalServerError)
 			return
 		}
@@ -199,7 +243,7 @@ func (s *Server) applyScimActive(ctx context.Context, w http.ResponseWriter, id 
 	}
 	// REACTIVATION DOES NOT RESTORE A ROLE. It clears the revocation only if an administrator has since
 	// granted one; on its own it leaves the operator with no access, for the same reason a create does.
-	if err := s.recordOperatorIdentity(ctx, id, "scim"); err != nil {
+	if err := s.recordOperatorIdentity(ctx, principal, "scim"); err != nil {
 		http.Error(w, "could not record the identity", http.StatusInternalServerError)
 		return
 	}
@@ -225,7 +269,12 @@ func activeFromPatch(path string, value json.RawMessage) (bool, bool) {
 }
 
 func (s *Server) scimGet(w http.ResponseWriter, r *http.Request, id string) {
-	role, revoked, err := s.lookupOperatorRole(r.Context(), id)
+	principal, perr := s.scimPrincipal(id)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	role, revoked, err := s.lookupOperatorRole(r.Context(), principal)
 	if err != nil {
 		http.Error(w, "user not found", http.StatusNotFound)
 		return
@@ -239,8 +288,13 @@ func (s *Server) scimSearch(w http.ResponseWriter, r *http.Request) {
 	name := userNameFromFilter(r.URL.Query().Get("filter"))
 	resources := []map[string]any{}
 	if name != "" {
-		if _, revoked, err := s.lookupOperatorRole(r.Context(), name); err == nil {
-			resources = append(resources, scimUserBody(name, !revoked))
+		// Looked up by PRINCIPAL and reported by userName: the provider asked about its own object, and
+		// a search that misses because it queried the wrong key would have the provider create a
+		// duplicate — which is how a deactivation later addresses a row nobody logs in as.
+		if principal, perr := s.scimPrincipal(name); perr == nil {
+			if _, revoked, err := s.lookupOperatorRole(r.Context(), principal); err == nil {
+				resources = append(resources, scimUserBody(name, !revoked))
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/scim+json")

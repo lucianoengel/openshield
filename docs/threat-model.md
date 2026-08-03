@@ -138,16 +138,34 @@ independence is the whole guarantee. A witness key the deployer holds attests to
 **What it gets:** the console, and therefore configuration, cases, and the response surface.
 
 **What bounds it:** FOUR-EYES on the acts that matter — closing an investigation, disabling enforcement
-fleet-wide, containing a subject. The requester and the approver are taken from client CERTIFICATES,
+fleet-wide, containing a subject. The requester and the approver are taken from the VERIFIED CREDENTIAL,
 never from a request field, so an administrator cannot approve their own action by naming someone else.
 Every configuration change is a revision with an author, and a rollback is a NEW revision: the audit
 trail cannot be rewound by the same authority that writes it.
 
-**Proven by:** `TestFourEyesCaseClosureRefusesTheRequester`, `TestAHighImpactIntentNeedsTwoOperatorsAndThenReachesTheBroker`,
-`TestRollbackRestoresValuesAsANewRevision`.
+**The comparison is on the ACCOUNT, not the credential (CONSOLE-1).** A person may hold a client
+certificate and an SSO login; those are two principals — `cert:<CN>` and `oidc:<issuer>#<sub>` — and
+comparing those strings would be satisfied by one human requesting from the CLI and approving from the
+browser. `operator_identities` links a person's principals to one account and the approval predicate
+compares that, still inside the UPDATE so two operators racing cannot both succeed. The CREDENTIAL is
+still recorded, because "who approved it" and "from which session" are different facts and an
+investigation needs both.
 
-**Honest limit:** four-eyes is arithmetic on identities, so it is exactly as strong as the CA's issuance
-discipline. Whoever can mint an operator certificate can be both pairs of eyes.
+**Proven by:** `TestFourEyesCaseClosureRefusesTheRequester`, `TestAHighImpactIntentNeedsTwoOperatorsAndThenReachesTheBroker`,
+`TestRollbackRestoresValuesAsANewRevision`, `TestOneHumanWithTwoCredentialsCannotBeBothPairsOfEyes`.
+
+**Honest limits.** Four-eyes is arithmetic on identities, so it is exactly as strong as the CA's issuance
+discipline: whoever can mint an operator certificate can be both pairs of eyes. It distinguishes two
+ACCOUNTS, never two PEOPLE — two accounts under one person's control satisfy it, and nothing available
+at the deployment boundary can tell. And the account link is something an administrator MAINTAINS: an
+operator whose second credential nobody linked is two accounts to this control. What SEC-D added is that
+the deployment's ability to tell credentials apart is now recorded on every approval and stated at
+startup, so the trail no longer claims more than the deployment could deliver.
+
+**Unmigratable history:** approvals resolved before CONSOLE-1 carry the identity strings in use at the
+time, which are not canonical principals. They are left as they are — rewriting an audit trail to match
+a later naming scheme would be editing evidence — so a query joining old approvals to current principals
+will not match, by design.
 
 ## Offline endpoint
 

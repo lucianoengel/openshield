@@ -46,13 +46,16 @@ func TestARoleChangeTakesEffectWithoutReissuingTheCertificate(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "operator-zt7-demote"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "cert:" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
 
 	// The certificate says RESPONDER and never changes for the whole test.
 	state := certFor(t, who, "responder")
 	gate := controlplane.RequireTierForTest(s, "responder")
 
-	if err := s.SetOperatorRole(ctx, who, "responder", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, principal, "responder", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serve(t, gate, state); code != http.StatusOK {
@@ -60,7 +63,7 @@ func TestARoleChangeTakesEffectWithoutReissuingTheCertificate(t *testing.T) {
 	}
 
 	// THE DEMOTION. Before ZT-7 this was impossible without reissuing the certificate.
-	if err := s.SetOperatorRole(ctx, who, "analyst", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, principal, "analyst", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serve(t, gate, state); code != http.StatusForbidden {
@@ -80,20 +83,23 @@ func TestRevocationIsImmediateAndBeatsTheCertificate(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "operator-zt7-revoked"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "cert:" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
 
 	// A certificate that says ADMIN — the strongest thing the old scheme could assert.
 	state := certFor(t, who, "admin")
 	gate := controlplane.RequireTierForTest(s, "analyst")
 
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, principal, "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serve(t, gate, state); code != http.StatusOK {
 		t.Fatalf("an admin was refused: %d", code)
 	}
 
-	if err := s.RevokeOperator(ctx, who, "test"); err != nil {
+	if err := s.RevokeOperator(ctx, principal, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serve(t, gate, state); code != http.StatusForbidden {
@@ -112,13 +118,16 @@ func TestRevocationIsARowSoItCannotBeUndoneByDeletion(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "operator-zt7-rowcheck"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "cert:" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
 
-	if err := s.RevokeOperator(ctx, who, "test"); err != nil {
+	if err := s.RevokeOperator(ctx, principal, "test"); err != nil {
 		t.Fatal(err)
 	}
 	var revoked bool
-	if err := pool.QueryRow(ctx, `SELECT revoked FROM operator_roles WHERE identity = $1`, who).Scan(&revoked); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT revoked FROM operator_roles WHERE identity = $1`, principal).Scan(&revoked); err != nil {
 		t.Fatalf("revocation left no row, so it is an absence rather than a fact — and an absence falls back "+
 			"to the certificate: %v", err)
 	}
@@ -182,9 +191,20 @@ func TestAnAgentCertificateCannotBeGrantedAnOperatorTier(t *testing.T) {
 type stubVerifier struct {
 	token   string
 	subject string
+	// issuer namespaces the subject. Defaults to a stand-in when unset, because a subject with no
+	// issuer is not a principal (CONSOLE-1) and these cases are about authorization, not namespacing.
+	issuer string
 	// proof, when set, makes this token sender-constrained: it verifies only when the matching proof is
 	// presented.
 	proof string
+}
+
+// Issuer is who minted the token; a subject is unique only within one.
+func (s stubVerifier) Issuer() string {
+	if s.issuer == "" {
+		return "https://idp.test"
+	}
+	return s.issuer
 }
 
 // bound simulates a sender-constrained token: it needs a matching proof.
@@ -225,7 +245,10 @@ func TestAnSsoOperatorIsAuthorizedByTheServerNotTheToken(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "alice@corp.example"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "oidc:https://idp.test#" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
 	s.SetOperatorOIDC(stubVerifier{token: "good", subject: who})
 
 	gate := controlplane.RequireTierForTest(s, "responder")
@@ -237,7 +260,7 @@ func TestAnSsoOperatorIsAuthorizedByTheServerNotTheToken(t *testing.T) {
 			"the IdP is deciding authorization and a demotion does not take effect until it expires", code)
 	}
 
-	if err := s.SetOperatorRole(ctx, who, "responder", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, principal, "responder", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusOK {
@@ -245,7 +268,7 @@ func TestAnSsoOperatorIsAuthorizedByTheServerNotTheToken(t *testing.T) {
 	}
 
 	// AND THE DEMOTION APPLIES TO THE TOKEN ALREADY ISSUED — the same property the certificate half has.
-	if err := s.SetOperatorRole(ctx, who, "analyst", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, principal, "analyst", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusForbidden {
@@ -258,17 +281,20 @@ func TestRevokingAnSsoOperatorTakesEffectOnTheTokenTheyHold(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "bob@corp.example"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "oidc:https://idp.test#" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
 	s.SetOperatorOIDC(stubVerifier{token: "good", subject: who})
 	gate := controlplane.RequireTierForTest(s, "analyst")
 
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	if err := s.SetOperatorRole(ctx, principal, "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusOK {
 		t.Fatalf("an SSO admin was refused: %d", code)
 	}
-	if err := s.RevokeOperator(ctx, who, "test"); err != nil {
+	if err := s.RevokeOperator(ctx, principal, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if code := serveReq(gate, bearerReq(t, "good")); code != http.StatusForbidden {
@@ -312,8 +338,11 @@ func TestAStolenSenderConstrainedOperatorTokenIsUseless(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "erin@corp.example"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "oidc:https://idp.test#" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
+	if err := s.SetOperatorRole(ctx, principal, "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 	s.SetOperatorOIDC(stubVerifier{token: "bound-token", subject: who, proof: "the-proof"})
@@ -350,8 +379,11 @@ func TestRequiringDpopRefusesAnUnboundToken(t *testing.T) {
 	s := controlplane.New(pool)
 	ctx := context.Background()
 	const who = "frank@corp.example"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, who) })
-	if err := s.SetOperatorRole(ctx, who, "admin", "test"); err != nil {
+	// The GRANT is namespaced by the credential that will present it (CONSOLE-1); `who` stays
+	// the raw CommonName / token subject the credential actually carries.
+	principal := "oidc:https://idp.test#" + who
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = $1`, principal) })
+	if err := s.SetOperatorRole(ctx, principal, "admin", "test"); err != nil {
 		t.Fatal(err)
 	}
 	s.SetOperatorOIDC(stubVerifier{token: "plain-token", subject: who}) // no proof: unbound

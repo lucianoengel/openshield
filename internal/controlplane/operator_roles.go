@@ -63,8 +63,10 @@ func strictOperatorRoles() bool {
 	return strings.TrimSpace(os.Getenv("OPENSHIELD_OPERATOR_ROLES_STRICT")) == "1"
 }
 
-// certIdentity returns the verified peer certificate's CommonName, or "" when there is no verified peer.
-func certIdentity(state *tls.ConnectionState) string {
+// certCommonName returns the verified peer certificate's CommonName, or "" when there is no verified
+// peer. It is a raw name, NOT an identity: turning it into one is certPrincipal's job, and keeping the
+// two apart is what stops a bare string being used where a principal is meant.
+func certCommonName(state *tls.ConnectionState) string {
 	if state == nil || len(state.PeerCertificates) == 0 {
 		return ""
 	}
@@ -76,10 +78,10 @@ func certIdentity(state *tls.ConnectionState) string {
 // The order is the whole point: the DATABASE decides, and the certificate is consulted only when the
 // database has nothing to say about this identity.
 func (s *Server) resolveOperatorRole(ctx context.Context, auth operatorAuth) (string, operatorRoleSource) {
-	if !auth.ok || auth.identity == "" {
+	if !auth.ok || !auth.principal.valid() {
 		return "", roleAbsent
 	}
-	identity := auth.identity
+	identity := auth.principal.String()
 	role, revoked, err := s.lookupOperatorRole(ctx, identity)
 	switch {
 	case err == nil && revoked:
@@ -138,9 +140,19 @@ func (s *Server) SetOperatorRole(ctx context.Context, identity, role, by string)
 	if !validOperatorRole(role) {
 		return fmt.Errorf("controlplane: %q is not an operator role (want analyst, responder or admin)", role)
 	}
-	if strings.TrimSpace(identity) == "" {
-		return errors.New("controlplane: no identity")
+	// THE IDENTITY MUST BE A CANONICAL PRINCIPAL (CONSOLE-1).
+	//
+	// A bare name is refused rather than defaulted to a namespace. Defaulting is how a grant meant for a
+	// certificate holder would silently also cover whoever an identity provider calls by the same name —
+	// and the namespace is the only thing keeping those apart.
+	p, perr := parsePrincipal(identity)
+	if perr != nil {
+		return fmt.Errorf("%w — grant to `cert:<CommonName>` or `oidc:<issuer>#<subject>`", perr)
 	}
+	// STORED IN CANONICAL FORM, not as the caller spelled it. The lookup key is built by String(), so a
+	// grant stored verbatim would silently miss for any input that parses to the same principal without
+	// being byte-identical to it — surrounding whitespace being the obvious one.
+	identity = p.String()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
 		 VALUES ($1,$2,false,now(),$3)
@@ -156,9 +168,13 @@ func (s *Server) SetOperatorRole(ctx context.Context, identity, role, by string)
 // restore whatever the certificate said. That reversal is the reason this is written down rather than left
 // to whoever next edits this file.
 func (s *Server) RevokeOperator(ctx context.Context, identity, by string) error {
-	if strings.TrimSpace(identity) == "" {
-		return errors.New("controlplane: no identity")
+	// Canonicalised like the grant path: a revocation that writes a differently-spelled key creates a
+	// second row and revokes nobody, which is the worst possible outcome for this particular call.
+	p, perr := parsePrincipal(identity)
+	if perr != nil {
+		return fmt.Errorf("%w — revoke `cert:<CommonName>` or `oidc:<issuer>#<subject>`", perr)
 	}
+	identity = p.String()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
 		 VALUES ($1,'',true,now(),$2)
@@ -235,6 +251,9 @@ func (s *Server) ListOperatorRoles(ctx context.Context) ([]OperatorRoleRow, erro
 // leave a path that ignores sender-constraining, and the whole value of DPoP is that there is no such path.
 type operatorTokenVerifier interface {
 	VerifySubjectWithProof(token, dpopProof, method, requestURI string, requireBound bool) (string, error)
+	// Issuer is who minted the token. Part of the interface because a subject is unique only within an
+	// issuer, so a principal that omits it is not an identity — it is a name two providers can both use.
+	Issuer() string
 }
 
 // requireBoundOperatorTokens reports whether an operator token that is NOT sender-constrained is refused.
@@ -278,7 +297,9 @@ func bearerToken(r *http.Request) string {
 
 // operatorAuth is the result of authenticating a request, before any authorization decision.
 type operatorAuth struct {
-	identity string
+	// principal is the canonical, namespaced identity (CONSOLE-1). It replaces a bare string that meant
+	// `operator:<CN>` from one credential path and a raw `sub` from the other.
+	principal operatorPrincipal
 	// certState is non-nil only for a certificate-authenticated operator; it is what the legacy fallback
 	// reads. A bearer-authenticated operator has none, and therefore no fallback.
 	certState *tls.ConnectionState
@@ -292,8 +313,15 @@ type operatorAuth struct {
 // conservative direction.
 func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		if id := certIdentity(r.TLS); id != "" {
-			return operatorAuth{identity: id, certState: r.TLS, ok: true}
+		if cn := certCommonName(r.TLS); cn != "" {
+			p, err := certPrincipal(cn)
+			if err != nil {
+				// A CommonName that cannot become a canonical principal authenticates NOTHING. It is a
+				// CA-issuance problem, and accepting it would mean storing an identity that parses back
+				// as something else.
+				return operatorAuth{}
+			}
+			return operatorAuth{principal: p, certState: r.TLS, ok: true}
 		}
 	}
 	v := s.operatorOIDCVerifier()
@@ -311,7 +339,14 @@ func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
 		// with a lower tier — every check in the verifier is fail-closed and so is this.
 		return operatorAuth{}
 	}
-	return operatorAuth{identity: sub, ok: true}
+	// THE ISSUER IS PART OF THE IDENTITY. `sub` is unique only within an issuer, so two identity
+	// providers can both mint "alice" and they are not the same person — and without the issuer in the
+	// key, a subject equal to a certificate CommonName would inherit that certificate's role row.
+	p, perr := oidcPrincipal(v.Issuer(), sub)
+	if perr != nil {
+		return operatorAuth{}
+	}
+	return operatorAuth{principal: p, ok: true}
 }
 
 // recordOperatorIdentity notes that an identity EXISTS, without granting it anything.
@@ -324,9 +359,11 @@ func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
 // An existing row is left alone apart from clearing a revocation — re-provisioning must not silently
 // downgrade someone who already has a tier.
 func (s *Server) recordOperatorIdentity(ctx context.Context, identity, by string) error {
-	if strings.TrimSpace(identity) == "" {
-		return errors.New("controlplane: no identity")
+	p, perr := parsePrincipal(identity)
+	if perr != nil {
+		return perr
 	}
+	identity = p.String()
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
 		 VALUES ($1,'',false,now(),$2)

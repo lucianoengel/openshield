@@ -140,7 +140,7 @@ func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
 		}
 		role, src := s.resolveOperatorRole(r.Context(), auth)
 		if src == roleFromCertificate && role != "" {
-			s.warnLegacyRole(auth.identity, role)
+			s.warnLegacyRole(auth.principal.String(), role)
 		}
 		if roleRank(role) < min {
 			// The message distinguishes a REVOCATION from merely ranking too low, because those send an
@@ -153,21 +153,46 @@ func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
 			http.Error(w, "forbidden: operator role tier not authorized for this endpoint", http.StatusForbidden)
 			return
 		}
-		h.ServeHTTP(w, r)
+		// THE AUTHENTICATED PRINCIPAL TRAVELS WITH THE REQUEST (CONSOLE-1).
+		//
+		// It used to be resolved here and dropped, and eight handlers re-derived an identity from the TLS
+		// peer certificate — which is absent for a bearer-authenticated operator. So SSO passed this gate
+		// and was then refused by every handler that needed to know WHO was calling. Authenticating twice,
+		// by two different rules, is how those two answers came to disagree.
+		h.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), auth.principal)))
 	})
 }
 
-// operatorIdentity derives the viewer identity from a VERIFIED mutual-TLS client
-// certificate (D56). The handler runs only under RequireAndVerifyClientCert
-// (D55), so a present peer certificate is already CA-verified — this reads the
-// established identity, it does not re-verify. Returns "" when no peer
-// certificate is present (checked defensively; the required-client-cert config
-// makes this unreachable in production), which the caller turns into a refusal.
-func operatorIdentity(state *tls.ConnectionState) string {
-	if state == nil || len(state.PeerCertificates) == 0 {
+// principalCtxKey is unexported and of a private type, so nothing outside this package can put a
+// principal on a context — the value a handler trusts must come from requireTier and nowhere else.
+type principalCtxKey struct{}
+
+// withPrincipal attaches the authenticated principal to a request context.
+func withPrincipal(ctx context.Context, p operatorPrincipal) context.Context {
+	return context.WithValue(ctx, principalCtxKey{}, p)
+}
+
+// principalFrom reads the authenticated principal, reporting false when there is none.
+//
+// A handler that reaches this with no principal is mounted outside requireTier, which is a wiring bug
+// rather than an authorization decision — so it refuses, and does not attempt to re-derive an identity
+// from the connection. Re-deriving is what CONSOLE-1 exists to remove.
+func principalFrom(ctx context.Context) (operatorPrincipal, bool) {
+	p, ok := ctx.Value(principalCtxKey{}).(operatorPrincipal)
+	return p, ok && p.valid()
+}
+
+// operatorIdentity returns the authenticated principal's canonical string, or "" when the request
+// carries none.
+//
+// It kept its name and lost its argument, which is the point: every call site used to pass `r.TLS` and
+// therefore answered "" for a perfectly well-authenticated bearer request. The compiler found all eight.
+func operatorIdentity(ctx context.Context) string {
+	p, ok := principalFrom(ctx)
+	if !ok {
 		return ""
 	}
-	return "operator:" + state.PeerCertificates[0].Subject.CommonName
+	return p.String()
 }
 
 // ViewHandler serves an authenticated investigation view (D56). It records the
@@ -183,7 +208,7 @@ func (s *Server) ViewHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		viewer := operatorIdentity(r.TLS)
+		viewer := operatorIdentity(r.Context())
 		if viewer == "" {
 			// No verified certificate → no accountable identity → no view (D20).
 			http.Error(w, "client certificate required", http.StatusUnauthorized)

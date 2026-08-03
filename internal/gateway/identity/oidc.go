@@ -429,6 +429,14 @@ func LoadOIDCKeys(dir string) (map[string]crypto.PublicKey, error) {
 // ZTNA gateway missing its role-claim setting constructs happily and fails later, per request, at the point
 // where a subject's authorization group cannot be read — turning a startup misconfiguration into a runtime
 // one. The ZTNA path keeps failing fast; this path never wanted the field.
+// Issuer is who this verifier accepts tokens from.
+//
+// Exposed because a token subject is unique only WITHIN an issuer: the control plane namespaces an
+// operator principal as `oidc:<issuer>#<sub>` so that two identity providers minting the same subject
+// are two operators, and so that a subject equal to a certificate CommonName cannot inherit that
+// certificate's role.
+func (v *OIDCVerifier) Issuer() string { return v.issuer }
+
 func NewOperatorVerifier(issuer, audience string, keys map[string]crypto.PublicKey) (*OIDCVerifier, error) {
 	if issuer == "" || audience == "" {
 		return nil, fmt.Errorf("identity: operator OIDC verifier needs an issuer and an audience")

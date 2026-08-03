@@ -75,7 +75,7 @@ func TestViewRequiresOperatorRole(t *testing.T) {
 		t.Fatalf("agent /view = %d, want 403 — the D56 hole is open", resp2.StatusCode)
 	}
 	views, _ := srv.Views(context.Background(), "inv-r1")
-	if len(views) != 1 || views[0].Viewer != "operator:alice" {
+	if len(views) != 1 || views[0].Viewer != "cert:alice" {
 		t.Fatalf("views = %+v, want exactly the operator's — the agent's 403 must record nothing", views)
 	}
 }
