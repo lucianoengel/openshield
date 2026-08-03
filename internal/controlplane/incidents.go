@@ -36,6 +36,13 @@ type StoredIncident struct {
 	// incidents needs to see "this is the fourth time" without asking a second question per row.
 	RecurrenceOf    int64 `json:"recurrence_of,omitempty"`
 	RecurrenceCount int   `json:"recurrence_count"`
+	// Kind and RuleName say WHICH rule raised this incident (XDR-4c). The list already carried neither,
+	// which was survivable while there was one burst rule and one cross-domain rule; with configured
+	// hunts an asset can have several open cross-domain incidents at once, and without the rule they
+	// are indistinguishable rows differing only in their counts. RuleName is empty for the burst rule
+	// and for the unnamed cross-domain breadth rule — which is what those are, not a missing value.
+	Kind     string `json:"kind,omitempty"`
+	RuleName string `json:"rule_name,omitempty"`
 }
 
 // MaterializeIncidents runs the correlation rule and persists each computed incident, upserting the
@@ -57,7 +64,11 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 		if err := s.pool.QueryRow(ctx,
 			`INSERT INTO incidents (kind, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen, backfilled)
 			 VALUES ('ueba_burst',$1,'open',$2,$3,$4,$5,$6,$7)
-			 ON CONFLICT (kind, subject_id) WHERE state = 'open'
+			 -- XDR-4c widened the open-incident index to (kind, rule_name, subject_id) so two named
+			 -- hunts on one asset cannot collide. The burst rule has exactly one rule and always
+			 -- writes rule_name '' (the column's default), so naming it here is what keeps this
+			 -- conflict target matching an index — a mismatch is a runtime 42P10, not a compile error.
+			 ON CONFLICT (kind, rule_name, subject_id) WHERE state = 'open'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, max_risk = EXCLUDED.max_risk,
 			              host_count = EXCLUDED.host_count, last_seen = EXCLUDED.last_seen,
 			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()
@@ -129,7 +140,8 @@ func (s *Server) RecentIncidents(ctx context.Context, limit int) ([]StoredIncide
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen,
-		        acknowledged_by, acknowledged_at, COALESCE(recurrence_of, 0), recurrence_count
+		        acknowledged_by, acknowledged_at, COALESCE(recurrence_of, 0), recurrence_count,
+		        kind, rule_name
 		   FROM incidents ORDER BY last_seen DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -140,7 +152,7 @@ func (s *Server) RecentIncidents(ctx context.Context, limit int) ([]StoredIncide
 		var i StoredIncident
 		if err := rows.Scan(&i.ID, &i.SubjectID, &i.State, &i.AlertCount, &i.MaxRisk, &i.HostCount,
 			&i.FirstSeen, &i.LastSeen, &i.AcknowledgedBy, &i.AcknowledgedAt,
-			&i.RecurrenceOf, &i.RecurrenceCount); err != nil {
+			&i.RecurrenceOf, &i.RecurrenceCount, &i.Kind, &i.RuleName); err != nil {
 			return nil, err
 		}
 		i.Severity = Severity(i.MaxRisk)

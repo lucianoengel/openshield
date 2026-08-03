@@ -30,6 +30,12 @@ const (
 
 // CrossDomainRule parameterizes the entity-keyed rule. All fields have safe defaults.
 type CrossDomainRule struct {
+	// Name identifies a configured HUNT (XDR-4c). Empty is the unnamed breadth rule — what every
+	// cross-domain incident raised before hunts existed was, which is why the column defaults to ''.
+	//
+	// It is the incident's identity alongside the entity: two hunts matching one asset must raise two
+	// incidents, or the second narrative is folded silently into the first (see migration 045).
+	Name        string
 	Window      time.Duration // look-back window (default 1h)
 	MinDomains  int           // distinct domains within the window to raise an incident (default 2)
 	MinSeverity string        // ignore alerts below this severity bucket ("" = no floor)
@@ -324,16 +330,16 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 		var id int64
 		var inserted bool
 		if err := s.pool.QueryRow(ctx,
-			`INSERT INTO incidents (kind, subject_id, entity_id, state, alert_count, max_risk, host_count,
-			                        domain_count, domains, first_seen, last_seen, backfilled)
-			 VALUES ('cross_domain',$1,$2,'open',$3,0,0,$4,$5,$6,$7,$8)
-			 ON CONFLICT (entity_id) WHERE state = 'open' AND kind = 'cross_domain'
+			`INSERT INTO incidents (kind, rule_name, subject_id, entity_id, state, alert_count, max_risk,
+			                        host_count, domain_count, domains, first_seen, last_seen, backfilled)
+			 VALUES ('cross_domain',$1,$2,$3,'open',$4,0,0,$5,$6,$7,$8,$9)
+			 ON CONFLICT (entity_id, rule_name) WHERE state = 'open' AND kind = 'cross_domain'
 			 DO UPDATE SET alert_count = EXCLUDED.alert_count, domain_count = EXCLUDED.domain_count,
 			              domains = EXCLUDED.domains,
 			              subject_id = EXCLUDED.subject_id, last_seen = EXCLUDED.last_seen,
 			              first_seen = LEAST(incidents.first_seen, EXCLUDED.first_seen), updated_at = now()
 			 RETURNING id, (xmax = 0) AS inserted`,
-			inc.SubjectID, inc.EntityID, inc.AlertCount, inc.DomainCount, inc.Domains,
+			rule.Name, inc.SubjectID, inc.EntityID, inc.AlertCount, inc.DomainCount, inc.Domains,
 			inc.FirstSeen, inc.LastSeen, s.quiet()).
 			Scan(&id, &inserted); err != nil {
 			return 0, err
@@ -359,7 +365,7 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 			if err != nil {
 				RecurrenceLinkFailures.Add(1)
 			}
-			s.notifyCrossDomainIncident(ctx, id, inc, now, rec)
+			s.notifyCrossDomainIncident(ctx, id, rule.Name, inc, now, rec)
 		}
 	}
 	return len(incidents), nil
@@ -369,8 +375,8 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 // the breadth, which is the reason this incident exists at all. max_risk is deliberately not part of it:
 // unified alerts carry a severity bucket, not a continuous risk score, and reporting a 0.00 risk would
 // be a false statement about a signal this rule never computed.
-func (s *Server) notifyCrossDomainIncident(ctx context.Context, id int64, inc CrossDomainIncident,
-	now time.Time, rec Recurrence) {
+func (s *Server) notifyCrossDomainIncident(ctx context.Context, id int64, ruleName string,
+	inc CrossDomainIncident, now time.Time, rec Recurrence) {
 	s.emit(ctx, notify.Notification{
 		Kind:    notify.KindIncident,
 		Subject: inc.SubjectID,
@@ -379,8 +385,25 @@ func (s *Server) notifyCrossDomainIncident(ctx context.Context, id int64, inc Cr
 		// dedup id (the two tables' autoincrements are one sequence, but the ids are not the same
 		// logical alert).
 		ID: fmt.Sprintf("xinc_%d", id),
-		Detail: fmt.Sprintf("%s cross-domain incident: %d alerts across %d domains (%s)%s",
-			inc.Severity, inc.AlertCount, inc.DomainCount, strings.Join(inc.Domains, ", "),
-			recurrenceSuffix(rec)),
+		Detail: fmt.Sprintf("%s cross-domain incident%s: %d alerts across %d domains (%s)%s",
+			inc.Severity, huntSuffix(ruleName), inc.AlertCount, inc.DomainCount,
+			strings.Join(inc.Domains, ", "), recurrenceSuffix(rec)),
 	})
+}
+
+// huntSuffix names the configured hunt in a page, and says nothing for the unnamed breadth rule.
+//
+// Naming it IS the finding. Two hunts on one asset produce identical breadth text — "3 alerts across 2
+// domains (dlp, hips)" — and an operator paged with that has no way to know WHICH narrative matched,
+// which is the only thing a sequence rule claims that the breadth rule does not.
+//
+// The name is operator-authored free text, so it goes into the notification a human reads and nowhere
+// else: not into a title, not into a dedup key. The same reasoning keeps Decision.reason out of
+// alertTitleFor — a hunt named after a customer file path would otherwise be a content leak in a
+// widely-read derived index (D10/D29).
+func huntSuffix(ruleName string) string {
+	if ruleName == "" {
+		return ""
+	}
+	return " [" + ruleName + "]"
 }

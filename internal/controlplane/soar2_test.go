@@ -42,6 +42,7 @@ func TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest(t *testing.T) {
 			return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
 				controlplane.CrossDomainRule{Window: 30 * time.Minute, MinDomains: 2}
 		},
+		nil, // XDR-4c: no hunts configured — the breadth rule alone, the pre-hunt behaviour
 		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 
 	// An incident appears without anyone asking for one.

@@ -127,7 +127,13 @@ each ticket deliberately did **not** close. That is what is kept.
 - **XDR-4 · Cross-domain correlation rules** — ✅ D242; **the technique-vocabulary residual is closed
   (XDR-4b, D455)**: the `Decision` contract change was made, so a rule can name an ordered ATT&CK
   sequence (`T1552 → T1567.002`) alongside the domain sequence. The ids are DERIVED from signals and
-  refused by the contract if outside the closed vocabulary — a policy cannot declare one. *Residual:*
+  refused by the contract if outside the closed vocabulary — a policy cannot declare one. **The
+  sequence rules now RUN ON THE CLOCK (XDR-4c, D456)**: before it, `Sequence`/`TechniqueSequence` were
+  set in exactly one place in the tree outside tests — the `GET /incidents` query parser — so a
+  narrative could be asked about and never reported. Named hunts come from a validated file, run on
+  every correlation tick beside the breadth rule, and page with the hunt named; incidents are now keyed
+  by (entity, rule) so two narratives on one asset cannot collide into one silently-updated row.
+  *Residual:*
   two steps cannot be satisfied by one alert (deliberate — a moment cannot evidence "then"), so a
   chain that genuinely happens within a single event is not expressible as a sequence; no technique
   weighting in severity; no backfill of alerts that predate the column; no alert-storm suppression

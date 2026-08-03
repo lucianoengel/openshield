@@ -59,6 +59,8 @@ var ServerFields = []Field{
 		Description: "Alerts within the window needed to raise a burst incident."},
 	{Key: "OPENSHIELD_CORRELATE_MIN_DOMAINS", Scope: ScopeDynamic, Kind: KindInt, Default: "2",
 		Description: "Distinct domains needed to raise a cross-domain incident (XDR-4)."},
+	{Key: "OPENSHIELD_CORRELATION_HUNTS", Scope: ScopeDynamic, Kind: KindPath, Default: "",
+		Description: "Path to a JSON hunt file: named cross-domain rules of {name, domain_sequence, technique_sequence, window_seconds, min_domains, min_severity} run on every correlation tick alongside the breadth rule (XDR-4c). Unset means only the breadth rule runs, and an ordered ATT&CK or domain sequence can then only be ASKED for interactively — it never raises an incident or pages anyone. A hunt naming a domain no producer emits or a technique this build cannot derive is refused at load, because a rule that matches nothing is indistinguishable from an all-clear."},
 	{Key: "OPENSHIELD_ESCALATION_LADDER", Scope: ScopeDynamic, Kind: KindPath, Default: "",
 		Description: "Path to a JSON escalation ladder: rungs of {after_seconds, min_severity, sinks} fired against incidents still unacknowledged that long (SOAR-9b). Unset disables escalation. Acknowledging an incident stops its ladder. This is a timer, not an on-call schedule — there is no rotation or calendar."},
 	{Key: "OPENSHIELD_ESCALATION_INTERVAL", Scope: ScopeDynamic, Kind: KindDuration, Default: "60s",

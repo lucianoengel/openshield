@@ -234,9 +234,42 @@ func main() {
 						MinDomains:       cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
 						RecurrenceWindow: recur,
 					}
+			},
+			// XDR-4c: the NARRATIVE rules, read per tick from the hunt file. Before this, XDR-4's
+			// ordered-sequence rule was reachable only from the GET /incidents query parser: the
+			// platform could answer "did this chain happen?" for an operator who already suspected it,
+			// and could never tell anyone. A hunt file that fails to parse leaves hunts OFF and counts
+			// it — substituting a default would raise incidents against a narrative nobody wrote.
+			func() []controlplane.CrossDomainRule {
+				p := cfg.String("OPENSHIELD_CORRELATION_HUNTS")
+				if p == "" {
+					return nil // not configured: the breadth rule alone, exactly as before
+				}
+				h, err := loadHuntsFile(p)
+				if err != nil {
+					controlplane.CorrelationFailures.Add(1)
+					return nil
+				}
+				return h.Rules(cfg.Duration("OPENSHIELD_CORRELATE_WINDOW"),
+					cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
+					cfg.Duration("OPENSHIELD_INCIDENT_RECURRENCE_WINDOW"))
 			}, nil)
 		fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation loop ACTIVE (interval read live "+
 			"from configuration; 0 = idle, no restart needed to change it)\n")
+		// Say at startup whether the narrative rules are on, and NAME a broken hunt file. A hunt that
+		// silently fails to load matches nothing, and nothing-matched is indistinguishable from
+		// nothing-happened — which is the exact failure the loader's validation exists to refuse.
+		if p := cfg.String("OPENSHIELD_CORRELATION_HUNTS"); p == "" {
+			fmt.Fprintf(os.Stderr, "openshield-server: correlation hunts IDLE — set "+
+				"OPENSHIELD_CORRELATION_HUNTS to a hunt file to raise incidents on ATT&CK/domain "+
+				"sequences automatically (no restart needed)\n")
+		} else if h, err := loadHuntsFile(p); err != nil {
+			fmt.Fprintf(os.Stderr, "openshield-server: correlation hunts NOT loaded from %s: %v — "+
+				"narrative sequences will NOT raise incidents\n", p, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "openshield-server: correlation hunts ACTIVE from %s (%d hunt(s), "+
+				"run on every correlation tick alongside the breadth rule)\n", p, len(h.Hunts))
+		}
 
 		// NIPS-6: sweep for beaconing on its OWN schedule. A 24h rhythm window on a 1h correlation tick
 		// would either re-scan a day of telemetry every tick or measure rhythm over an hour, and neither
@@ -1061,6 +1094,18 @@ func loadRoutesFile(path string, sinkNames []string) ([]notify.Route, error) {
 // loadLadderFile reads and VALIDATES an escalation ladder against the configured sink names (SOAR-9b).
 // Same discipline as the routing table, for the same reason: an escalation mistake found at firing time
 // is found by a page that did not arrive.
+// loadHuntsFile reads and validates the XDR-4c hunt file. Same shape as loadLadderFile, and the same
+// reasoning: the file is re-read per tick so an edit applies without a restart, and validation happens
+// at load because a mistake discovered at match time is discovered as an absence of incidents.
+func loadHuntsFile(path string) (controlplane.Hunts, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return controlplane.Hunts{}, err
+	}
+	defer f.Close()
+	return controlplane.LoadHunts(f)
+}
+
 func loadLadderFile(path string, sinkNames []string) (controlplane.Ladder, error) {
 	f, err := os.Open(path)
 	if err != nil {

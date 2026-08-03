@@ -109,8 +109,16 @@ var CorrelationFailures atomic.Int64
 // PLAT-5b: the interval and BOTH rules are read PER TICK from providers rather than captured at start, so
 // a configuration change applies to a running server without a restart. A loop holding the values it was
 // constructed with is what makes database-backed configuration a config file with extra steps.
+// XDR-4c: `hunts` supplies the configured narrative rules, read PER TICK like everything else here, so
+// editing the hunt file applies to a running server. Nil, or an empty slice, means only the breadth
+// rule runs — exactly the behaviour before hunts existed.
+//
+// The breadth rule ALWAYS runs alongside them. A sequence rule is strictly NARROWER than the breadth
+// rule it derives from — it only ever adds constraints — so treating hunts as a replacement would lose
+// the case they cannot anticipate: three domains lighting up on one asset in a shape nobody wrote a
+// rule for, which is the case the breadth rule exists for.
 func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Duration,
-	rules func() (CorrelationRule, CrossDomainRule), log *slog.Logger) {
+	rules func() (CorrelationRule, CrossDomainRule), hunts func() []CrossDomainRule, log *slog.Logger) {
 	retain.DynamicLoop(ctx, interval, func(c context.Context) {
 		burst, cross := rules()
 		now := s.now()
@@ -124,6 +132,21 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Du
 			CorrelationFailures.Add(1)
 			if log != nil {
 				log.Error("scheduled correlation (cross-domain rule) failed", slog.Any("err", err))
+			}
+		}
+		// XDR-4c: every configured hunt, on the same tick and the same window as the breadth rule
+		// unless it says otherwise. A hunt that fails is counted and NAMED, then the next one runs —
+		// one unsatisfiable rule must not stop the others, and "correlation failed" without the hunt
+		// name is not actionable when several are configured.
+		if hunts != nil {
+			for _, h := range hunts() {
+				if _, err := s.MaterializeCrossDomainIncidents(c, h, now); err != nil {
+					CorrelationFailures.Add(1)
+					if log != nil {
+						log.Error("scheduled correlation (hunt) failed",
+							slog.String("hunt", h.Name), slog.Any("err", err))
+					}
+				}
 			}
 		}
 		// XDR-7: recompute cross-domain entity risk on the same tick, so an endpoint detection raises the

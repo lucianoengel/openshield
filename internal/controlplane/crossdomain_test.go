@@ -32,6 +32,14 @@ func (c *countingSink) count() int {
 	return len(c.got)
 }
 
+// notifications returns a copy of what was delivered, so a test can assert on the TEXT an operator
+// reads and not only on how many pages fired.
+func (c *countingSink) notifications() []notify.Notification {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]notify.Notification(nil), c.got...)
+}
+
 // recordAlert seeds one unified alert through the REAL RecordUnifiedAlert path (entity resolution,
 // dedup key, the lot) — never a direct INSERT, so the test exercises the same keying production does.
 func recordAlert(t *testing.T, srv *controlplane.Server, domain, subject, severity string, at time.Time) {
