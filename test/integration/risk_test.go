@@ -37,14 +37,22 @@ import (
 // THE ASSERTION IS ON AN ACCESS DECISION, not on a log line: the same request succeeds, then is refused
 // once risk is published for that subject. Nothing else about the request changes.
 
-// riskPolicy denies above a risk threshold and allows below it. Keyed on the RISK SCORE alone, so the
-// decision can only change if a published update was verified and reached the policy input — a policy
-// keyed on the certificate would pass whether or not any risk was ever applied.
+// riskPolicy denies above a risk threshold and allows below it. What FLIPS the decision is the RISK
+// SCORE alone, so it can only change if a published update was verified and reached the policy input — a
+// policy keyed on the certificate would pass whether or not any risk was ever applied.
+//
+// The identity guard is not decoration and was added when SEC-C's load-time probe refused this policy.
+// Keyed on risk alone, an unknown caller carries score 0, `risky` is false, and `not risky` ALLOWS —
+// so the fixture was a gate that admitted anyone it knew nothing about. That is precisely what the probe
+// exists to catch, and a test fixture is not a good enough reason to make it blind to it. Risk still
+// decides everything this scenario asserts.
 const riskPolicy = `package openshield
 import rego.v1
+known if { input.context.identity != "" }
 risky if { input.context.risk_score >= 0.8 }
-decision := {"action":"BLOCK","reason":"risk too high for this resource","confidence":0.9} if { risky }
-decision := {"action":"ALLOW","reason":"risk acceptable","confidence":0.9} if { not risky }`
+decision := {"action":"BLOCK","reason":"unknown principal","confidence":0.9} if { not known }
+decision := {"action":"BLOCK","reason":"risk too high for this resource","confidence":0.9} if { known; risky }
+decision := {"action":"ALLOW","reason":"risk acceptable","confidence":0.9} if { known; not risky }`
 
 // publishRisk signs a RiskUpdate with the key the PROVISIONING TOOL produced and publishes it the way
 // the control plane does. The test stands in for the server here deliberately: what is under test is

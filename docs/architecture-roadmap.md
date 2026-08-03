@@ -1040,7 +1040,12 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   `role != "banned"` predicate reads like a denylist and admits every caller whose role could not be
   resolved. That second half is not redundant: such a policy MATCHES, so no default can catch it. The
   gateway refuses to start on one. *Proved through the real binary: an incomplete policy denies an
-  unmatched caller and still serves the authorized one; a permissive policy never opens the port.* (Credit where due, and keep it: the Rego capability restriction is
+  unmatched caller and still serves the authorized one; a permissive policy never opens the port.*
+  **Upgrade impact, found by CI and worth stating:** a deployment whose access policy is keyed on
+  something other than identity — the shipped `risk_test` fixture allowed whenever `risk_score < 0.8`,
+  which admits a caller with no identity and therefore score 0 — will now FAIL TO START rather than
+  keep admitting unknown principals. That is the intended failure mode, and it is a breaking change for
+  exactly the policies that had the defect. (Credit where due, and keep it: the Rego capability restriction is
   genuinely well built — nondeterministic builtins filtered wholesale by flag, `opa.runtime` denied,
   `AllowNet` empty, so `http.send` from an authored policy is not expressible.)
 - ~~**SEC-D · Four-eyes is capped by two shipped defaults**~~ — **SHIPPED D465; do not re-propose.**
