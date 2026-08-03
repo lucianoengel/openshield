@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D419.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D458.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D429)
+## What OpenShield is (status at a glance, through D458)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -52,6 +52,20 @@ the queue is PLAT-6's remaining distribution work (Sigstore/cosign, `.deb`/`.rpm
 and each of those is a separate trust-or-distribution decision rather than leftover engineering.
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
+
+**What has actually been shipping since (D440–D458), and why it is not the UI.** Two threads, both
+deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
+fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
+and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
+valuable one, is **the unwired-feature hunt**: a mechanical scan for exported fields assigned only in
+tests, which found capability after capability that was implemented, tested, and reachable by nothing.
+`Sequence`/`TechniqueSequence` (D456) could be *asked about* and never reported, because the scheduled
+correlation loop never set them. `core.ExclusionSet` (D457) — the privacy exclusion primitive the DPIA
+template tells deployers to record — had **zero non-test callers**. And chasing one of those leads found
+D458: two producers ran the pipeline twice over ONE-SHOT content, so a print verdict could be decided by
+the run that saw nothing, and allow. **This is the highest-yield activity in the repo right now**, and
+running it to exhaustion before the UI is the right order: a console that displays an inert control is
+worse than no console. The scan and its still-open leads are in session memory.
 
 **Why OpenShield, in one sentence (a thesis the MVP must *earn* — not yet a proven claim):** *every
 security decision — detection, correlation, and response — is explainable, reproducible, and
@@ -1226,7 +1240,34 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   (D368); endpoint partition + ping detection (D369); PLAT-10 — a broker returning with empty JetStream
   state no longer wedges the fleet silently, repaired by a POLL rather than a reconnect handler because a
   stream can be deleted while the connection stays healthy (D370).
-- **DSPM:** DSPM-1 object-store discovery connector (D371).
+- **DSPM:** DSPM-1 object-store discovery connector (D371); DSPM-2 bucket ACCESS CONTEXT rides every
+  discovered object — ACL, bucket policy, block-public-access and default encryption probed once per
+  sweep, three-valued so a credential that cannot read `?acl` yields UNKNOWN and never "private", with
+  each refused probe named (D454).
+- **Release / packaging:** the release publishes its own `.deb` and its systemd units are tested
+  (D448/D449); packaging no longer makes the next `verify-release` report tampering (D447); an INSTALLED
+  system can be checked against the release it came from (D450).
+- **Endpoint / fleet:** the endpoint asks about ITSELF the posture question it asks about everything
+  else (D451); fleet binary provenance — "which endpoints run binaries nobody published" is a fleet
+  query (D452).
+- **Detection breadth:** Spain's DNI/NIE and France's NIR (D453). Italy's Codice Fiscale deliberately
+  absent rather than guessed — see the enrichment backlog.
+- **ATT&CK / narrative correlation (the D455–D456 pair):** XDR-4b put the technique ids on the
+  `Decision` — DERIVED from the platform's own signals, never read back out of a policy result, and
+  refused by the contract if outside the closed vocabulary — so correlation can hunt `T1552 →
+  T1567.002` rather than `dlp → hips` (D455). XDR-4c then made the ordered-sequence rules RUN ON THE
+  CLOCK from a validated hunt file, with incidents keyed by (entity, rule) so two narratives on one
+  asset cannot collide into one silently-updated row (D456). Before it, the sequence fields were set in
+  exactly one place outside tests — the `GET /incidents` query parser.
+- **Privacy (PRIV-1, D457):** `core.ExclusionSet` had zero non-test callers. Personal-folder prefixes
+  and break-time windows are now configurable and enforced BEFORE classification; an exclusion never
+  suppresses an enforcement verdict (that would be the user-invokable evasion the requirement forbids);
+  and a path exclusion that cannot be evaluated is COUNTED, so the gap in the privacy claim is a number.
+- **DLP correctness (D458):** `printDecider` and the clipboard mediator each ran the pipeline TWICE over
+  one job — once for the verdict, once because the event was also enqueued — while `ContentStore`
+  releases on read. The two runs raced for the only copy of the evidence, and when the observation loop
+  won, the VERDICT was the blind one: no detection, allow, job printed. Both existing tests passed
+  because they hand the decider a buffered channel with no consumer.
 - **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers
