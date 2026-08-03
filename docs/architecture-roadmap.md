@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D465.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D466.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D465)
+## What OpenShield is (status at a glance, through D466)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ and each of those is a separate trust-or-distribution decision rather than lefto
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
 
-**What has actually been shipping since (D440–D465), and why it is not the UI.** Two threads, both
+**What has actually been shipping since (D440–D466), and why it is not the UI.** Two threads, both
 deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
 fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
 and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
@@ -657,9 +657,13 @@ the console", which is a different and later claim.*
   a dry-run evaluator and **diff + four-eyes on save**. Sessions: active principal/device/service and
   **terminate one or all** — what an IR lead needs at 2am and cannot do from anywhere today (responder tier,
   deliberately: admin builds a control nobody on shift can use).
-  **Three review requirements:** depends on `SEC-C` making default-deny structural, because today
-  `evalCandidate` grants on no-match and an edit shadowing one line converts the gate silently; **hot-reload
-  with fail-static** (compile → assert the module denies a canonical unknown-principal input → swap
+  **Three review requirements.** The first is now UNBLOCKED, not outstanding: `SEC-C` (D464) made
+  default-deny structural, so an edit shadowing one line no longer converts the gate — and `NewAccess`
+  is the constructor a save path must use, its `ErrAccessPolicyAdmitsUnknown` the refusal it must
+  surface. `SEC-D` (D465) supplies the other half a save needs: `AssessFourEyes` makes "refuse to enable
+  a four-eyes gate unless operator identity is hardened" expressible. Still outstanding: **hot-reload
+  with fail-static** (compile → assert the module denies a canonical unknown-principal input — which
+  `NewAccess` now does, so this is a call rather than new logic → swap
   atomically → keep last-good → alarm), because the policy is `fatal` on compile failure and read once at
   startup, so a browser editor otherwise makes one bad save a **single-credential production-access DoS**;
   and the **dry-run evaluator is an access oracle** — it enumerates who reaches production with no
@@ -1002,17 +1006,19 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
 
 **Gate the "call it shippable" line — do before or alongside the MVP:**
 
-- **SEC-A · No configuration field declares a bound, and four dynamic fields already neuter the product** —
-  new work · M. `grep "Validate:" internal/config/*.go` outside tests returns **zero**: the entire per-field
-  bound today is `Kind` parseability. At single-admin tier over `POST /config` (no four-eyes, no TTL, no
-  sequence) an operator can set `OPENSHIELD_CORRELATE_INTERVAL=0s` (**no incidents are raised at all**),
-  `OPENSHIELD_BEACON_ALLOWLIST=<C2 domain>`, `OPENSHIELD_OVERDUE_THRESHOLD=8760h` (a killed agent is never
-  reported), or `OPENSHIELD_FLEET_RETENTION=1h` + `RETENTION_INTERVAL=1m` (**evidence purged through a
-  sanctioned delete path the hash chain does not cover**). `KindUnitInterval` is a *parseability* bound, not
-  a *reachability* one — its own doc says validation "cannot refuse an unwise one", and
-  `DNS_TUNNEL_THRESHOLD=0.999999` is in range and unreachable. Add real operational ranges as `Validate`
-  on every field gating a detector or a retention window, and a `SecurityRelevant` + direction attribute so
-  "toward less detection" is computable rather than a human judgement.
+- ~~**SEC-A · No configuration field declares a bound, and four dynamic fields already neuter the
+  product**~~ — **SHIPPED D466; do not re-propose.** `grep "Validate:"` returned zero: the hook existed,
+  both validation paths called it, and no field had ever declared one, so the entire bound was `Kind`
+  parseability. Fixed in two halves, because a bound alone would not have been enough. **Ranges** on the
+  fields gating a detector or a retention window, each refusal naming what BREAKS rather than which limit
+  was exceeded. And a **direction** (`Sensitivity`) on all seventeen, making "this change moves toward
+  less detection" computable — which is the half that matters, since most of the attack uses values that
+  are reasonable in isolation (a 24h retention is a legitimate choice and a suspicious one on the day an
+  incident is opened). A weakening change now **pages someone** and is **recorded on the revision diff**;
+  a tightening one is silent, or the alert gets muted and takes the weakening one with it. The subtle
+  case, with its own test: a DISABLING value orders as the weakest setting, not by magnitude — read as a
+  number, `CORRELATE_INTERVAL=0s` is the smallest interval and the single change that raises no incidents
+  at all would have scored as a hardening.
 - ~~**SEC-B · The fleet-control replay bound is in memory, and the threat model says otherwise**~~ —
   **SHIPPED D462; do not re-propose.** `FleetControlSubscriber.applied` was a plain `uint64` with no
   persistence and no call site that could supply any, so an agent restart reset the bound to zero and
@@ -1309,6 +1315,13 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   and the rule that is PRESENT and wrong (only evaluating the module finds it) — and a third
   consideration that shaped both: an engine-wide default-deny would have been a worse defect than the
   bug, blocking every ordinary file write on every endpoint on the first deployment.
+- **SEC-D and SEC-A — two more controls that were sound and consulted something worthless (D465, D466).**
+  The whole SEC lane turned out to have ONE SHAPE: *the mechanism was correct and its input was not.* A
+  replay bound that reset on restart, a no-match default that was right for one stage and wrong for the
+  other, an identity string two credentials satisfy, and a configuration field whose only bound was
+  whether it parsed. None of the four was a logic error; each was a correct check over a value that did
+  not mean what the check assumed — which is also why all four were invisible to unit tests that
+  construct their own inputs. **Look at the input, not the logic.**
 - **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers

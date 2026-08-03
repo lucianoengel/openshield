@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/config"
+	"github.com/lucianoengel/openshield/internal/notify"
 )
 
 // Database-authoritative dynamic configuration, with revisions (PLAT-5b).
@@ -75,14 +77,29 @@ func (s *Server) ApplySettings(ctx context.Context, r *config.Resolver, author, 
 		`INSERT INTO config_revisions (author, note) VALUES ($1,$2) RETURNING id`, author, note).Scan(&rev); err != nil {
 		return 0, err
 	}
+	var weakened []string
 	for _, k := range keys {
 		var old string
 		// The previous value is captured for the DIFF: "who widened the retention window" needs to say
 		// what it was widened FROM.
 		_ = tx.QueryRow(ctx, `SELECT value FROM config_settings WHERE key=$1`, k).Scan(&old)
+		// SEC-A: did this change move the deployment toward LESS detection?
+		//
+		// Compared against the DEFAULT when nothing is stored, because that is what the binary was
+		// actually running. Treating an unset key as "no previous value" would make the first edit of
+		// every field unclassifiable — and the first edit is the interesting one.
+		f, _ := r.Field(k)
+		prev := old
+		if prev == "" {
+			prev = f.Default
+		}
+		weakens := f.Weakens(prev, changes[k])
+		if weakens {
+			weakened = append(weakened, k)
+		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO config_changes (revision_id, key, old_value, new_value) VALUES ($1,$2,$3,$4)`,
-			rev, k, old, changes[k]); err != nil {
+			`INSERT INTO config_changes (revision_id, key, old_value, new_value, weakens) VALUES ($1,$2,$3,$4,$5)`,
+			rev, k, old, changes[k], weakens); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(ctx,
@@ -94,6 +111,24 @@ func (s *Server) ApplySettings(ctx context.Context, r *config.Resolver, author, 
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
+	}
+	// A CHANGE THAT REDUCES DETECTION PAGES SOMEONE, on the channel that already routes to whoever is
+	// on call (SOAR-9).
+	//
+	// A log line would not do. The threat this addresses is an operator credential being used to blind
+	// the product before the thing it would have caught — and nobody reads a config-change log at the
+	// moment it matters. Emitted AFTER the commit, best-effort, because the revision row is the record
+	// and a failing sink must never fail the write.
+	if len(weakened) > 0 {
+		s.emit(ctx, notify.Notification{
+			Kind:     notify.KindConfigWeakened,
+			Subject:  author,
+			Severity: SeverityHigh,
+			At:       s.now(),
+			ID:       fmt.Sprintf("config_weakened_%d", rev),
+			Detail: fmt.Sprintf("revision %d by %s moved %d setting(s) toward LESS detection: %s",
+				rev, author, len(weakened), strings.Join(weakened, ", ")),
+		})
 	}
 	return rev, nil
 }
@@ -141,6 +176,10 @@ type ConfigChange struct {
 	Key string `json:"key"`
 	Old string `json:"old_value,omitempty"`
 	New string `json:"new_value"`
+	// Weakens reports that this change moved the deployment toward LESS detection (SEC-A), as judged
+	// when it was made. An investigator asking "what changed before we stopped seeing anything" needs
+	// this on the diff, not in a separate place they have to know to look.
+	Weakens bool `json:"weakens,omitempty"`
 }
 
 // Revisions returns the change history, newest first.
@@ -168,13 +207,13 @@ func (s *Server) Revisions(ctx context.Context, limit int) ([]ConfigRevision, er
 	}
 	for i := range out {
 		crows, err := s.pool.Query(ctx,
-			`SELECT key, old_value, new_value FROM config_changes WHERE revision_id=$1 ORDER BY key`, out[i].ID)
+			`SELECT key, old_value, new_value, weakens FROM config_changes WHERE revision_id=$1 ORDER BY key`, out[i].ID)
 		if err != nil {
 			return nil, err
 		}
 		for crows.Next() {
 			var c ConfigChange
-			if err := crows.Scan(&c.Key, &c.Old, &c.New); err != nil {
+			if err := crows.Scan(&c.Key, &c.Old, &c.New, &c.Weakens); err != nil {
 				crows.Close()
 				return nil, err
 			}

@@ -98,7 +98,21 @@ type Field struct {
 	Default     string
 	Description string
 	// Validate is an optional extra constraint beyond parseability, returning why the value is refused.
+	//
+	// It existed with no caller anywhere in the shipped tree until SEC-A, which is why "is this a
+	// duration" was the entire bound on values that decide whether anything is detected at all.
 	Validate func(raw string) error
+
+	// Sensitivity says which way a change to this field moves the deployment's ability to DETECT, so
+	// "this edit reduces coverage" is computable rather than something a reviewer has to know per key
+	// (SEC-A). See sensitivity.go.
+	Sensitivity Sensitivity
+
+	// ZeroDisables marks a field whose zero value turns its feature OFF rather than meaning "as often as
+	// possible" or "none". It changes how zero ORDERS: without it, setting a correlation interval to 0s
+	// — which disables scheduled correlation entirely — would compare as the most aggressive possible
+	// setting, and the one change that stops incidents being raised at all would score as a hardening.
+	ZeroDisables bool
 }
 
 // Secret reports whether this field's value must never be read back.

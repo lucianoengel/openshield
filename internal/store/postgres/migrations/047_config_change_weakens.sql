@@ -1,0 +1,18 @@
+-- SEC-A: record which configuration changes moved the deployment TOWARD LESS DETECTION.
+--
+-- Every field's only bound used to be its Kind's parseability, and `Validate` had no caller anywhere in
+-- the shipped tree. At single-admin tier over POST /config, with no four-eyes and no TTL, a valid
+-- duration was enough to turn the product off: CORRELATE_INTERVAL=0s raises no incidents at all,
+-- OVERDUE_THRESHOLD=8760h never reports a killed agent, BEACON_ALLOWLIST=<c2> mutes the destination, and
+-- FLEET_RETENTION=1h with RETENTION_INTERVAL=1m purges evidence through a SANCTIONED delete path that
+-- the ledger's hash chain does not cover.
+--
+-- Bounds refuse the unusable values. They cannot refuse the plausible ones — a 24-hour retention is a
+-- legitimate choice and a suspicious one on the day an incident is opened. What the trail was missing is
+-- the DIRECTION: whether a change reduced what the deployment can see. That is not a matter of opinion,
+-- and with a per-field declaration it is computable rather than something a reviewer has to know per key.
+--
+-- Stored per change rather than derived when the history is read, for the same reason the four-eyes
+-- assurance is (SEC-D): it is a fact about the moment. Re-deriving it later would evaluate today's field
+-- declarations against a value set years ago.
+ALTER TABLE config_changes ADD COLUMN IF NOT EXISTS weakens BOOLEAN NOT NULL DEFAULT false;

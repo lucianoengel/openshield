@@ -32,6 +32,15 @@ const (
 	// reach somewhere the first notification did not — and routing keys on kind. Sent to the same
 	// destination as the page nobody answered, it would be a louder version of being ignored.
 	KindEscalation Kind = "escalation"
+	// KindConfigWeakened is a configuration change that moved the deployment TOWARD LESS DETECTION
+	// (SEC-A) — a longer silence tolerated before an agent is called missing, a shorter evidence
+	// retention, a destination added to a detector's allowlist.
+	//
+	// It is a detection in its own right, not an administrative log entry, because the threat it
+	// addresses is an operator credential being used to blind the product before the thing it would
+	// have caught. Nobody reads a config-change history at the moment that matters, which is why this
+	// goes to the channel that reaches whoever is on call.
+	KindConfigWeakened Kind = "config-weakened"
 )
 
 // Notification is one alert. Subject and AgentID are pseudonymous (D23) — the
