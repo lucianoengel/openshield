@@ -30,6 +30,8 @@ var EngineFields = []Field{
 		Description: "Forward-secure ledger signer state. Its directory must survive restarts or the chain cannot continue."},
 	{Key: "OPENSHIELD_SEQ_FILE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Persisted telemetry sequence. Without it a restart replays sequence numbers and the control plane sees a gap."},
+	{Key: "OPENSHIELD_FLEET_CONTROL_SEQ_FILE", Scope: ScopeBootstrap, Kind: KindString, Default: "/var/lib/openshield/fleet-control.seq",
+		Description: "Where the fleet-control REPLAY BOUND is persisted (SEC-B) — the highest control sequence this host has applied. Its directory must survive restarts: set it empty and the bound is in memory, so a restart lets every captured control replay until its own expiry. Must not be the same file as OPENSHIELD_SEQ_FILE."},
 	{Key: "OPENSHIELD_NATS_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "NATS URL for telemetry. Set with an enrollment URL to publish signed."},
 	{Key: "OPENSHIELD_ENROLL_URL", Scope: ScopeBootstrap, Kind: KindString, Default: "",

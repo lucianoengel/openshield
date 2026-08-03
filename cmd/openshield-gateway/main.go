@@ -47,6 +47,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/dnssink"
 	"github.com/lucianoengel/openshield/internal/gateway"
 	identitypkg "github.com/lucianoengel/openshield/internal/gateway/identity"
+	"github.com/lucianoengel/openshield/internal/intent"
 	"github.com/lucianoengel/openshield/internal/nips"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/retain"
@@ -144,6 +145,12 @@ func main() {
 	// a single worker), so concurrent flows classify in parallel (D76).
 	gw := gateway.New(pool, pol, ledger, log, 30*time.Second)
 	installKillSwitch(ctx, gw, log)
+	// The proxy path reports its degraded state too. It did not until D462: the reporter lived inside
+	// runAccessMode, which main RETURNS AFTER rather than falling through, so the mode most gateways run
+	// in said nothing about a suppressed enforcement, a dropped audit append or a fleet-control forgery
+	// flood. Placed right after the kill switch is installed, because that is the counter whose silence
+	// misleads most — a suppressed gateway looks exactly like a quiet one.
+	reportDegraded(ctx, log, gw)
 	applyThreatFeed(ctx, gw, log)
 	applyCasbCatalog(ctx, log)
 	applyTProxy(ctx, gw, log)
@@ -331,7 +338,7 @@ func installKillSwitch(ctx context.Context, gw *gateway.Gateway, log *slog.Logge
 	if err != nil {
 		fatal(log, "fleet-control nats", err)
 	}
-	if _, err := gw.SubscribeFleetControl(conn, key); err != nil {
+	if _, err := gw.SubscribeFleetControl(conn, key, fleetControlBound(log)); err != nil {
 		fatal(log, "fleet-control subscribe", err)
 	}
 	// XDR-6: consume coordinated-response intents on the SAME connection and the SAME key. One approved
@@ -605,29 +612,15 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	// DEGRADED OPERATION, reported on the same discipline as the rejections above but meaning something
 	// else: this gateway is running with less than its full function.
 	//
-	// OUTSIDE THE NATS BLOCK, deliberately. The first version of this sat inside `if OPENSHIELD_NATS_URL
-	// != ""` alongside the signed-channel counters, which was wrong: the signed SUBSCRIBERS only exist
-	// with a broker, but the kill switch, the enforcement-audit trail and the entity graph do not. A
-	// gateway deployed without NATS still enforces, can still have enforcement suppressed, and can still
-	// drop an audit append — and would have reported none of it. That is the same defect this whole
-	// thread is about, reintroduced one commit after fixing it (D421).
+	// The counters every gateway has live in reportDegraded, which the proxy path calls too. Only the
+	// ACCESS-PROXY ones are added here, because only this mode has an access proxy.
 	//
-	// FleetControlCounts returns (0, 0) when no subscriber exists, so those two read zero rather than
-	// needing their own conditional.
-	degraded := []rejectionCounter{
-		{"fleet_control_applied", func() int64 { a, _ := gw.FleetControlCounts(); return a }},
-		{"fleet_control_rejected", func() int64 { _, r := gw.FleetControlCounts(); return r }},
-		{"entity_link_failures", ap.EntityLinkFailures.Load},
-		{"enforcement_audit_dropped", gw.EnforceAuditDropped},
-	}
-	if gw.KillSwitch != nil {
-		degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})
-	}
 	// ZT-9: tunnel outcomes. `tunnels_revoked` is the one worth waking up for — it is continuous
 	// verification tearing down a session that was authorized and no longer is, and it happens on a
 	// connection nobody is watching. Refusals and dial failures are here so a run of either is visible
 	// rather than reported one connection at a time to whoever happened to be trying.
-	degraded = append(degraded,
+	reportDegraded(ctx, log, gw,
+		rejectionCounter{"entity_link_failures", ap.EntityLinkFailures.Load},
 		rejectionCounter{"tunnels_revoked", ap.TunnelsRevoked},
 		rejectionCounter{"tunnels_refused", ap.TunnelsRefused},
 		rejectionCounter{"tunnel_dial_failures", ap.TunnelDialFailures},
@@ -636,12 +629,6 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 		rejectionCounter{"socks_revoked", ap.SOCKSRevoked},
 		rejectionCounter{"socks_refused", ap.SOCKSRefused},
 		rejectionCounter{"socks_dial_failures", ap.SOCKSDialFailures})
-	go reportRejections(ctx,
-		log,
-		"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+
-			"links are failing. Detection continues; some of what you expect to be blocked is not.",
-		envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
-		degraded...)
 
 	// ZT-12: SOCKS5, for the tooling that does not speak HTTP proxying — ssh's ProxyCommand, database
 	// clients, anything pointed at a system-wide proxy setting. It listens on its OWN port with the SAME
@@ -1161,6 +1148,48 @@ func envMark(k string, def int) int {
 func fatal(log *slog.Logger, msg string, err error) {
 	log.Error(msg, slog.String("err", err.Error()))
 	os.Exit(1)
+}
+
+// defaultFleetControlSeqFile is where the gateway's fleet-control replay bound lives. A DIFFERENT
+// filename from the engine's on purpose: the two subscribe to the same subject and apply the same
+// controls, so a shared path would have whichever restarted last refuse controls the other had already
+// consumed — and on a host running both, the default must be right without an operator noticing.
+const defaultFleetControlSeqFile = "/var/lib/openshield/gateway-fleet-control.seq"
+
+// fleetControlBound opens the durable replay bound for fleet-wide controls (SEC-B). The engine's mirror,
+// and mirrored for the reason SubscribeFleetControl gives: a bound honoured by one enforcement point and
+// forgotten by the other is the failure this channel's design exists to avoid.
+//
+// Set OPENSHIELD_FLEET_CONTROL_SEQ_FILE empty to keep the bound in memory and accept that a restart
+// reopens the replay window.
+func fleetControlBound(log *slog.Logger) natsx.SeqStore {
+	path, set := os.LookupEnv("OPENSHIELD_FLEET_CONTROL_SEQ_FILE")
+	if !set {
+		path = defaultFleetControlSeqFile
+	}
+	if path == "" {
+		log.Warn("gateway: the fleet-control replay bound is IN MEMORY — a restart resets it to zero, " +
+			"so any control an attacker captured off the wire replays until its own expiry. Set " +
+			"OPENSHIELD_FLEET_CONTROL_SEQ_FILE to a path on storage that survives a restart")
+		return nil
+	}
+	bound, err := intent.OpenReplayBound(path, os.Getenv("OPENSHIELD_SEQ_FILE"))
+	switch {
+	case err == nil:
+		return bound
+	case set, !errors.Is(err, intent.ErrBoundUnwritable):
+		// Explicitly configured and wrong is a typo worth failing the boot over; so is a corrupt bound at
+		// any path, because starting fresh at 0 is exactly what a replay wants.
+		fatal(log, "fleet-control replay bound", err)
+		return nil
+	default:
+		log.Warn("gateway: the default fleet-control replay bound is not writable, so the bound is IN "+
+			"MEMORY — a restart resets it to zero and any control an attacker captured off the wire "+
+			"replays until its own expiry. Point OPENSHIELD_FLEET_CONTROL_SEQ_FILE at writable storage "+
+			"that survives a restart",
+			slog.String("path", path), slog.String("err", err.Error()))
+		return nil
+	}
 }
 
 // loadEd25519Pub reads a raw 32-byte Ed25519 public key from a file — the trusted

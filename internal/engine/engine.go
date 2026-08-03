@@ -32,6 +32,7 @@ import (
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 	"github.com/lucianoengel/openshield/internal/intent"
 	"github.com/lucianoengel/openshield/internal/pseudonym"
+	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -518,12 +519,25 @@ func (e *Engine) recordSuppression(ctx context.Context, dec *corev1.Decision, re
 // The subscriber verifies the signature, refuses a replayed sequence, refuses an expired or
 // unknown-version control, and only then drives the same KillSwitch a local file does. Everything it
 // refuses leaves enforcement ON.
-func (e *Engine) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey) (*nats.Subscription, error) {
+//
+// bound is where the replay sequence is PERSISTED (SEC-B). A nil bound keeps it in memory, which means a
+// restart replays every captured control until its TTL — the caller that passes nil is responsible for
+// saying so at startup.
+func (e *Engine) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey,
+	bound natsx.SeqStore) (*nats.Subscription, error) {
 	if e.KillSwitch == nil {
 		return nil, errors.New("engine: no kill switch installed; refusing to accept fleet control that " +
 			"would have nothing to act on")
 	}
-	sub := intent.NewFleetControlSubscriber(key, e.KillSwitch)
+	var sub *intent.FleetControlSubscriber
+	if bound == nil {
+		sub = intent.NewFleetControlSubscriber(key, e.KillSwitch)
+	} else {
+		var err error
+		if sub, err = intent.NewPersistentFleetControlSubscriber(key, e.KillSwitch, bound); err != nil {
+			return nil, err
+		}
+	}
 	e.fleetControl = sub
 	return sub.Subscribe(conn)
 }

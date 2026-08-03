@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D458.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D462.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D458)
+## What OpenShield is (status at a glance, through D462)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ and each of those is a separate trust-or-distribution decision rather than lefto
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
 
-**What has actually been shipping since (D440–D458), and why it is not the UI.** Two threads, both
+**What has actually been shipping since (D440–D462), and why it is not the UI.** Two threads, both
 deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
 fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
 and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
@@ -1013,15 +1013,17 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   `DNS_TUNNEL_THRESHOLD=0.999999` is in range and unreachable. Add real operational ranges as `Validate`
   on every field gating a detector or a retention window, and a `SecurityRelevant` + direction attribute so
   "toward less detection" is computable rather than a human judgement.
-- **SEC-B · The fleet-control replay bound is in memory, and the threat model says otherwise** — new work ·
-  S. `FleetControlSubscriber.applied` is a plain `uint64` struct field (`internal/intent/fleetcontrol.go:56`)
-  with no persistence — verified: neither call site passes a state file, and there is no analogue of
-  `OPENSHIELD_SEQ_FILE`, which exists precisely because *"without it a restart replays sequence numbers"*.
-  So **an agent restart resets the replay bound to zero and every captured control replays**, bounded only
-  by its TTL. Meanwhile `docs/threat-model.md:171` claims the sequence is *"stored rather than held in
-  memory so a control-plane restart does not reopen the window"* — true of the publisher, **false of the
-  consumer, and the consumer is where replay is refused.** Persist it beside the ledger signer state and
-  correct the threat model.
+- ~~**SEC-B · The fleet-control replay bound is in memory, and the threat model says otherwise**~~ —
+  **SHIPPED D462; do not re-propose.** `FleetControlSubscriber.applied` was a plain `uint64` with no
+  persistence and no call site that could supply any, so an agent restart reset the bound to zero and
+  every captured control replayed, bounded only by its TTL — while `docs/threat-model.md` claimed the
+  sequence was *"stored rather than held in memory"*. True of the publisher; **false of the consumer,
+  and the consumer is where replay is refused.** Now persisted by DEFAULT
+  (`OPENSHIELD_FLEET_CONTROL_SEQ_FILE`), written BEFORE the control is applied, refused when it cannot
+  be written, proven readable and writable at startup, and refused outright when pointed at the
+  telemetry sequence file. Threat model corrected including the residual. *Proved end to end by
+  capturing the control plane's own bytes and replaying them past a restart, with an in-memory gateway
+  as the control group.*
 - **SEC-C · The access policy grants on no-match** — new work · M. `evalCandidate` returns `ACTION_ALLOW`
   with reason *"no policy rule matched"* (`internal/policy/policy.go:211`), and the access proxy grants on
   `ALLOW`. So **default-deny lives in the text of the operator's Rego, not in the engine** — an edit that
@@ -1278,6 +1280,18 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   releases on read. The two runs raced for the only copy of the evidence, and when the observation loop
   won, the VERDICT was the blind one: no detection, allow, job printed. Both existing tests passed
   because they hand the decider a buffered channel with no consumer.
+- **SEC-B — the fleet-control replay bound survives a restart (D462).** The refusal logic was correct
+  the whole time and consulted a number that every new process initialised to zero, so waiting for a
+  reboot was the entire attack against the most attractive forgery target in the system. Persisted by
+  default, written before the control is applied, and refused when unwritable. Two further defects were
+  found by *trying to prove it end to end*, which is the argument for scenario tests in one line:
+  **D461** — a ledger anchored but never written to could not be reopened, so a process that started,
+  recorded nothing and restarted could never start again, permanently and self-inflicted (`entryCount`
+  was read and never used — the shape of a branch that was meant to be there); and **D462b** — the
+  gateway's degraded counters, including the kill switch's suppression count, were reported only in
+  ACCESS mode, which is an alternative to the proxy path rather than a stage of it, so the mode most
+  gateways run in reported nothing. That block carried a comment about having been deliberately hoisted
+  out of the NATS conditional to fix this exact defect; the hoist was right and one scope short.
 - **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers

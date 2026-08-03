@@ -7,6 +7,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/intent"
+	natsx "github.com/lucianoengel/openshield/internal/transport/nats"
 )
 
 // SubscribeFleetControl wires the GATEWAY to fleet-wide operational control (PLAT-9).
@@ -19,12 +20,24 @@ import (
 //
 // The subscriber verifies the signature, refuses a replayed sequence, and refuses an expired or
 // unknown-version control. Everything it refuses leaves enforcement ON.
-func (g *Gateway) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey) (*nats.Subscription, error) {
+//
+// bound persists the replay sequence across restarts (SEC-B); nil keeps it in memory and the caller owes
+// the operator a startup warning saying so.
+func (g *Gateway) SubscribeFleetControl(conn *nats.Conn, key ed25519.PublicKey,
+	bound natsx.SeqStore) (*nats.Subscription, error) {
 	if g.KillSwitch == nil {
 		return nil, errors.New("gateway: no kill switch installed; refusing to accept fleet control that " +
 			"would have nothing to act on")
 	}
-	sub := intent.NewFleetControlSubscriber(key, g.KillSwitch)
+	var sub *intent.FleetControlSubscriber
+	if bound == nil {
+		sub = intent.NewFleetControlSubscriber(key, g.KillSwitch)
+	} else {
+		var err error
+		if sub, err = intent.NewPersistentFleetControlSubscriber(key, g.KillSwitch, bound); err != nil {
+			return nil, err
+		}
+	}
 	g.fleetControl = sub
 	return sub.Subscribe(conn)
 }

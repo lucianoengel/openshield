@@ -48,6 +48,7 @@ import (
 	usbenforce "github.com/lucianoengel/openshield/internal/enforcers/usb"
 	"github.com/lucianoengel/openshield/internal/engine"
 	"github.com/lucianoengel/openshield/internal/fim"
+	"github.com/lucianoengel/openshield/internal/intent"
 	"github.com/lucianoengel/openshield/internal/meminject"
 	"github.com/lucianoengel/openshield/internal/policy"
 	"github.com/lucianoengel/openshield/internal/printguard"
@@ -1145,6 +1146,51 @@ func fatal(log *slog.Logger, msg string, err error) {
 	os.Exit(1)
 }
 
+// defaultFleetControlSeqFile is where the fleet-control replay bound lives unless an operator moves it.
+// It has a DEFAULT, unlike OPENSHIELD_SEQ_FILE, because the two are not the same kind of setting: a
+// missing telemetry sequence costs a counted gap, while a missing replay bound is a security property the
+// threat model asserts. A guarantee that must be switched on is a guarantee most deployments do not have.
+const defaultFleetControlSeqFile = "/var/lib/openshield/fleet-control.seq"
+
+// fleetControlBound opens the durable replay bound for fleet-wide controls (SEC-B).
+//
+// Set OPENSHIELD_FLEET_CONTROL_SEQ_FILE to an EMPTY string to opt out and keep the bound in memory —
+// which is warned about rather than forbidden, because a read-only or ephemeral root filesystem is a real
+// deployment and refusing to start there would be worse. LookupEnv rather than env() is what makes that
+// opt-out expressible at all: env() cannot tell "unset" from "deliberately empty", and here they must
+// mean opposite things.
+func fleetControlBound(log *slog.Logger) natsx.SeqStore {
+	path, set := os.LookupEnv("OPENSHIELD_FLEET_CONTROL_SEQ_FILE")
+	if !set {
+		path = defaultFleetControlSeqFile
+	}
+	if path == "" {
+		log.Warn("engine: the fleet-control replay bound is IN MEMORY — a restart resets it to zero, so " +
+			"any control an attacker captured off the wire replays until its own expiry. Set " +
+			"OPENSHIELD_FLEET_CONTROL_SEQ_FILE to a path on storage that survives a restart")
+		return nil
+	}
+	bound, err := intent.OpenReplayBound(path, os.Getenv("OPENSHIELD_SEQ_FILE"))
+	switch {
+	case err == nil:
+		return bound
+	// An operator who typed the path is told they typed it wrong, at boot, the way an explicitly-set bad
+	// KindPath already fails validation. A path nobody chose is a different situation: /var/lib is not
+	// writable in plenty of correct deployments, and dying there would make this fix a regression for
+	// hosts that had no replay bound to lose.
+	case set, !errors.Is(err, intent.ErrBoundUnwritable):
+		fatal(log, "fleet-control replay bound", err)
+		return nil
+	default:
+		log.Warn("engine: the default fleet-control replay bound is not writable, so the bound is IN "+
+			"MEMORY — a restart resets it to zero and any control an attacker captured off the wire "+
+			"replays until its own expiry. Point OPENSHIELD_FLEET_CONTROL_SEQ_FILE at writable storage "+
+			"that survives a restart",
+			slog.String("path", path), slog.String("err", err.Error()))
+		return nil
+	}
+}
+
 func envDuration(k string, def time.Duration) time.Duration {
 	if v := os.Getenv(k); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -1192,7 +1238,7 @@ func installKillSwitch(ctx context.Context, eng *engine.Engine, log *slog.Logger
 	if err != nil {
 		fatal(log, "fleet-control nats", err)
 	}
-	if _, err := eng.SubscribeFleetControl(conn, key); err != nil {
+	if _, err := eng.SubscribeFleetControl(conn, key, fleetControlBound(log)); err != nil {
 		fatal(log, "fleet-control subscribe", err)
 	}
 	// XDR-6: consume coordinated-response intents, so a CONTAINed subject's next exec is refused INLINE

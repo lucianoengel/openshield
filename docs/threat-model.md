@@ -168,12 +168,27 @@ Detection is that the host went quiet, which is indistinguishable from a laptop 
 **What it gets:** re-delivery of a legitimate message — a captured fleet DISABLE re-sent after an
 operator restored enforcement is the sharpest case.
 
-**What bounds it:** a MONOTONIC SEQUENCE, stored rather than held in memory so a control-plane restart
-does not reopen the window, plus expiry evaluated ON READ by the consumer. A control at or below the
-highest applied sequence is refused; an expired one is refused even if the issuer is gone.
+**What bounds it:** a MONOTONIC SEQUENCE, stored rather than held in memory so that neither a
+control-plane restart nor a CONSUMER restart reopens the window, plus expiry evaluated ON READ by the
+consumer. A control at or below the highest applied sequence is refused; an expired one is refused even
+if the issuer is gone.
+
+The consumer's half of that sentence was false until SEC-B, and it is worth recording why rather than
+just correcting it. The publisher's sequence had been persisted since D66; the consumer's — which is
+where a replay is actually refused — was a `uint64` struct field, so every restart reset the bound to
+zero and every captured control replayed, bounded only by its own TTL. The claim and the code had drifted
+apart in the direction that reads as safe. Both endpoints now persist the bound
+(`OPENSHIELD_FLEET_CONTROL_SEQ_FILE`, defaulted rather than opt-in), write it BEFORE applying a control,
+and refuse a control they cannot persist.
+
+**Honest limit:** a deployment may set that path empty — a read-only root filesystem is a real
+deployment, and refusing to start there would be worse than the window. The agent then says at startup
+that its replay bound is in memory. If you accept it, the window is "everything captured since the last
+sequence reset, until each control's expiry".
 
 **Proven by:** `TestAFleetWideDisableReachesAGatewayAndStopsEnforcement` exercises the accepted path;
-the replay and expiry refusals are covered in `internal/intent`.
+`TestARestartDoesNotReopenTheReplayWindow` and `TestTheBoundIsPersistedBeforeTheControlIsApplied` cover
+the persistence; the remaining replay and expiry refusals are covered in `internal/intent`.
 
 ## Malicious insider with an operator role
 

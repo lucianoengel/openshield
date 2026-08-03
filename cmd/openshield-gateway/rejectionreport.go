@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/lucianoengel/openshield/internal/gateway"
 )
 
 // REJECTION REPORTING FOR THE GATEWAY'S SIGNED CHANNELS.
@@ -36,6 +38,38 @@ import (
 type rejectionCounter struct {
 	name string
 	read func() int64
+}
+
+// reportDegraded starts the DEGRADED reporter for the counters EVERY gateway has, whatever it is serving,
+// plus any mode-specific ones the caller adds.
+//
+// It exists because the previous version of this reporter lived entirely inside runAccessMode, and
+// runAccessMode is an ALTERNATIVE to the ordinary proxy path rather than a stage of it — main returns
+// straight after calling it. So a gateway doing the thing gateways mostly do reported none of this: not a
+// suppressed enforcement, not a dropped audit append, not a fleet-control forgery flood.
+//
+// The block carried a comment explaining that it had been deliberately hoisted OUT of the NATS
+// conditional, because "a gateway deployed without NATS still enforces … and would have reported none of
+// it. That is the same defect this whole thread is about, reintroduced one commit after fixing it." The
+// hoist was correct and one scope short: the same argument applies to the mode. Hence a function, so the
+// next caller has to be given the counters rather than having to remember to copy them.
+func reportDegraded(ctx context.Context, log *slog.Logger, gw *gateway.Gateway, extra ...rejectionCounter) {
+	// FleetControlCounts returns (0, 0) when no subscriber exists, so those two read zero rather than
+	// needing their own conditional.
+	degraded := []rejectionCounter{
+		{"fleet_control_applied", func() int64 { a, _ := gw.FleetControlCounts(); return a }},
+		{"fleet_control_rejected", func() int64 { _, r := gw.FleetControlCounts(); return r }},
+		{"enforcement_audit_dropped", gw.EnforceAuditDropped},
+	}
+	if gw.KillSwitch != nil {
+		degraded = append(degraded, rejectionCounter{"enforcement_suppressed", gw.KillSwitch.Suppressions.Load})
+	}
+	go reportRejections(ctx,
+		log,
+		"gateway: DEGRADED — enforcement is being suppressed, fleet control is arriving, or entity "+
+			"links are failing. Detection continues; some of what you expect to be blocked is not.",
+		envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute),
+		append(degraded, extra...)...)
 }
 
 // msg is passed in because two groups share this discipline with different meanings: signed-channel
