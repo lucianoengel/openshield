@@ -372,11 +372,17 @@ func runAccessMode(ctx context.Context, log *slog.Logger, cls *privileged.Pool, 
 	// The access policy is identity-aware and DEFAULT-DENY (D87) — only the operator
 	// can author it. Load it, or abort: never fall back to the observe-first default
 	// (which is default-ALLOW and would admit everyone).
+	//
+	// SEC-C: policy.NewAccess, not policy.New. Until D464 this loaded an ORDINARY stage, whose no-match
+	// outcome is ALLOW — and the access proxy grants on ALLOW. So "default-deny" was a claim about the
+	// operator's Rego text rather than a property of the gate, and deleting one line from that text
+	// turned this into a default-allow proxy in front of internal services. NewAccess denies on no-match
+	// and refuses to start on a module that admits a principal it knows nothing about.
 	mod, err := os.ReadFile(policyPath)
 	if err != nil {
 		fatal(log, "reading access policy", err)
 	}
-	accessPol, err := policy.New(ctx, "access", "1", string(mod))
+	accessPol, err := policy.NewAccess(ctx, "access", "1", string(mod))
 	if err != nil {
 		fatal(log, "access policy", err)
 	}

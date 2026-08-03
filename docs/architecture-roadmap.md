@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D462.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D464.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D462)
+## What OpenShield is (status at a glance, through D464)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ and each of those is a separate trust-or-distribution decision rather than lefto
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
 
-**What has actually been shipping since (D440–D462), and why it is not the UI.** Two threads, both
+**What has actually been shipping since (D440–D464), and why it is not the UI.** Two threads, both
 deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
 fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
 and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
@@ -1024,13 +1024,17 @@ mostly independent of the lanes above. Surfaced by an external architecture revi
   telemetry sequence file. Threat model corrected including the residual. *Proved end to end by
   capturing the control plane's own bytes and replaying them past a restart, with an in-memory gateway
   as the control group.*
-- **SEC-C · The access policy grants on no-match** — new work · M. `evalCandidate` returns `ACTION_ALLOW`
-  with reason *"no policy rule matched"* (`internal/policy/policy.go:211`), and the access proxy grants on
-  `ALLOW`. So **default-deny lives in the text of the operator's Rego, not in the engine** — an edit that
-  shadows or removes the default line silently converts a default-deny gate to default-allow, and the diff
-  shows only a deleted line the reviewer has to *know* is the whole security model. Make no-match **DENY**
-  for `access`-stage modules at the engine, and assert at save time that the compiled module denies a
-  canonical unknown-principal input. (Credit where due, and keep it: the Rego capability restriction is
+- ~~**SEC-C · The access policy grants on no-match**~~ — **SHIPPED D464; do not re-propose.**
+  `evalCandidate` returned `ACTION_ALLOW` with reason *"no policy rule matched"* and the access proxy
+  grants on `ALLOW`, so **default-deny lived in the text of the operator's Rego, not in the engine** —
+  and every access policy in the tree ends with the one line that provided it. `policy.NewAccess` now
+  denies on no-match (a per-STAGE property: the endpoint DLP pipeline must keep allowing an unmatched
+  event, or it blocks every ordinary file write on the host) **and** proves at load that the module
+  denies a canonical unknown principal, in two shapes — nil context and zero context — because a
+  `role != "banned"` predicate reads like a denylist and admits every caller whose role could not be
+  resolved. That second half is not redundant: such a policy MATCHES, so no default can catch it. The
+  gateway refuses to start on one. *Proved through the real binary: an incomplete policy denies an
+  unmatched caller and still serves the authorized one; a permissive policy never opens the port.* (Credit where due, and keep it: the Rego capability restriction is
   genuinely well built — nondeterministic builtins filtered wholesale by flag, `opa.runtime` denied,
   `AllowNet` empty, so `http.send` from an authored policy is not expressible.)
 - **SEC-D · Four-eyes is capped by two shipped defaults** — new work · S. `OPERATOR_ROLES_STRICT` defaults
@@ -1292,6 +1296,14 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   ACCESS mode, which is an alternative to the proxy path rather than a stage of it, so the mode most
   gateways run in reported nothing. That block carried a comment about having been deliberately hoisted
   out of the NATS conditional to fix this exact defect; the hoist was right and one scope short.
+- **SEC-C — the access gate's default-deny is now the gate's, not the operator's (D464).** The comment at
+  the load site already claimed the property: *"never fall back to the observe-first default (which is
+  default-ALLOW and would admit everyone)"*. It refused to fall back to a whole permissive POLICY, and
+  then loaded the operator's policy into a stage whose no-match OUTCOME was that same default-ALLOW. The
+  fix has two halves because the failures are disjoint — the rule that is ABSENT (a default answers it)
+  and the rule that is PRESENT and wrong (only evaluating the module finds it) — and a third
+  consideration that shaped both: an engine-wide default-deny would have been a worse defect than the
+  bug, blocking every ordinary file write on every endpoint on the first deployment.
 - **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers
