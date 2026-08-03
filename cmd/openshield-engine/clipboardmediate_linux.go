@@ -21,7 +21,7 @@ import (
 // It returns false when mediation is unavailable, so the caller can fall back to the polled producer.
 func mediateClipboard(ctx context.Context, display string, store *clipboard.ContentStore,
 	excl *clipboard.Exclusions, decide func(*corev1.Event, string) bool,
-	events chan<- *corev1.Event, log *slog.Logger) bool {
+	log *slog.Logger) bool {
 	m, err := x11.Open(display)
 	if err != nil {
 		log.Warn("engine: clipboard MEDIATION unavailable — falling back to observe-only capture",
@@ -35,14 +35,15 @@ func mediateClipboard(ctx context.Context, display string, store *clipboard.Cont
 	// OnCopy: classify through the real pipeline and report whether the content is sensitive. Only
 	// sensitive content is mediated — taking ownership for every copy would be needless interference with
 	// a desktop that is mostly copying non-sensitive text.
+	//
+	// NO `events` CHANNEL, DELIBERATELY (DLP-2), for the same reason as printDecider: `decide` runs
+	// the full pipeline, and handing the event to the observation loop as well ran it twice over
+	// ONE-SHOT content. Whichever run lost the race classified nothing, and an empty classification on
+	// a copy whose whole content arrives out-of-band is indistinguishable from clean text — so when
+	// the loop won, sensitive content was not mediated and pasted anywhere.
 	m.OnCopy = func(c x11.Copy) bool {
 		ev := clipboardEvent(len(c.Content), clipboard.DisplayX11)
 		store.Put(ev.GetEventId(), c.Content)
-		select {
-		case events <- ev:
-		case <-ctx.Done():
-			return false
-		}
 		return decide(ev, c.SourceExe)
 	}
 

@@ -26,7 +26,6 @@ import (
 //
 // This is exercisable without X: opening a display that does not exist is the failure being asserted.
 func TestMediationReportsUnavailableSoTheFallbackStillRuns(t *testing.T) {
-	events := make(chan *corev1.Event, 8)
 	store := clipboard.NewContentStore(nil)
 	excl := clipboard.NewExclusions()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -43,7 +42,7 @@ func TestMediationReportsUnavailableSoTheFallbackStillRuns(t *testing.T) {
 			defer cancel()
 
 			done := make(chan bool, 1)
-			go func() { done <- mediateClipboard(ctx, display, store, excl, decide, events, log) }()
+			go func() { done <- mediateClipboard(ctx, display, store, excl, decide, log) }()
 
 			select {
 			case got := <-done:

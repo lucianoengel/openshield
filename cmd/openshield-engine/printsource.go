@@ -38,18 +38,19 @@ func printJobEvent(req printguard.Request) *corev1.Event {
 // An evaluation ERROR is returned rather than converted into a verdict. The filter fails open on an error,
 // which is what we want — but it must be able to tell "the policy allowed this" from "we could not decide",
 // because laundering the second into the first would make an outage look like a clean bill of health.
+// NO `events` CHANNEL, DELIBERATELY (DLP-2). This function IS the pipeline run: eng.Process
+// classifies, decides, records to the ledger, enforces and projects telemetry. Handing the event to
+// the observation loop as well ran all of that a SECOND time — and ContentStore.Resolve deletes on
+// read, so only one of the two runs ever saw the document. When the loop won that race the blind run
+// was the VERDICT: no CPF found, allow, and the job printed. The parameter is gone rather than merely
+// unused, so the mistake cannot be re-introduced by restoring one line.
 func printDecider(ctx context.Context, eng processor, store *clipboard.ContentStore,
-	events chan<- *corev1.Event, log *slog.Logger) func(context.Context, printguard.Request) (printguard.Verdict, error) {
+	log *slog.Logger) func(context.Context, printguard.Request) (printguard.Verdict, error) {
 	return func(rctx context.Context, req printguard.Request) (printguard.Verdict, error) {
 		ev := printJobEvent(req)
 		// The job bytes reach the classifier through the same content seam the clipboard uses, so the
 		// engine forwards them to the sandboxed worker and never parses them here (D71/D29).
 		store.Put(ev.GetEventId(), req.Job)
-		select {
-		case events <- ev:
-		case <-rctx.Done():
-			return printguard.VerdictAllow, rctx.Err()
-		}
 		dec, err := eng.Process(rctx, ev)
 		if err != nil {
 			return printguard.VerdictAllow, err

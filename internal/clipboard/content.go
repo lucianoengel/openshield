@@ -1,6 +1,9 @@
 package clipboard
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // ContentStore holds the bytes for events whose content is out-of-band, keyed by event id, so the engine's
 // classify stage can fetch them and classify in the SANDBOXED WORKER (D71/D29). It is how clipboard content
@@ -21,10 +24,31 @@ type ContentStore struct {
 	// Max bounds retained entries. On overflow the oldest registration is dropped (see Put).
 	Max int
 
-	mu    sync.Mutex
-	items map[string][]byte
-	order []string
+	mu       sync.Mutex
+	items    map[string][]byte
+	order    []string
+	consumed map[string]bool // ids already resolved once, bounded like `order`
+	spent    []string
+
+	// repeats counts a Resolve for an event id whose content was ALREADY consumed (DLP-2).
+	//
+	// It exists because the failure that motivated it was silent. Two producers ran the pipeline twice
+	// over one job — the decider for its verdict, the observation loop because the event had also been
+	// enqueued — and since this store releases on read, the second run classified NOTHING. For a print
+	// job or a clipboard copy, whose whole content arrives out-of-band, an empty classification is a
+	// clean result, not an error: the blind run was indistinguishable from a clean document, and when
+	// it was the verdict, the job printed.
+	//
+	// A plain miss counter would be noise: the engine consults the resolver for every non-filesystem
+	// event, and a DNS query legitimately has no content. A REPEAT is precise — it means something
+	// asked for bytes another consumer already took, which is only ever a duplicate pipeline run.
+	repeats atomic.Int64
 }
+
+// Repeats reports how many times content was requested for an event id that had already been
+// resolved. Non-zero means one event is being processed by more than one consumer, and that at least
+// one of them classified nothing while looking exactly like a clean result.
+func (s *ContentStore) Repeats() int64 { return s.repeats.Load() }
 
 // DefaultMaxEntries bounds pending content registrations. Content is normally resolved microseconds after
 // it is registered (the producer emits the event immediately), so anything beyond a handful means the
@@ -75,6 +99,9 @@ func (s *ContentStore) Resolve(eventID string) []byte {
 				break
 			}
 		}
+		s.remember(eventID)
+	} else if s.consumed[eventID] {
+		s.repeats.Add(1)
 	}
 	next := s.Next
 	s.mu.Unlock()
@@ -92,4 +119,27 @@ func (s *ContentStore) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.items)
+}
+
+// remember records that an id's content has been handed out, so a later request for it is
+// recognisable as a duplicate rather than as an ordinary miss. Bounded by the same ceiling as pending
+// registrations: this is a recent-history window for detecting a duplicate consumer, not a log.
+//
+// Caller holds s.mu.
+func (s *ContentStore) remember(eventID string) {
+	if s.consumed == nil {
+		s.consumed = map[string]bool{}
+	}
+	max := s.Max
+	if max <= 0 {
+		max = DefaultMaxEntries
+	}
+	if !s.consumed[eventID] {
+		s.consumed[eventID] = true
+		s.spent = append(s.spent, eventID)
+	}
+	for len(s.spent) > max {
+		delete(s.consumed, s.spent[0])
+		s.spent = s.spent[1:]
+	}
 }

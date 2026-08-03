@@ -13,6 +13,6 @@ import (
 // mediateClipboard is unavailable off Linux: clipboard mediation is built on the X11 selection protocol.
 // Returning false keeps the caller on the observe-only path rather than pretending to enforce.
 func mediateClipboard(context.Context, string, *clipboard.ContentStore, *clipboard.Exclusions,
-	func(*corev1.Event, string) bool, chan<- *corev1.Event, *slog.Logger) bool {
+	func(*corev1.Event, string) bool, *slog.Logger) bool {
 	return false
 }

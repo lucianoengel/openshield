@@ -195,10 +195,11 @@ func TestPrintJobIsClassifiedAndTheEventCarriesNoDocument(t *testing.T) {
 	job := []byte("%!PS\nEmployee record: CPF " + seededCPF + "\n")
 
 	store := clipboard.NewContentStore(nil)
-	events := make(chan *corev1.Event, 4)
 	var gotClassification *corev1.LocalClassification
+	var gotEvent *corev1.Event
 	policy := stageFn("policy", func(_ context.Context, s *core.State) (core.Outcome, error) {
 		gotClassification = s.Classification
+		gotEvent = s.Event
 		action := corev1.Action_ACTION_ALLOW
 		// Deny when the classifier found anything — a real policy would be richer; this proves the verdict
 		// follows the CLASSIFICATION rather than a hardcoded answer.
@@ -211,7 +212,7 @@ func TestPrintJobIsClassifiedAndTheEventCarriesNoDocument(t *testing.T) {
 	eng := engine.New(inProcessWorker{c: classify.New()}, policy, &recordingLedger{}, nil, 5*time.Second)
 	eng.SetContentResolver(func(e *corev1.Event) []byte { return store.Resolve(e.GetEventId()) })
 
-	decide := printDecider(context.Background(), eng, store, events,
+	decide := printDecider(context.Background(), eng, store,
 		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 
 	v, err := decide(context.Background(), printguard.Request{
@@ -227,7 +228,13 @@ func TestPrintJobIsClassifiedAndTheEventCarriesNoDocument(t *testing.T) {
 		t.Fatal("the job produced no detector hits — the document never reached the classifier")
 	}
 
-	ev := <-events
+	// DLP-2: the event is taken from the PIPELINE, not from an observation channel. printDecider no
+	// longer enqueues — running the pipeline twice over one-shot content meant one of the two runs
+	// classified nothing, and when that run was the verdict the job printed.
+	ev := gotEvent
+	if ev == nil {
+		t.Fatal("the policy stage never saw the event")
+	}
 	raw, err := proto.Marshal(ev)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +254,7 @@ func TestPrintJobIsClassifiedAndTheEventCarriesNoDocument(t *testing.T) {
 	// And a clean job is allowed.
 	store2 := clipboard.NewContentStore(nil)
 	eng.SetContentResolver(func(e *corev1.Event) []byte { return store2.Resolve(e.GetEventId()) })
-	decide2 := printDecider(context.Background(), eng, store2, events,
+	decide2 := printDecider(context.Background(), eng, store2,
 		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	v2, err := decide2(context.Background(), printguard.Request{ID: 2, Printer: "p", User: "bob",
 		Job: []byte("%!PS\nnothing sensitive here\n")})

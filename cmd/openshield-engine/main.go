@@ -243,6 +243,10 @@ func main() {
 	// on windows/darwin so the same engine observes there too (ADR-11/PLAT-7).
 	// Inline blocking (the privileged permission-mode agent) is deferred (D49).
 	events := make(chan *corev1.Event, 64)
+	// DLP-2: every out-of-band content store, so its repeat-resolve counter is surfaced. A store whose
+	// counter nothing reads is exactly the shape that hid a duplicate pipeline run for as long as it
+	// existed.
+	contentStores := map[string]*clipboard.ContentStore{}
 	var wg sync.WaitGroup
 	opened := 0
 	for _, dir := range dirs {
@@ -320,6 +324,7 @@ func main() {
 	// silently disable clipboard or print classification for anyone who enables both.
 	if smtpAddr := strings.TrimSpace(os.Getenv("OPENSHIELD_SMTP_LISTEN")); smtpAddr != "" {
 		sstore := clipboard.NewContentStore(nil)
+		contentStores["smtp"] = sstore
 		sprev := eng.ContentResolver()
 		eng.SetContentResolver(func(ev *corev1.Event) []byte {
 			if b := sstore.Resolve(ev.GetEventId()); len(b) > 0 {
@@ -569,6 +574,7 @@ func main() {
 	if iv := envDuration("OPENSHIELD_CLIPBOARD_INTERVAL", 0); iv > 0 {
 		excl := clipboard.NewExclusions(splitList(os.Getenv("OPENSHIELD_CLIPBOARD_EXCLUDE"))...)
 		store := clipboard.NewContentStore(nil)
+		contentStores["clipboard"] = store
 		eng.SetContentResolver(func(ev *corev1.Event) []byte { return store.Resolve(ev.GetEventId()) })
 
 		// MEDIATION first (DLP-2a inc 2): on X11 the engine can own the selection and DECIDE each paste,
@@ -585,7 +591,7 @@ func main() {
 						return false
 					}
 					return dec.GetAction() != corev1.Action_ACTION_ALLOW
-				}, events, log)
+				}, log)
 		}
 
 		reader, cerr := clipboard.NewReader()
@@ -614,6 +620,7 @@ func main() {
 	// the job is classified here, in the sandboxed worker.
 	if sock := strings.TrimSpace(os.Getenv("OPENSHIELD_PRINT_SOCKET")); sock != "" {
 		pstore := clipboard.NewContentStore(nil)
+		contentStores["print"] = pstore
 		prev := eng.ContentResolver()
 		eng.SetContentResolver(func(ev *corev1.Event) []byte {
 			if b := pstore.Resolve(ev.GetEventId()); len(b) > 0 {
@@ -625,7 +632,7 @@ func main() {
 			return nil
 		})
 		psrv := &printguard.Server{
-			Decide: printDecider(ctx, eng, pstore, events, log),
+			Decide: printDecider(ctx, eng, pstore, log),
 			Logf:   func(format string, a ...any) { log.Warn(fmt.Sprintf(format, a...)) },
 		}
 		wg.Add(1)
@@ -913,6 +920,13 @@ func main() {
 	degraded = append(degraded,
 		discardCounter{"privacy_excluded", eng.Excluded},
 		discardCounter{"privacy_exclusions_unevaluable", eng.ExclusionsUnevaluable})
+	// DLP-2: content requested for an event whose bytes another consumer already took. Non-zero means
+	// one job is being run through the pipeline more than once, and that at least one of those runs
+	// classified NOTHING while looking exactly like a clean document — the shape that let a print
+	// verdict silently allow a job it never read.
+	for name, st := range contentStores {
+		degraded = append(degraded, discardCounter{"content_resolve_repeats_" + name, st.Repeats})
+	}
 	go reportDegraded(ctx, log, envDuration("OPENSHIELD_DISCARD_REPORT_INTERVAL", time.Minute), degraded...)
 
 	selfVerify(log)
