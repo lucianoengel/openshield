@@ -163,7 +163,22 @@ func (l *Ledger) prepareForWriting(ctx context.Context) error {
 	if !l.signer.AnchorKey().Equal(storedAnchor) {
 		return ErrCannotResumeWriting
 	}
-	if err := l.resumeTail(ctx); err != nil {
+	// AN ANCHORED BUT EMPTY LEDGER IS A NORMAL STATE, and this branch used to deny it.
+	//
+	// The anchor epoch is persisted when the process first opens the ledger; the first ENTRY is written
+	// whenever a decision is first made, which may be much later or never. Any restart in between —
+	// install, start, notice a wrong setting, restart; or a host whose enforcement was disabled before it
+	// decided anything — landed here with a stored epoch and no entries, and resumeTail's
+	// `ORDER BY sequence DESC LIMIT 1` returned no rows. That surfaced as "ledger: unavailable: no rows
+	// in result set" and the binary EXITED, every time, until someone deleted the key_epochs row by hand.
+	//
+	// entryCount was already being read and never used, which is the shape of a branch that was meant to
+	// be here. Continuing from the genesis hash is the same state the fresh-database path sets, and it is
+	// correct for exactly the same reason: there is no predecessor to commit to yet.
+	if entryCount == 0 {
+		l.seq = 0
+		l.prev = core.GenesisHash[:]
+	} else if err := l.resumeTail(ctx); err != nil {
 		return err
 	}
 	return l.pool.QueryRow(ctx, `SELECT max(idx) FROM key_epochs`).Scan(&l.persistedEpoch)
