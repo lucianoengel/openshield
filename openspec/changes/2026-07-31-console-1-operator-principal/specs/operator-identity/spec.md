@@ -101,6 +101,18 @@ expiry SHALL be mandatory, because a non-expiring automation credential is the o
 - **WHEN** a machine principal presents a credential past its expiry
 - **THEN** the request is unauthenticated
 
+#### Scenario: A machine credential can be presented without a client certificate
+- **WHEN** an automation presents a machine credential to a deployment that has configured no identity provider
+- **THEN** the credential authenticates, rather than the connection being refused before it is read
+
+#### Scenario: Issuing a machine credential grants nothing
+- **WHEN** a machine credential is issued and presented before any role is granted to its principal
+- **THEN** the request is authenticated and refused as unauthorized
+
+#### Scenario: Rotation invalidates the previous secret immediately
+- **WHEN** a machine credential is rotated
+- **THEN** the previous secret authenticates nothing from that moment, with no overlap window
+
 ### Requirement: Privilege over personal data MUST be separable from privilege over configuration
 
 Authority over personal data SHALL be grantable independently of authority over configuration: exporting a

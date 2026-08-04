@@ -335,12 +335,30 @@ func (s *Server) authenticateOperator(r *http.Request) operatorAuth {
 			return operatorAuth{principal: p, certState: r.TLS, ok: true}
 		}
 	}
-	v := s.operatorOIDCVerifier()
-	if v == nil {
-		return operatorAuth{}
-	}
 	tok := bearerToken(r)
 	if tok == "" {
+		return operatorAuth{}
+	}
+	// A MACHINE TOKEN IS DECIDED BY ITS PREFIX, BEFORE THE IDENTITY PROVIDER IS CONSULTED (CONSOLE-1).
+	//
+	// Both credential classes arrive on the same header, so something has to choose. Handing a machine
+	// token to the OIDC verifier would fail there with a message about the identity provider and send
+	// whoever debugs it to the wrong system; worse, a deployment with SSO unconfigured would refuse a
+	// perfectly valid machine credential for the unrelated reason that there is no verifier.
+	//
+	// It carries NO certState, so there is no legacy fallback: a machine with no recorded grant is
+	// authorized for nothing, whatever its credential proves.
+	if strings.HasPrefix(tok, MachineTokenPrefix) {
+		if p, ok := s.authenticateMachine(r.Context(), tok); ok {
+			return operatorAuth{principal: p, ok: true}
+		}
+		// A token that LOOKS like ours and does not verify is refused here rather than falling through
+		// to the identity provider. Falling through would let an expired or revoked machine credential
+		// get a second opinion from a system that knows nothing about it.
+		return operatorAuth{}
+	}
+	v := s.operatorOIDCVerifier()
+	if v == nil {
 		return operatorAuth{}
 	}
 	sub, err := v.VerifySubjectWithProof(tok, r.Header.Get("DPoP"), r.Method, requestURI(r),

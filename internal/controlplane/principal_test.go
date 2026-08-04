@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +287,97 @@ func TestAnApproverMustBeACanonicalPrincipal(t *testing.T) {
 	}
 	if err := s.ResolveApproval(ctx, id, "bob", true); !errors.Is(err, controlplane.ErrBadPrincipal) {
 		t.Fatalf("a bare name resolved an approval: %v", err)
+	}
+}
+
+// TestTheSelfApprovalRefusalIsFourEyesAndNotTheGate closes the INV-4 vacuous-negative trap on the test
+// above, at the layer where it can actually spring.
+//
+// `TestOneHumanWithTwoCredentialsCannotBeBothPairsOfEyes` calls `ResolveApproval` directly, so it cannot
+// tell a four-eyes refusal from a request that never arrived. Driven over HTTP the trap is worse, not
+// better, because THE TWO REFUSALS SHARE A STATUS CODE: an unauthorized operator gets 403 from
+// `requireGrant` and a self-approving operator gets 403 from the handler. A test asserting 403 passes
+// just as happily against a deployment where the credential was never allowed near the route — which
+// would mean the four-eyes control was never exercised at all and the test says it was.
+//
+// So the proof is not a status code and not a body string: THE SAME CREDENTIAL, ON THE SAME ROUTE,
+// RESOLVES A DIFFERENT APPROVAL SUCCESSFULLY. A credential that can resolve one approval has provably
+// passed authentication and the tier gate, so the refusal of the other can only have come from the
+// four-eyes comparison.
+//
+// Mutation: strip the responder grant from the token principal → the second half returns 403 and this
+// FAILS, naming the gate. That is the point — with the grant absent, the first half's 403 is worthless
+// and this test refuses to accept it.
+func TestTheSelfApprovalRefusalIsFourEyesAndNotTheGate(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+
+	const (
+		certPrin  = "cert:mallory-cli"
+		tokenPrin = "oidc:https://idp.test#mallory@corp.example"
+		other     = "cert:trent"
+	)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM operator_identities WHERE account_id = 'person:mallory-http'`)
+		_, _ = pool.Exec(ctx, `DELETE FROM operator_roles WHERE identity = ANY($1)`,
+			[]string{certPrin, tokenPrin, other})
+	})
+
+	s.SetOperatorOIDC(stubVerifier{token: "mallory-token", subject: "mallory@corp.example"})
+	for _, p := range []string{certPrin, tokenPrin, other} {
+		if err := s.SetOperatorRole(ctx, p, controlplane.RoleResponder, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One person, two credentials. Trent is deliberately UNLINKED — an operator nobody has linked is
+	// their own account, which is the state every existing deployment is in.
+	for _, p := range []string{certPrin, tokenPrin} {
+		if err := s.LinkOperatorIdentity(ctx, p, "person:mallory-http", "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resolve := func(id int64) (int, string) {
+		t.Helper()
+		req := tokenReq(http.MethodPost,
+			"/approvals/resolve?id="+strconv.FormatInt(id, 10)+"&approve=true", "mallory-token")
+		rec := httptest.NewRecorder()
+		controlplane.RequireTierForTestHandler(s, controlplane.RoleResponder, s.OperatorReadHandler()).
+			ServeHTTP(rec, req)
+		return rec.Code, strings.TrimSpace(rec.Body.String())
+	}
+
+	// Mallory's own request, approved with Mallory's other credential.
+	own, err := s.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-self-http",
+		certPrin, "contain everything", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := resolve(own)
+	if code != http.StatusForbidden {
+		t.Fatalf("one human requested with a certificate and approved with a token over HTTP: %d %q",
+			code, body)
+	}
+
+	// THE NON-VACUITY PROOF. Same token, same route, same handler — someone else's request.
+	theirs, err := s.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-other-http",
+		other, "contain host A", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := resolve(theirs); code != http.StatusOK {
+		t.Fatalf("the same credential could not resolve ANOTHER operator's approval: %d %q.\n"+
+			"Then the refusal above proves nothing about four-eyes — this credential never got past "+
+			"authentication or the tier gate, and a test that reads that 403 as the control working is "+
+			"asserting a negative it never reached", code, body)
+	}
+	// ...and the self-approval it was refused is still pending, not quietly resolved.
+	got, err := s.ApprovalFor(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-self-http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != controlplane.ApprovalPending {
+		t.Errorf("state = %q after the refusal, want still pending", got.State)
 	}
 }

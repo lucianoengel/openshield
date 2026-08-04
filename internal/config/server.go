@@ -202,6 +202,13 @@ var ServerFields = []Field{
 		Description: "Bearer token the identity provider presents to the SCIM endpoint for operator deprovisioning (ZT-7). Empty disables SCIM. Note what SCIM does here: deactivating a user revokes their access immediately; CREATING one grants nothing, because the provider identifies and this product authorizes."},
 	{Key: "OPENSHIELD_FOUR_EYES_REQUIRE_STRONG", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
 		Description: "Refuse to APPROVE a four-eyes request unless operator identity is hardened — both OPENSHIELD_OPERATOR_ROLES_STRICT and OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP on (SEC-D). Off, every approval is still RECORDED with the assurance in force when it was resolved, so the audit trail never attests to a two-person control the deployment could not deliver. Denials are never gated: refusing to record a 'no' would keep a dangerous request pending and approvable."},
+	// CONSOLE-1: accepting a certificate-less handshake is a POSTURE change, so it is a decision rather
+	// than a side effect of issuing a credential. Turning it ON is the weakening direction — the listener
+	// stops refusing an unauthenticated peer at the handshake — even though the credential presented
+	// afterwards is verified just as strictly.
+	{Key: "OPENSHIELD_OPERATOR_MACHINE_TOKENS", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
+		Sensitivity: RaisingWeakens,
+		Description: "Accept machine bearer credentials (`osm_…`) on the operator surface, which requires allowing a TLS handshake with no client certificate (CONSOLE-1). A presented certificate is still verified against the CA; only its ABSENCE stops being fatal, becoming a 401 one layer up. Off, an issued machine credential is refused with `tls: certificate required` before the token is read — the server warns at boot if live credentials exist in that state. Operator SSO turns the same relaxation on independently."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP", Scope: ScopeBootstrap, Kind: KindBool, Default: "0",
 		Description: "Refuse operator tokens that are not sender-constrained (ZT-7). A bound token is ALWAYS proof-checked; this decides whether an UNBOUND one is refused. Turn on once the issuer binds tokens — before that it locks every operator out. Without it, an issuer misconfiguration silently downgrades every operator to a stealable bearer token."},
 	{Key: "OPENSHIELD_OPERATOR_OIDC_DPOP_REPLAY_CACHE", Scope: ScopeBootstrap, Kind: KindInt, Default: "4096",

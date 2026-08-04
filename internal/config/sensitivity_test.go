@@ -185,6 +185,11 @@ func TestEveryDetectionFieldDeclaresItsDirection(t *testing.T) {
 		"OPENSHIELD_PEER_UEBA_THRESHOLD":     config.RaisingWeakens,
 		"OPENSHIELD_PEER_UEBA_COOLDOWN":      config.RaisingWeakens,
 		"OPENSHIELD_ALERT_ROUTES":            config.AnyChangeWeakens,
+		// Not a detection knob but an AUTHENTICATION posture one, and it belongs here for the same
+		// reason: turning it on stops the listener refusing a certificate-less peer at the handshake
+		// (CONSOLE-1). What is presented afterwards is verified just as strictly, so this is a narrow
+		// weakening — but a weakening whose direction nobody declared would read as irrelevant.
+		"OPENSHIELD_OPERATOR_MACHINE_TOKENS": config.RaisingWeakens,
 	}
 	got := map[string]config.Sensitivity{}
 	for _, f := range config.ServerFields {

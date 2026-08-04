@@ -231,6 +231,13 @@ construction, the operator who reviews who has been looking.
 and not in force until someone decides who the privacy officer is. Migration 049 says so with a count.
 Until that decision is made, this section describes a capability rather than a control.
 
+**And the automation is no longer a person.** Until CONSOLE-1 nothing could present a `svc:` identity, so
+an integration calling the operator API used a human's certificate or SSO token — which is exactly the
+second credential the four-eyes account comparison exists to collapse. A machine credential is now issued
+by the control plane with a mandatory, capped expiry, rotatable and revocable in one command, and it can
+never grant an approval (D469). *Residual:* it is a bearer secret, so its defence is a short life and
+fast revocation rather than sender-constraining — there is no browser to bind a proof to.
+
 **Proven by:** `TestACaseNoteIsAttributedToItsAuthorAndTheReadIsRecorded`, `TestAnAnalystCannotActOnACase`,
 `TestAConfigurationAdminCannotExportSubjectData`, `TestAPrivacyOfficerCannotChangeConfiguration`,
 `TestTheViewAuditIsReadableAtLast`.

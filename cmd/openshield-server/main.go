@@ -54,6 +54,8 @@ func main() {
 			os.Exit(showConfig(dsn))
 		case "operator-role":
 			os.Exit(operatorRole(dsn, os.Args[2:]))
+		case "machine-credential":
+			os.Exit(machineCredential(dsn, os.Args[2:]))
 		}
 	}
 	// ZT-7: operator SSO. Off unless an issuer is configured — enabling an IdP must not happen by accident.
@@ -173,6 +175,8 @@ func main() {
 	// must not race the watcher's initial load.
 	srv.LoadSettings(ctx, settings)
 	setUpOperatorSSO(srv, ctx)
+	// CONSOLE-1: a machine credential that exists and cannot reach the listener is a silent gap (D31).
+	warnAboutUnreachableMachineCredentials(ctx, srv, operatorSSOEnabled)
 	go srv.WatchSettings(ctx, settings, envDuration("OPENSHIELD_CONFIG_POLL", 15*time.Second))
 	// D292: the configuration surface reports and validates against THIS process's resolver, so what an
 	// operator reads is what this binary is honouring — not a fresh one built inside a handler, which
@@ -745,8 +749,13 @@ func main() {
 					// token is ever read. A presented certificate is still verified against the CA, so
 					// certificate authentication is unchanged and an unknown one is still refused here —
 					// only ABSENCE stops being fatal, becoming a 401 one layer up.
+					//
+					// MACHINE CREDENTIALS NEED THE SAME RELAXATION, and gating it on SSO alone would have
+					// shipped them unreachable in exactly the way D375 describes: an automation presenting
+					// `osm_…` has no certificate either, so a deployment with no identity provider would
+					// refuse a perfectly valid credential at the handshake, before the token was read.
 					cfg := tlsConf.ServerConfig()
-					if operatorSSOEnabled {
+					if operatorSSOEnabled || machineTokensEnabled() {
 						cfg = tlsConf.ServerConfigOptionalClientCert()
 					}
 					serveErr = srv.ServeHTTPTLS(leaderCtx, addr, cfg)
@@ -1228,4 +1237,179 @@ func splitCSV(v string) []string {
 		}
 	}
 	return out
+}
+
+// machineCredential is the `svc:<name>` lifecycle (CONSOLE-1): issue, rotate, revoke, list.
+//
+// AN OPERATOR-LOCAL COMMAND for the same reason `operator-role` is (D51): minting a credential that can
+// call the operator API must not itself be reachable over the operator API.
+//
+// The subcommand exists because the machine principal had a namespace and no credential — nothing could
+// present a `svc:` identity, so every automation ran on a person's certificate or a person's SSO token,
+// which is exactly the input the four-eyes account comparison exists to reject.
+func machineCredential(dsn string, args []string) int {
+	usage := "usage: openshield-server machine-credential issue <name> --ttl <duration>\n" +
+		"       openshield-server machine-credential rotate <name> --ttl <duration>\n" +
+		"       openshield-server machine-credential revoke <name>\n" +
+		"       openshield-server machine-credential list\n\n" +
+		"Mints the credential for the machine principal `svc:<name>`. THE TOKEN IS PRINTED ONCE and only\n" +
+		"its hash is stored, so a lost secret is rotated rather than recovered.\n\n" +
+		"--ttl is REQUIRED and capped at 90 days. There is no non-expiring machine credential: the one\n" +
+		"nobody rotates is the one that never had to be.\n\n" +
+		"ISSUING GRANTS NOTHING. Authorize it like any operator:\n" +
+		"  openshield-server operator-role set svc:<name> analyst\n" +
+		"A machine principal may REQUEST an approval and may never grant one (SOAR-4, D469)."
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	// ttlArg reads `--ttl <duration>` from the remaining arguments. Absent is an ERROR rather than a
+	// default, because a default life is a life nobody chose.
+	ttlArg := func(rest []string) (time.Duration, bool) {
+		for i := 0; i < len(rest)-1; i++ {
+			if rest[i] == "--ttl" {
+				d, err := time.ParseDuration(rest[i+1])
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "machine-credential: --ttl:", err)
+					return 0, false
+				}
+				return d, true
+			}
+		}
+		fmt.Fprintln(os.Stderr, "machine-credential: --ttl is required (for example --ttl 720h)")
+		return 0, false
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "machine-credential:", err)
+		return 1
+	}
+	defer pool.Close()
+	srv := controlplane.New(pool)
+	by := env("USER", "unknown") + "@" + hostname()
+
+	// printed reports a freshly minted secret. To STDOUT so it can be piped into a secret store, while
+	// every explanation goes to stderr — a token with prose around it is a token somebody pastes wrong.
+	printed := func(name, secret string) {
+		fmt.Println(secret)
+		fmt.Fprintf(os.Stderr, "svc:%s — this is the only time the token is shown. It grants NOTHING "+
+			"until you run `openshield-server operator-role set svc:%s <role>`.\n", name, name)
+	}
+
+	switch args[0] {
+	case "issue", "rotate":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		ttl, ok := ttlArg(args[2:])
+		if !ok {
+			return 2
+		}
+		var secret error
+		var tok string
+		if args[0] == "issue" {
+			tok, secret = srv.IssueMachineCredential(ctx, args[1], ttl, by)
+		} else {
+			tok, secret = srv.RotateMachineCredential(ctx, args[1], ttl, by)
+		}
+		if secret != nil {
+			fmt.Fprintf(os.Stderr, "machine-credential %s: %v\n", args[0], secret)
+			return 1
+		}
+		printed(args[1], tok)
+		if args[0] == "rotate" {
+			fmt.Fprintln(os.Stderr, "The previous secret stopped working immediately — there is no "+
+				"overlap window, so update the automation in this same change.")
+		}
+	case "revoke":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		if err := srv.RevokeMachineCredential(ctx, args[1], by); err != nil {
+			fmt.Fprintln(os.Stderr, "machine-credential revoke:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "svc:%s is REVOKED — it authenticates nothing as of now. Its operator-role "+
+			"grant is untouched; revoke that too if the identity is going away.\n", args[1])
+	case "list":
+		rows, err := srv.ListMachineCredentials(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "machine-credential list:", err)
+			return 1
+		}
+		if len(rows) == 0 {
+			fmt.Fprintln(os.Stderr, "no machine credentials — any automation calling the operator API is "+
+				"doing so as a PERSON, which is what four-eyes cannot see through")
+		}
+		now := time.Now()
+		for _, r := range rows {
+			state := "active"
+			switch {
+			case r.Revoked:
+				state = "REVOKED"
+			case r.Expired(now):
+				state = "EXPIRED"
+			}
+			used := "never"
+			if r.LastUsedAt.After(time.Unix(0, 0)) {
+				used = r.LastUsedAt.UTC().Format(time.RFC3339)
+			}
+			fmt.Printf("%s\t%s\texpires=%s\tlast_used=%s\trotations=%d\t%s\n", r.Principal, state,
+				r.ExpiresAt.UTC().Format(time.RFC3339), used, r.Rotations, r.IssuedBy)
+		}
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	return 0
+}
+
+// machineTokensEnabled reports whether this deployment accepts machine bearer credentials at the
+// handshake (CONSOLE-1).
+//
+// OFF BY DEFAULT, and the same shape as operator SSO for the same reason: accepting a handshake with no
+// client certificate is a posture change, and a posture change must be a decision rather than a side
+// effect of somebody running an unrelated command. A deployment that never issues a machine credential
+// keeps the mutual-TLS refusal it has always had.
+//
+// The cost of an off-by-default switch is a silent failure — issue a credential, watch it not work, no
+// clue why — so warnAboutUnreachableMachineCredentials exists to make that state loud rather than
+// leaving it to be discovered (D31).
+func machineTokensEnabled() bool {
+	return strings.TrimSpace(os.Getenv("OPENSHIELD_OPERATOR_MACHINE_TOKENS")) == "1"
+}
+
+// warnAboutUnreachableMachineCredentials reports, at boot, credentials that exist and cannot be used.
+//
+// The pairing is what makes this checkable: a credential in the table plus a listener that refuses a
+// certificate-less handshake means an automation is getting `tls: certificate required` and its owner is
+// reading it as a networking problem. D31 — a gap must never be silent.
+func warnAboutUnreachableMachineCredentials(ctx context.Context, srv *controlplane.Server, ssoOn bool) {
+	if ssoOn || machineTokensEnabled() {
+		return
+	}
+	rows, err := srv.ListMachineCredentials(ctx)
+	if err != nil {
+		return // a boot-time advisory must never be the reason a server fails to start
+	}
+	var live int
+	now := time.Now()
+	for _, r := range rows {
+		if !r.Revoked && !r.Expired(now) {
+			live++
+		}
+	}
+	if live == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "openshield-server: %d active machine credential(s) exist and CANNOT BE USED: "+
+		"this listener requires a client certificate at the handshake, so an automation presenting a "+
+		"machine token is refused with `tls: certificate required` before the token is read. Set "+
+		"OPENSHIELD_OPERATOR_MACHINE_TOKENS=1 to accept them (a presented certificate is still verified; "+
+		"only its ABSENCE stops being fatal), or revoke them with "+
+		"`openshield-server machine-credential revoke <name>`.\n", live)
 }

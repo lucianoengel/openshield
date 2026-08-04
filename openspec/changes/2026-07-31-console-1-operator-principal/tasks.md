@@ -43,7 +43,7 @@
   both write through it.
 - [x] Approval predicate compares account id, not principal string.
 - [x] Test: one human, two credentials, request + approve → refused, request stays pending.
-- [ ] Test asserts the attempt **reached the tier gate** before the four-eyes refusal — a test that passes
+- [x] Test asserts the attempt **reached the tier gate** before the four-eyes refusal — a test that passes
   because the request never arrived is the INV-4 vacuous-negative trap.
 - [x] Test: two distinct operators still satisfy four-eyes (the control must still permit the legitimate
   case).
@@ -51,7 +51,7 @@
 
 ## Seams that are cheap only here
 
-- [ ] Machine principal kind `svc:<name>` with issue/scope/expire/rotate/revoke; expiry mandatory.
+- [x] Machine principal kind `svc:<name>` with issue/scope/expire/rotate/revoke; expiry mandatory.
 - [x] Four-eyes refuses when either side is a machine principal.
 - [x] Test: a service account cannot approve; cannot request an approval-gated act; an expired credential
   authenticates nothing.

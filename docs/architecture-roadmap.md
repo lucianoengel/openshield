@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D470.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D471.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D470)
+## What OpenShield is (status at a glance, through D471)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -410,8 +410,9 @@ stated in its entry.
 
 ### Phase 0 · Foundation
 
-- **CONSOLE-1 · One canonical operator principal** — 🟡 **groups 1–3, 5 and the admin/privacy split
-  SHIPPED (D468, D469, D470); 26/33 tasks.** Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
+- **CONSOLE-1 · One canonical operator principal** — 🟡 **groups 1–3, 5, the admin/privacy split and the
+  machine-credential lifecycle SHIPPED (D468, D469, D470, D471); 28/33 tasks.** Only the scope-predicate
+  seam remains. Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
   `playbook:<name>`) threaded through `requireTier` onto the request context; the eight
   `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account
   and **four-eyes compares the account, not the string**; the issuer is part of an SSO identity, so a
@@ -432,6 +433,18 @@ stated in its entry.
   narrows them. Along the way `/views` was wired: `Views`/`ViewsBy` had no caller anywhere, so every view
   recorded since D20 went into a table nothing could read — the reader half of `CONSOLE-5`, arriving
   early because the split needed something for the privacy officer to oversee.
+
+  **D471 gave the machine principal a credential.** `svc:<name>` parsed, was grantable and was refused
+  four-eyes — and nothing could present one, so every `svc:` grant authorized a caller that could not
+  exist and every automation calling the operator API ran on a PERSON's certificate or SSO token. That is
+  the exact input the four-eyes account comparison exists to reject. `machine-credential
+  issue|rotate|revoke|list` mints an `osm_`-prefixed bearer secret (SHA-256 stored, plaintext printed
+  once), **expiry mandatory, 90-day ceiling, checked at authentication**, rotation with no overlap window,
+  and issuance granting nothing. **The D375 wiring defect was caught before shipping:** the
+  certificate-less handshake relaxation was gated on operator SSO, so a machine credential on a
+  deployment with no identity provider would have died at the handshake with `tls: certificate required`
+  — mutation-verified against the real binaries. `OPENSHIELD_OPERATOR_MACHINE_TOKENS=1`, off by default,
+  with a boot warning when live credentials cannot reach the listener (D31).
   **⚠️ UPGRADE BREAK: every operator must be re-granted.** Grants were stored under a BARE identity
   (`certIdentity` returned the CommonName unprefixed for the ROLE lookup while `operatorIdentity`
   returned `operator:<CN>` for the AUDIT trail — one person, two strings, one process; SCIM stored the
