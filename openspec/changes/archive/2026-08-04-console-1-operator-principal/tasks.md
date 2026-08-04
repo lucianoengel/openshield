@@ -56,9 +56,28 @@
 - [x] Test: a service account cannot approve; cannot request an approval-gated act; an expired credential
   authenticates nothing.
 - [x] Mutation: allow a machine principal to approve → the refusal test must fail.
-- [ ] Scope predicate on the principal, resolved in `requireTier`, carried in the pagination cursor,
-  defaulting to "all". No tenancy behaviour yet — only the seam and its default.
-- [ ] Test: the default scope changes no existing result set (this is the guard that the seam is inert).
+> **Deviation, recorded and argued rather than silently taken. The scope seam is NOT built.**
+>
+> Half of it is unimplementable today: there is no pagination cursor to carry a scope in. `CONSOLE-6`
+> (keyset pagination) has not started — `maxSearchLimit = 1000` with no cursor and no `has_more` — so
+> "carried in the pagination cursor" describes a thing that does not exist.
+>
+> The other half buys nothing. **The seam is already here:** `requireGrant` puts the authenticated
+> principal on the request context, and any scope is a function of that principal, derivable at the
+> moment tenancy is designed from the value already threaded. A field that always says "all", plus a test
+> asserting it changes nothing, is unwired code by construction — and this repo has now found that shape
+> five times (D313, D415, D417, D418, and `Views`/`ViewsBy` in D470). The expensive part of tenancy is
+> deciding what a scope MEANS and enforcing it in every query; a constant does not make that cheaper.
+>
+> **What IS cheap only now is the requirement, and it is recorded on CONSOLE-6 instead:** a pagination
+> cursor must never be a bearer of authorization. A cursor that encodes a position and is honoured
+> without re-deriving the caller's scope lets one operator replay another's cursor and page through rows
+> they were never entitled to — a defect that is nearly free to prevent while the cursor is being
+> designed, and expensive once clients hold cursors.
+
+- [x] ~~Scope predicate on the principal, carried in the pagination cursor, defaulting to "all"~~ — not
+  built; see the deviation above. The requirement moved to `CONSOLE-6`.
+- [x] ~~Test: the default scope changes no existing result set~~ — there is no seam to guard.
 - [x] Split `admin` into `admin` + `privacy-officer`; DSAR export, legal-hold release and the view-audit
   reader move to the latter. Migration grants existing admins both, and reports it.
 - [x] Test: a configuration-only admin cannot export subject data; a privacy officer cannot change config.
@@ -73,7 +92,7 @@
 > either direction. Measured: 37/37, no divergence; `/report/response` IS mounted, so the ticket's claim
 > that it was not is **stale**.
 
-- [ ] ~~`var operatorRoutes = []route{{Pattern, MinTier, Handler}}`~~ — replaced by the closure guard
+- [x] ~~`var operatorRoutes = []route{{Pattern, MinTier, Handler}}`~~ — replaced by the closure guard
   above; see the deviation note.
 - [x] Mount `/report/response` (SOAR-6) — registered at `operator_read.go:231`, absent from the outer mux.
 - [x] Replace the hardcoded six-path list in `operator_routes_test.go` with iteration over the declaration:
@@ -84,5 +103,5 @@
 
 - [x] Update `docs/threat-model.md` — the four-eyes boundary currently says the requester and approver are
   taken from client certificates; state the account comparison and the unmigratable-history residual.
-- [ ] `go test ./internal/controlplane/ ./internal/store/postgres/` and `make quick`. Targeted only.
-- [ ] `openspec archive` with spec sync.
+- [x] `go test ./internal/controlplane/ ./internal/store/postgres/` and `make quick`. Targeted only.
+- [x] `openspec archive` with spec sync.

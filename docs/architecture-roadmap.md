@@ -410,9 +410,12 @@ stated in its entry.
 
 ### Phase 0 · Foundation
 
-- **CONSOLE-1 · One canonical operator principal** — 🟡 **groups 1–3, 5, the admin/privacy split and the
-  machine-credential lifecycle SHIPPED (D468, D469, D470, D471); 28/33 tasks.** Only the scope-predicate
-  seam remains. Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
+- **CONSOLE-1 · One canonical operator principal** — ✅ **COMPLETE (D468, D469, D470, D471).** Archived
+  `2026-08-04-console-1-operator-principal`, specs synced. Two deviations are recorded in its task list
+  rather than taken silently: the route set is a closure GUARD instead of a shared `[]route` table (37/37,
+  no divergence), and the scope predicate was NOT built — the principal is already on the request
+  context, so a field that always says "all" is unwired code by construction, and the requirement that
+  survives moved to `CONSOLE-6`. Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
   `playbook:<name>`) threaded through `requireTier` onto the request context; the eight
   `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account
   and **four-eyes compares the account, not the string**; the issuer is part of an SSO identity, so a
@@ -507,8 +510,15 @@ the surfaces, then the two exit-criteria tickets.*
   non-pseudonymised operator identities — a console makes it one of the largest tables in the database.
 - **CONSOLE-6 · Keyset pagination** — new work · M. `maxSearchLimit = 1000` (`operator_read.go:281`), no
   cursor, no `has_more`. Hunt cannot be built on "top 1000 rows, no row 1001" against 90-day retention; the
-  existing `ORDER BY received_at DESC, id DESC` is already a usable cursor. *Residual:* no stable snapshot
-  across pages while ingest is live.
+  existing `ORDER BY received_at DESC, id DESC` is already a usable cursor.
+  **⚠️ REQUIREMENT INHERITED FROM CONSOLE-1: A CURSOR MUST NEVER BE A BEARER OF AUTHORIZATION.** Resolve
+  the caller's authority from their principal on every page — a cursor that encodes a position and is
+  honoured without re-deriving it lets one operator replay another's cursor and page through rows they
+  were never entitled to. Nearly free to prevent while the cursor is being designed; expensive once
+  clients hold cursors. CONSOLE-1 deliberately did NOT build an inert scope field for this — the
+  principal is already on the request context, so any scope is derivable there when tenancy is designed,
+  and a constant that always says "all" is unwired code by construction (see the CONSOLE-1 tasks
+  deviation). *Residual:* no stable snapshot across pages while ingest is live.
 - **CONSOLE-7 · Operator-tier `/health`** — new work · S. Leader held / broker connected / ingest state /
   schema skew / last anchor. The Overview strip's first tile **has no data source today**: `/metrics` sits
   behind a separate constant-time bearer token (PLAT-4b), not the operator session. Specifies what the

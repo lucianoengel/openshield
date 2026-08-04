@@ -113,6 +113,20 @@ expiry SHALL be mandatory, because a non-expiring automation credential is the o
 - **WHEN** a machine credential is rotated
 - **THEN** the previous secret authenticates nothing from that moment, with no overlap window
 
+### Requirement: A pagination cursor MUST NOT carry authorization
+
+A paginated result SHALL resolve the caller's authority from their authenticated principal on every
+page. A cursor SHALL carry position only, and a server SHALL NOT honour authority encoded in one.
+
+A cursor that is honoured without re-deriving the caller's authority is a bearer token for whatever it
+was issued against: one operator replays another's cursor and pages through rows they were never
+entitled to, and no gate is consulted because the request looks like a continuation. The defect is
+nearly free to prevent while the cursor is designed and expensive once clients hold cursors.
+
+#### Scenario: A cursor issued to one operator does not widen another's results
+- **WHEN** an operator presents a pagination cursor issued for a different operator's request
+- **THEN** the results served are those the presenting operator is authorized for, or the cursor is refused
+
 ### Requirement: Privilege over personal data MUST be separable from privilege over configuration
 
 Authority over personal data SHALL be grantable independently of authority over configuration: exporting a
@@ -189,3 +203,8 @@ An unverifiable credential SHALL yield no identity at all — not a reduced one,
 #### Scenario: A view established by a verified token is recorded under that identity
 - **WHEN** an investigation view is requested with a verified token
 - **THEN** the view is served and recorded under that operator's namespaced principal
+
+## RENAMED Requirements
+
+- FROM: `### Requirement: A view without a verified certificate is refused`
+- TO: `### Requirement: A view without a verified identity is refused`
