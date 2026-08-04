@@ -77,50 +77,55 @@ func certCommonName(state *tls.ConnectionState) string {
 //
 // The order is the whole point: the DATABASE decides, and the certificate is consulted only when the
 // database has nothing to say about this identity.
-func (s *Server) resolveOperatorRole(ctx context.Context, auth operatorAuth) (string, operatorRoleSource) {
+func (s *Server) resolveOperatorRole(ctx context.Context, auth operatorAuth) (operatorGrant, operatorRoleSource) {
 	if !auth.ok || !auth.principal.valid() {
-		return "", roleAbsent
+		return operatorGrant{}, roleAbsent
 	}
 	identity := auth.principal.String()
-	role, revoked, err := s.lookupOperatorRole(ctx, identity)
+	grant, revoked, err := s.lookupOperatorRole(ctx, identity)
 	switch {
 	case err == nil && revoked:
 		// An explicit revocation OUTRANKS the certificate. Returning the cert's role here would mean
 		// revoking someone restored whatever their certificate said.
-		return "", roleRevoked
+		return operatorGrant{}, roleRevoked
 	case err == nil:
-		return role, roleFromDatabase
+		return grant, roleFromDatabase
 	case !errors.Is(err, pgx.ErrNoRows):
 		// A database error must NOT fall through to the certificate: that would turn a database outage into
 		// a silent restoration of stale privileges — a fail-open on authorization, which is the one place
 		// this project never fails open.
-		return "", roleAbsent
+		return operatorGrant{}, roleAbsent
 	}
 	if strictOperatorRoles() {
-		return "", roleAbsent
+		return operatorGrant{}, roleAbsent
 	}
 	// NO CERTIFICATE MEANS NO FALLBACK. An SSO operator has no embedded role to fall back TO, so they are
 	// strict by construction: no record, no access, whatever the token asserts. The fallback exists to keep
 	// existing certificate holders working through the migration and for nothing else.
 	if auth.certState == nil {
-		return "", roleAbsent
+		return operatorGrant{}, roleAbsent
 	}
-	return certRole(auth.certState), roleFromCertificate
+	// TIER ONLY. The certificate cannot carry the privacy authority (CONSOLE-1) — `certRole` does not
+	// recognise `privacy-officer`, and the grant built here leaves Privacy false whatever the OU says.
+	// The fallback exists to keep existing certificate holders working, and it must never be able to
+	// grant MORE than the recorded grant it stands in for.
+	return operatorGrant{Tier: certRole(auth.certState)}, roleFromCertificate
 }
 
 // lookupOperatorRole reads one identity's row.
-func (s *Server) lookupOperatorRole(ctx context.Context, identity string) (string, bool, error) {
+func (s *Server) lookupOperatorRole(ctx context.Context, identity string) (operatorGrant, bool, error) {
 	s.mu.Lock()
 	pool := s.pool
 	s.mu.Unlock()
 	if pool == nil {
-		return "", false, pgx.ErrNoRows
+		return operatorGrant{}, false, pgx.ErrNoRows
 	}
-	var role string
+	var g operatorGrant
 	var revoked bool
 	err := pool.QueryRow(ctx,
-		`SELECT role, revoked FROM operator_roles WHERE identity = $1`, identity).Scan(&role, &revoked)
-	return role, revoked, err
+		`SELECT role, privacy_officer, revoked FROM operator_roles WHERE identity = $1`, identity).
+		Scan(&g.Tier, &g.Privacy, &revoked)
+	return g, revoked, err
 }
 
 // warnLegacyRole reports, once per identity, that an operator is running on a role embedded in their
@@ -135,10 +140,16 @@ func (s *Server) warnLegacyRole(identity, role string) {
 		"operator has a row.\n", identity, role, identity, role)
 }
 
-// SetOperatorRole grants or changes an operator's role. Takes effect on the next request.
+// SetOperatorRole grants or changes an operator's grant. Takes effect on the next request.
+//
+// `role` is a grant SPECIFICATION (CONSOLE-1): a tier, `privacy-officer`, or both separated by a comma.
+// The whole grant is replaced, which is what makes `operator-role set cert:alice admin` the way to take
+// the privacy authority back off an administrator the upgrade granted both to. A merge would have no
+// such inverse — an authority that can only ever be added is not one that can be separated.
 func (s *Server) SetOperatorRole(ctx context.Context, identity, role, by string) error {
-	if !validOperatorRole(role) {
-		return fmt.Errorf("controlplane: %q is not an operator role (want analyst, responder or admin)", role)
+	grant, gerr := parseGrant(role)
+	if gerr != nil {
+		return gerr
 	}
 	// THE IDENTITY MUST BE A CANONICAL PRINCIPAL (CONSOLE-1).
 	//
@@ -154,11 +165,12 @@ func (s *Server) SetOperatorRole(ctx context.Context, identity, role, by string)
 	// being byte-identical to it — surrounding whitespace being the obvious one.
 	identity = p.String()
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
-		 VALUES ($1,$2,false,now(),$3)
-		 ON CONFLICT (identity) DO UPDATE SET role = EXCLUDED.role, revoked = false,
+		`INSERT INTO operator_roles (identity, role, privacy_officer, revoked, updated_at, updated_by)
+		 VALUES ($1,$2,$3,false,now(),$4)
+		 ON CONFLICT (identity) DO UPDATE SET role = EXCLUDED.role,
+		     privacy_officer = EXCLUDED.privacy_officer, revoked = false,
 		     updated_at = now(), updated_by = EXCLUDED.updated_by`,
-		identity, role, by)
+		identity, grant.Tier, grant.Privacy, by)
 	return err
 }
 
@@ -175,24 +187,16 @@ func (s *Server) RevokeOperator(ctx context.Context, identity, by string) error 
 		return fmt.Errorf("%w — revoke `cert:<CommonName>` or `oidc:<issuer>#<subject>`", perr)
 	}
 	identity = p.String()
+	// The privacy authority is cleared alongside the tier. A revoked row that still reads
+	// `privacy-officer` in `operator-role list` describes an access this identity does not have, and the
+	// listing is what an access review reads.
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
-		 VALUES ($1,'',true,now(),$2)
-		 ON CONFLICT (identity) DO UPDATE SET revoked = true, updated_at = now(),
+		`INSERT INTO operator_roles (identity, role, privacy_officer, revoked, updated_at, updated_by)
+		 VALUES ($1,'',false,true,now(),$2)
+		 ON CONFLICT (identity) DO UPDATE SET revoked = true, privacy_officer = false, updated_at = now(),
 		     updated_by = EXCLUDED.updated_by`,
 		identity, by)
 	return err
-}
-
-// validOperatorRole is the closed set an operator row may hold. `agent` is deliberately absent: an agent is
-// not an operator, and letting one be granted an operator tier here would turn a fleet credential into a
-// console credential.
-func validOperatorRole(role string) bool {
-	switch role {
-	case RoleAnalyst, RoleResponder, RoleAdmin:
-		return true
-	}
-	return false
 }
 
 // operatorRoleChanges counts authorization changes, so a spike is visible without reading the table.
@@ -203,7 +207,10 @@ func OperatorRoleChanges() int64 { return operatorRoleChanges.Load() }
 
 // OperatorRoleRow is one row of the operator authorization table, for `operator-role list`.
 type OperatorRoleRow struct {
-	Identity  string
+	Identity string
+	// Role is the WHOLE grant in the form `operator-role set` accepts — `admin`, `privacy-officer`, or
+	// `admin,privacy-officer` — not just the tier. An access review reads this listing, and a listing
+	// that omits an axis of authority is a review that cannot see it.
 	Role      string
 	Revoked   bool
 	UpdatedAt time.Time
@@ -214,7 +221,8 @@ type OperatorRoleRow struct {
 // reviewing access needs to see, not an absence to infer.
 func (s *Server) ListOperatorRoles(ctx context.Context) ([]OperatorRoleRow, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT identity, role, revoked, updated_at, updated_by FROM operator_roles ORDER BY identity`)
+		`SELECT identity, role, privacy_officer, revoked, updated_at, updated_by
+		   FROM operator_roles ORDER BY identity`)
 	if err != nil {
 		return nil, err
 	}
@@ -222,9 +230,12 @@ func (s *Server) ListOperatorRoles(ctx context.Context) ([]OperatorRoleRow, erro
 	var out []OperatorRoleRow
 	for rows.Next() {
 		var r OperatorRoleRow
-		if err := rows.Scan(&r.Identity, &r.Role, &r.Revoked, &r.UpdatedAt, &r.UpdatedBy); err != nil {
+		var g operatorGrant
+		if err := rows.Scan(&r.Identity, &g.Tier, &g.Privacy, &r.Revoked, &r.UpdatedAt,
+			&r.UpdatedBy); err != nil {
 			return nil, err
 		}
+		r.Role = g.String()
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -365,8 +376,8 @@ func (s *Server) recordOperatorIdentity(ctx context.Context, identity, by string
 	}
 	identity = p.String()
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO operator_roles (identity, role, revoked, updated_at, updated_by)
-		 VALUES ($1,'',false,now(),$2)
+		`INSERT INTO operator_roles (identity, role, privacy_officer, revoked, updated_at, updated_by)
+		 VALUES ($1,'',false,false,now(),$2)
 		 ON CONFLICT (identity) DO UPDATE SET revoked = false, updated_at = now(),
 		     updated_by = EXCLUDED.updated_by`,
 		identity, by)

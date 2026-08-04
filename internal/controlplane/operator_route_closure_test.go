@@ -59,6 +59,23 @@ func controlplaneSources(t *testing.T) map[string]string {
 	return out
 }
 
+// mountedOperatorRoutes returns every path mounted on the served TLS mux, read from the mount itself.
+//
+// Shared with TestOperatorReadRoutesMountedAndGated, which used to carry six hand-written paths — the
+// declaration IS the route set, so a test that drives the surface should iterate it rather than keep a
+// second copy that silently falls behind.
+func mountedOperatorRoutes(t *testing.T) []string {
+	t.Helper()
+	srcs := controlplaneSources(t)
+	outer, ok := srcs["enroll_http.go"]
+	if !ok {
+		t.Fatal("enroll_http.go not found — reading the route set from the wrong directory")
+	}
+	paths := matches(mountCall, outer)
+	sort.Strings(paths)
+	return paths
+}
+
 func matches(re *regexp.Regexp, src string) []string {
 	var out []string
 	for _, m := range re.FindAllStringSubmatch(src, -1) {

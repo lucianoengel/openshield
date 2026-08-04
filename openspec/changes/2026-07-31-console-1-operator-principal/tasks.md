@@ -31,7 +31,7 @@
 - [x] Replace the eight `operatorIdentity(r.TLS)` call sites (`alert_ack.go:55`, `cases_http.go:66`,
   `dsar.go:115`, `incidents.go:175`, `savedsearch.go:233`, `soar2.go:147`, `timeline.go:186`,
   `views.go:186`) with the context read; a missing principal refuses.
-- [ ] Guard test, grep-style in the `internal/doccheck` idiom: no handler outside the auth package reaches
+- [x] Guard test, grep-style in the `internal/doccheck` idiom: no handler outside the auth package reaches
   for `r.TLS` to derive an identity.
 - [x] Test: a bearer-only operator acknowledges an incident, transitions it, reads its timeline, opens a
   case and saves a search — each attributed.
@@ -59,10 +59,10 @@
 - [ ] Scope predicate on the principal, resolved in `requireTier`, carried in the pagination cursor,
   defaulting to "all". No tenancy behaviour yet — only the seam and its default.
 - [ ] Test: the default scope changes no existing result set (this is the guard that the seam is inert).
-- [ ] Split `admin` into `admin` + `privacy-officer`; DSAR export, legal-hold release and the view-audit
+- [x] Split `admin` into `admin` + `privacy-officer`; DSAR export, legal-hold release and the view-audit
   reader move to the latter. Migration grants existing admins both, and reports it.
-- [ ] Test: a configuration-only admin cannot export subject data; a privacy officer cannot change config.
-- [ ] Mutation: collapse the two tiers back → both separation tests must fail.
+- [x] Test: a configuration-only admin cannot export subject data; a privacy officer cannot change config.
+- [x] Mutation: collapse the two tiers back → both separation tests must fail.
 
 ## Route set as data
 
@@ -76,7 +76,7 @@
 - [ ] ~~`var operatorRoutes = []route{{Pattern, MinTier, Handler}}`~~ — replaced by the closure guard
   above; see the deviation note.
 - [x] Mount `/report/response` (SOAR-6) — registered at `operator_read.go:231`, absent from the outer mux.
-- [ ] Replace the hardcoded six-path list in `operator_routes_test.go` with iteration over the declaration:
+- [x] Replace the hardcoded six-path list in `operator_routes_test.go` with iteration over the declaration:
   every route is served with a credential, refused without one.
 - [x] Mutation: delete an entry from the outer loop → the served-route test must fail.
 

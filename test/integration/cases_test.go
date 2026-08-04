@@ -347,11 +347,68 @@ func TestAnAnalystCannotActOnACase(t *testing.T) {
 		t.Errorf("an ANALYST opened a case (%d %s) — reading an investigation and acting on one are "+
 			"different authorities", code, body)
 	}
-	// ...and may NOT release a legal hold, which is admin-only: it is the one operation here that makes
-	// held evidence purgeable again.
+	// ...and may NOT release a legal hold. It is the one operation here that makes held evidence about a
+	// person purgeable again, so since CONSOLE-1 it belongs to the privacy officer — see
+	// TestOnlyThePrivacyOfficerReleasesALegalHold, which asserts that NO TIER reaches it, admin included.
 	if code, body := do(t, responder, http.MethodPost, base+"/cases/hold/release?subject=s1", nil); code != http.StatusForbidden {
-		t.Errorf("a RESPONDER released a legal hold (%d %s) — releasing evidence from a hold sits with "+
-			"the admin tier, not with case management", code, body)
+		t.Errorf("a RESPONDER released a legal hold (%d %s) — releasing evidence from a hold is not case "+
+			"management", code, body)
+	}
+}
+
+// TestOnlyThePrivacyOfficerReleasesALegalHold drives the CONSOLE-1 split through the SHIPPED binaries:
+// the real CLI writes the grant, the real server reads it, over real mutual TLS.
+//
+// The package tests prove the gate's logic against a synthesised TLS state. What they cannot prove is
+// that `operator-role set … privacy-officer` — a grant spelling that did not exist before this — reaches
+// the running server's authorization decision at all. Every defect this project has found in an
+// authorization change has lived in exactly that gap.
+func TestOnlyThePrivacyOfficerReleasesALegalHold(t *testing.T) {
+	p := newPKI(t)
+	stack, _, base := mtlsServer(t, p)
+
+	// The certificates are identical apart from their CommonName: both carry the `admin` OU, so anything
+	// that separates them below came from the GRANT and not from the credential.
+	admin := p.operator(t, "admin", "cfg-admin")
+	officer := p.operator(t, "admin", "dpo")
+
+	operatorRoleCmd(t, stack, "set", "cert:cfg-admin", "admin")
+	operatorRoleCmd(t, stack, "set", "cert:dpo", "privacy-officer")
+
+	// THE ADMIN IS REFUSED, holding the highest tier there is.
+	if code, body := do(t, admin, http.MethodPost, base+"/cases/hold/release?subject=s1", nil); code != http.StatusForbidden {
+		t.Errorf("an ADMIN released a legal hold (%d %s) — the operator who can change what the platform "+
+			"detects must not also be the one who releases evidence about a person", code, body)
+	}
+	// ...and so is their DSAR export, which used to sit at the analyst tier.
+	if code, body := do(t, admin, http.MethodGet, base+"/subject?id=s1", nil); code != http.StatusForbidden {
+		t.Errorf("an ADMIN compiled a subject report (%d %s)", code, body)
+	}
+
+	// THE PRIVACY OFFICER IS ADMITTED — the other half, without which every refusal above is satisfied
+	// by a grant that reaches nothing.
+	if code, body := do(t, officer, http.MethodGet, base+"/subject?id=s1", nil); code != http.StatusOK {
+		t.Fatalf("the privacy officer could not run a DSAR export (%d %s)", code, body)
+	}
+	if code, body := do(t, officer, http.MethodGet, base+"/views?viewer=cert:dpo", nil); code != http.StatusOK {
+		t.Fatalf("the privacy officer could not read the view audit (%d %s) — it was written by four call "+
+			"sites and readable by nothing until CONSOLE-1", code, body)
+	}
+	// ...and holds no tier: the second axis must not quietly carry the console with it.
+	if code, body := do(t, officer, http.MethodGet, base+"/alerts", nil); code != http.StatusForbidden {
+		t.Errorf("the privacy officer read the analyst queue (%d %s)", code, body)
+	}
+
+	// NARROWING WORKS THROUGH THE CLI, which is the only way an upgraded deployment ever applies the
+	// separation: migration 049 grants every existing admin both.
+	operatorRoleCmd(t, stack, "set", "cert:dpo", "admin,privacy-officer")
+	if code, body := do(t, officer, http.MethodGet, base+"/alerts", nil); code != http.StatusOK {
+		t.Fatalf("a grant of both authorities did not carry the tier (%d %s)", code, body)
+	}
+	operatorRoleCmd(t, stack, "set", "cert:dpo", "admin")
+	if code, body := do(t, officer, http.MethodGet, base+"/subject?id=s1", nil); code != http.StatusForbidden {
+		t.Errorf("re-granting `admin` left the privacy authority in place (%d %s) — then no deployment "+
+			"that upgraded can ever separate the two", code, body)
 	}
 }
 

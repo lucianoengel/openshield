@@ -18,11 +18,22 @@ func TestOperatorReadRoutesMountedAndGated(t *testing.T) {
 	addr := serveRoleGated(t, srv, ca)
 
 	op := clientWith(t, ca, "alice", "operator")
-	// Every operator-read GET route. A mounted route returns 200 (or a 4xx for a missing param),
-	// never 404. A 404 means the route is registered on the inner mux but not served.
-	for _, path := range []string{
-		"/alerts", "/search", "/events", "/incidents", "/overdue", "/subject?id=s1",
-	} {
+	// EVERY MOUNTED ROUTE, READ OUT OF THE MOUNT ITSELF (CONSOLE-1). This used to be six paths written
+	// by hand, which meant the check covered whatever someone remembered to add — and a route nobody
+	// remembered is exactly the failure being guarded against. The list now comes from the same outer
+	// mux the guard in operator_route_closure_test.go parses, so a route cannot be added without being
+	// covered here.
+	//
+	// GET ONLY, deliberately: every mutating route rejects a GET with 405, so this walks the whole
+	// surface without opening a case, publishing an intent or launching a backfill against the fixture
+	// database. A mounted route answers SOMETHING — 200, 400 for a missing parameter, 403 for a tier or
+	// the privacy authority it lacks, 405 for the wrong method. Only 404 means it was never mounted.
+	mounted := mountedOperatorRoutes(t)
+	if len(mounted) < 30 {
+		t.Fatalf("read only %d mounted routes out of enroll_http.go — the parse is wrong and this test "+
+			"proves nothing", len(mounted))
+	}
+	for _, path := range mounted {
 		resp, err := op.Get("https://" + addr + path)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)
@@ -30,6 +41,18 @@ func TestOperatorReadRoutesMountedAndGated(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusNotFound {
 			t.Errorf("operator GET %s = 404 — route registered on the inner mux but not mounted on the served mux", path)
+		}
+		// AND IT IS GATED. Without this, a route accidentally mounted OUTSIDE requireTier would pass the
+		// loop above perfectly — it would answer, which is all the 404 check asks for.
+		anon := clientWith(t, ca, "nobody", "")
+		aresp, aerr := anon.Get("https://" + addr + path)
+		if aerr != nil {
+			t.Fatalf("anonymous GET %s: %v", path, aerr)
+		}
+		aresp.Body.Close()
+		if aresp.StatusCode != http.StatusUnauthorized && aresp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET %s with a role-less certificate = %d — an operator route must refuse an "+
+				"unauthorized caller, not serve them", path, aresp.StatusCode)
 		}
 	}
 

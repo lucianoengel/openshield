@@ -101,7 +101,7 @@ func certRole(state *tls.ConnectionState) string {
 // role comes from the certificate's identity, never the request (D58).
 //
 // AN EXACT-ROLE GATE IS ONLY USED FOR `agent`, which is not an operator tier and is not in the roles table
-// (see validOperatorRole). So this deliberately still reads the certificate: an agent's role is a property
+// (see parseGrant). So this deliberately still reads the certificate: an agent's role is a property
 // of the credential the fleet was issued, not an operator grant somebody administers.
 func requireRole(role string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +121,19 @@ func requireRole(role string, h http.Handler) http.Handler {
 // requireTier gates a handler on a MINIMUM operator tier (PLAT-3/ADR-4): 401 when there is no verified
 // cert, 403 when the role IN FORCE ranks below minRole, else it serves h. A higher tier satisfies a lower
 // requirement (admin ≥ responder ≥ analyst). The role comes from the identity, never the request (D58).
+func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
+	return s.requireGrant(minRole, h)
+}
+
+// requirePrivacyOfficer gates a handler on the DATA-SUBJECT authority, which no tier satisfies —
+// including admin (CONSOLE-1). Spelled as its own wrapper because `requireTier(RolePrivacyOfficer, …)`
+// at a mount site would read as a claim about tiers, and it is the opposite of one.
+func (s *Server) requirePrivacyOfficer(h http.Handler) http.Handler {
+	return s.requireGrant(RolePrivacyOfficer, h)
+}
+
+// requireGrant is the gate both wrappers share: 401 with no credential, 403 when the grant in force does
+// not satisfy `require`, else it serves h with the authenticated principal on the context.
 //
 // A METHOD, AND THAT IS THE ZT-7 CHANGE (D372). This used to be a package function reading the role out of
 // the certificate's OU, which meant authorization was frozen for the certificate's lifetime: a demotion or
@@ -128,8 +141,7 @@ func requireRole(role string, h http.Handler) http.Handler {
 // now" at all. It now resolves against the operator_roles table on every request — see
 // resolveOperatorRole, including why there is no cache and why a database error denies rather than falling
 // back to the certificate.
-func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
-	min := roleRank(minRole)
+func (s *Server) requireGrant(require string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// AUTHENTICATE, then authorize. A client certificate or an OIDC bearer token (ZT-7); both converge
 		// on the same server-side role.
@@ -138,16 +150,24 @@ func (s *Server) requireTier(minRole string, h http.Handler) http.Handler {
 			http.Error(w, "client certificate or bearer token required", http.StatusUnauthorized)
 			return
 		}
-		role, src := s.resolveOperatorRole(r.Context(), auth)
-		if src == roleFromCertificate && role != "" {
-			s.warnLegacyRole(auth.principal.String(), role)
+		grant, src := s.resolveOperatorRole(r.Context(), auth)
+		if src == roleFromCertificate && grant.Tier != "" {
+			s.warnLegacyRole(auth.principal.String(), grant.Tier)
 		}
-		if roleRank(role) < min {
+		if !grant.satisfies(require) {
 			// The message distinguishes a REVOCATION from merely ranking too low, because those send an
 			// operator to completely different places: one is "ask for access", the other is "your access
 			// was taken away and you should know that".
 			if src == roleRevoked {
 				http.Error(w, "forbidden: this operator identity has been revoked", http.StatusForbidden)
+				return
+			}
+			// A THIRD MESSAGE FOR THE PRIVACY AXIS, because "your tier is too low" is actively misleading
+			// here: the admin refused at a privacy route holds the HIGHEST tier there is, and telling them
+			// to ask for a higher one sends them to look for something that does not exist (CONSOLE-1).
+			if require == RolePrivacyOfficer {
+				http.Error(w, "forbidden: this endpoint is the privacy officer's, and no operator tier "+
+					"grants it — including admin", http.StatusForbidden)
 				return
 			}
 			http.Error(w, "forbidden: operator role tier not authorized for this endpoint", http.StatusForbidden)
@@ -233,6 +253,65 @@ func (s *Server) ViewHandler() http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{"viewer": viewer, "rows": out})
 	})
 	return mux
+}
+
+// viewAuditHandler serves GET /views?event=<id> or ?viewer=<principal> — WHO LOOKED AT WHAT.
+//
+// This is the privacy officer's route, and it is the reason the split has teeth. The control plane has
+// recorded every investigation view since D20/T-013, and until now NOTHING COULD READ IT: `Views` and
+// `ViewsBy` had no caller anywhere outside their own tests. An accountability record nobody can read is
+// a record that accounts to nobody — the same unwired shape this repo has now found in D313, D415, D417,
+// D418 and CONSOLE-1's own `/report/response`.
+//
+// Gated on the privacy authority alone, deliberately: an administrator reading the log of who viewed
+// what would be auditing themselves, and the tier that can look at investigations must not be the tier
+// that reviews the looking.
+//
+// Reading it is itself recorded, like every other read of this surface. Nobody is above the record,
+// including whoever holds this route.
+func (s *Server) viewAuditHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	officer := operatorIdentity(r.Context())
+	if officer == "" {
+		http.Error(w, "client certificate or bearer token required", http.StatusUnauthorized)
+		return
+	}
+	event, viewer := r.URL.Query().Get("event"), r.URL.Query().Get("viewer")
+	// EXACTLY ONE, and neither defaults to "everything". An unfiltered dump of the whole view log is a
+	// different and much broader question than "who looked at this investigation", and it should be
+	// asked for explicitly by whoever builds it rather than fallen into by omitting a parameter.
+	if (event == "") == (viewer == "") {
+		http.Error(w, "give exactly one of ?event= or ?viewer=", http.StatusBadRequest)
+		return
+	}
+	if err := s.RecordView(r.Context(), officer, viewer, event); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var (
+		records []ViewRecord
+		err     error
+	)
+	if event != "" {
+		records, err = s.Views(r.Context(), event)
+	} else {
+		records, err = s.ViewsBy(r.Context(), viewer)
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	out := make([]map[string]any, 0, len(records))
+	for _, v := range records {
+		out = append(out, map[string]any{
+			"viewer": v.Viewer, "subject_filter": v.SubjectFilter,
+			"event_id": v.EventID, "viewed_at": v.ViewedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	writeJSON(w, map[string]any{"rows": out})
 }
 
 // Views returns recorded views for an event, oldest first.

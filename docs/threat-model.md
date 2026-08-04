@@ -217,7 +217,23 @@ reading an investigation is how one learns what is known about them.
 written BEFORE the evidence is returned — a read that fails to record does not happen. Tiers separate
 reading from acting, and acting from administering.
 
-**Proven by:** `TestACaseNoteIsAttributedToItsAuthorAndTheReadIsRecorded`, `TestAnAnalystCannotActOnACase`.
+And the record is now READABLE, which it was not until CONSOLE-1: `Views`/`ViewsBy` had no caller
+anywhere, so every view since D20 was written to a table nothing could query. An accountability record
+nobody can read accounts to nobody.
+
+**Separately: the administrator is not the auditor.** `admin` used to mean "can change configuration"
+AND "can read everything held about a named human" — the subject report, the legal hold, and (had it been
+reachable) the view record. Those are one grant no longer: `privacy-officer` is a second axis that no
+tier satisfies and that grants no tier, so the operator who can disable a detection is not, by
+construction, the operator who reviews who has been looking.
+
+**Residual, stated plainly:** an upgrade grants every existing admin BOTH, so the separation is available
+and not in force until someone decides who the privacy officer is. Migration 049 says so with a count.
+Until that decision is made, this section describes a capability rather than a control.
+
+**Proven by:** `TestACaseNoteIsAttributedToItsAuthorAndTheReadIsRecorded`, `TestAnAnalystCannotActOnACase`,
+`TestAConfigurationAdminCannotExportSubjectData`, `TestAPrivacyOfficerCannotChangeConfiguration`,
+`TestTheViewAuditIsReadableAtLast`.
 
 ## Supply chain
 

@@ -897,9 +897,17 @@ func revokeAgent(dsn string, args []string) int {
 // (D51): the ability to hand out admin must not itself be reachable over the network the admin console
 // uses. Whoever runs this already has database credentials and shell on the control plane.
 func operatorRole(dsn string, args []string) int {
-	usage := "usage: openshield-server operator-role set <identity> <analyst|responder|admin>\n" +
+	usage := "usage: openshield-server operator-role set <identity> <grant>\n" +
 		"       openshield-server operator-role revoke <identity>\n" +
 		"       openshield-server operator-role list\n\n" +
+		"<grant> is an operational TIER, the PRIVACY authority, or both (CONSOLE-1):\n" +
+		"  analyst | responder | admin   the tiers, ordered; a higher one satisfies a lower\n" +
+		"  privacy-officer               DSAR export, legal-hold release, and the record of who viewed\n" +
+		"                                what. NOT a tier: no tier grants it and it grants no tier.\n" +
+		"  admin,privacy-officer         both — what `admin` alone meant before this split, and what\n" +
+		"                                every existing admin was migrated to so nothing broke\n\n" +
+		"The grant is REPLACED, not merged, so `set <identity> admin` is how the privacy authority comes\n" +
+		"back off an administrator who was migrated with both.\n\n" +
 		"<identity> is a NAMESPACED PRINCIPAL naming the credential that will present it (CONSOLE-1):\n" +
 		"  cert:<CommonName>          a CA-issued operator client certificate\n" +
 		"  oidc:<issuer>#<subject>    a verified operator bearer token\n" +

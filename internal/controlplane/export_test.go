@@ -137,3 +137,11 @@ func PlausibleObservationTimeForTest(ev *corev1.Event, receivedAt time.Time, tol
 func RequireTierForTestHandler(s *Server, minRole string, h http.Handler) http.Handler {
 	return s.requireTier(minRole, h)
 }
+
+// RequirePrivacyOfficerForTestHandler wraps a real handler in the DATA-SUBJECT gate (CONSOLE-1), which
+// no operator tier satisfies. Exported separately from the tier gate for the same reason the production
+// wrapper is: routing a privacy route through a function whose name says "tier" is how the two would
+// quietly become one again.
+func RequirePrivacyOfficerForTestHandler(s *Server, h http.Handler) http.Handler {
+	return s.requirePrivacyOfficer(h)
+}

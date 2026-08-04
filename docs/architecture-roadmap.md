@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D469.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D470.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D469)
+## What OpenShield is (status at a glance, through D470)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -410,8 +410,8 @@ stated in its entry.
 
 ### Phase 0 · Foundation
 
-- **CONSOLE-1 · One canonical operator principal** — 🟡 **groups 1–3 and 5 SHIPPED (D468, D469);
-  21/33 tasks.** Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
+- **CONSOLE-1 · One canonical operator principal** — 🟡 **groups 1–3, 5 and the admin/privacy split
+  SHIPPED (D468, D469, D470); 26/33 tasks.** Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
   `playbook:<name>`) threaded through `requireTier` onto the request context; the eight
   `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account
   and **four-eyes compares the account, not the string**; the issuer is part of an SSO identity, so a
@@ -419,6 +419,19 @@ stated in its entry.
   enforcing what the capability spec has claimed since SOAR-4 with nothing behind it, before `svc:`
   principals made it reachable. Automation may still request one; that is the whole purpose of a
   wait-for-approval step.
+
+  **D470 split the admin tier's two authorities apart.** `admin` meant "can change configuration" AND
+  "can read everything held about a named human" — the DSAR export (which sat at the ANALYST tier, so the
+  broadest read role could compile a dossier on anyone), the legal-hold release, and the record of who
+  looked. `privacy-officer` is now a SECOND AXIS rather than a fourth rank: no tier satisfies it,
+  including admin, and it grants no tier. Ranking it could not express the control — above admin it
+  inherits configuration, below it the admin inherits the dossier. **The admin administers the system;
+  the privacy officer oversees the admin.** Migration 049 grants every existing admin BOTH and says so
+  with a count, so nothing breaks on upgrade and **the separation is available but not in force** until
+  someone decides who the privacy officer is; `operator-role set <id> admin` replaces the grant and
+  narrows them. Along the way `/views` was wired: `Views`/`ViewsBy` had no caller anywhere, so every view
+  recorded since D20 went into a table nothing could read — the reader half of `CONSOLE-5`, arriving
+  early because the split needed something for the privacy officer to oversee.
   **⚠️ UPGRADE BREAK: every operator must be re-granted.** Grants were stored under a BARE identity
   (`certIdentity` returned the CommonName unprefixed for the ROLE lookup while `operatorIdentity`
   returned `operator:<CN>` for the AUDIT trail — one person, two strings, one process; SCIM stored the
@@ -468,7 +481,9 @@ stated in its entry.
 *Read models first, then the security primitives the console's own threat model forces, then tuning, then
 the surfaces, then the two exit-criteria tickets.*
 
-- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — CONSOLE-1 · M. **A console WEAKENS
+- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — CONSOLE-1 · M. 🟡 **The READER
+  landed with D470** (`GET /views?event=|viewer=`, privacy-officer tier, and reading it is itself
+  recorded). What remains is the RECORDING gap and retention, below. **A console WEAKENS
   a documented trust boundary unless this lands.** `RecordView` has four call sites (`views.go:47`,
   `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`); `/alerts`, `/search`, `/events`, `/logs`,
   `/incidents`, `/overdue`, `/subject`, `/searches/run` record nothing — and those are the console's primary

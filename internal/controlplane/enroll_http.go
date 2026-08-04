@@ -131,18 +131,27 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// heavy job against the database the live pipeline is using.
 		mux.Handle("/correlate/backfill", s.requireTier(RoleAdmin, opRead))
 		mux.Handle("/overdue", s.requireTier(RoleAnalyst, opRead))
-		mux.Handle("/subject", s.requireTier(RoleAnalyst, opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
+		// CONSOLE-1: THE DATA-SUBJECT ROUTES ARE THE PRIVACY OFFICER'S, AND NO TIER REACHES THEM.
+		//
+		// `/subject` compiles everything the platform holds about a named individual and sat at the
+		// LOWEST tier, so the broadest read role could assemble a dossier on anyone. `/cases/hold/release`
+		// makes evidence about a person purgeable again. `/views` is the record of who looked — the
+		// oversight of the tier that does the looking, which is why an admin must not hold it.
+		//
+		// An upgraded deployment's existing administrators keep all three (migration 049) so nothing
+		// breaks; separating them is a decision an operator makes, not one an upgrade makes for them.
+		mux.Handle("/subject", s.requirePrivacyOfficer(opRead)) // PLAT-8: DSAR — compile what the platform holds about a subject
+		mux.Handle("/views", s.requirePrivacyOfficer(opRead))   // D20/T-013: who viewed which investigation
+		mux.Handle("/cases/hold/release", s.requirePrivacyOfficer(opRead))
 		// D290: cases and approvals. Reading an investigation is the ANALYST tier and records the view
-		// (D20); acting on one is RESPONDER. Releasing a legal hold is ADMIN — it is the only operation
-		// here that makes evidence purgeable again, so it sits with the other destructive-adjacent act
-		// rather than with case management.
+		// (D20); acting on one is RESPONDER. Releasing a legal hold moved to the privacy officer above —
+		// it is the only operation here that makes evidence about a person purgeable again.
 		mux.Handle("/cases", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/cases/open", s.requireTier(RoleResponder, opRead))
 		mux.Handle("/cases/assign", s.requireTier(RoleResponder, opRead))
 		mux.Handle("/cases/note", s.requireTier(RoleResponder, opRead))
 		mux.Handle("/cases/close/request", s.requireTier(RoleResponder, opRead))
 		mux.Handle("/cases/close/approve", s.requireTier(RoleResponder, opRead))
-		mux.Handle("/cases/hold/release", s.requireTier(RoleAdmin, opRead))
 		mux.Handle("/approvals", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/approvals/resolve", s.requireTier(RoleResponder, opRead))
 		// D291: response intents. RESPONDER for both steps — preparing one opens a four-eyes request in

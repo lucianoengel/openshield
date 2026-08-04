@@ -120,6 +120,14 @@ administrator may not read subject data" contradicts that.
 - **WHEN** an operator holding only privacy authority applies a configuration change
 - **THEN** the request is refused
 
+#### Scenario: An upgraded administrator holds both and can be narrowed
+- **WHEN** an administrator granted both authorities by an upgrade is re-granted configuration authority alone
+- **THEN** the authority over personal data is removed from that operator
+
+#### Scenario: Reading the view audit leaves a view record
+- **WHEN** an operator holding privacy authority reads who viewed an investigation
+- **THEN** the record is served and the reading is itself recorded against that operator
+
 ### Requirement: An operator route MUST be unreachable only by decision
 
 The set of operator routes, their minimum tiers and their handlers SHALL be declared once as data, and both
