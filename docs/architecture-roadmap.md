@@ -550,10 +550,24 @@ the surfaces, then the two exit-criteria tickets.*
   their laptop is unlocked". Enumerate, terminate one or all, and make SCIM deprovisioning and an
   `operator-role` revocation invalidate live cookie sessions. A query and a delete **now**; a security
   incident later.
-- **CONSOLE-40 · Stable rule identity on alerts** — new work · S. **Blocks every tuning ticket.**
-  `unified_alerts` (migration 025) carries `domain` and `dedup_key` but no stable rule identifier, and
-  `dedup_key`'s own comment calls its format "a projection detail" with a fallback. Adds `rule_id` written
-  by every producer, with a whole-tree guard in the D274 shape so a new detector cannot ship without one.
+- **CONSOLE-40 · Stable rule identity on alerts** — new work · **S→M, see the constraint below.**
+  **Blocks every tuning ticket.** `unified_alerts` (migration 025) carries `domain` and `dedup_key` but no
+  stable rule identifier, and `dedup_key`'s own comment calls its format "a projection detail" with a
+  fallback. Adds `rule_id` written by every producer, with a whole-tree guard in the D274 shape so a new
+  detector cannot ship without one.
+  **⚠️ CONSTRAINT MEASURED 2026-08-04, and it is why this is not an S.** There are three producers
+  (`decision_alerts.go`, `beaconing.go`, `recordDeviceUnifiedAlert`). Two are single-detector and their
+  rule identity is a constant. The third is the pipeline, and **the Decision contract has no rule-level
+  identity to carry**: `Decision.policy_id` is the STAGE id and `policy_version` its version, while the
+  thing that actually fired is the winning *member* of the composed module set (`candidate.name` in
+  `internal/policy/policy.go`) — which is discarded when the Decision is built. `reason` is
+  operator-authored free text and cannot be an identifier. So CONSOLE-40 must choose:
+  (a) add a rule/member field to `decision.proto` — the honest identity, but a change to a contract
+  written into a hash-chained ledger; (b) accept STAGE-level granularity, which means an exception in
+  CONSOLE-41 can only be scoped to "the endpoint policy" and not to a rule, defeating the point; or
+  (c) derive one from `(domain, action, kind)`, which is the same "projection detail" criticism this
+  ticket exists to fix. **(a) looks right and should be decided before the ticket starts**, since (b) and
+  (c) silently cap what CONSOLE-41/-42/-43 can ever offer.
 - **CONSOLE-41 · Tuning: disposition → exception, with a preview that cannot lie** — CONSOLE-4,40 · L.
   *(Absorbs the former CONSOLE-27, which was the same ticket written in an earlier round.)*
   **The surface that decides whether the console gets used**, not an admin convenience: if week three
