@@ -279,7 +279,7 @@ func TestFourEyesCaseClosureRefusesTheRequester(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &opened); err != nil {
 		t.Fatalf("parsing %q: %v", body, err)
 	}
-	if opened.OpenedBy != "operator:alice" {
+	if opened.OpenedBy != "cert:alice" {
 		t.Errorf("the case was opened by %q — the opener must come from the CERTIFICATE, so that a "+
 			"caller cannot record an act under someone else's name", opened.OpenedBy)
 	}
@@ -309,7 +309,7 @@ func TestFourEyesCaseClosureRefusesTheRequester(t *testing.T) {
 	if code, body = do(t, bob, http.MethodPost, approveURL, nil); code != http.StatusOK {
 		t.Fatalf("Bob could not approve Alice's request: %d %s\n%s", code, body, srv.Output())
 	}
-	if !contains(body, "operator:bob") {
+	if !contains(body, "cert:bob") {
 		t.Errorf("the closure does not name Bob: %s", body)
 	}
 
@@ -321,7 +321,7 @@ func TestFourEyesCaseClosureRefusesTheRequester(t *testing.T) {
 		opened.CaseID).Scan(&status, &requestedBy, &closedBy); err != nil {
 		t.Fatal(err)
 	}
-	if status != "closed" || requestedBy != "operator:alice" || closedBy != "operator:bob" {
+	if status != "closed" || requestedBy != "cert:alice" || closedBy != "cert:bob" {
 		t.Errorf("case row is status=%q requested_by=%q closed_by=%q — the record must show BOTH pairs "+
 			"of eyes, or the control leaves no evidence it was applied", status, requestedBy, closedBy)
 	}
@@ -389,7 +389,7 @@ func TestACaseNoteIsAttributedToItsAuthorAndTheReadIsRecorded(t *testing.T) {
 		Scan(&author); err != nil {
 		t.Fatalf("the note was not stored: %v", err)
 	}
-	if author != "operator:carol" {
+	if author != "cert:carol" {
 		t.Errorf("the note is attributed to %q, not the certificate that wrote it", author)
 	}
 	if err := pool.QueryRow(Ctx(t),
@@ -397,7 +397,7 @@ func TestACaseNoteIsAttributedToItsAuthorAndTheReadIsRecorded(t *testing.T) {
 		"subject-notes").Scan(&viewer); err != nil {
 		t.Fatalf("reading the case recorded no view: %v", err)
 	}
-	if viewer != "operator:carol" {
+	if viewer != "cert:carol" {
 		t.Errorf("the view is recorded against %q", viewer)
 	}
 }

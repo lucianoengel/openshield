@@ -61,7 +61,7 @@ func TestASavedSettingTakesEffectThroughTheAPI(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied.Author != "operator:root" {
+	if applied.Author != "cert:root" {
 		t.Errorf("the revision is attributed to %q — a configuration change is an accountable act, and "+
 			"the author must be the certificate that made it", applied.Author)
 	}
@@ -75,7 +75,7 @@ func TestASavedSettingTakesEffectThroughTheAPI(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("reading revisions: %d %s", code, body)
 	}
-	if !contains(body, "OPENSHIELD_PLAYBOOK_INTERVAL") || !contains(body, "operator:root") {
+	if !contains(body, "OPENSHIELD_PLAYBOOK_INTERVAL") || !contains(body, "cert:root") {
 		t.Errorf("the revision trail does not record the change or its author:\n%s", body)
 	}
 }

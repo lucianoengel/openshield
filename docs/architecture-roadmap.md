@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D467.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D469.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D467)
+## What OpenShield is (status at a glance, through D469)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -53,7 +53,7 @@ and each of those is a separate trust-or-distribution decision rather than lefto
 **So PLAT-1 — the UI — is unblocked, and is the next thing.** It was deliberately last so it would be
 built over a proven, tested, stable backend; that condition is now met.
 
-**What has actually been shipping since (D440–D467), and why it is not the UI.** Two threads, both
+**What has actually been shipping since (D440–D469), and why it is not the UI.** Two threads, both
 deliberate. The first is *enrichment on the frozen core* — release verification, endpoint self-posture,
 fleet binary provenance, Spanish/French national IDs, bucket access context for data-at-rest discovery,
 and the ATT&CK technique lane through the Decision contract into correlation. The second, and the more
@@ -410,22 +410,31 @@ stated in its entry.
 
 ### Phase 0 · Foundation
 
-- **CONSOLE-1 · One canonical operator principal** — new work · L. Namespaced principals
-  (`cert:<CN>` / `oidc:<iss>#<sub>`) threaded through `requireTier` onto the request context; the eight
-  `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account and
-  **four-eyes compares the account, not the string**; `operator_roles` gains an issuer discriminator so an
-  IdP subject cannot inherit a certificate CN's row; the operator route set becomes **data**, so a
-  registered-but-unmounted route is unrepresentable — and `/report/response` (SOAR-6, registered at
-  `operator_read.go:231`, absent from the outer mux) is mounted by it.
-  **Three seams ride along because they are S-sized here and L-sized after**, when they would mean touching
-  the same eight handlers and cursors twice: a **machine principal** (`svc:<name>`) with its own lifecycle
-  that can **never satisfy four-eyes**; a **scope predicate** on the principal carried in the cursor,
-  defaulting to "all", reserving tenancy as a later `WHERE` clause; and **`admin` split into `admin` +
-  `privacy-officer`** for DSAR, legal-hold release and the view audit, because one tier currently fuses
-  "can change configuration" to "can read every subject's personal data".
-  `Accept`: a bearer-only operator acknowledges, transitions, reads a timeline and opens a case; **one human
-  with two credentials is REFUSED at four-eyes**, with the test first asserting the request reached the tier
-  gate. *OpenSpec: `2026-07-31-console-1-operator-principal`.*
+- **CONSOLE-1 · One canonical operator principal** — 🟡 **groups 1–3 and 5 SHIPPED (D468, D469);
+  21/33 tasks.** Namespaced principals (`cert:<CN>` / `oidc:<issuer>#<sub>` / `svc:<name>` /
+  `playbook:<name>`) threaded through `requireTier` onto the request context; the eight
+  `operatorIdentity(r.TLS)` sites read from there; `operator_identities` links principals to one account
+  and **four-eyes compares the account, not the string**; the issuer is part of an SSO identity, so a
+  provider subject cannot inherit a certificate CN's row; and **only a human may GRANT an approval** —
+  enforcing what the capability spec has claimed since SOAR-4 with nothing behind it, before `svc:`
+  principals made it reachable. Automation may still request one; that is the whole purpose of a
+  wait-for-approval step.
+  **⚠️ UPGRADE BREAK: every operator must be re-granted.** Grants were stored under a BARE identity
+  (`certIdentity` returned the CommonName unprefixed for the ROLE lookup while `operatorIdentity`
+  returned `operator:<CN>` for the AUDIT trail — one person, two strings, one process; SCIM stored the
+  raw `userName` in the same column). **That shared column IS the collision** the ticket describes, and a
+  bare row does not record which credential class it was for — so renamespacing means guessing, and
+  either guess grants access to the wrong credential. Legacy rows are left denying, kept visible, and the
+  migration RAISEs a notice with the count.
+  **Still open:** the machine principal's own lifecycle (issue/scope/expire/rotate/revoke, expiry
+  mandatory); the scope predicate in the pagination cursor; and **`admin` split into `admin` +
+  `privacy-officer`**, because one tier currently fuses "can change configuration" to "can read every
+  subject's personal data".
+  **Two roadmap claims here were STALE and are corrected:** `/report/response` IS mounted
+  (`enroll_http.go:124`), and the route set is closed — a guard now fails when a registered route is
+  unmounted or a mounted one unregistered, in place of the proposed shared table, because restructuring
+  37 security-gated mounts risks landing one at the wrong TIER. *OpenSpec:
+  `2026-07-31-console-1-operator-principal`.*
 - **CONSOLE-2 · Toolchain, dependency budget, reproducible bundle** (ADR-13) — new work · M. React/TS/Vite
   under `apps/console/`, embedded via `embed.FS`, same origin, no CDN, Node-free `go build`. Budget is a
   **number** in CI; each direct dependency gets the one-sentence justification D276 demanded when it refused
@@ -1338,6 +1347,15 @@ D200–D240 shipment. Reverting each guard flips its test to FAIL. Open git log 
   **no test at all**; it has one now, asserted at the HTTP boundary, because "the schema carries it" and
   "the console can see it" are different claims and the gap between them is where D418's whole class of
   defect lives.
+- **Lane F started, and it did not start with a UI (D468, D469).** Its first tickets are backend work —
+  `CONSOLE-1` is a shipped SECURITY DEFECT, not console preparation: `requireTier` authenticated a
+  bearer token and discarded the identity, so an SSO operator passed the tier gate and was refused by
+  eight handlers that re-derived it from the TLS peer certificate. D373 shipped an authentication method
+  that reached almost none of the product. **The obvious fix was the trap** — threading the token
+  identity through unchanged lets one human request an approval from the CLI and grant it from the
+  browser, because a certificate minted `operator:<CN>` and a token minted the raw `sub`. Since SEC-D
+  that collapse would have been recorded as `strong` assurance. Fixed together, which is what the ticket
+  meant by "fixes both or neither".
 - **Identity / Zero Trust:** ZT-7 operator identity — SSO, the role out of the certificate, token binding and SCIM deprovisioning (D372/D373/D375/D379/D380). IDENT-1 canonical device identity (D170, ADR-6) — one shared pseudonym
   across enrollment/posture/proxy. ZT-2 OIDC/JWT verifier on-path (alg-confusion rejected); ZT-2b live
   JWKS refresher (D182); ZT-3 dual-credential access proxy; PLAT-3 RBAC analyst/responder/admin tiers
