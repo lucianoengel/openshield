@@ -45,11 +45,11 @@ func TestAFleetDisableRequiresFourEyes(t *testing.T) {
 	}
 	id := controlplane.FleetControlID(corev1.FleetVerb_FLEET_VERB_ENFORCEMENT_DISABLE, seq+1)
 	aid, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectFleetControl, id,
-		"operator:alice", "stop enforcing", 0)
+		"cert:alice", "stop enforcing", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, aid, "operator:bob", true); err != nil {
+	if err := srv.ResolveApproval(ctx, aid, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err := srv.PublishFleetControl(ctx, corev1.FleetVerb_FLEET_VERB_ENFORCEMENT_DISABLE,

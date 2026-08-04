@@ -31,7 +31,7 @@ func TestAcknowledgeAlert(t *testing.T) {
 	}
 
 	// First ack wins.
-	newly, err := srv.AcknowledgeAlert(ctx, id, "operator:alice")
+	newly, err := srv.AcknowledgeAlert(ctx, id, "cert:alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestAcknowledgeAlert(t *testing.T) {
 	}
 
 	// Second ack is a no-op that preserves alice as the original triager.
-	newly2, err := srv.AcknowledgeAlert(ctx, id, "operator:bob")
+	newly2, err := srv.AcknowledgeAlert(ctx, id, "cert:bob")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,12 @@ func TestAcknowledgeAlert(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT acknowledged_by FROM peer_alerts WHERE id=$1`, id).Scan(&by); err != nil {
 		t.Fatal(err)
 	}
-	if by != "operator:alice" {
+	if by != "cert:alice" {
 		t.Errorf("acknowledged_by = %q, want operator:alice (bob's late ack must not overwrite)", by)
 	}
 
 	// Acking a non-existent alert is an error, not a silent no-op.
-	if _, err := srv.AcknowledgeAlert(ctx, 9_999_999, "operator:alice"); !errors.Is(err, controlplane.ErrAlertNotFound) {
+	if _, err := srv.AcknowledgeAlert(ctx, 9_999_999, "cert:alice"); !errors.Is(err, controlplane.ErrAlertNotFound) {
 		t.Errorf("ack of a phantom id = %v, want ErrAlertNotFound", err)
 	}
 

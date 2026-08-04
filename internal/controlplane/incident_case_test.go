@@ -24,7 +24,7 @@ func TestOpenCaseForIncident(t *testing.T) {
 		FirstSeen:  now.Add(-1 * time.Hour),
 		LastSeen:   now,
 	}
-	id, err := srv.OpenCaseForIncident(ctx, inc, "operator:alice")
+	id, err := srv.OpenCaseForIncident(ctx, inc, "cert:alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestOpenCaseForIncident(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.SubjectID != "sub_incident" || c.OpenedBy != "operator:alice" || c.Status != "open" {
+	if c.SubjectID != "sub_incident" || c.OpenedBy != "cert:alice" || c.Status != "open" {
 		t.Errorf("case = %+v, want the incident's subject, opened by alice, open", c)
 	}
 
@@ -59,7 +59,7 @@ func TestOpenCaseForIncident(t *testing.T) {
 func TestOpenCaseForIncidentRejectsEmpty(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
-	if _, err := srv.OpenCaseForIncident(context.Background(), controlplane.Incident{}, "operator:x"); err == nil {
+	if _, err := srv.OpenCaseForIncident(context.Background(), controlplane.Incident{}, "cert:x"); err == nil {
 		t.Error("opened a case for an empty incident")
 	}
 }

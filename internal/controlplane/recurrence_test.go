@@ -38,7 +38,7 @@ func recurSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, subject st
 // believe the matter is finished. That belief is exactly what a recurrence contradicts.
 func closeIncident(t *testing.T, ctx context.Context, srv *controlplane.Server, id int64) {
 	t.Helper()
-	if err := srv.TransitionIncident(ctx, id, controlplane.IncidentClosed, "operator:alice"); err != nil {
+	if err := srv.TransitionIncident(ctx, id, controlplane.IncidentClosed, "cert:alice"); err != nil {
 		t.Fatalf("closing incident %d: %v", id, err)
 	}
 }

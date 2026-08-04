@@ -110,7 +110,7 @@ func TestUnapprovedIntentIsNeverExecuted(t *testing.T) {
 
 	// (2) A PENDING approval is not an approval.
 	pendingID, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-pending", "operator:alice", "revoke trust", 0)
+		"intent-pending", "cert:alice", "revoke trust", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestUnapprovedIntentIsNeverExecuted(t *testing.T) {
 	}
 
 	// (3) A DENIED approval is not an approval.
-	if err := srv.ResolveApproval(ctx, pendingID, "operator:bob", false); err != nil {
+	if err := srv.ResolveApproval(ctx, pendingID, "cert:bob", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := srv.EnactIntent(ctx, conn, pending); !errors.Is(err, controlplane.ErrIntentNotApproved) {
@@ -133,11 +133,11 @@ func TestUnapprovedIntentIsNeverExecuted(t *testing.T) {
 	// (4) An approval for a DIFFERENT intent id does not transfer. This is what SOAR-3's (kind, id)
 	// keying exists for: approval to revoke trust for one subject must never authorize another.
 	otherID, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-other", "operator:alice", "revoke trust", 0)
+		"intent-other", "cert:alice", "revoke trust", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, otherID, "operator:bob", true); err != nil {
+	if err := srv.ResolveApproval(ctx, otherID, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	elsewhere := testIntent("intent-elsewhere", "subject-c", corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST, future)
@@ -163,11 +163,11 @@ func TestApprovedIntentExecutesAndLinksIntentToCall(t *testing.T) {
 	ctx := context.Background()
 
 	id, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-approved", "operator:alice", "revoke trust", 0)
+		"intent-approved", "cert:alice", "revoke trust", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); err != nil {
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	in := testIntent("intent-approved", "pseudo-subject-42", corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST,
@@ -229,8 +229,8 @@ func TestRedeliveryExecutesExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 
 	id, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-redelivered", "operator:alice", "revoke", 0)
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); err != nil {
+		"intent-redelivered", "cert:alice", "revoke", 0)
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	in := testIntent("intent-redelivered", "subject-r", corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST,
@@ -265,8 +265,8 @@ func TestRedeliveryExecutesExactlyOnce(t *testing.T) {
 	base := idp.calls.Load()
 	for i := 0; i < intents; i++ {
 		iid := fmt.Sprintf("intent-race-%d", i)
-		aid, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, iid, "operator:alice", "revoke", 0)
-		if err := srv.ResolveApproval(ctx, aid, "operator:bob", true); err != nil {
+		aid, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, iid, "cert:alice", "revoke", 0)
+		if err := srv.ResolveApproval(ctx, aid, "cert:bob", true); err != nil {
 			t.Fatal(err)
 		}
 		raced := testIntent(iid, fmt.Sprintf("subject-race-%d", i), corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST,
@@ -299,8 +299,8 @@ func TestUndeclaredVerbAndExpiredIntentDoNothing(t *testing.T) {
 	// A verb this connector does not declare: ignored, not improvised into an action. Approved, so the
 	// only thing stopping it is the closed vocabulary.
 	id, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-contain", "operator:alice", "contain", 0)
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); err != nil {
+		"intent-contain", "cert:alice", "contain", 0)
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	contain := testIntent("intent-contain", "subject-x", corev1.IntentVerb_INTENT_VERB_CONTAIN,
@@ -318,8 +318,8 @@ func TestUndeclaredVerbAndExpiredIntentDoNothing(t *testing.T) {
 
 	// An EXPIRED intent is not authority, even with a live approval.
 	eid, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-expired", "operator:alice", "revoke", 0)
-	if err := srv.ResolveApproval(ctx, eid, "operator:bob", true); err != nil {
+		"intent-expired", "cert:alice", "revoke", 0)
+	if err := srv.ResolveApproval(ctx, eid, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	expired := testIntent("intent-expired", "subject-y", corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST,
@@ -342,8 +342,8 @@ func TestFailedCallIsRecordedNotDiscarded(t *testing.T) {
 	ctx := context.Background()
 
 	id, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent,
-		"intent-failing", "operator:alice", "revoke", 0)
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); err != nil {
+		"intent-failing", "cert:alice", "revoke", 0)
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	in := testIntent("intent-failing", "subject-f", corev1.IntentVerb_INTENT_VERB_REVOKE_TRUST,

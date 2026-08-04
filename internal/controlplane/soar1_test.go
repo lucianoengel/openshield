@@ -172,7 +172,7 @@ func TestDistinctLaterIncidentPagesAgain(t *testing.T) {
 	if firstID == 0 {
 		t.Fatal("no open incident found to acknowledge")
 	}
-	if _, err := srv.AcknowledgeIncident(ctx, firstID, "operator:alice"); err != nil {
+	if _, err := srv.AcknowledgeIncident(ctx, firstID, "cert:alice"); err != nil {
 		t.Fatal(err)
 	}
 

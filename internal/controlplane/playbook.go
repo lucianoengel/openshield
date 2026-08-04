@@ -121,7 +121,10 @@ type Playbook struct {
 
 // Identity is how a playbook attributes its own work — never as an operator. A machine's action recorded
 // under a human's name is a corrupted audit trail.
-func (p Playbook) Identity() string { return "playbook:" + p.Name }
+// Identity is the automation engine acting as itself, built through the shared principal vocabulary so
+// that "is this caller a machine" has one answer (CONSOLE-1). A playbook may REQUEST an approval and
+// may never grant one.
+func (p Playbook) Identity() string { return PlaybookPrincipal(p.Name) }
 
 // runCtx is what a step implementation gets: which run/step it is, and the incident it acts on.
 type runCtx struct {

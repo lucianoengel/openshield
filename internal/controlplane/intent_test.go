@@ -84,11 +84,11 @@ func TestUnapprovedHighImpactIntentIsNotPublished(t *testing.T) {
 	// With an approval bound to THIS intent, it publishes.
 	now := time.Now()
 	intentID, aid, err := srv.RequestIntentApproval(ctx, corev1.IntentVerb_INTENT_VERB_CONTAIN, "sub_a",
-		"operator:alice", "burst", now)
+		"cert:alice", "burst", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, aid, "operator:bob", true); err != nil {
+	if err := srv.ResolveApproval(ctx, aid, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := srv.PublishIntents(ctx, corev1.IntentVerb_INTENT_VERB_CONTAIN, []string{"sub_a"}, "burst", time.Hour); err != nil {

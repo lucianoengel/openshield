@@ -44,7 +44,7 @@ func TestSubjectAccessReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A case, which also places a legal hold on the subject.
-	if _, err := srv.OpenCase(ctx, subj, "operator:alice"); err != nil {
+	if _, err := srv.OpenCase(ctx, subj, "cert:alice"); err != nil {
 		t.Fatal(err)
 	}
 

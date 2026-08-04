@@ -116,7 +116,7 @@ func TestApprovalIsRecordedEvenWhenDeliveryFails(t *testing.T) {
 	ctx := context.Background()
 
 	id, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-1",
-		"operator:alice", "contain a host", 0)
+		"cert:alice", "contain a host", 0)
 	if err != nil {
 		t.Fatalf("a failing sink failed the approval request: %v — the row is the record, delivery is an "+
 			"additive copy", err)

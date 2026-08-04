@@ -60,11 +60,11 @@ func TestMaterializeAndAcknowledgeIncident(t *testing.T) {
 	}
 
 	// Acknowledge the incident as a unit; first-ack-wins.
-	newly, err := srv.AcknowledgeIncident(ctx, inc.ID, "operator:alice")
+	newly, err := srv.AcknowledgeIncident(ctx, inc.ID, "cert:alice")
 	if err != nil || !newly {
 		t.Fatalf("first ack = %v, %v; want true", newly, err)
 	}
-	newly2, _ := srv.AcknowledgeIncident(ctx, inc.ID, "operator:bob")
+	newly2, _ := srv.AcknowledgeIncident(ctx, inc.ID, "cert:bob")
 	if newly2 {
 		t.Error("second ack reported newly — first-ack-wins violated")
 	}
@@ -90,11 +90,11 @@ func TestMaterializeAndAcknowledgeIncident(t *testing.T) {
 	}
 
 	// A phantom id errors; a DB failure is not "not found".
-	if _, err := srv.AcknowledgeIncident(ctx, 9_999_999, "operator:alice"); !errors.Is(err, controlplane.ErrIncidentNotFound) {
+	if _, err := srv.AcknowledgeIncident(ctx, 9_999_999, "cert:alice"); !errors.Is(err, controlplane.ErrIncidentNotFound) {
 		t.Errorf("phantom ack = %v, want ErrIncidentNotFound", err)
 	}
 	pool.Close()
-	if _, err := srv.AcknowledgeIncident(context.Background(), inc.ID, "operator:alice"); err == nil || errors.Is(err, controlplane.ErrIncidentNotFound) {
+	if _, err := srv.AcknowledgeIncident(context.Background(), inc.ID, "cert:alice"); err == nil || errors.Is(err, controlplane.ErrIncidentNotFound) {
 		t.Errorf("ack against a closed pool = %v, want a real error (not ErrIncidentNotFound)", err)
 	}
 }

@@ -44,7 +44,7 @@ func TestASavedSearchReturnsWhatTheTypedQueryReturns(t *testing.T) {
 	if err := srv.SaveSearch(ctx, controlplane.SavedSearch{
 		Name: "high-risk-for-subject", Surface: controlplane.SurfaceAlerts, Query: query,
 		Description: "the hunt that found it last quarter",
-	}, "operator:alice"); err != nil {
+	}, "cert:alice"); err != nil {
 		t.Fatalf("saving: %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestABadSearchIsRefusedAtSaveTime(t *testing.T) {
 			if tc.name == "no name" {
 				sv.Name = "   "
 			}
-			err := srv.SaveSearch(ctx, sv, "operator:alice")
+			err := srv.SaveSearch(ctx, sv, "cert:alice")
 			if err == nil {
 				t.Fatalf("accepted a search that cannot run: %s", tc.why)
 			}
@@ -118,7 +118,7 @@ func TestABadSearchIsRefusedAtSaveTime(t *testing.T) {
 	// And a valid one saves, so the refusals above are not "nothing is ever accepted".
 	if err := srv.SaveSearch(ctx, controlplane.SavedSearch{
 		Name: "ok", Surface: controlplane.SurfaceEvents, Query: "limit=10",
-	}, "operator:alice"); err != nil {
+	}, "cert:alice"); err != nil {
 		t.Fatalf("a valid search was refused: %v", err)
 	}
 }
@@ -136,11 +136,11 @@ func TestReplacingASearchKeepsItsOriginalAuthor(t *testing.T) {
 	ctx := context.Background()
 
 	base := controlplane.SavedSearch{Name: "shared", Surface: controlplane.SurfaceEvents, Query: "limit=10"}
-	if err := srv.SaveSearch(ctx, base, "operator:alice"); err != nil {
+	if err := srv.SaveSearch(ctx, base, "cert:alice"); err != nil {
 		t.Fatal(err)
 	}
 	base.Query = "limit=50"
-	if err := srv.SaveSearch(ctx, base, "operator:bob"); err != nil {
+	if err := srv.SaveSearch(ctx, base, "cert:bob"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -148,11 +148,11 @@ func TestReplacingASearchKeepsItsOriginalAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CreatedBy != "operator:alice" {
+	if got.CreatedBy != "cert:alice" {
 		t.Errorf("created_by = %q, want operator:alice — the person who introduced a hunt is a "+
 			"different question from who last adjusted it", got.CreatedBy)
 	}
-	if got.UpdatedBy != "operator:bob" {
+	if got.UpdatedBy != "cert:bob" {
 		t.Errorf("updated_by = %q, want operator:bob", got.UpdatedBy)
 	}
 	if got.Query != "limit=50" {
@@ -173,7 +173,7 @@ func TestDeletingAMissingSearchIsNotReportedAsSuccess(t *testing.T) {
 
 	if err := srv.SaveSearch(ctx, controlplane.SavedSearch{
 		Name: "doomed", Surface: controlplane.SurfaceEvents, Query: "limit=10",
-	}, "operator:alice"); err != nil {
+	}, "cert:alice"); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.DeleteSavedSearch(ctx, "doomed"); err != nil {

@@ -34,7 +34,7 @@ func requestAndResolve(t *testing.T, srv *controlplane.Server, subject, approver
 	t.Helper()
 	ctx := context.Background()
 	id, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, subject,
-		"operator:alice", "contain host A", time.Hour)
+		"cert:alice", "contain host A", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestAnApprovalRecordsWhatFourEyesWasWorth(t *testing.T) {
 	// A deployment running the shipped defaults.
 	t.Setenv("OPENSHIELD_OPERATOR_ROLES_STRICT", "0")
 	t.Setenv("OPENSHIELD_OPERATOR_OIDC_REQUIRE_DPOP", "0")
-	if err := requestAndResolve(t, srv, "intent-weak", "operator:bob", true); err != nil {
+	if err := requestAndResolve(t, srv, "intent-weak", "cert:bob", true); err != nil {
 		t.Fatalf("a second operator's approval was refused on an unhardened deployment: %v — recording "+
 			"the weakness must not break the control", err)
 	}
@@ -70,7 +70,7 @@ func TestAnApprovalRecordsWhatFourEyesWasWorth(t *testing.T) {
 
 	// The same control on a hardened deployment.
 	hardened(t)
-	if err := requestAndResolve(t, srv, "intent-strong", "operator:bob", true); err != nil {
+	if err := requestAndResolve(t, srv, "intent-strong", "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err = srv.ApprovalFor(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-strong")
@@ -95,7 +95,7 @@ func TestADeploymentCanRefuseAWeakApproval(t *testing.T) {
 	t.Setenv("OPENSHIELD_OPERATOR_ROLES_STRICT", "0")
 	t.Setenv("OPENSHIELD_FOUR_EYES_REQUIRE_STRONG", "1")
 
-	err := requestAndResolve(t, srv, "intent-refused", "operator:bob", true)
+	err := requestAndResolve(t, srv, "intent-refused", "cert:bob", true)
 	if !errors.Is(err, controlplane.ErrWeakFourEyes) {
 		t.Fatalf("err = %v, want ErrWeakFourEyes — this deployment asked to refuse approvals it cannot "+
 			"attest to", err)
@@ -113,7 +113,7 @@ func TestADeploymentCanRefuseAWeakApproval(t *testing.T) {
 	// Hardening the deployment lets the same approval through — the refusal is about the identity model,
 	// not about this request.
 	hardened(t)
-	if err := srv.ResolveApproval(ctx, got.ID, "operator:bob", true); err != nil {
+	if err := srv.ResolveApproval(ctx, got.ID, "cert:bob", true); err != nil {
 		t.Fatalf("the approval was still refused after hardening: %v", err)
 	}
 }
@@ -133,7 +133,7 @@ func TestADenialIsNeverGatedByAssurance(t *testing.T) {
 	t.Setenv("OPENSHIELD_OPERATOR_ROLES_STRICT", "0")
 	t.Setenv("OPENSHIELD_FOUR_EYES_REQUIRE_STRONG", "1")
 
-	if err := requestAndResolve(t, srv, "intent-denied", "operator:bob", false); err != nil {
+	if err := requestAndResolve(t, srv, "intent-denied", "cert:bob", false); err != nil {
 		t.Fatalf("a DENIAL was refused on a weak deployment: %v — the request would stay pending and "+
 			"approvable, and the operator trying to stop it is the one being blocked", err)
 	}

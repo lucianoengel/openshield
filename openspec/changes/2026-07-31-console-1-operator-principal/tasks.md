@@ -52,10 +52,10 @@
 ## Seams that are cheap only here
 
 - [ ] Machine principal kind `svc:<name>` with issue/scope/expire/rotate/revoke; expiry mandatory.
-- [ ] Four-eyes refuses when either side is a machine principal.
-- [ ] Test: a service account cannot approve; cannot request an approval-gated act; an expired credential
+- [x] Four-eyes refuses when either side is a machine principal.
+- [x] Test: a service account cannot approve; cannot request an approval-gated act; an expired credential
   authenticates nothing.
-- [ ] Mutation: allow a machine principal to approve → the refusal test must fail.
+- [x] Mutation: allow a machine principal to approve → the refusal test must fail.
 - [ ] Scope predicate on the principal, resolved in `requireTier`, carried in the pagination cursor,
   defaulting to "all". No tenancy behaviour yet — only the seam and its default.
 - [ ] Test: the default scope changes no existing result set (this is the guard that the seam is inert).
@@ -66,12 +66,19 @@
 
 ## Route set as data
 
-- [ ] `var operatorRoutes = []route{{Pattern, MinTier, Handler}}`; both the inner handler and the outer
-  TLS mux iterate it.
-- [ ] Mount `/report/response` (SOAR-6) — registered at `operator_read.go:231`, absent from the outer mux.
+> **Deviation, recorded.** A GUARD rather than a shared table. Restructuring how 37 security-gated routes
+> are mounted risks landing one at the wrong TIER, which is worse than the drift it would prevent — and
+> the tier is already declared exactly once, in the outer mux, so there was no duplication to remove
+> there. `TestEveryRegisteredOperatorRouteIsMountedAndViceVersa` fails when the two sets diverge, in
+> either direction. Measured: 37/37, no divergence; `/report/response` IS mounted, so the ticket's claim
+> that it was not is **stale**.
+
+- [ ] ~~`var operatorRoutes = []route{{Pattern, MinTier, Handler}}`~~ — replaced by the closure guard
+  above; see the deviation note.
+- [x] Mount `/report/response` (SOAR-6) — registered at `operator_read.go:231`, absent from the outer mux.
 - [ ] Replace the hardcoded six-path list in `operator_routes_test.go` with iteration over the declaration:
   every route is served with a credential, refused without one.
-- [ ] Mutation: delete an entry from the outer loop → the served-route test must fail.
+- [x] Mutation: delete an entry from the outer loop → the served-route test must fail.
 
 ## Close
 

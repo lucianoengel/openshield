@@ -225,3 +225,66 @@ func TestABareIdentityCannotBeGranted(t *testing.T) {
 		t.Errorf("the refusal does not show the accepted forms: %v", err)
 	}
 }
+
+// TestAMachineMayRequestAnApprovalAndMayNeverGrantOne enforces what the capability spec has claimed
+// since SOAR-4: "automation may request an approval, but only a human may grant it".
+//
+// Nothing enforced it. That was harmless only because no machine could reach the resolve path —
+// playbooks call the engine directly, and the HTTP surface required a person. CONSOLE-1 introduces
+// `svc:` machine principals, which authenticate as operators and therefore CAN reach it, so the rule is
+// enforced before the credential that would break it exists rather than after.
+//
+// The asymmetry is the point: a playbook's wait-for-approval step opening a request is the whole
+// purpose of that step. An approval GRANTED by a machine is a human-in-the-loop gate with no human in
+// the loop.
+//
+// Mutation: drop the isMachine() check → the service account's approval succeeds → this FAILS.
+func TestAMachineMayRequestAnApprovalAndMayNeverGrantOne(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+
+	// AUTOMATION REQUESTS — and this must keep working.
+	id, err := s.RequestApproval(ctx, controlplane.ApprovalSubjectPlaybookStep, "run-1/step-2",
+		controlplane.PlaybookPrincipal("contain-and-notify"), "step needs a human", time.Hour)
+	if err != nil {
+		t.Fatalf("a playbook could not open an approval request: %v — that is the entire purpose of a "+
+			"wait-for-approval step", err)
+	}
+
+	// A SERVICE ACCOUNT GRANTS — and this must not.
+	err = s.ResolveApproval(ctx, id, "svc:ci-runner", true)
+	if !errors.Is(err, controlplane.ErrMachineCannotApprove) {
+		t.Fatalf("a machine principal resolved an approval (%v). An automation-initiated request is a "+
+			"human-in-the-loop gate, and a machine granting it is that gate with nobody in it", err)
+	}
+	// So can the automation engine itself, which is the sharper case: it would be approving its own
+	// request.
+	if err := s.ResolveApproval(ctx, id, controlplane.PlaybookPrincipal("contain-and-notify"), true); !errors.
+		Is(err, controlplane.ErrMachineCannotApprove) {
+		t.Fatalf("the playbook resolved its OWN approval request: %v", err)
+	}
+
+	// A HUMAN GRANTS IT, because the gate has to be passable.
+	if err := s.ResolveApproval(ctx, id, "cert:alice", true); err != nil {
+		t.Fatalf("a human could not resolve a playbook's request: %v — an automation-initiated request "+
+			"needs exactly one operator, and refusing everyone is an outage", err)
+	}
+}
+
+// TestAnApproverMustBeACanonicalPrincipal. This predicate is the only thing between one operator and a
+// two-person control, so what it compares has to be something the server minted.
+func TestAnApproverMustBeACanonicalPrincipal(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+
+	id, err := s.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-canonical",
+		"cert:alice", "contain", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResolveApproval(ctx, id, "bob", true); !errors.Is(err, controlplane.ErrBadPrincipal) {
+		t.Fatalf("a bare name resolved an approval: %v", err)
+	}
+}

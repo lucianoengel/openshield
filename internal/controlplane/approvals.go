@@ -43,6 +43,9 @@ var (
 	ErrApprovalExpired = errors.New("controlplane: approval request has expired")
 	// ErrApprovalNotFound means no such approval.
 	ErrApprovalNotFound = errors.New("controlplane: approval not found")
+	// ErrMachineCannotApprove means a service account or the automation engine tried to resolve an
+	// approval. Requesting one is legitimate; granting one is not.
+	ErrMachineCannotApprove = errors.New("controlplane: only a human may resolve an approval")
 )
 
 // Approval is one request for a second pair of eyes.
@@ -124,6 +127,26 @@ func (s *Server) RequestApproval(ctx context.Context, kind, subjectID, requester
 func (s *Server) ResolveApproval(ctx context.Context, id int64, approver string, approve bool) error {
 	if approver == "" {
 		return ErrNoViewer
+	}
+	// ONLY A HUMAN MAY RESOLVE ONE (CONSOLE-1), enforcing what the capability already claimed.
+	//
+	// The spec has said since SOAR-4 that "automation may request an approval, but only a human may
+	// grant it" — an automation-initiated request is a human-in-the-loop gate, and a machine granting it
+	// is that gate with no human in it. Nothing enforced it, which was harmless only because no machine
+	// could reach this: playbooks call the engine directly and the HTTP surface required a person.
+	//
+	// Machine principals (`svc:`) change that, so the rule is enforced BEFORE the credential that would
+	// break it exists rather than after.
+	//
+	// A non-canonical approver is refused for the same reason: this is the one predicate standing between
+	// one operator and a two-person control, and it must compare something the server minted.
+	ap, aperr := parsePrincipal(approver)
+	if aperr != nil {
+		return fmt.Errorf("%w — an approval is resolved by a verified operator principal", aperr)
+	}
+	if ap.isMachine() {
+		return fmt.Errorf("%w: %s is a machine principal, and an approval resolved by a machine is a "+
+			"human-in-the-loop gate with no human in it", ErrMachineCannotApprove, approver)
 	}
 	// SEC-D: what a second pair of eyes is WORTH here, decided now and written down.
 	//

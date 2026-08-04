@@ -47,7 +47,7 @@ func TestPeerAlertLifecycleFields(t *testing.T) {
 	}
 
 	// Acknowledgement advances the status beyond open.
-	newly, err := srv.AcknowledgeAlert(ctx, got.ID, "operator:alice")
+	newly, err := srv.AcknowledgeAlert(ctx, got.ID, "cert:alice")
 	if err != nil || !newly {
 		t.Fatalf("acknowledge: newly=%v err=%v", newly, err)
 	}
@@ -60,7 +60,7 @@ func TestPeerAlertLifecycleFields(t *testing.T) {
 			if a.Status != "triaged" {
 				t.Errorf("after ack, status = %q, want triaged (the lifecycle advanced)", a.Status)
 			}
-			if a.AcknowledgedBy != "operator:alice" {
+			if a.AcknowledgedBy != "cert:alice" {
 				t.Errorf("acknowledged_by = %q, want operator:alice", a.AcknowledgedBy)
 			}
 		}

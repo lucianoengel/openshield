@@ -39,7 +39,7 @@ func TestDynamicSettingsComeFromTheDatabase(t *testing.T) {
 	if got := r.Duration("D_INTERVAL"); got != time.Hour {
 		t.Fatalf("unset dynamic field = %v, want its declared default", got)
 	}
-	rev, err := srv.ApplySettings(ctx, r, "operator:alice", "tighten correlation",
+	rev, err := srv.ApplySettings(ctx, r, "cert:alice", "tighten correlation",
 		map[string]string{"D_INTERVAL": "30s", "D_COUNT": "5"})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
@@ -66,7 +66,7 @@ func TestDynamicSettingsComeFromTheDatabase(t *testing.T) {
 	if err != nil || len(revs) != 1 || revs[0].ID != rev {
 		t.Fatalf("revisions = %+v err=%v", revs, err)
 	}
-	if revs[0].Author != "operator:alice" || revs[0].Note != "tighten correlation" {
+	if revs[0].Author != "cert:alice" || revs[0].Note != "tighten correlation" {
 		t.Errorf("revision = %+v, want the author and note recorded", revs[0])
 	}
 	byKey := map[string]controlplane.ConfigChange{}
@@ -88,7 +88,7 @@ func TestAChangeIsValidatedAndRefusedInFull(t *testing.T) {
 	r := testResolver(config.NewDBSource())
 	ctx := context.Background()
 
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "",
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "",
 		map[string]string{"D_COUNT": "7", "D_INTERVAL": "half an hour"}); err == nil {
 		t.Fatal("an invalid duration was accepted")
 	}
@@ -101,12 +101,12 @@ func TestAChangeIsValidatedAndRefusedInFull(t *testing.T) {
 	}
 
 	// An unknown key would be a value nobody reads.
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "",
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "",
 		map[string]string{"D_NOT_A_FIELD": "x"}); !errors.Is(err, controlplane.ErrUnknownSetting) {
 		t.Errorf("unknown key error = %v, want ErrUnknownSetting", err)
 	}
 	// A bootstrap field must reach the process BEFORE the database does.
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "",
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "",
 		map[string]string{"B_DSN": "postgres://x"}); !errors.Is(err, controlplane.ErrNotDynamic) {
 		t.Errorf("bootstrap write error = %v, want ErrNotDynamic", err)
 	}
@@ -122,7 +122,7 @@ func TestSecretsAreNeverStored(t *testing.T) {
 	ctx := context.Background()
 
 	for _, key := range []string{"D_SECRET", "B_TOKEN"} {
-		_, err := srv.ApplySettings(ctx, r, "operator:alice", "", map[string]string{key: "s3cret-value"})
+		_, err := srv.ApplySettings(ctx, r, "cert:alice", "", map[string]string{key: "s3cret-value"})
 		if err == nil {
 			t.Errorf("%s was stored — a backup of this database is now a backup of the deployment's "+
 				"credentials", key)
@@ -135,7 +135,7 @@ func TestSecretsAreNeverStored(t *testing.T) {
 		t.Errorf("%d row(s) stored for a secret", n)
 	}
 	// And the refusal itself must not echo the value back.
-	_, err := srv.ApplySettings(ctx, r, "operator:alice", "", map[string]string{"D_SECRET": "s3cret-value"})
+	_, err := srv.ApplySettings(ctx, r, "cert:alice", "", map[string]string{"D_SECRET": "s3cret-value"})
 	if err != nil && strings.Contains(err.Error(), "s3cret-value") {
 		t.Errorf("the refusal leaked the secret value: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestEnvDoesNotSilentlyOverrideADynamicSetting(t *testing.T) {
 	r := testResolver(db)
 	ctx := context.Background()
 
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "",
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "",
 		map[string]string{"D_INTERVAL": "30s"}); err != nil {
 		t.Fatal(err)
 	}
@@ -200,14 +200,14 @@ func TestRollbackRestoresValuesAsANewRevision(t *testing.T) {
 	r := testResolver(db)
 	ctx := context.Background()
 
-	first, err := srv.ApplySettings(ctx, r, "operator:alice", "initial", map[string]string{"D_COUNT": "3"})
+	first, err := srv.ApplySettings(ctx, r, "cert:alice", "initial", map[string]string{"D_COUNT": "3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.ApplySettings(ctx, r, "operator:bob", "widen", map[string]string{"D_COUNT": "99"}); err != nil {
+	if _, err := srv.ApplySettings(ctx, r, "cert:bob", "widen", map[string]string{"D_COUNT": "99"}); err != nil {
 		t.Fatal(err)
 	}
-	back, err := srv.RollbackTo(ctx, r, first, "operator:carol")
+	back, err := srv.RollbackTo(ctx, r, first, "cert:carol")
 	if err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestRollbackRestoresValuesAsANewRevision(t *testing.T) {
 		t.Fatalf("%d revisions after a rollback, want 3 — an audit trail you can rewind by ERASING is "+
 			"not one", len(revs))
 	}
-	if revs[0].ID != back || revs[0].Author != "operator:carol" {
+	if revs[0].ID != back || revs[0].Author != "cert:carol" {
 		t.Errorf("the rollback is not recorded as its own attributed revision: %+v", revs[0])
 	}
 	if !strings.Contains(revs[0].Note, "rollback") || revs[0].Changes[0].Old != "99" {
@@ -249,7 +249,7 @@ func TestSavedChangeAppliesWithoutARestart(t *testing.T) {
 	if got := r.Int("D_COUNT"); got != 3 {
 		t.Fatalf("D_COUNT starts at %d, want the default 3", got)
 	}
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "live", map[string]string{"D_COUNT": "11"}); err != nil {
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "live", map[string]string{"D_COUNT": "11"}); err != nil {
 		t.Fatal(err)
 	}
 	// No restart, no re-read by the test: the running process picks it up.
@@ -271,7 +271,7 @@ func TestSavedChangeAppliesWithoutARestart(t *testing.T) {
 		defer func() { mu <- struct{}{} }()
 		return len(seen) >= 2
 	})
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "again", map[string]string{"D_COUNT": "22"}); err != nil {
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "again", map[string]string{"D_COUNT": "22"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {

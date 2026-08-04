@@ -54,7 +54,7 @@ func TestAConfigChangeThatReducesDetectionPagesSomeone(t *testing.T) {
 
 	// Tolerating six hours of silence from a host, up from the fifteen-minute default. A legitimate
 	// value; no bound can refuse it; it is also how a killed agent stops being reported.
-	if _, err := srv.ApplySettings(ctx, r, "operator:mallory", "quieter alerts",
+	if _, err := srv.ApplySettings(ctx, r, "cert:mallory", "quieter alerts",
 		map[string]string{"OPENSHIELD_OVERDUE_THRESHOLD": "6h"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAConfigChangeThatReducesDetectionPagesSomeone(t *testing.T) {
 	if !strings.Contains(found.Detail, "OPENSHIELD_OVERDUE_THRESHOLD") {
 		t.Errorf("the alert does not name the setting: %q", found.Detail)
 	}
-	if !strings.Contains(found.Detail, "operator:mallory") {
+	if !strings.Contains(found.Detail, "cert:mallory") {
 		t.Errorf("the alert does not name who made the change: %q", found.Detail)
 	}
 }
@@ -99,7 +99,7 @@ func TestATighteningChangeIsSilent(t *testing.T) {
 	ctx := context.Background()
 
 	// Noticing a silent host SOONER, and keeping evidence LONGER. Both move toward more detection.
-	if _, err := srv.ApplySettings(ctx, r, "operator:alice", "tighten",
+	if _, err := srv.ApplySettings(ctx, r, "cert:alice", "tighten",
 		map[string]string{
 			"OPENSHIELD_OVERDUE_THRESHOLD": "5m",
 			"OPENSHIELD_FLEET_RETENTION":   "4320h",
@@ -129,7 +129,7 @@ func TestTheWeakeningIsOnTheDiffAnInvestigatorReads(t *testing.T) {
 	r := serverFieldResolver(config.NewDBSource())
 	ctx := context.Background()
 
-	if _, err := srv.ApplySettings(ctx, r, "operator:mallory", "",
+	if _, err := srv.ApplySettings(ctx, r, "cert:mallory", "",
 		map[string]string{
 			"OPENSHIELD_FLEET_RETENTION":   "48h", // three months of evidence becomes two days
 			"OPENSHIELD_CORRELATE_WINDOW":  "30m", // narrower look-back

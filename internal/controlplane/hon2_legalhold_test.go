@@ -21,7 +21,7 @@ func TestOpenCasePlacesLegalHold(t *testing.T) {
 	}
 
 	// Opening a case holds the subject.
-	if _, err := srv.OpenCase(ctx, "sub_held", "operator:alice"); err != nil {
+	if _, err := srv.OpenCase(ctx, "sub_held", "cert:alice"); err != nil {
 		t.Fatal(err)
 	}
 	held, err := srv.IsUnderLegalHold(ctx, "sub_held")
@@ -47,7 +47,7 @@ func TestOpenCaseForIncidentPlacesLegalHold(t *testing.T) {
 	srv := controlplane.New(pool)
 	ctx := context.Background()
 	inc := controlplane.Incident{SubjectID: "sub_inc", AlertCount: 3, MaxRisk: 0.9, FirstSeen: time.Now().Add(-time.Hour), LastSeen: time.Now()}
-	if _, err := srv.OpenCaseForIncident(ctx, inc, "operator:bob"); err != nil {
+	if _, err := srv.OpenCaseForIncident(ctx, inc, "cert:bob"); err != nil {
 		t.Fatal(err)
 	}
 	if held, _ := srv.IsUnderLegalHold(ctx, "sub_inc"); !held {
@@ -60,10 +60,10 @@ func TestLegalHoldIdempotent(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
 	ctx := context.Background()
-	if _, err := srv.OpenCase(ctx, "sub_dup", "operator:a"); err != nil {
+	if _, err := srv.OpenCase(ctx, "sub_dup", "cert:a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srv.OpenCase(ctx, "sub_dup", "operator:b"); err != nil {
+	if _, err := srv.OpenCase(ctx, "sub_dup", "cert:b"); err != nil {
 		t.Fatalf("second case on the same subject errored (hold not idempotent): %v", err)
 	}
 }

@@ -46,6 +46,11 @@ const (
 	kindOIDC principalKind = "oidc"
 	// kindService is a machine principal. It authenticates, and it can never satisfy four-eyes.
 	kindService principalKind = "svc"
+	// kindPlaybook is the automation engine acting as itself. It predates this vocabulary — a playbook
+	// step opens approval requests as `playbook:<name>` — and it is folded in here so that "is this a
+	// machine" is one question over one closed set, rather than a prefix check somebody has to remember
+	// to extend when a fourth non-human caller appears.
+	kindPlaybook principalKind = "playbook"
 )
 
 // operatorPrincipal is a verified operator identity, namespaced by how it was proven.
@@ -102,7 +107,30 @@ func servicePrincipal(name string) (operatorPrincipal, error) {
 	return operatorPrincipal{kind: kindService, subject: name}, nil
 }
 
-// String is the canonical stored form: `cert:<cn>`, `oidc:<issuer>#<sub>`, `svc:<name>`.
+// playbookPrincipal builds the automation engine's own principal.
+func playbookPrincipal(name string) (operatorPrincipal, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return operatorPrincipal{}, fmt.Errorf("%w: a playbook principal needs a name", ErrBadPrincipal)
+	}
+	if strings.ContainsAny(name, "#") {
+		return operatorPrincipal{}, fmt.Errorf("%w: name contains a reserved character", ErrBadPrincipal)
+	}
+	return operatorPrincipal{kind: kindPlaybook, subject: name}, nil
+}
+
+// PlaybookPrincipal is the canonical identity string for a named playbook, so the automation engine and
+// the approval control agree on one vocabulary.
+func PlaybookPrincipal(name string) string {
+	p, err := playbookPrincipal(name)
+	if err != nil {
+		return ""
+	}
+	return p.String()
+}
+
+// String is the canonical stored form: `cert:<cn>`, `oidc:<issuer>#<sub>`, `svc:<name>`,
+// `playbook:<name>`.
 //
 // This is what goes in operator_roles, in an approval's requester and approver, and in every audit row.
 // It is stable and parseable, and it can be read by a human looking at a database — which matters,
@@ -121,8 +149,15 @@ func (p operatorPrincipal) String() string {
 // valid reports whether this is a real principal rather than the zero value.
 func (p operatorPrincipal) valid() bool { return p.kind != "" && p.subject != "" }
 
-// isMachine reports whether this principal is a service account. Four-eyes consults it.
-func (p operatorPrincipal) isMachine() bool { return p.kind == kindService }
+// isMachine reports whether this principal is NOT A PERSON — a service account or the automation engine.
+//
+// Four-eyes consults it, and the asymmetry is the existing spec requirement rather than a new rule:
+// automation MAY request an approval (a playbook step opening a wait-for-approval gate is the whole
+// point of that step), and may never GRANT one. An approval granted by a machine is a human-in-the-loop
+// gate with no human in the loop.
+func (p operatorPrincipal) isMachine() bool {
+	return p.kind == kindService || p.kind == kindPlaybook
+}
 
 // parsePrincipal reads a canonical principal string back.
 //
@@ -140,6 +175,8 @@ func parsePrincipal(s string) (operatorPrincipal, error) {
 		return certPrincipal(rest)
 	case kindService:
 		return servicePrincipal(rest)
+	case kindPlaybook:
+		return playbookPrincipal(rest)
 	case kindOIDC:
 		issuer, sub, ok := strings.Cut(rest, "#")
 		if !ok {

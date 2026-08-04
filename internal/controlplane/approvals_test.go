@@ -18,11 +18,11 @@ func TestRequesterCannotApproveTheirOwnRequest(t *testing.T) {
 	ctx := context.Background()
 
 	id, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-1",
-		"operator:alice", "contain host A", time.Hour)
+		"cert:alice", "contain host A", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, id, "operator:alice", true); !errors.Is(err, controlplane.ErrFourEyes) {
+	if err := srv.ResolveApproval(ctx, id, "cert:alice", true); !errors.Is(err, controlplane.ErrFourEyes) {
 		t.Fatalf("self-approval err = %v, want ErrFourEyes — one operator must not be able to both request "+
 			"and approve a containment", err)
 	}
@@ -35,11 +35,11 @@ func TestRequesterCannotApproveTheirOwnRequest(t *testing.T) {
 	}
 
 	// A DIFFERENT operator can.
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); err != nil {
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); err != nil {
 		t.Fatalf("second-operator approval: %v", err)
 	}
 	got, _ = srv.ApprovalFor(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-1")
-	if got.State != controlplane.ApprovalApproved || got.Approver != "operator:bob" || got.ResolvedAt == nil {
+	if got.State != controlplane.ApprovalApproved || got.Approver != "cert:bob" || got.ResolvedAt == nil {
 		t.Fatalf("approved record = %+v, want approved and attributed to bob", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestConcurrentApprovalsProduceExactlyOneOutcome(t *testing.T) {
 	for round := 0; round < rounds; round++ {
 		subject := "step-" + strconv.Itoa(round)
 		id, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectPlaybookStep, subject,
-			"operator:alice", "", time.Hour)
+			"cert:alice", "", time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +79,7 @@ func TestConcurrentApprovalsProduceExactlyOneOutcome(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				<-start
-				results[i] = srv.ResolveApproval(ctx, id, "operator:approver-"+strconv.Itoa(i), true)
+				results[i] = srv.ResolveApproval(ctx, id, "cert:approver-"+strconv.Itoa(i), true)
 			}(i)
 		}
 		close(start)
@@ -108,13 +108,13 @@ func TestExpiredApprovalCannotBeApproved(t *testing.T) {
 
 	// A TTL that has already elapsed by the time we resolve.
 	id, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-expired",
-		"operator:alice", "", 50*time.Millisecond)
+		"cert:alice", "", 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(150 * time.Millisecond)
 
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); !errors.Is(err, controlplane.ErrApprovalExpired) {
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); !errors.Is(err, controlplane.ErrApprovalExpired) {
 		t.Fatalf("approving an expired request err = %v, want ErrApprovalExpired", err)
 	}
 	// And a reader sees it as expired even before the (cosmetic) sweeper runs.
@@ -137,15 +137,15 @@ func TestApprovalOutcomeIsTerminal(t *testing.T) {
 	srv := controlplane.New(pool)
 	ctx := context.Background()
 
-	id, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectCaseClose, "case-9", "operator:alice", "", time.Hour)
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", false); err != nil {
+	id, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectCaseClose, "case-9", "cert:alice", "", time.Hour)
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, id, "operator:carol", true); !errors.Is(err, controlplane.ErrApprovalNotPending) {
+	if err := srv.ResolveApproval(ctx, id, "cert:carol", true); !errors.Is(err, controlplane.ErrApprovalNotPending) {
 		t.Fatalf("re-resolving err = %v, want ErrApprovalNotPending", err)
 	}
 	got, _ := srv.ApprovalFor(ctx, controlplane.ApprovalSubjectCaseClose, "case-9")
-	if got.State != controlplane.ApprovalDenied || got.Approver != "operator:bob" {
+	if got.State != controlplane.ApprovalDenied || got.Approver != "cert:bob" {
 		t.Fatalf("the original outcome was overwritten: %+v", got)
 	}
 }
@@ -157,8 +157,8 @@ func TestApprovalIsBoundToItsSubject(t *testing.T) {
 	ctx := context.Background()
 
 	id, _ := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-A",
-		"operator:alice", "", time.Hour)
-	if err := srv.ResolveApproval(ctx, id, "operator:bob", true); err != nil {
+		"cert:alice", "", time.Hour)
+	if err := srv.ResolveApproval(ctx, id, "cert:bob", true); err != nil {
 		t.Fatal(err)
 	}
 	// A different subject id under the same kind has no approval...
@@ -179,11 +179,11 @@ func TestOnePendingApprovalPerSubject(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-dup",
-		"operator:alice", "", time.Hour); err != nil {
+		"cert:alice", "", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := srv.RequestApproval(ctx, controlplane.ApprovalSubjectResponseIntent, "intent-dup",
-		"operator:alice", "", time.Hour); err == nil {
+		"cert:alice", "", time.Hour); err == nil {
 		t.Fatal("a second PENDING approval for the same subject was accepted — a requester could open " +
 			"several and shop for an approver")
 	}

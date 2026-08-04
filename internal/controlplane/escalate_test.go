@@ -59,7 +59,7 @@ func TestAnUnacknowledgedIncidentEscalatesAndAnAcknowledgedOneDoesNot(t *testing
 
 	ignored := seedOpenIncident(t, ctx, pool, "sub_esc_ignored", 0.95, 30*time.Minute)
 	handled := seedOpenIncident(t, ctx, pool, "sub_esc_handled", 0.95, 30*time.Minute)
-	if _, err := srv.AcknowledgeIncident(ctx, handled, "operator:alice"); err != nil {
+	if _, err := srv.AcknowledgeIncident(ctx, handled, "cert:alice"); err != nil {
 		t.Fatal(err)
 	}
 

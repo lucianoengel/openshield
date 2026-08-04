@@ -53,7 +53,7 @@ func TestTransitionOffOpenRecordsTheAcknowledgement(t *testing.T) {
 	// (1) Straight from open to triaged: the transitioning operator IS the acknowledger.
 	direct := seedTimedIncident(t, pool, "subject-soar6-direct", now.Add(-time.Hour), now.Add(-time.Hour), nil,
 		controlplane.IncidentOpen, nil)
-	if err := srv.TransitionIncident(ctx, direct, controlplane.IncidentTriaged, "operator:carol"); err != nil {
+	if err := srv.TransitionIncident(ctx, direct, controlplane.IncidentTriaged, "cert:carol"); err != nil {
 		t.Fatalf("transition: %v", err)
 	}
 	var ackBy string
@@ -62,7 +62,7 @@ func TestTransitionOffOpenRecordsTheAcknowledgement(t *testing.T) {
 		direct).Scan(&ackBy, &ackAt); err != nil {
 		t.Fatal(err)
 	}
-	if ackAt == nil || ackBy != "operator:carol" {
+	if ackAt == nil || ackBy != "cert:carol" {
 		t.Errorf("open→triaged recorded acknowledged_by=%q at=%v — an operator who triages directly erases "+
 			"their own response time, and that incident can never be measured", ackBy, ackAt)
 	}
@@ -70,14 +70,14 @@ func TestTransitionOffOpenRecordsTheAcknowledgement(t *testing.T) {
 	// (2) An EXISTING acknowledgement is never overwritten: first-ack-wins (SIEM-11b) survives.
 	acked := seedTimedIncident(t, pool, "subject-soar6-acked", now.Add(-time.Hour), now.Add(-time.Hour), nil,
 		controlplane.IncidentOpen, nil)
-	if _, err := srv.AcknowledgeIncident(ctx, acked, "operator:first"); err != nil {
+	if _, err := srv.AcknowledgeIncident(ctx, acked, "cert:first"); err != nil {
 		t.Fatal(err)
 	}
 	var firstAckAt time.Time
 	if err := pool.QueryRow(ctx, `SELECT acknowledged_at FROM incidents WHERE id=$1`, acked).Scan(&firstAckAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.TransitionIncident(ctx, acked, controlplane.IncidentContained, "operator:second"); err != nil {
+	if err := srv.TransitionIncident(ctx, acked, controlplane.IncidentContained, "cert:second"); err != nil {
 		t.Fatal(err)
 	}
 	var laterBy string
@@ -86,7 +86,7 @@ func TestTransitionOffOpenRecordsTheAcknowledgement(t *testing.T) {
 		acked).Scan(&laterBy, &laterAt); err != nil {
 		t.Fatal(err)
 	}
-	if laterBy != "operator:first" || !laterAt.Equal(firstAckAt) {
+	if laterBy != "cert:first" || !laterAt.Equal(firstAckAt) {
 		t.Errorf("a later transition overwrote the acknowledgement (by=%q at=%v, want operator:first at %v) — "+
 			"first-ack-wins attribution is lost and MTTA silently improves every time someone touches it",
 			laterBy, laterAt, firstAckAt)
@@ -95,7 +95,7 @@ func TestTransitionOffOpenRecordsTheAcknowledgement(t *testing.T) {
 	// (3) A REFUSED (backward) transition records nothing.
 	closed := seedTimedIncident(t, pool, "subject-soar6-closed", now.Add(-time.Hour), now.Add(-time.Hour), nil,
 		controlplane.IncidentClosed, &now)
-	if err := srv.TransitionIncident(ctx, closed, controlplane.IncidentTriaged, "operator:late"); err == nil {
+	if err := srv.TransitionIncident(ctx, closed, controlplane.IncidentTriaged, "cert:late"); err == nil {
 		t.Fatal("a backward transition was accepted")
 	}
 	var closedAck *time.Time
@@ -236,7 +236,7 @@ func TestMetricsHistogramsMoveAndAreWellFormed(t *testing.T) {
 		t.Errorf("excluded gauge = %q, want 1 — the unacknowledged incident is invisible", got)
 	}
 
-	if _, err := srv.AcknowledgeIncident(ctx, id, "operator:a"); err != nil {
+	if _, err := srv.AcknowledgeIncident(ctx, id, "cert:a"); err != nil {
 		t.Fatal(err)
 	}
 	after := scrape()
@@ -279,7 +279,7 @@ func TestMetricsHistogramsMoveAndAreWellFormed(t *testing.T) {
 
 	// NO PER-OPERATOR SERIES. Grouping these by named analyst is trivial and deliberately not done:
 	// attribution on an incident serves accountability; a per-person score is workforce surveillance.
-	if strings.Contains(after, "operator:") || strings.Contains(after, `analyst="`) {
+	if strings.Contains(after, "cert:") || strings.Contains(after, `analyst="`) {
 		t.Error("the metrics exposition names an operator — response times must stay fleet-level")
 	}
 }
@@ -340,7 +340,7 @@ func TestResponseReportEndpoint(t *testing.T) {
 			t.Errorf("report is missing %q: %s", want, body)
 		}
 	}
-	if strings.Contains(body, "operator:") {
+	if strings.Contains(body, "cert:") {
 		t.Error("the report names an operator — response metrics stay fleet-level by design")
 	}
 }

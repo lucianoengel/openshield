@@ -15,8 +15,8 @@ func TestCaseFourEyesClosure(t *testing.T) {
 	srv := controlplane.New(pool)
 	ctx := context.Background()
 
-	alice := "operator:alice"
-	bob := "operator:bob"
+	alice := "cert:alice"
+	bob := "cert:bob"
 
 	id, err := srv.OpenCase(ctx, "sub_target", alice)
 	if err != nil {
@@ -65,11 +65,11 @@ func TestApproveWithoutRequest(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
 	ctx := context.Background()
-	id, err := srv.OpenCase(ctx, "sub_x", "operator:alice")
+	id, err := srv.OpenCase(ctx, "sub_x", "cert:alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ApproveClose(ctx, id, "operator:bob"); err == nil {
+	if err := srv.ApproveClose(ctx, id, "cert:bob"); err == nil {
 		t.Error("approved a closure that was never requested")
 	}
 }

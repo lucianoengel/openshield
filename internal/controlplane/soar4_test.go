@@ -339,7 +339,7 @@ func TestWaitForApprovalParksTheRunUntilAHumanDecides(t *testing.T) {
 	}
 
 	// A human approves; the run finishes.
-	if err := restarted.ResolveApproval(ctx, approvalID, "operator:alice", true); err != nil {
+	if err := restarted.ResolveApproval(ctx, approvalID, "cert:alice", true); err != nil {
 		t.Fatalf("approving: %v", err)
 	}
 	if err := restarted.RunPlaybooksOnce(ctx, []controlplane.Playbook{pb}); err != nil {
@@ -355,7 +355,7 @@ func TestWaitForApprovalParksTheRunUntilAHumanDecides(t *testing.T) {
 	if n := countRows(t, pool, `SELECT count(*) FROM cases WHERE subject_id=$1`, subject); n != 1 {
 		t.Errorf("after approval the run produced %d case(s), want 1", n)
 	}
-	if !strings.Contains(run.Steps[1].Result, "operator:alice") {
+	if !strings.Contains(run.Steps[1].Result, "cert:alice") {
 		t.Errorf("the gate step recorded %q — the approving operator must be on the record", run.Steps[1].Result)
 	}
 }
@@ -388,7 +388,7 @@ func TestDeniedOrExpiredApprovalFailsTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.ResolveApproval(ctx, *run.Steps[0].ApprovalID, "operator:bob", false); err != nil {
+	if err := srv.ResolveApproval(ctx, *run.Steps[0].ApprovalID, "cert:bob", false); err != nil {
 		t.Fatalf("denying: %v", err)
 	}
 	if err := srv.RunPlaybooksOnce(ctx, []controlplane.Playbook{denyPB}); err != nil {

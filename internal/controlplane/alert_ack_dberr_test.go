@@ -15,7 +15,7 @@ func TestAcknowledgeAlertDBErrorIsNotNotFound(t *testing.T) {
 	srv := controlplane.New(pool)
 	pool.Close() // simulate infrastructure failure
 
-	_, err := srv.AcknowledgeAlert(context.Background(), 123, "operator:alice")
+	_, err := srv.AcknowledgeAlert(context.Background(), 123, "cert:alice")
 	if err == nil {
 		t.Fatal("ack against a closed pool returned nil")
 	}
