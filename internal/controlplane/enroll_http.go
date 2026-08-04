@@ -131,6 +131,10 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// heavy job against the database the live pipeline is using.
 		mux.Handle("/correlate/backfill", s.requireTier(RoleAdmin, opRead))
 		mux.Handle("/overdue", s.requireTier(RoleAnalyst, opRead))
+		// CONSOLE-7: the health report. ANALYST — the lowest tier — because every operator using the
+		// console needs to know whether the answers it is giving them can be trusted, and an empty
+		// incident queue on a fresh install is indistinguishable from broken ingest without it.
+		mux.Handle("/health", s.requireTier(RoleAnalyst, opRead))
 		// CONSOLE-1: THE DATA-SUBJECT ROUTES ARE THE PRIVACY OFFICER'S, AND NO TIER REACHES THEM.
 		//
 		// `/subject` compiles everything the platform holds about a named individual and sat at the

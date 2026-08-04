@@ -227,6 +227,19 @@ func main() {
 	// over on leader failure. A single deployed instance becomes leader immediately (unchanged).
 	leader := controlplane.NewLeader(pool)
 	lerr := leader.Run(ctx, func(leaderCtx context.Context) {
+		// CONSOLE-7: leadership is a FACT AN OPERATOR NEEDS, and it is only knowable here.
+		//
+		// A follower runs none of the loops below, which is correct and is also the single most confusing
+		// thing about a highly-available deployment: the console shows an empty queue and nothing says
+		// "you are talking to the standby". Recorded so /health can state it, and un-recorded the moment
+		// leadership is lost — a stale `leader: true` on a demoted process is worse than no field at all,
+		// because it is the answer an operator would act on.
+		controlplane.SetLeaderHeld(true)
+		go func() {
+			<-leaderCtx.Done()
+			controlplane.SetLeaderHeld(false)
+		}()
+
 		// SOAR-2: correlate on a CLOCK, not only when an operator asks. Before this, both materializers
 		// were called from exactly one place — the GET /incidents handler — so an incident existed only if
 		// a human happened to look, and SOAR-1's automatic page (D220) followed someone else's request.

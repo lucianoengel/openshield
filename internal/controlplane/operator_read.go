@@ -223,6 +223,7 @@ func (s *Server) OperatorReadHandler() http.Handler {
 
 	mux.HandleFunc("/subject", s.subjectHandler)
 	mux.HandleFunc("/views", s.viewAuditHandler) // CONSOLE-1: who viewed what — the privacy officer's route
+	mux.HandleFunc("/health", s.healthHandler)   // CONSOLE-7: can this console trust the answers it is getting
 
 	mux.HandleFunc("/incidents", s.incidentsHandler)
 	mux.HandleFunc("/incidents/ack", s.incidentAckHandler)

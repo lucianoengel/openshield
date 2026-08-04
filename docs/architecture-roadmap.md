@@ -4,7 +4,7 @@
 > OpenShield is today, the **MVP cut** (everything required before the UI), the **enrichment
 > backlog** (post-MVP plugins on the frozen core), and the **design rationale** as reference.
 >
-> **Authoritative status is this file at `HEAD`, current through D471.** History (round-by-round
+> **Authoritative status is this file at `HEAD`, current through D472.** History (round-by-round
 > audits, the R34 findings, per-ticket shipment notes) lives in git and the session memory — it is
 > not re-carried here. The compact *Done ledger* below records what shipped so it is not
 > re-proposed; open git log for the detail behind any `D<n>`.
@@ -37,7 +37,7 @@
 
 ---
 
-## What OpenShield is (status at a glance, through D471)
+## What OpenShield is (status at a glance, through D472)
 
 **OpenShield is architected as a pipeline-native XDR + SOAR** — one
 Event→Classify→Policy→Decision→Enforce→Audit pipeline spanning **endpoint, network, and identity**, with
@@ -519,10 +519,13 @@ the surfaces, then the two exit-criteria tickets.*
   principal is already on the request context, so any scope is derivable there when tenancy is designed,
   and a constant that always says "all" is unwired code by construction (see the CONSOLE-1 tasks
   deviation). *Residual:* no stable snapshot across pages while ingest is live.
-- **CONSOLE-7 · Operator-tier `/health`** — new work · S. Leader held / broker connected / ingest state /
-  schema skew / last anchor. The Overview strip's first tile **has no data source today**: `/metrics` sits
-  behind a separate constant-time bearer token (PLAT-4b), not the operator session. Specifies what the
-  console shows when talking to a follower.
+- **CONSOLE-7 · Operator-tier `/health`** — ✅ **SHIPPED (D472).** `GET /health` at analyst tier: leader
+  held, broker connected, PLAT-10 ingest repairs, database reachable, PLAT-9 schema skew, last external
+  anchor — each read at request time. **A REPORT, NOT A LIVENESS PROBE:** always 200, because a follower
+  is healthy and one status code cannot say what is wrong. Each problem names its consequence;
+  `degraded` is derived from the list so the two cannot disagree; an empty list serializes as `[]`.
+  `SetLeaderHeld` is wired from the real election and proven so by the integration test against the
+  shipped binary. Archived `2026-08-04-console-7-operator-health`, specs synced.
 - **CONSOLE-8 · Fleet inventory + break-glass surface** — CONSOLE-7 · M. Agent identity, platform, version,
   last-seen, attestation verdict + TTL, posture, spool depth — and **which agents are enforcement-suppressed,
   since when, by whom, until when** from `agent_enforcement` (`heartbeat.go:72`). `INVARIANTS.md:131`:
