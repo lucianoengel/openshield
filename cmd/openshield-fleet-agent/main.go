@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/lucianoengel/openshield/internal/config"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,9 +25,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"crypto/ed25519"
-	"strings"
-
-	"github.com/lucianoengel/openshield/internal/attest"
 
 	enrollpkg "github.com/lucianoengel/openshield/internal/agent/enroll"
 
@@ -189,7 +187,7 @@ func main() {
 	// current state (a drift drops it within a cycle). The AK must be enrolled at the gateway under
 	// postureSubject (the canonical pseudonym) — by self-enrollment here, or by an operator's
 	// `openshield-provision attest-capture` file.
-	if pcrs := parsePCRs(os.Getenv("OPENSHIELD_ATTEST_PCRS")); len(pcrs) > 0 {
+	if pcrs := posture.ParsePCRs(os.Getenv("OPENSHIELD_ATTEST_PCRS"), simLogger()); len(pcrs) > 0 {
 		// IN A GOROUTINE, because this whole block used to run on the agent's MAIN PATH and could
 		// BLOCK THERE FOREVER (D314). The comment above it said "attestation never blocks the agent",
 		// and the code did the opposite: a TPM that accepts a connection and then does not answer —
@@ -201,7 +199,12 @@ func main() {
 		// disabled everything else the agent does, and from the control plane the machine looked
 		// simply absent. Off the main path, a TPM that never answers costs exactly the feature that
 		// needs it.
-		go setUpAttestation(ctx, conn, agentID, postureSubject, pcrs)
+		go posture.StartAgentAttestation(ctx, conn, posture.AgentAttestation{
+			Subject: postureSubject, PCRs: pcrs, TPMAddr: os.Getenv("OPENSHIELD_TPM_ADDR"),
+			SelfEnroll:   os.Getenv("OPENSHIELD_ATTEST_SELF_ENROLL") != "",
+			PreAuthToken: os.Getenv("OPENSHIELD_ENROLL_PREAUTH_TOKEN"),
+			Interval:     envDuration("OPENSHIELD_ATTEST_INTERVAL", 5*time.Minute),
+		}, simLogger())
 	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
@@ -236,39 +239,6 @@ func main() {
 	}
 }
 
-// parsePCRs parses a comma-separated PCR list ("16,23") into indices. An empty or absent value disables
-// attestation; a malformed entry is skipped but SAID OUT LOUD.
-//
-// The warning is the fix, and the divergence it covers is worth naming. openshield-provision's
-// parsePCRList REFUSES a malformed index outright, on the stated grounds that an empty baseline "attests
-// to nothing". This one skips, which is right for a simulation agent that should keep running — but
-// skipping SILENTLY meant `OPENSHIELD_ATTEST_PCRS=0,seven` enrolled a baseline over PCR 0 alone while the
-// operator had asked for two. Downstream validation cannot catch that: [0] is a perfectly valid non-empty
-// baseline. The result is an agent attesting to less than was asked, with nothing to indicate it (D31 — a
-// gap must never be silent).
-func parsePCRs(s string) []int {
-	var pcrs []int
-	var skipped []string
-	for _, f := range strings.Split(s, ",") {
-		f = strings.TrimSpace(f)
-		if f == "" {
-			continue
-		}
-		n, err := strconv.Atoi(f)
-		if err != nil {
-			skipped = append(skipped, f)
-			continue
-		}
-		pcrs = append(pcrs, n)
-	}
-	if len(skipped) > 0 {
-		fmt.Fprintf(os.Stderr, "fleet-agent: OPENSHIELD_ATTEST_PCRS %q — ignoring %d unparseable entry/ies "+
-			"(%s); attesting over %v only. A typo here NARROWS the baseline silently, which is why this "+
-			"says so.\n", s, len(skipped), strings.Join(skipped, ", "), pcrs)
-	}
-	return pcrs
-}
-
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -294,95 +264,6 @@ func envInt(k string, def int) int {
 func fatal(f string, a ...any) {
 	fmt.Fprintf(os.Stderr, "fleet-agent: "+f+"\n", a...)
 	os.Exit(1)
-}
-
-// selfEnroll runs the network enrollment handshake, creating the EK it needs and releasing it after.
-//
-// THE EK IS FLUSHED, and that is not tidiness. A TPM has a small fixed number of object slots; leaving
-// the endorsement key loaded after enrollment consumes one for the life of the process, and the next
-// component to need a slot — the AK on a restart, another application's key — fails with a TPM
-// out-of-memory error that names nothing about this program. `FlushEK` existed for this and had no
-// caller, which is consistent: nothing called the enrollment path either.
-func selfEnroll(conn *nats.Conn, tpm *attest.TPM, ak *attest.AK, subject string, pcrs []int) error {
-	ek, err := tpm.CreateEK()
-	if err != nil {
-		return fmt.Errorf("creating the endorsement key: %w", err)
-	}
-	defer func() { _ = tpm.FlushEK(ek) }()
-	// The operator's PRE-AUTHORIZATION token, when the deployment issues them (D317). Empty is correct
-	// and common: a gateway without OPENSHIELD_ENROLL_PREAUTH_TOKENS ignores the field, so one agent
-	// shape serves both. Until D317 nothing could send one at all, which meant a gateway that turned
-	// the guard ON could not be enrolled by any shipped client — the control did not make enrollment
-	// stricter, it made it impossible.
-	return posture.EnrollWithToken(conn, tpm, ek, ak, subject, pcrs,
-		os.Getenv("OPENSHIELD_ENROLL_PREAUTH_TOKEN"))
-}
-
-// setUpAttestation opens the TPM, creates the AK, optionally self-enrolls, and starts the attest loop.
-//
-// EVERY FAILURE IS LOGGED AND NON-FATAL. Attestation is a signal the gateway consumes, not a
-// precondition for the agent existing; a device with a broken TPM should still report heartbeats and
-// telemetry, and be visible as a device that cannot attest — which is a much more useful thing for an
-// operator to see than a machine that has vanished.
-func setUpAttestation(ctx context.Context, conn *nats.Conn, agentID, subject string, pcrs []int) {
-	tpm, err := attest.Open(os.Getenv("OPENSHIELD_TPM_ADDR"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fleet-agent %s: attestation disabled — open TPM: %v\n", agentID, err)
-		return
-	}
-	// TPM2_STARTUP, which was missing entirely (D314) and is why nothing here could ever work against a
-	// software TPM. A hardware TPM is started by the platform firmware before any userspace runs, so
-	// omitting it looked correct on the only device anyone had tried; a swtpm is started by whoever
-	// connects to it, and until then it answers no command — it does not REFUSE them, it does not
-	// answer, so the agent hung.
-	//
-	// AN ERROR HERE IS NOT FATAL, because the overwhelmingly common case is the good one: a
-	// firmware-started TPM answers TPM_RC_INITIALIZE ("already started"), and treating "it was already
-	// ready" as a failure would disable attestation on every real machine to satisfy the emulator.
-	if err := tpm.Startup(); err != nil {
-		fmt.Fprintf(os.Stderr, "fleet-agent %s: TPM startup returned %v (expected on a "+
-			"firmware-started TPM, which is already running — continuing)\n", agentID, err)
-	}
-	ak, err := tpm.CreateAK()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fleet-agent %s: attestation disabled — create AK: %v\n", agentID, err)
-		_ = tpm.Close()
-		return
-	}
-
-	// SELF-ENROLL FIRST (D314), when the operator asks for it.
-	//
-	// The gateway has SERVED the enrollment protocol since D184 — credential activation, pre-auth
-	// tokens, EK-certificate anchoring, all built and unit-tested — and NO SHIPPED BINARY EVER SPOKE
-	// IT. `posture.Enroll` had no caller anywhere in the tree. So the automated half of ZT-1 could not
-	// happen in a deployment: the only way to populate the verifier was an operator-written JSON file,
-	// and the function that WRITES that file (`attest.MarshalEnrollments`) had no caller either.
-	//
-	// The consequence is worse than an inert feature, because the verifier FAILS CLOSED by design
-	// (D85/D186): an empty verifier means every device is unattested, so an operator who turned
-	// attestation on and wrote a policy requiring it got a deployment that refused everything, with
-	// the gateway logging that enrollment was available.
-	//
-	// It is OPT-IN because self-enrollment is a trust decision: a device asserting its own identity to
-	// the control plane is exactly what pre-auth tokens and EK anchoring exist to constrain, and
-	// enabling it by default would hand that decision to a default.
-	if os.Getenv("OPENSHIELD_ATTEST_SELF_ENROLL") != "" {
-		if err := selfEnroll(conn, tpm, ak, subject, pcrs); err != nil {
-			// NOT fatal, and not silent. A gateway that already holds this device in an enrollment file
-			// will REJECT a re-enrollment, and that is a correct refusal rather than a reason to stop.
-			// Attestation then proceeds and either works — because the device was already enrolled — or
-			// does not, visibly.
-			fmt.Fprintf(os.Stderr, "fleet-agent %s: self-enrollment did not complete: %v\n", agentID, err)
-		} else {
-			fmt.Fprintf(os.Stderr, "fleet-agent %s: ZT-1 self-enrolled with the gateway (AK proven "+
-				"TPM-resident by credential activation)\n", agentID)
-		}
-	}
-
-	interval := envDuration("OPENSHIELD_ATTEST_INTERVAL", 5*time.Minute)
-	fmt.Fprintf(os.Stderr, "fleet-agent %s: ZT-1 continuous attestation enabled (PCRs %v, every %s)\n",
-		agentID, pcrs, interval)
-	posture.AttestLoop(ctx, conn, tpm, ak, subject, pcrs, interval, nil)
 }
 
 // binaryIntegrity re-hashes this host's installed binaries against the signed release manifest the
@@ -426,4 +307,11 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// simLogger adapts this binary's stderr convention to the slog the shared attestation orchestration
+// takes. The simulator prints prose to stderr rather than structured logs, so the messages stay where an
+// operator reading this binary's output expects them.
+func simLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }

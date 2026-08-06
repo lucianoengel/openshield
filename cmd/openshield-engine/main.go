@@ -251,6 +251,27 @@ func main() {
 		// (PLAT-2) before it.
 		attachSpool(ctx, pub, agentID, log)
 		startPostureReporting(ctx, conn, agentID, log)
+
+		// CONSOLE-8e: ZT-1 CONTINUOUS HARDWARE ATTESTATION, which only the fleet SIMULATOR ever did.
+		//
+		// Attestation is the one device signal that is NOT self-reported: the gateway sets `Attested`
+		// from its own verification of a TPM quote. With no real producer, a policy requiring it refused
+		// every genuine endpoint — the same shape as posture (D476), and worse, because attestation is
+		// the signal a compromised endpoint cannot fake and therefore the one worth requiring.
+		//
+		// IN A GOROUTINE, because a TPM that accepts a connection and then does not answer — exactly
+		// what an un-started software TPM does — blocks forever. On the agent's main path that silently
+		// disabled everything else it does (D314); off it, a dead TPM costs exactly the feature that
+		// needs it.
+		if pcrs := posture.ParsePCRs(os.Getenv("OPENSHIELD_ATTEST_PCRS"), log); len(pcrs) > 0 {
+			go posture.StartAgentAttestation(ctx, conn, posture.AgentAttestation{
+				Subject: pseudonym.Of(agentID), PCRs: pcrs,
+				TPMAddr:      os.Getenv("OPENSHIELD_TPM_ADDR"),
+				SelfEnroll:   os.Getenv("OPENSHIELD_ATTEST_SELF_ENROLL") != "",
+				PreAuthToken: os.Getenv("OPENSHIELD_ENROLL_PREAUTH_TOKEN"),
+				Interval:     envDuration("OPENSHIELD_ATTEST_INTERVAL", 5*time.Minute),
+			}, log)
+		}
 		eng.SetTelemetry(pub)
 		log.Info("engine: fleet telemetry ENABLED — real detections project to the control plane (D80)",
 			slog.String("agent_id", agentID), slog.Bool("durable_ingest", natsx.JetStreamEnabled()))

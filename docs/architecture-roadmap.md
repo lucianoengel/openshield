@@ -542,8 +542,8 @@ the surfaces, then the two exit-criteria tickets.*
   ### ⚠️ THE SIMULATOR HAD THE CAPABILITIES AND THE PRODUCT DID NOT
 
   `cmd/openshield-fleet-agent` says of itself that it *"does NOT classify files or run the pipeline (that
-  is the engine)"*. It was nonetheless the **only** producer in the tree for five features. Two are fixed
-  by D474; **three remain, and each is its own increment**:
+  is the engine)"*. It was nonetheless the **only** producer in the tree for five features. **All five are now
+  fixed (D474–D477)**; the table stays because the detection signature is the reusable part:
 
   | Capability | Ticket | What is broken on a real deployment | Status |
   |---|---|---|---|
@@ -551,7 +551,8 @@ the surfaces, then the two exit-criteria tickets.*
   | version stamp | PLAT-6 | every shipped binary carries no version | ✅ D474 |
   | `SetSpool`/`queue.Open` | D40/D67/T-024 | a broker outage lost endpoint telemetry outright (fleet view, not evidence — the local ledger held) | ✅ D475 |
   | `posture.Publish` | D92/D85, HON-4 | the tamper-lockout denied every REAL endpoint and admitted only the simulation | ✅ D476 |
-  | `attest` + `binaryIntegrity` | ZT-1/D190, PLAT-6 | no real endpoint attests or reports binary integrity | ❌ `CONSOLE-8e` |
+  | `binaryIntegrity` | PLAT-6 | answered only to a local log, on the host that may itself be compromised | ✅ D476 |
+  | `attest` (TPM) | ZT-1/D190 | an attestation-requiring policy refused EVERY real endpoint — the verifier fails closed | ✅ D477 |
 
   **The detection signature is reusable and worth keeping:** diff what `cmd/openshield-fleet-agent` wires
   against what `cmd/openshield-engine` and `cmd/openshield-gateway` wire. PLAT-2 found durable ingest this
