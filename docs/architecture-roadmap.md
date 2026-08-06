@@ -381,7 +381,7 @@ neither.
 | CONSOLE-6 | Keyset pagination | 2 | — | M |
 | CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
 | CONSOLE-8 | Fleet inventory + break-glass surface 🟡 | 2 | 7 | M |
-| CONSOLE-9 | Entity surface over HTTP | 2 | — | M |
+| CONSOLE-9 | Entity surface over HTTP ✅ | 2 | — | M |
 | CONSOLE-10 | Replay + explain over HTTP ⛔ | 2 | **PLAT-5c**, CONSOLE-40 decision | M |
 | CONSOLE-11 | Untrusted-render component + approval hardening | 2 | 3 | M |
 | CONSOLE-25 | Step-up re-authentication | 2 | 3, 11 | S |
@@ -570,8 +570,12 @@ the surfaces, then the two exit-criteria tickets.*
   - **posture** — the gateway's in-memory `PostureStore`, keyed by the **pseudonymous subject** (D23), not
     by `agent_id`. Joining it to the agent roster would re-identify the subject the pseudonym exists to
     protect. ⚠️ This is a privacy boundary to be argued, not a join to be written.
-- **CONSOLE-9 · Entity surface over HTTP** — new work · M. The entity graph (D203) and per-entity risk
-  (D255) are database-only; no HTTP route exposes either.
+- **CONSOLE-9 · Entity surface over HTTP** — ✅ **SHIPPED (D480).** `GET /entities` serves the device⋈user
+  graph joined to per-entity risk, or one entity via `?value=` from either of its names — the console pivot.
+  `xdr.Store` had **no reader at all** (Resolve/LookupAny/Link each answer "what is the id for THIS name");
+  it now has `Entities` and `EntityFor`. Risk is ABSENT where no alert concerns the entity, never zero; the
+  page counts entities rather than join rows; a read never creates; an unknown value is 404. Analyst tier —
+  the graph is pseudonym⋈pseudonym, and re-identification stays `/subject` (the privacy officer's).
 - **CONSOLE-10 · Replay + explain over HTTP** — ⛔ **BLOCKED, and not on effort. Both halves are.**
   `openshieldctl replay` is CLI-only, and moving it to the control plane produces a route that answers a
   question nobody asked. The extraction it needs is done (D479): `cli.ReplayResultFor` returns the

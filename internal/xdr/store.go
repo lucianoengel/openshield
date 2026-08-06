@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -190,4 +191,112 @@ func orderKeys(a, b string) (string, string) {
 		return a, b
 	}
 	return b, a
+}
+
+// Entity is one node of the graph: the coalesced identity, and every alias that resolves to it.
+type Entity struct {
+	ID        int64     `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Aliases   []Alias   `json:"aliases"`
+}
+
+// Alias is one name an entity is known by in some domain.
+type Alias struct {
+	Kind      string    `json:"kind"`
+	Value     string    `json:"value"`
+	FirstSeen time.Time `json:"first_seen"`
+}
+
+// Entities lists the graph, newest entity first, with each one's aliases.
+//
+// THE STORE HAD NO READER AT ALL (CONSOLE-9). Resolve, LookupAny and Link are write-or-lookup-by-value:
+// every one of them answers "what is the id for THIS name", and none of them can answer "what does the
+// platform know". The device⋈user graph has been populated since D203 and nothing could enumerate it, so
+// the coalescing this package exists to perform was invisible to the operators it was performed for.
+func (s *Store) Entities(ctx context.Context, limit int) ([]Entity, error) {
+	if limit <= 0 || limit > maxEntityPage {
+		limit = maxEntityPage
+	}
+	// ORDERED AND BOUNDED IN THE SAME QUERY. Selecting the newest entities and then joining their
+	// aliases keeps the page size a count of ENTITIES rather than of alias rows — a limit that counted
+	// rows would return a partial entity, and half a coalesced identity is worse than none because it
+	// looks complete.
+	rows, err := s.pool.Query(ctx,
+		`SELECT e.id, e.created_at, a.kind, a.value, a.first_seen
+		   FROM (SELECT id, created_at FROM entities ORDER BY id DESC LIMIT $1) e
+		   LEFT JOIN entity_aliases a ON a.entity_id = e.id
+		  ORDER BY e.id DESC, a.kind, a.value`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("xdr: listing entities: %w", err)
+	}
+	defer rows.Close()
+	return scanEntities(rows)
+}
+
+// EntityFor returns the entity a value resolves to, with ALL of its aliases — the pivot an operator
+// makes from one alert: "this device is also known as what, and to whom?"
+//
+// It does NOT create on miss, unlike Resolve. A read that invented an entity would make the graph grow
+// by being looked at, and every typo in a console search would leave a permanent empty node.
+func (s *Store) EntityFor(ctx context.Context, value string) (Entity, bool, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT e.id, e.created_at, a.kind, a.value, a.first_seen
+		   FROM entity_aliases seed
+		   JOIN entities e ON e.id = seed.entity_id
+		   LEFT JOIN entity_aliases a ON a.entity_id = e.id
+		  WHERE seed.value = $1
+		  ORDER BY a.kind, a.value`, value)
+	if err != nil {
+		return Entity{}, false, fmt.Errorf("xdr: resolving %q: %w", value, err)
+	}
+	defer rows.Close()
+	out, err := scanEntities(rows)
+	if err != nil {
+		return Entity{}, false, err
+	}
+	if len(out) == 0 {
+		return Entity{}, false, nil
+	}
+	// One alias belongs to exactly one entity ((kind, value) is the primary key), so a value that
+	// matched at all matched one entity. Several rows here are its aliases, already coalesced above.
+	return out[0], true, nil
+}
+
+// maxEntityPage caps a single read (SEC-8): an uncapped limit is an unbounded query and an unbounded
+// response.
+const maxEntityPage = 500
+
+// scanEntities folds the flat join into one record per entity, preserving row order.
+func scanEntities(rows pgx.Rows) ([]Entity, error) {
+	var out []Entity
+	byID := map[int64]int{}
+	for rows.Next() {
+		var (
+			id        int64
+			createdAt time.Time
+			kind      *string
+			value     *string
+			firstSeen *time.Time
+		)
+		if err := rows.Scan(&id, &createdAt, &kind, &value, &firstSeen); err != nil {
+			return nil, fmt.Errorf("xdr: reading entities: %w", err)
+		}
+		idx, seen := byID[id]
+		if !seen {
+			out = append(out, Entity{ID: id, CreatedAt: createdAt, Aliases: []Alias{}})
+			idx = len(out) - 1
+			byID[id] = idx
+		}
+		// An entity with NO aliases is possible — Resolve creates the entity and the alias in one
+		// transaction, but a merge can leave one behind — and it is reported as an entity with an empty
+		// alias list rather than dropped. A node nothing names is exactly the kind of thing an operator
+		// should be able to see.
+		if kind != nil && value != nil && firstSeen != nil {
+			out[idx].Aliases = append(out[idx].Aliases, Alias{Kind: *kind, Value: *value, FirstSeen: *firstSeen})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("xdr: reading entities: %w", err)
+	}
+	return out, nil
 }

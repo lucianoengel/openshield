@@ -149,6 +149,13 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// Restricting who may read it weakens the control rather than the exposure.
 		mux.Handle("/fleet", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/fleet/controls", s.requireTier(RoleAnalyst, opRead))
+		// CONSOLE-9: the entity graph and per-entity risk. ANALYST, and the privacy boundary matters
+		// because this sits beside the CONSOLE-1 split: the graph is PSEUDONYM⋈PSEUDONYM (IDENT-1/D23),
+		// never a name. Resolving a pseudonym to a person is `/subject`, which is the privacy officer's
+		// and which no tier reaches. This answers "these detections concern one asset" — the analyst's
+		// pivot from an alert, and withholding it from the tier that triages alerts would leave them
+		// reading one asset's activity as several unrelated ones.
+		mux.Handle("/entities", s.requireTier(RoleAnalyst, opRead))
 		// CONSOLE-1: THE DATA-SUBJECT ROUTES ARE THE PRIVACY OFFICER'S, AND NO TIER REACHES THEM.
 		//
 		// `/subject` compiles everything the platform holds about a named individual and sat at the

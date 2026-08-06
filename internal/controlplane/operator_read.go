@@ -227,6 +227,8 @@ func (s *Server) OperatorReadHandler() http.Handler {
 	// CONSOLE-8: the roster, and the register of what has been used to stop the product.
 	mux.HandleFunc("/fleet", s.fleetHandler)
 	mux.HandleFunc("/fleet/controls", s.fleetControlsHandler)
+	// CONSOLE-9: the device⋈user graph and its risk — the analyst's pivot from an alert.
+	mux.HandleFunc("/entities", s.entitiesHandler)
 
 	mux.HandleFunc("/incidents", s.incidentsHandler)
 	mux.HandleFunc("/incidents/ack", s.incidentAckHandler)
