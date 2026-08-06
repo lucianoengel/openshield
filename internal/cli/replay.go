@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/lucianoengel/openshield/internal/core"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
 )
 
@@ -34,74 +33,37 @@ type Dispatcher interface {
 	Dispatch(ctx context.Context, e *corev1.Event) (*corev1.Decision, error)
 }
 
-// Replay re-evaluates one event and compares the result with what the ledger recorded for it.
+// Replay re-evaluates one event and compares the result with what the ledger recorded for it, printing
+// the answer as prose and returning the process exit code.
+//
+// IT IS A RENDERER. The comparison itself lives in ReplayResultFor, which the operator API also calls
+// (CONSOLE-10) — because an operator who gets "REPRODUCED" from the console and "DIVERGED" from the CLI
+// has learned only that the product cannot be trusted about the one thing it claims to be good at.
 func Replay(ctx context.Context, w io.Writer, r Reader, d Dispatcher, e *corev1.Event) int {
-	if e.GetEventId() == "" {
-		fmt.Fprintf(w, "UNAVAILABLE: the supplied event carries no event id, so there is nothing to "+
-			"look up in the ledger.\n")
+	res := ReplayResultFor(ctx, r, d, e)
+	switch res.Outcome {
+	case ReplayUnavailable:
+		fmt.Fprintf(w, "UNAVAILABLE: %s.\n", res.Reason)
 		return ExitUnavailable
-	}
-	entries, err := r.Entries(ctx)
-	if err != nil {
-		fmt.Fprintf(w, "UNAVAILABLE: cannot read the ledger: %v\n", err)
-		return ExitUnavailable
-	}
-
-	var found []*core.Entry
-	for _, ent := range entries {
-		if ent.Decision.GetEventId() == e.GetEventId() {
-			found = append(found, ent)
-		}
-	}
-	switch len(found) {
-	case 0:
-		// NOT a divergence. "The policy produced something different" and "there is no record of this
-		// decision" call for different responses, and collapsing them would let a typo in an event id
-		// read as a policy regression.
-		fmt.Fprintf(w, "UNAVAILABLE: no ledger entry records a decision for event %q.\n"+
-			"  This is not a divergence — there is nothing to compare against.\n", e.GetEventId())
-		return ExitUnavailable
-	case 1:
-	default:
-		// Comparing against an arbitrary one would produce a confident answer about the wrong record.
-		fmt.Fprintf(w, "UNAVAILABLE: %d ledger entries record a decision for event %q.\n"+
-			"  An event that produced several decisions was either re-processed or is a bug; either way\n"+
-			"  the right one to compare against is not this command's guess to make.\n",
-			len(found), e.GetEventId())
-		return ExitUnavailable
-	}
-	recorded := found[0].Decision
-
-	got, derr := d.Dispatch(ctx, e)
-	if derr != nil {
-		fmt.Fprintf(w, "UNAVAILABLE: re-evaluating the event failed: %v\n", derr)
-		return ExitUnavailable
-	}
-
-	if eqErr := core.DecisionsEquivalent(recorded, got); eqErr != nil {
+	case ReplayDiverged:
 		fmt.Fprintf(w, "DIVERGED: replaying event %q does not reproduce the recorded decision.\n"+
-			"  %v\n", e.GetEventId(), eqErr)
+			"  %s\n", res.EventID, res.Reason)
 		// The policy that DECIDED and the policy that just RAN, named side by side. A divergence
 		// explained by "you are running a different policy" is not a regression and must not read like
 		// one.
-		if recorded.GetPolicyId() != got.GetPolicyId() || recorded.GetPolicyVersion() != got.GetPolicyVersion() {
+		if res.RecordedPolicyID != res.ReplayedPolicyID ||
+			res.RecordedPolicyVersion != res.ReplayedPolicyVersion {
 			fmt.Fprintf(w, "  recorded under policy %s@%s; replayed under %s@%s\n",
-				recorded.GetPolicyId(), recorded.GetPolicyVersion(),
-				got.GetPolicyId(), got.GetPolicyVersion())
+				res.RecordedPolicyID, res.RecordedPolicyVersion,
+				res.ReplayedPolicyID, res.ReplayedPolicyVersion)
 		}
-		fmt.Fprintf(w, "  CAUSE IS AMBIGUOUS: the ledger stores no content, so this replay read the "+
-			"input as it is NOW.\n"+
-			"  A divergence means the POLICY changed or the INPUT changed. Establish which before "+
-			"treating it as a regression.\n")
+		fmt.Fprintf(w, "  CAUSE IS AMBIGUOUS: %s\n", res.Caveat)
 		return ExitInconsistent
 	}
 
 	fmt.Fprintf(w, "REPRODUCED: event %q re-evaluates to the recorded decision (%s, confidence %.2f)\n",
-		e.GetEventId(), recorded.GetAction(), recorded.GetConfidence())
-	fmt.Fprintf(w, "  policy %s@%s\n", got.GetPolicyId(), got.GetPolicyVersion())
-	fmt.Fprintf(w, "  NOTE: this establishes that the policy produces the recorded decision FROM THIS "+
-		"INPUT.\n"+
-		"  It does not establish that this input is what the original decision saw — the ledger keeps "+
-		"no content.\n")
+		res.EventID, res.RecordedAction, res.Confidence)
+	fmt.Fprintf(w, "  policy %s@%s\n", res.ReplayedPolicyID, res.ReplayedPolicyVersion)
+	fmt.Fprintf(w, "  NOTE: %s\n", res.Caveat)
 	return ExitOK
 }

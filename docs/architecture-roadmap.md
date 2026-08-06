@@ -382,7 +382,7 @@ neither.
 | CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
 | CONSOLE-8 | Fleet inventory + break-glass surface 🟡 | 2 | 7 | M |
 | CONSOLE-9 | Entity surface over HTTP | 2 | — | M |
-| CONSOLE-10 | Replay + explain over HTTP | 2 | — | M |
+| CONSOLE-10 | Replay + explain over HTTP ⛔ | 2 | **PLAT-5c**, CONSOLE-40 decision | M |
 | CONSOLE-11 | Untrusted-render component + approval hardening | 2 | 3 | M |
 | CONSOLE-25 | Step-up re-authentication | 2 | 3, 11 | S |
 | CONSOLE-29 | Session inventory + revoke | 2 | 3 | S |
@@ -572,9 +572,38 @@ the surfaces, then the two exit-criteria tickets.*
     protect. ⚠️ This is a privacy boundary to be argued, not a join to be written.
 - **CONSOLE-9 · Entity surface over HTTP** — new work · M. The entity graph (D203) and per-entity risk
   (D255) are database-only; no HTTP route exposes either.
-- **CONSOLE-10 · Replay + explain over HTTP** — new work · M. `openshieldctl replay` is CLI-only. Backs the
-  thesis page: which pack and rule won under the most-restrictive-wins lattice (ADR-5), and whether current
-  policy still produces this decision.
+- **CONSOLE-10 · Replay + explain over HTTP** — ⛔ **BLOCKED, and not on effort. Both halves are.**
+  `openshieldctl replay` is CLI-only, and moving it to the control plane produces a route that answers a
+  question nobody asked. The extraction it needs is done (D479): `cli.ReplayResultFor` returns the
+  comparison structurally and the CLI is now a renderer over it, so whoever builds the surface cannot
+  reimplement the comparison — an operator who gets "REPRODUCED" from the console and "DIVERGED" from the
+  CLI has learned only that the product cannot be trusted about the one thing it claims to be good at.
+
+  **⛔ THE REPLAY HALF IS BLOCKED ON `PLAT-5c`.** Replay needs two things and the control plane has
+  neither for an endpoint:
+  1. **The ledger.** `cmd/openshield-server/main.go:6` states it outright — the hash-chained record is
+     *"the agent's local forward-secure ledger, NOT this aggregate."* Each endpoint writes to its own
+     database. The control plane holds the PROJECTED decision in `fleet_telemetry` (`kind='decision'`),
+     which is the same proto but not the tamper-evident record.
+  2. **The policy.** `policy.SelectFromEnv` reads the *server's* `OPENSHIELD_POLICY_*`. Endpoints
+     deliberately do not read the configuration store (`endpoint2.go`: making engine settings dynamic
+     would invalidate the premise D269's signed fleet-control channel rests on), and delivering
+     configuration to endpoints **is `PLAT-5c`, which is open.**
+
+  So a control-plane `/replay` would re-evaluate under the SERVER's policy and compare against an
+  ENDPOINT's decision. On any fleet whose endpoints are not configured identically to the server,
+  **"DIVERGED" is the normal result** — a route that cries wolf until operators stop reading it. Worse
+  than absent.
+
+  The alternative is an ENDPOINT-side HTTP surface, which the engine does not have and which is a much
+  larger decision than this ticket implies (a new listener on every endpoint is new attack surface). That
+  is the owner's call, not this ticket's.
+
+  **⛔ THE EXPLAIN HALF IS BLOCKED ON THE SAME `decision.proto` QUESTION AS `CONSOLE-40`** — and this is
+  the second ticket that question caps. "Which pack and rule won under the most-restrictive-wins lattice"
+  is not recoverable: `selectWinner` returns a `candidate` carrying `name`, and `policy.go:287` builds the
+  `Decision` with `PolicyId: s.id` — the COMPOSITE's id. **`win.name` is discarded.** `Reason` carries
+  `win.reason`, which is operator-authored free text and cannot be an identifier.
 - **CONSOLE-11 · Untrusted-render component + approval hardening** — CONSOLE-3 · M. One `<Untrusted>`
   component is the **only** path telemetry reaches the DOM, with an href scheme allowlist applied inside it
   — "a pivot menu on every value" turns every telemetry string into a potential `href`, and
