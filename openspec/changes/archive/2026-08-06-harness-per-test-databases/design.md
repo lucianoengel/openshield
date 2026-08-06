@@ -27,21 +27,31 @@ The first mutation attempt broke `DSNFor` while the unit test exercised `scopedD
 and the test was proving less than it appeared to. Breaking the naming fails the unit assertions; breaking
 the wiring reproduces the CI error verbatim. Two seams, two mutations.
 
-## A related hazard found while verifying this, and deliberately NOT fixed here
+## A related hazard found while verifying this — CLAIM WITHDRAWN, see below
 
-`go test ./internal/controlplane/ ./internal/xdr/` fails; `go test -p 1 …` passes. Go runs packages in
+> **CORRECTED the same day (see `2026-08-06-correct-parallel-package-claim`). The observation below was
+> real; the mechanism I attached to it was not, and I recorded it without reproducing it. The paragraph is
+> kept rather than deleted so the record shows what was believed and why it did not hold.**
+
+~~`go test ./internal/controlplane/ ./internal/xdr/` fails; `go test -p 1 …` passes. Go runs packages in
 parallel by default, and each of these packages' `requireDB` fixtures DROPs a shared table list — including
 `entities` and `entity_aliases` — on the same database. One package therefore drops tables the other is
-using.
+using.~~
 
-**CI is not exposed:** `go test -race ./...` runs without Postgres, so every database-backed test skips
-there. The hazard is local, for anyone running the DB suite across packages — which is exactly how this
-project verifies persistence.
+**What actually holds:**
 
-It is **not fixed in this change**, and the reason is scope rather than effort: this change is about
-resources a scenario creates INSIDE the integration stack, and that is about package-level fixtures
-sharing one database. Folding them together would make one change that is really two, and the second one
-touches three fixtures.
+- One run of that command did fail. That much is observed.
+- The stated mechanism is wrong. All three database-backed packages — `internal/controlplane`,
+  `internal/xdr` and `internal/store/postgres` — already acquire the **same process-wide advisory lock
+  (920431)** on a dedicated connection held for the binary's lifetime. That serializes precisely the
+  DROP-and-migrate window claimed to be racing.
+- Re-running the same command passes: `ok internal/controlplane 169.4s`, `ok internal/xdr 4.8s`. A prior
+  isolated run of `internal/controlplane` also passed.
+- **The cause of the one failure is unknown.** A candidate, explicitly a hypothesis and not a finding:
+  several long-running background test processes were active in that session, so two binaries for the
+  SAME package may have overlapped.
 
-Recorded so it is a decision rather than a silence. Until it is fixed, run database-backed packages with
-`-p 1` when running more than one.
+The `-p 1` advice is **withdrawn** as unfounded.
+
+**CI is not exposed either way:** `go test -race ./...` runs without Postgres, so every database-backed
+test skips there.
