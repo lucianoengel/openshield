@@ -44,6 +44,8 @@ var EngineFields = []Field{
 		Description: "Local break-glass file. While it EXISTS, this host stops ENFORCING but keeps detecting and auditing \u2014 the answer to \"how do I stop this\" when the control plane is unreachable."},
 	{Key: "OPENSHIELD_BREAK_GLASS_POLL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "10s",
 		Description: "How often the break-glass file is checked. Short: this is the emergency path, and a slow one is not one."},
+	{Key: "OPENSHIELD_HEARTBEAT_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "60s",
+		Description: "How often this endpoint reports that it is alive, along with its enforcement state and inventory (T-018/PLAT-9). The overdue threshold should be several of these. Zero or less DISABLES it, and the endpoint then looks silent to the dead-man's-switch whenever it is merely idle \u2014 which is announced at startup."},
 	{Key: "OPENSHIELD_ENFORCE", Scope: ScopeBootstrap, Kind: KindString, Default: "",
 		Description: "Set to register the file enforcers. Unset is observe-only (D1)."},
 	{Key: "OPENSHIELD_RETENTION_INTERVAL", Scope: ScopeBootstrap, Kind: KindDuration, Default: "24h",

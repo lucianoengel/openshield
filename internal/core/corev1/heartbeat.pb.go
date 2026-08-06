@@ -49,8 +49,20 @@ type Heartbeat struct {
 	// applied_fleet_sequence is the highest fleet-control sequence this agent has applied — the answer to
 	// "which hosts have not caught up yet".
 	AppliedFleetSequence uint64 `protobuf:"varint,5,opt,name=applied_fleet_sequence,json=appliedFleetSequence,proto3" json:"applied_fleet_sequence,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// platform is the build target this agent runs on, "goos/goarch" ("linux/amd64").
+	Platform string `protobuf:"bytes,6,opt,name=platform,proto3" json:"platform,omitempty"`
+	// agent_version is the release this binary was built from, or "dev" for an unstamped local build. It
+	// is deliberately not empty for an unstamped build: "we could not tell" and "this host is running
+	// something nobody released" are different facts and must not look alike on a roster.
+	AgentVersion string `protobuf:"bytes,7,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	// spool_depth is how many envelopes are waiting in the agent's durable offline queue (D40/D67).
+	//
+	// A depth that keeps climbing is the shape of an outage the agent is surviving and an operator has not
+	// noticed — and, past the spool's bound, of evidence being dropped. It is reported on the heartbeat
+	// because the heartbeat is what still gets through when telemetry does not.
+	SpoolDepth    uint64 `protobuf:"varint,8,opt,name=spool_depth,json=spoolDepth,proto3" json:"spool_depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Heartbeat) Reset() {
@@ -118,18 +130,43 @@ func (x *Heartbeat) GetAppliedFleetSequence() uint64 {
 	return 0
 }
 
+func (x *Heartbeat) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *Heartbeat) GetAgentVersion() string {
+	if x != nil {
+		return x.AgentVersion
+	}
+	return ""
+}
+
+func (x *Heartbeat) GetSpoolDepth() uint64 {
+	if x != nil {
+		return x.SpoolDepth
+	}
+	return 0
+}
+
 var File_openshield_v1_heartbeat_proto protoreflect.FileDescriptor
 
 const file_openshield_v1_heartbeat_proto_rawDesc = "" +
 	"\n" +
-	"\x1dopenshield/v1/heartbeat.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe8\x01\n" +
+	"\x1dopenshield/v1/heartbeat.proto\x12\ropenshield.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xca\x02\n" +
 	"\tHeartbeat\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1a\n" +
 	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12;\n" +
 	"\vobserved_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"observedAt\x121\n" +
 	"\x14enforcement_disabled\x18\x04 \x01(\bR\x13enforcementDisabled\x124\n" +
-	"\x16applied_fleet_sequence\x18\x05 \x01(\x04R\x14appliedFleetSequenceB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
+	"\x16applied_fleet_sequence\x18\x05 \x01(\x04R\x14appliedFleetSequence\x12\x1a\n" +
+	"\bplatform\x18\x06 \x01(\tR\bplatform\x12#\n" +
+	"\ragent_version\x18\a \x01(\tR\fagentVersion\x12\x1f\n" +
+	"\vspool_depth\x18\b \x01(\x04R\n" +
+	"spoolDepthB@Z>github.com/lucianoengel/openshield/internal/core/corev1;corev1b\x06proto3"
 
 var (
 	file_openshield_v1_heartbeat_proto_rawDescOnce sync.Once

@@ -100,6 +100,14 @@ plane publishes DATA, it never commands.
 
 **Proven by:** INV-1 in [INVARIANTS.md](../INVARIANTS.md), mutation-verified.
 
+**A correction worth recording, because this document asserted it before it was true (D474):** the
+endpoint's acknowledgement that a fleet control ARRIVED was, until 2026-08-06, written by nothing but
+tests. The projection was reachable only from an unsigned heartbeat subject that no binary published to,
+and the real endpoint agent published no heartbeat at all. An operator issuing a fleet-wide disable could
+not tell a delivered one from an undelivered one on any deployment that has ever run. It is now projected
+from the signed path every agent uses, and only for VERIFIED envelopes — an unverifiable heartbeat cannot
+report a host as "already disabled" and hide a live endpoint from the operator trying to stop it.
+
 **Honest limit, and it is a real one:** this bounds what a compromised control plane can EXPRESS, not
 what it can do with the verbs it legitimately holds. An attacker owning it can CONTAIN every subject in
 the fleet. Four-eyes (SOAR-3) makes that require a second operator's approval; the blast-radius ceiling

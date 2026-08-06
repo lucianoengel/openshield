@@ -33,4 +33,30 @@ message Heartbeat {
   // applied_fleet_sequence is the highest fleet-control sequence this agent has applied — the answer to
   // "which hosts have not caught up yet".
   uint64 applied_fleet_sequence = 5;
+
+  // INVENTORY (CONSOLE-8). "What is running out there, and is it current?" is a question a fleet roster
+  // must answer, and none of it was collected anywhere: the heartbeat carried liveness and enforcement
+  // and nothing describing the agent itself.
+  //
+  // Carried HERE rather than on a new message for the same reason the enforcement acknowledgement is: an
+  // agent that is alive is sending this already, and a second transport would be a second thing that can
+  // silently stop. These are the facts an agent knows about ITSELF with certainty — no attestation claim
+  // and no posture verdict rides here, because both are answers about trustworthiness and a self-report
+  // is not evidence of trustworthiness (D85: a device with no posture published is UNTRUSTED).
+  //
+  // ADDITIVE ONLY. No field above changes number, type or meaning, so a control plane at this version
+  // reads an older agent's heartbeat unchanged and an older control plane ignores these.
+
+  // platform is the build target this agent runs on, "goos/goarch" ("linux/amd64").
+  string platform = 6;
+  // agent_version is the release this binary was built from, or "dev" for an unstamped local build. It
+  // is deliberately not empty for an unstamped build: "we could not tell" and "this host is running
+  // something nobody released" are different facts and must not look alike on a roster.
+  string agent_version = 7;
+  // spool_depth is how many envelopes are waiting in the agent's durable offline queue (D40/D67).
+  //
+  // A depth that keeps climbing is the shape of an outage the agent is surviving and an operator has not
+  // noticed — and, past the spool's bound, of evidence being dropped. It is reported on the heartbeat
+  // because the heartbeat is what still gets through when telemetry does not.
+  uint64 spool_depth = 8;
 }

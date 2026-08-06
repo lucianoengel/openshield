@@ -15,6 +15,14 @@ DIST=${DIST:-dist}
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
 COMMIT=${COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}
 
+# The linker target for the release version. It was `main.version` for as long as this script existed and
+# NO cmd/*/main.go ever declared that variable — the Go linker silently ignores an -X target that does not
+# exist, so every shipped binary carried no version and the flag was decorative. One symbol in one
+# package, because twelve per-command variables is twelve places to forget; internal/doccheck asserts that
+# the path below still names a variable that exists, so a rename fails a test instead of quietly
+# un-stamping the fleet.
+VERSION_SYMBOL="github.com/lucianoengel/openshield/internal/buildinfo.Version"
+
 rm -rf "$DIST"; mkdir -p "$DIST"
 
 # Linux-only commands are built for Linux ONLY; the manifest records each artifact's platform rather than
@@ -26,7 +34,7 @@ build() { # $1=cmd $2=goos $3=goarch
   local out="$DIST/$1_$2_$3"
   CGO_ENABLED=0 GOOS="$2" GOARCH="$3" go build \
     -trimpath -buildvcs=false \
-    -ldflags "-s -w -X main.version=$VERSION" \
+    -ldflags "-s -w -X $VERSION_SYMBOL=$VERSION" \
     -o "$out" "./cmd/$1"
 }
 

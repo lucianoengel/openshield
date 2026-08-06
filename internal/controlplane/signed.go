@@ -138,6 +138,31 @@ func (s *Server) handleSigned(ctx context.Context, data []byte) ingestOutcome {
 		s.projectDecisionAlert(ctx, env.GetPayload())
 	}
 
+	// PLAT-9's ENFORCEMENT ACKNOWLEDGEMENT, PROJECTED FROM THE PATH AGENTS ACTUALLY USE.
+	//
+	// It was projected only by recordHeartbeat, which is subscribed on the PLAINTEXT heartbeat subject —
+	// and NOTHING IN THE TREE PUBLISHES THERE. Every producer signs (SignedPublisher.PublishHeartbeat
+	// wraps the heartbeat in an envelope on SubjectSigned), so this function saw every heartbeat, stored
+	// it as telemetry, and dropped the enforcement fields on the floor.
+	//
+	// The consequence was total rather than partial: `agent_enforcement` was written by nothing but
+	// tests. "Did my fleet disable arrive?" — the question PLAT-9 exists to answer, asked thirty seconds
+	// after turning a security product off across a fleet — read an empty table, `FleetEnforcementState`
+	// returned zeros, and the /metrics gauge read zero forever. Two halves each passed their own tests:
+	// the projection stored what it was handed, and the producer sent what it was asked to.
+	//
+	// ONLY ON THE VERIFIED PATH (D44/D50), for the same reason the decision projection above is: an
+	// unverified publisher must not be able to tell the control plane that a host has stopped enforcing,
+	// which would hide a live endpoint behind a forged "already disabled".
+	if env.GetKind() == "heartbeat" {
+		var h corev1.Heartbeat
+		if err := proto.Unmarshal(env.GetPayload(), &h); err == nil {
+			s.recordEnforcementState(ctx, &h)
+		} else {
+			s.DecodeFailures.Add(1)
+		}
+	}
+
 	// Server-side peer-UEBA (D54), only for a VERIFIED event: an unverified
 	// message is not evidence and must never move a subject's baseline (D50).
 	// Order: Observe THEN evaluate, so the subject's own event is in the baseline

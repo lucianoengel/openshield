@@ -534,7 +534,31 @@ the surfaces, then the two exit-criteria tickets.*
   highest-sequence unexpired control, never stored. Fixed a shipped defect on the way: `fleet-control
   publish` never applied the broker's TLS options, so the emergency disable was unpublishable on any
   mutually-authenticated deployment.
-  **INCREMENT 2 — what the platform does not collect.** `agent_enforcement` (`heartbeat.go:72`) answers
+  **INCREMENT 2 SHIPPED (D474).** `openshield-engine` — the real endpoint agent — now publishes a signed
+  heartbeat carrying its actual kill-switch state, applied fleet sequence, platform, version and spool
+  depth; `handleSigned` projects the PLAT-9 acknowledgement (it had no producer at all); and
+  `internal/buildinfo.Version` is stamped by `release.sh` into a symbol that exists.
+
+  ### ⚠️ THE SIMULATOR HAD THE CAPABILITIES AND THE PRODUCT DID NOT
+
+  `cmd/openshield-fleet-agent` says of itself that it *"does NOT classify files or run the pipeline (that
+  is the engine)"*. It was nonetheless the **only** producer in the tree for five features. Two are fixed
+  by D474; **three remain, and each is its own increment**:
+
+  | Capability | Ticket | What is broken on a real deployment | Status |
+  |---|---|---|---|
+  | `PublishHeartbeat` | T-018/D16, PLAT-9 | idle endpoint ≡ dead endpoint; acknowledgement table empty | ✅ D474 |
+  | version stamp | PLAT-6 | every shipped binary carries no version | ✅ D474 |
+  | `SetSpool`/`queue.Open` | D40/D67/T-024 | **a broker outage loses endpoint telemetry outright** — all three spool-drain integration tests exercise the simulator | ❌ `CONSOLE-8c` |
+  | `posture.Publish` | D92/D85, HON-4 | no endpoint publishes posture, so the D85 tamper-lockout has no input | ❌ `CONSOLE-8d` |
+  | `attest` + `binaryIntegrity` | ZT-1/D190, PLAT-6 | no real endpoint attests or reports binary integrity | ❌ `CONSOLE-8e` |
+
+  **The detection signature is reusable and worth keeping:** diff what `cmd/openshield-fleet-agent` wires
+  against what `cmd/openshield-engine` and `cmd/openshield-gateway` wire. PLAT-2 found durable ingest this
+  way; D474 found three more. A capability demonstrated by the simulation is not a capability the product
+  has.
+
+  **What the platform still does not collect.** `agent_enforcement` (`heartbeat.go:72`) answers
   what agents SAY; the following are absent from the surface because they are absent from the product, and
   they were NOT shipped as empty fields:
   - **platform / version / spool depth** — `Heartbeat` has five fields and none is any of these;

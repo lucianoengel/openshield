@@ -128,6 +128,21 @@ func (p *SignedPublisher) publish(kind string, m proto.Message) error {
 // publish returns an error (unchanged).
 func (p *SignedPublisher) SetSpool(s Spool) { p.spool = s }
 
+// SpoolDepth is how many envelopes are waiting in the durable offline queue, or 0 when no spool is
+// attached. Reported on the heartbeat (CONSOLE-8): a depth that keeps climbing is the shape of an outage
+// the agent is surviving and an operator has not noticed, and past the spool's ceiling it is evidence
+// being dropped.
+//
+// Zero for "no spool attached" is honest here and only here: the caller reporting it is the agent
+// itself, which knows whether it configured one. A control plane reading 0 for an agent that has no
+// spool is reading "nothing is waiting", which is true.
+func (p *SignedPublisher) SpoolDepth() int {
+	if p.spool == nil {
+		return 0
+	}
+	return p.spool.Len()
+}
+
 // storeOrSend publishes directly when connected and the spool is empty, else
 // durably enqueues — preserving FIFO order (a new message goes BEHIND anything
 // already queued, so the control plane sees events in the order produced).

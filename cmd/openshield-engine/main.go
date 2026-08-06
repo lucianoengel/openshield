@@ -16,15 +16,18 @@ import (
 	"fmt"
 	"github.com/lucianoengel/openshield/internal/agent/openipc"
 	"github.com/lucianoengel/openshield/internal/agent/prefilter"
+	"github.com/lucianoengel/openshield/internal/buildinfo"
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/connectors/dns"
 	"github.com/lucianoengel/openshield/internal/connectors/execaudit"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -235,6 +238,7 @@ func main() {
 		eng.SetTelemetry(pub)
 		log.Info("engine: fleet telemetry ENABLED — real detections project to the control plane (D80)",
 			slog.String("agent_id", agentID), slog.Bool("durable_ingest", natsx.JetStreamEnabled()))
+		startHeartbeat(ctx, eng, pub, agentID, log)
 	}
 
 	// The observe path needs no privileged agent. The engine opens a file watcher
@@ -1348,4 +1352,79 @@ func exclusionSet() (core.ExclusionSet, error) {
 	}
 	s.TimeWindows = windows
 	return s, nil
+}
+
+// startHeartbeat gives the REAL endpoint agent a liveness signal (T-018/D16, PLAT-9).
+//
+// UNTIL THIS, THE ONLY HEARTBEAT PRODUCER IN THE TREE WAS THE FLEET SIMULATOR
+// (cmd/openshield-fleet-agent, whose own doc comment says it "does NOT classify files or run the
+// pipeline — that is the engine"). Two shipped features therefore described nothing on a real
+// deployment:
+//
+//   - PLAT-9's enforcement acknowledgement. `agent_enforcement` is written only from a heartbeat, so
+//     "did my fleet disable arrive?" — the question an operator asks thirty seconds after issuing one —
+//     returned an empty table on every deployment running engines.
+//   - The dead-man's-switch. Last-seen advances from verified telemetry, and an IDLE endpoint on a quiet
+//     host produces none, so a healthy machine was indistinguishable from a killed one. That is the
+//     precise false positive the heartbeat exists to prevent — OverdueAgents' own comment says its
+//     threshold should be "several heartbeat intervals", and for this binary there were none.
+//
+// This is the same shape PLAT-2 found in this very file ("Before this, only the fleet SIMULATOR did —
+// meaning every real detection this binary produced went over core NATS at-most-once while the platform
+// claimed durable ingest"). The simulator having a capability is not the product having it.
+func startHeartbeat(ctx context.Context, eng *engine.Engine, pub *natsx.SignedPublisher,
+	agentID string, log *slog.Logger) {
+	interval := envDuration("OPENSHIELD_HEARTBEAT_INTERVAL", 60*time.Second)
+	if interval <= 0 {
+		// TURNING IT OFF IS LOUD (D31). It must be possible — an endpoint with nowhere to send has no
+		// use for it — but a silently absent liveness signal is the exact failure this function fixes,
+		// and the control plane cannot tell "configured off" from "stopped working".
+		log.Warn("engine: HEARTBEAT DISABLED by OPENSHIELD_HEARTBEAT_INTERVAL<=0 — this endpoint will " +
+			"look silent to the dead-man's-switch whenever it is merely idle, and its enforcement state " +
+			"will never reach the fleet roster")
+		return
+	}
+	log.Info("engine: heartbeat ACTIVE — liveness, enforcement state and inventory reach the control "+
+		"plane on an interval, so an idle endpoint is distinguishable from a dead one",
+		slog.Duration("interval", interval), slog.String("version", buildinfo.Version))
+
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				// The ACTUAL enforcement state, from this endpoint's own switch — not "what the last
+				// fleet control told us". An agent disabled by its LOCAL break-glass file reports true
+				// here too, which is information the control plane has no other way to learn.
+				var disabled bool
+				if eng.KillSwitch != nil {
+					disabled, _ = eng.KillSwitch.Engaged()
+				}
+				hb := &corev1.Heartbeat{
+					AgentId:              agentID,
+					ObservedAt:           timestamppb.Now(),
+					EnforcementDisabled:  disabled,
+					AppliedFleetSequence: eng.AppliedFleetSequence(),
+					Platform:             runtime.GOOS + "/" + runtime.GOARCH,
+					AgentVersion:         buildinfo.Version,
+					SpoolDepth:           uint64(pub.SpoolDepth()),
+				}
+				if err := pub.PublishHeartbeat(ctx, hb); err != nil {
+					// LOGGED, NEVER FATAL, and never spooled. This binary's job is to observe, classify
+					// and enforce; a broker that will not take a heartbeat must stop none of it. And a
+					// heartbeat is worthless once late — spooling one would replay a stale liveness
+					// claim on reconnect, which is worse than the gap it papers over.
+					//
+					// The opposite call from D473's fleet-control write, which ABORTS its publish. Same
+					// rule both times: abort when the alternative is acting without a record; continue
+					// when the record is the only thing at stake.
+					log.Warn("engine: heartbeat publish failed — this endpoint will look silent until it "+
+						"succeeds", slog.String("err", err.Error()))
+				}
+			}
+		}
+	}()
 }

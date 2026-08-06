@@ -553,3 +553,17 @@ func (e *Engine) FleetControlCounts() (applied, rejected int64) {
 	}
 	return e.fleetControl.Applied.Load(), e.fleetControl.Rejected.Load()
 }
+
+// AppliedFleetSequence is the highest fleet-control sequence this endpoint has applied — the endpoint's
+// half of PLAT-9's "which hosts have not caught up yet".
+//
+// ZERO IS A REAL ANSWER, not an absent one: an endpoint with no fleet-control channel configured (no
+// broker URL, no control-plane key — a supported deployment, per installKillSwitch) has applied nothing,
+// and that is exactly what it should report. Whether the endpoint is REACHABLE by a control at all is a
+// different question, answered by the heartbeat arriving.
+func (e *Engine) AppliedFleetSequence() uint64 {
+	if e.fleetControl == nil {
+		return 0
+	}
+	return e.fleetControl.AppliedSequence()
+}

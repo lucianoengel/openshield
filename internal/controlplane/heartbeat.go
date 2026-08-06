@@ -68,12 +68,35 @@ func (s *Server) recordEnforcementState(ctx context.Context, h *corev1.Heartbeat
 	if h.GetAgentId() == "" {
 		return
 	}
+	// CONSOLE-8: the inventory rides the same upsert. An agent on an older build sends none of these
+	// fields, and proto3 would give us "" and 0 — both of which are CLAIMS ("" reads as a version we
+	// could not determine, 0 as an empty spool). So an absent field is stored as NULL rather than as its
+	// zero value, and the roster reports it absent.
+	var platform, version *string
+	var spool *int64
+	if p := h.GetPlatform(); p != "" {
+		platform = &p
+	}
+	if v := h.GetAgentVersion(); v != "" {
+		version = &v
+	}
+	// Spool depth has no distinguishable zero on the wire, so it is stored only when the agent
+	// identified itself at all — an agent old enough to omit the platform is old enough to have no
+	// spool depth to report, and a hard 0 from it would look like a healthy empty queue.
+	if platform != nil || version != nil {
+		d := int64(h.GetSpoolDepth())
+		spool = &d
+	}
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO agent_enforcement (agent_id, disabled, applied_sequence, reported_at)
-		 VALUES ($1,$2,$3, now())
+		`INSERT INTO agent_enforcement (agent_id, disabled, applied_sequence, reported_at,
+		                                platform, agent_version, spool_depth)
+		 VALUES ($1,$2,$3, now(), $4,$5,$6)
 		 ON CONFLICT (agent_id) DO UPDATE SET disabled = EXCLUDED.disabled,
-		     applied_sequence = EXCLUDED.applied_sequence, reported_at = now()`,
-		h.GetAgentId(), h.GetEnforcementDisabled(), int64(h.GetAppliedFleetSequence())); err != nil {
+		     applied_sequence = EXCLUDED.applied_sequence, reported_at = now(),
+		     platform = EXCLUDED.platform, agent_version = EXCLUDED.agent_version,
+		     spool_depth = EXCLUDED.spool_depth`,
+		h.GetAgentId(), h.GetEnforcementDisabled(), int64(h.GetAppliedFleetSequence()),
+		platform, version, spool); err != nil {
 		s.DecodeFailures.Add(1)
 	}
 }

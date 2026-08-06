@@ -58,6 +58,12 @@ type FleetAgent struct {
 	EnforcementDisabled *bool      `json:"enforcement_disabled"`
 	AppliedSequence     *uint64    `json:"applied_sequence,omitempty"`
 	ReportedAt          *time.Time `json:"reported_at,omitempty"`
+	// INVENTORY (increment 2), and every one of these is a pointer for the same reason last-seen is: an
+	// agent on an older build reports none of them, and "" / 0 would be claims — a version we could not
+	// determine, or a spool that is comfortably empty. Absent must be readable as absent.
+	Platform     *string `json:"platform,omitempty"`
+	AgentVersion *string `json:"agent_version,omitempty"`
+	SpoolDepth   *int64  `json:"spool_depth,omitempty"`
 }
 
 // FleetRoster is the whole roster plus the fleet-level facts an operator reads it against.
@@ -170,7 +176,8 @@ func (s *Server) Fleet(ctx context.Context, now time.Time) (FleetRoster, error) 
 		`SELECT ai.agent_id, ai.enrolled_at, ai.revoked_at,
 		        (SELECT max(ft.received_at) FROM fleet_telemetry ft
 		          WHERE ft.agent_id = ai.agent_id AND ft.verified = true),
-		        ae.disabled, ae.applied_sequence, ae.reported_at
+		        ae.disabled, ae.applied_sequence, ae.reported_at,
+		        ae.platform, ae.agent_version, ae.spool_depth
 		   FROM agent_identities ai
 		   LEFT JOIN agent_enforcement ae ON ae.agent_id = ai.agent_id
 		  ORDER BY ai.agent_id`)
@@ -183,7 +190,8 @@ func (s *Server) Fleet(ctx context.Context, now time.Time) (FleetRoster, error) 
 		var a FleetAgent
 		var applied *int64
 		if err := rows.Scan(&a.AgentID, &a.EnrolledAt, &a.RevokedAt, &a.LastSeen,
-			&a.EnforcementDisabled, &applied, &a.ReportedAt); err != nil {
+			&a.EnforcementDisabled, &applied, &a.ReportedAt,
+			&a.Platform, &a.AgentVersion, &a.SpoolDepth); err != nil {
 			return roster, fmt.Errorf("controlplane: reading the fleet roster: %w", err)
 		}
 		if applied != nil {
