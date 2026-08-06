@@ -597,19 +597,59 @@ func scanRow(t *testing.T, pool *pgxpool.Pool, sql string, args []any, dest ...a
 // components sharing one database means the second one opens a chain whose keys it does not hold, and
 // refuses to start — correctly, since continuing would either fork the chain or forge it. In a real
 // deployment they are separate hosts; here they need separate databases to be separate hosts.
+//
+// THE NAME IS SCOPED TO THE CALLING TEST, and that is a fix rather than a flourish. The Postgres
+// container is shared across the suite, so two tests both asking for "endpoint" collided with
+// `database "endpoint" already exists` — and only in the FULL SUITE, never under `-run`, which is how it
+// reached CI green-locally. The convention was "pick a name nobody else used", which every new test has
+// to know and which fails silently until someone runs everything at once.
+//
+// Scoping removes the coordination entirely: `endpoint` in two tests is two databases.
 func (s *Stack) DSNFor(t *testing.T, name string) string {
 	t.Helper()
+	db := scopedDBName(t.Name(), name)
 	pool, err := pgxpool.New(Ctx(t), s.DSN)
 	if err != nil {
-		t.Fatalf("connecting to create %s: %v", name, err)
+		t.Fatalf("connecting to create %s: %v", db, err)
 	}
 	defer pool.Close()
-	// The name is a test-supplied constant, never external input; quoted anyway because an identifier
-	// cannot be a bind parameter and "it is a constant today" is how that stops being true.
-	if _, err := pool.Exec(Ctx(t), `CREATE DATABASE "`+strings.ReplaceAll(name, `"`, "")+`"`); err != nil {
-		t.Fatalf("creating database %s: %v", name, err)
+	// The name is test-supplied, never external input; quoted anyway because an identifier cannot be a
+	// bind parameter and "it is a constant today" is how that stops being true.
+	if _, err := pool.Exec(Ctx(t), `CREATE DATABASE "`+strings.ReplaceAll(db, `"`, "")+`"`); err != nil {
+		t.Fatalf("creating database %s: %v", db, err)
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, name)
+	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable", pgUser, pgPassword, s.hostPort, db)
+}
+
+// scopedDBName builds a per-test database identifier that is unique, lower-case and within Postgres's
+// 63-byte limit.
+//
+// TRUNCATION KEEPS THE TAIL OF THE TEST NAME rather than the head: Go test names in this suite share long
+// prefixes ("TestTheRealEngine…"), so cutting from the front is exactly where two names would collide
+// again. The caller's own label is always kept.
+func scopedDBName(testName, name string) string {
+	clean := func(s string) string {
+		var b strings.Builder
+		for _, r := range strings.ToLower(s) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			} else {
+				b.WriteRune('_')
+			}
+		}
+		return strings.Trim(b.String(), "_")
+	}
+	label := clean(name)
+	const maxIdent = 63
+	budget := maxIdent - len(label) - 1
+	scope := clean(testName)
+	if budget < 1 {
+		return label[:min(len(label), maxIdent)]
+	}
+	if len(scope) > budget {
+		scope = scope[len(scope)-budget:]
+	}
+	return scope + "_" + label
 }
 
 // TLSMaterial is a CA plus one leaf certificate, as file paths.
