@@ -106,6 +106,16 @@ the fleet. Four-eyes (SOAR-3) makes that require a second operator's approval; t
 caps how many subjects one publication may target. Neither makes it impossible — they make it noisy and
 bounded.
 
+The loudest of those verbs is the fleet-wide enforcement disable, and until D473 it was also the
+quietest: it was gated by four-eyes and a mandatory TTL, and then left **no record of itself** — its
+issue time, expiry and reason existed only on the wire. An attacker who obtained two operator identities
+could suppress the product across the fleet, and the platform could not afterwards say when, for how
+long, or on what stated pretext. `fleet_controls` closes that: every published control is recorded before
+it is sent, joined to the approval pair that authorized it, and readable at the analyst tier — because
+oversight of a two-person action is weakened, not strengthened, by restricting who may audit it. It does
+not prevent the suppression; it makes it a matter of record, which is the same trade the ledger makes
+everywhere else in this document.
+
 ## Compromised gateway
 
 **What it gets:** plaintext of every proxied flow it terminates, and the ability to allow what should be

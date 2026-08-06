@@ -145,3 +145,14 @@ func RequireTierForTestHandler(s *Server, minRole string, h http.Handler) http.H
 func RequirePrivacyOfficerForTestHandler(s *Server, h http.Handler) http.Handler {
 	return s.requirePrivacyOfficer(h)
 }
+
+// RecordFleetControlForTest exposes the break-glass register's writer, so a CONSOLE-8 derivation test can
+// seed controls at chosen sequences and expiries without standing up a broker, a signer and a four-eyes
+// approval for each one. The record-on-publish test drives the REAL path; these seed the thing that path
+// writes, which is what the derivation is a function of.
+func (s *Server) RecordFleetControlForTest(t interface{ Fatalf(string, ...any) }, id string,
+	verb corev1.FleetVerb, seq uint64, issued, expires time.Time, reason string) {
+	if err := s.recordFleetControl(context.Background(), id, verb, seq, issued, expires, reason); err != nil {
+		t.Fatalf("recording fleet control %s: %v", id, err)
+	}
+}

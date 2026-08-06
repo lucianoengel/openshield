@@ -89,7 +89,7 @@ func requireDB(t *testing.T) *pgxpool.Pool {
 	// leftovers from a previous run would make sequence numbers unpredictable.
 	dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer dropCancel()
-	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, case_notes, cases, approvals, legal_holds, incidents, incident_alerts, incident_escalations, saved_searches, agent_enforcement, config_changes, config_revisions, config_settings, itsm_tickets, runner_actions, ioc_indicators, ioc_feeds, playbook_steps, playbook_runs, incident_annotations, schema_migrations CASCADE`); err != nil {
+	if _, err := pool.Exec(dropCtx, `DROP TABLE IF EXISTS investigation_views, agent_identities, enrollment_tokens, audit_entries, key_epochs, anchors, fleet_telemetry, peer_alerts, case_notes, cases, approvals, legal_holds, incidents, incident_alerts, incident_escalations, saved_searches, agent_enforcement, fleet_controls, config_changes, config_revisions, config_settings, itsm_tickets, runner_actions, ioc_indicators, ioc_feeds, playbook_steps, playbook_runs, incident_annotations, schema_migrations CASCADE`); err != nil {
 		t.Fatalf("clearing schema: %v", err)
 	}
 	t.Cleanup(pool.Close)

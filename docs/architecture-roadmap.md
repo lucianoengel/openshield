@@ -380,7 +380,7 @@ neither.
 | CONSOLE-5 | View-audit repair + `investigation_views` retention | 2 | 1 | M |
 | CONSOLE-6 | Keyset pagination | 2 | — | M |
 | CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
-| CONSOLE-8 | Fleet inventory + break-glass surface | 2 | 7 | M |
+| CONSOLE-8 | Fleet inventory + break-glass surface 🟡 | 2 | 7 | M |
 | CONSOLE-9 | Entity surface over HTTP | 2 | — | M |
 | CONSOLE-10 | Replay + explain over HTTP | 2 | — | M |
 | CONSOLE-11 | Untrusted-render component + approval hardening | 2 | 3 | M |
@@ -526,10 +526,25 @@ the surfaces, then the two exit-criteria tickets.*
   `degraded` is derived from the list so the two cannot disagree; an empty list serializes as `[]`.
   `SetLeaderHeld` is wired from the real election and proven so by the integration test against the
   shipped binary. Archived `2026-08-04-console-7-operator-health`, specs synced.
-- **CONSOLE-8 · Fleet inventory + break-glass surface** — CONSOLE-7 · M. Agent identity, platform, version,
-  last-seen, attestation verdict + TTL, posture, spool depth — and **which agents are enforcement-suppressed,
-  since when, by whom, until when** from `agent_enforcement` (`heartbeat.go:72`). `INVARIANTS.md:131`:
-  *"'How do I stop this?' is the question a CISO asks before 'what does it detect?'"*
+- **CONSOLE-8 · Fleet inventory + break-glass surface** — 🟡 **INCREMENT 1 SHIPPED (D473).** `GET /fleet`
+  (roster: enrolment, revocation, last VERIFIED telemetry, silence, the agent's own enforcement report and
+  applied sequence) and `GET /fleet/controls` (the break-glass register), both at analyst tier.
+  `fleet_controls` records every published control between the four-eyes gate and the wire, fatally; the
+  register joins `approvals` for the pair that authorized it; suppression is DERIVED from the
+  highest-sequence unexpired control, never stored. Fixed a shipped defect on the way: `fleet-control
+  publish` never applied the broker's TLS options, so the emergency disable was unpublishable on any
+  mutually-authenticated deployment.
+  **INCREMENT 2 — what the platform does not collect.** `agent_enforcement` (`heartbeat.go:72`) answers
+  what agents SAY; the following are absent from the surface because they are absent from the product, and
+  they were NOT shipped as empty fields:
+  - **platform / version / spool depth** — `Heartbeat` has five fields and none is any of these;
+    `agent_version` appears nowhere in the tree. Additive proto fields + agent wiring + a projection. This
+    is the next increment and it is small.
+  - **attestation verdict + TTL** — lives in the gateway's in-memory `AttestationVerifier`, in another
+    process. Surfacing it needs a transport, not a query.
+  - **posture** — the gateway's in-memory `PostureStore`, keyed by the **pseudonymous subject** (D23), not
+    by `agent_id`. Joining it to the agent roster would re-identify the subject the pseudonym exists to
+    protect. ⚠️ This is a privacy boundary to be argued, not a join to be written.
 - **CONSOLE-9 · Entity surface over HTTP** — new work · M. The entity graph (D203) and per-entity risk
   (D255) are database-only; no HTTP route exposes either.
 - **CONSOLE-10 · Replay + explain over HTTP** — new work · M. `openshieldctl replay` is CLI-only. Backs the

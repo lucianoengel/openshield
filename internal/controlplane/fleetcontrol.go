@@ -113,11 +113,28 @@ func (s *Server) PublishFleetControlSeq(ctx context.Context, verb corev1.FleetVe
 		ttl = DefaultFleetControlTTL
 	}
 	now := s.now()
+	expires := now.Add(ttl)
 	payload, err := proto.Marshal(&corev1.FleetControl{
 		ControlId: id, Verb: verb, Version: core.WireVersion, Sequence: seq,
-		IssuedAt: timestamppb.New(now), ExpiresAt: timestamppb.New(now.Add(ttl)), Reason: reason,
+		IssuedAt: timestamppb.New(now), ExpiresAt: timestamppb.New(expires), Reason: reason,
 	})
 	if err != nil {
+		return "", err
+	}
+
+	// CONSOLE-8: RECORD BEFORE SENDING, AND FATALLY.
+	//
+	// Until this, the issued_at/expires_at/reason above existed only on the wire — an operator who found
+	// enforcement suppressed could recover none of them. Three orderings were possible: recording before
+	// the approval gate would list disables that were refused; recording after the publish would let a
+	// successful publish and a failed write leave the fleet suppressed with nothing saying so. Here, the
+	// only failure is a control recorded and not sent — which over-reports suppression, and an operator
+	// who investigates finds agent_enforcement showing every agent still enforcing.
+	//
+	// Unlike recordEnforcementState (best-effort, because a heartbeat's purpose is liveness and must not
+	// be lost to a projection failure), this ABORTS the publish. A fleet disable has no competing purpose:
+	// refusing to turn the product off because we cannot say that we did is the correct trade.
+	if err := s.recordFleetControl(ctx, id, verb, seq, now, expires, reason); err != nil {
 		return "", err
 	}
 	signed, err := proto.Marshal(&corev1.SignedUpdate{Payload: payload, Signature: ed25519.Sign(signer, payload)})

@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 
 	"github.com/lucianoengel/openshield/internal/controlplane"
 	corev1 "github.com/lucianoengel/openshield/internal/core/corev1"
+	"github.com/lucianoengel/openshield/internal/transport/tlsconf"
 )
 
 // The operator surface for the FLEET-WIDE emergency disable (PLAT-9).
@@ -96,6 +98,25 @@ func fleetControl(dsn string, args []string) int {
 			return 1
 		}
 		srv.SetIntentSigner(key)
+
+		// MUTUAL TLS TO THE BROKER (D55), which this command did not do — and could not publish without.
+		//
+		// The long-running server applies these options; this subcommand builds its own Server and never
+		// did, so on any deployment following the mutual-TLS posture the product recommends, publishing a
+		// fleet-wide disable failed at the handshake with an x509 error. "How do I stop this?" had no
+		// answer on precisely the deployments that hardened themselves — the D375 shape again, one
+		// command later, and found only by running the CLI against the TLS integration stack.
+		//
+		// The same loud-or-nothing rule as the server: a partial configuration is an error, never a
+		// silent fall-back to plaintext that would fail later and less clearly.
+		tlsConf, terr := tlsconf.LoadFromEnv()
+		if terr != nil {
+			fmt.Fprintln(os.Stderr, "fleet-control: TLS configuration:", terr)
+			return 1
+		}
+		if tlsConf != nil {
+			srv.SetNATSOptions(nats.Secure(tlsConf.ClientConfig()))
+		}
 		natsURL := env("OPENSHIELD_NATS_URL", "nats://127.0.0.1:4222")
 		if cerr := srv.Connect(natsURL); cerr != nil {
 			fmt.Fprintln(os.Stderr, "fleet-control: connecting to the broker:", cerr)

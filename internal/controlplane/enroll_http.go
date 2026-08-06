@@ -135,6 +135,20 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// console needs to know whether the answers it is giving them can be trusted, and an empty
 		// incident queue on a fresh install is indistinguishable from broken ingest without it.
 		mux.Handle("/health", s.requireTier(RoleAnalyst, opRead))
+		// CONSOLE-8: the fleet roster and the break-glass register. ANALYST for both, and the
+		// uncomfortable half is real: a list of which endpoints are not enforcing is a target list, and
+		// the threat model names a malicious insider holding an operator role. It is still right.
+		//
+		// The roster is ALREADY at this tier — `/overdue` returns every enrolled agent id and how long it
+		// has been silent, the same target list by absence instead of by suppression — so gating this
+		// higher would be a control with a door beside it. And an analyst who does not know a host was not
+		// enforcing will misread the evidence that host produced: the same alert means something
+		// categorically different on a suppressed endpoint.
+		//
+		// The register is oversight of an action two named people already took under four-eyes.
+		// Restricting who may read it weakens the control rather than the exposure.
+		mux.Handle("/fleet", s.requireTier(RoleAnalyst, opRead))
+		mux.Handle("/fleet/controls", s.requireTier(RoleAnalyst, opRead))
 		// CONSOLE-1: THE DATA-SUBJECT ROUTES ARE THE PRIVACY OFFICER'S, AND NO TIER REACHES THEM.
 		//
 		// `/subject` compiles everything the platform holds about a named individual and sat at the
