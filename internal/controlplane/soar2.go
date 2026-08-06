@@ -117,21 +117,61 @@ var CorrelationFailures atomic.Int64
 // rule it derives from — it only ever adds constraints — so treating hunts as a replacement would lose
 // the case they cannot anticipate: three domains lighting up on one asset in a shape nobody wrote a
 // rule for, which is the case the breadth rule exists for.
+// isLoopStop reports whether an error is this loop's own cancellation rather than a real failure.
+//
+// BOTH CONDITIONS ARE REQUIRED, and testing the context alone was the bug in the first version.
+// `leader.go` cancels the leader context when its Postgres ping fails, so a database outage produces a
+// real pgx error AND a cancelled context in the same window; a context-only guard discards the genuine
+// failure the metric exists for. Requiring the error to BE the cancellation keeps every other failure —
+// schema skew after a migration, a deadlock, pool exhaustion, a malformed operator-authored hunt —
+// counted, while still exempting the demotion and shutdown that made this guard necessary.
+func isLoopStop(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, context.Canceled)
+}
+
 func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Duration,
 	rules func() (CorrelationRule, CrossDomainRule), hunts func() []CrossDomainRule, log *slog.Logger) {
+	// STOPPING IS NOT FAILING — BUT ONLY THE STOP ITSELF IS EXEMPT.
+	//
+	// A lost leadership (ADR-3) or a process shutdown cancels this loop's context out from under whatever
+	// query is in flight. That in-flight call returns "context canceled", and counting it says
+	// `openshield_correlation_failures_total` > 0, whose published meaning is "incidents that should have
+	// been joined were not, and an attack spanning them reads as unrelated noise". A demoted replica or a
+	// clean restart would raise that alarm every time the stop landed mid-tick, and a counter that fires on
+	// an ordinary shutdown is one an operator learns to ignore — costing exactly the signal it carries.
+	//
+	// THE CONJUNCTION IS LOAD-BEARING, and the first version of this guard got it wrong by testing the
+	// context alone. `leader.go` CANCELS THE LEADER CONTEXT WHEN ITS POSTGRES PING FAILS, so a database
+	// outage produces both a real pgx error ("conn closed") and a cancellation in the same window. A guard
+	// keyed on the context alone then discards a genuine correlation failure — the exact event the metric
+	// exists for — and, because the log lived inside the same branch, discarded the log with it. No count,
+	// no line, nothing. Requiring the error to BE the cancellation keeps every other failure counted.
+	//
+	// The tick IS retried: `leader.Run` re-acquires after a demotion and calls onElected again in the same
+	// process, so nothing is permanently lost — but that is a reason the exemption is safe, not a reason to
+	// widen it.
+	stopping := func(err error) bool { return isLoopStop(ctx, err) }
 	retain.DynamicLoop(ctx, interval, func(c context.Context) {
 		burst, cross := rules()
 		now := s.now()
 		if _, err := s.MaterializeIncidents(c, burst, now); err != nil {
-			CorrelationFailures.Add(1)
+			// LOGGED EVEN WHEN NOT COUNTED: not counting is about not paging; not recording is a
+			// different decision, and an aborted tick that leaves no trace is unexplainable later.
 			if log != nil {
-				log.Error("scheduled correlation (burst rule) failed", slog.Any("err", err))
+				log.Error("scheduled correlation (burst rule) failed", slog.Any("err", err), slog.Bool("stopping", stopping(err)))
+			}
+			if !stopping(err) {
+				CorrelationFailures.Add(1)
 			}
 		}
 		if _, err := s.MaterializeCrossDomainIncidents(c, cross, now); err != nil {
-			CorrelationFailures.Add(1)
+			// LOGGED EVEN WHEN NOT COUNTED: not counting is about not paging; not recording is a
+			// different decision, and an aborted tick that leaves no trace is unexplainable later.
 			if log != nil {
-				log.Error("scheduled correlation (cross-domain rule) failed", slog.Any("err", err))
+				log.Error("scheduled correlation (cross-domain rule) failed", slog.Any("err", err), slog.Bool("stopping", stopping(err)))
+			}
+			if !stopping(err) {
+				CorrelationFailures.Add(1)
 			}
 		}
 		// XDR-4c: every configured hunt, on the same tick and the same window as the breadth rule
@@ -141,10 +181,16 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Du
 		if hunts != nil {
 			for _, h := range hunts() {
 				if _, err := s.MaterializeCrossDomainIncidents(c, h, now); err != nil {
-					CorrelationFailures.Add(1)
+					// A BROKEN HUNT IS OPERATOR INPUT, and its failure is the only signal that a hunt
+					// matches nothing because it is malformed rather than because nothing happened. It
+					// is logged whatever the loop is doing.
 					if log != nil {
 						log.Error("scheduled correlation (hunt) failed",
-							slog.String("hunt", h.Name), slog.Any("err", err))
+							slog.String("hunt", h.Name), slog.Any("err", err),
+							slog.Bool("stopping", stopping(err)))
+					}
+					if !stopping(err) {
+						CorrelationFailures.Add(1)
 					}
 				}
 			}
@@ -153,9 +199,13 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Du
 		// risk the access proxy applies to that asset's next request — the T2 loop (D89/D91) closed ACROSS
 		// domains rather than within peer-UEBA alone.
 		if _, err := s.PublishEntityRisk(c, cross.Window, now); err != nil {
-			CorrelationFailures.Add(1)
+			// LOGGED EVEN WHEN NOT COUNTED: not counting is about not paging; not recording is a
+			// different decision, and an aborted tick that leaves no trace is unexplainable later.
 			if log != nil {
-				log.Error("scheduled entity-risk publication failed", slog.Any("err", err))
+				log.Error("scheduled entity-risk publication failed", slog.Any("err", err), slog.Bool("stopping", stopping(err)))
+			}
+			if !stopping(err) {
+				CorrelationFailures.Add(1)
 			}
 		}
 	})

@@ -3,9 +3,9 @@ package controlplane_test
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -32,18 +32,16 @@ func TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest(t *testing.T) {
 	recordAlert(t, srv, "hips", subject, controlplane.SeverityHigh, now.Add(-4*time.Minute))
 	recordAlert(t, srv, "nips", subject, controlplane.SeverityHigh, now.Add(-2*time.Minute))
 
-	loopCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	// PLAT-5b: the interval and rules are read PER TICK from providers, so a configuration change reaches
-	// a running loop without a restart.
-	go srv.RunCorrelationLoop(loopCtx,
+	// a running loop without a restart. The helper is what STOPS the loop before the pool closes — see
+	// its comment, and the assertion on CorrelationFailures at the end of this test.
+	startCorrelationLoop(t, srv,
 		func() time.Duration { return 50 * time.Millisecond },
 		func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
 			return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
 				controlplane.CrossDomainRule{Window: 30 * time.Minute, MinDomains: 2}
 		},
-		nil, // XDR-4c: no hunts configured — the breadth rule alone, the pre-hunt behaviour
-		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+		nil) // XDR-4c: no hunts configured — the breadth rule alone, the pre-hunt behaviour
 
 	// An incident appears without anyone asking for one.
 	var incidents int
@@ -60,8 +58,99 @@ func TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest(t *testing.T) {
 		t.Errorf("the scheduled loop paged %d times for one incident, want 1 — a loop that re-pages every "+
 			"tick is worse than no loop", got)
 	}
-	if controlplane.CorrelationFailures.Load() != 0 {
-		t.Errorf("scheduled correlation reported %d failures", controlplane.CorrelationFailures.Load())
+	// CorrelationFailures is a PACKAGE-LEVEL counter, and this test deliberately does not reset it.
+	// Resetting would make the assertion pass whether or not some other test in this binary left a
+	// correlation loop running — which is precisely how this went red intermittently before
+	// startCorrelationLoop existed, and a reset would have hidden the leak rather than fixed it. The
+	// cost of not resetting is that the failure can be somebody else's, so the message says so.
+	if n := controlplane.CorrelationFailures.Load(); n != 0 {
+		t.Errorf("scheduled correlation reported %d failures — either this loop failed, or an EARLIER "+
+			"test in this package leaked a RunCorrelationLoop goroutine that is still ticking against "+
+			"a closed pool; start such loops with startCorrelationLoop, which joins them", n)
+	}
+}
+
+// STOPPING THE LOOP IS NOT A CORRELATION FAILURE.
+//
+// The loop runs in the leader's context, so losing leadership (ADR-3) or shutting the process down
+// cancels it — out from under whatever materialization is in flight, which then returns
+// "context canceled". Counting that raised `openshield_correlation_failures_total`, whose published
+// meaning is "incidents that should have been joined were not, and an attack spanning them reads as
+// unrelated noise". Every demoted replica and every clean restart that landed mid-tick therefore
+// reported broken detection, and an alarm that fires on an ordinary shutdown is one an operator learns
+// to ignore.
+//
+// This was found while fixing a flaky test, and it is a PRODUCT defect rather than a test artifact:
+// it fires in a running deployment on exactly the events a deployment performs most often.
+//
+// THE CANCELLATION IS FIRED FROM INSIDE THE PER-TICK RULES PROVIDER, which is the deterministic form of
+// "the stop landed mid-tick": every query in that tick then runs on a context that is already done. The
+// first tick is left alone and its incident is asserted, so the loop is proven to be doing real work
+// before the tick that gets cancelled — a test where nothing ran would count nothing either, and pass
+// while proving nothing. Waiting for the same collision to happen by luck was tried first and failed the
+// mutation 4 times in 10: flaky in the direction of PASSING, which is the failure this change exists to
+// remove.
+//
+// Mutation: drop the `stopping()` guard from the loop → the cancelled tick's errors are counted → this
+// FAILS.
+func TestStoppingTheCorrelationLoopIsNotAFailure(t *testing.T) {
+	pool := requireDB(t)
+	srv := controlplane.New(pool)
+	srv.SetNotifier(&countingSink{})
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	subject := pseudonym.Of("agent-loop-stop")
+	recordAlert(t, srv, "hips", subject, controlplane.SeverityHigh, now.Add(-4*time.Minute))
+	recordAlert(t, srv, "nips", subject, controlplane.SeverityHigh, now.Add(-2*time.Minute))
+
+	// A DELTA, not a reset. The counter is package-level and another test's assertion depends on its
+	// absolute value; zeroing it here would break that one's ability to see a leak. A delta asserts
+	// what this test is about — that THIS stop counted nothing — without touching what anyone else sees.
+	before := controlplane.CorrelationFailures.Load()
+
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	var ticks int
+	go func() {
+		defer close(done)
+		srv.RunCorrelationLoop(loopCtx,
+			func() time.Duration { return time.Millisecond },
+			func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
+				// Called once at the top of every tick. The SECOND tick is the one that gets stopped,
+				// so the first has already materialized against a healthy pool.
+				if ticks++; ticks == 2 {
+					cancel()
+				}
+				return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
+					controlplane.CrossDomainRule{Window: 30 * time.Minute, MinDomains: 2}
+			},
+			nil,
+			slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		cancel()
+		t.Fatal("the correlation loop did not return after its context was cancelled")
+	}
+
+	// The first tick did real work, so the second tick's queries were real queries that a cancelled
+	// context aborted — not a loop that had nothing to do.
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM incidents WHERE kind='cross_domain'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("no incident was materialized before the stop — this test would then be asserting that " +
+			"a loop which did nothing counted nothing")
+	}
+
+	if got := controlplane.CorrelationFailures.Load(); got != before {
+		t.Errorf("stopping the loop counted %d correlation failure(s) — a lost leadership or a clean "+
+			"shutdown is not a detection failure, and a counter that rises on one is a false alarm on "+
+			"the metric that exists to say detection stopped working", got-before)
 	}
 }
 
@@ -170,5 +259,45 @@ func TestTransitionEndpointOutcomes(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("agent transition = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestARealFailureDuringShutdownIsStillCounted.
+//
+// The first version of the stop guard tested the CONTEXT ALONE, and that is unsafe for a reason the
+// reviewer traced: `leader.go` cancels the leader context when its Postgres ping fails, so a database
+// outage produces a genuine pgx error AND a cancelled context in the same window. A context-only guard
+// then discards the very failure `openshield_correlation_failures_total` exists to report — and, because
+// the log call sat inside the same branch, discarded the log with it. No count, no line, nothing.
+//
+// Mutation: widen isLoopStop back to `ctx.Err() != nil` → the "real error while stopping" case FAILS.
+// Mutation: narrow it to `errors.Is(err, context.Canceled)` alone → the "cancelled but live ctx" case
+// FAILS, which is what keeps the exemption tied to THIS loop stopping rather than to any cancellation.
+func TestARealFailureDuringShutdownIsStillCounted(t *testing.T) {
+	live := context.Background()
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	dbDown := errors.New("conn closed")
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{"the loop's own cancellation, while stopping", stopped, context.Canceled, true},
+		{"a REAL database failure that lands while stopping", stopped, dbDown, false},
+		{"a real failure on a live loop", live, dbDown, false},
+		// A cancellation arriving on a LIVE loop is somebody else's cancelled request, not this loop
+		// shutting down — a real fault, and it must stay counted.
+		{"a cancellation from elsewhere, loop still live", live, context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := controlplane.IsLoopStopForTest(tc.ctx, tc.err); got != tc.want {
+				t.Errorf("isLoopStop = %v, want %v — %q", got, tc.want,
+					"a guard that exempts this case either pages on every restart or hides a real outage")
+			}
+		})
 	}
 }

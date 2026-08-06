@@ -2,8 +2,6 @@ package controlplane_test
 
 import (
 	"context"
-	"log/slog"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -179,17 +177,14 @@ func TestTheScheduledLoopRaisesANarrativeIncidentAndNamesTheHunt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loopCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go srv.RunCorrelationLoop(loopCtx,
+	startCorrelationLoop(t, srv,
 		func() time.Duration { return 50 * time.Millisecond },
 		func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
 			return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
 				controlplane.CrossDomainRule{Window: 30 * time.Minute, MinDomains: 2}
 		},
 		// Read per tick, exactly as the server reads the hunt file.
-		func() []controlplane.CrossDomainRule { return hunts.Rules(30*time.Minute, 2, 0) },
-		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+		func() []controlplane.CrossDomainRule { return hunts.Rules(30*time.Minute, 2, 0) })
 
 	chainedEntity := entityOf(t, srv, chained)
 	otherEntity := entityOf(t, srv, other)

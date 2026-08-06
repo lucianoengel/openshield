@@ -75,6 +75,14 @@ const socksHandshakeTimeout = 20 * time.Second
 
 // socksCounters are the observable outcomes. Refusals matter more than successes: a rising refusal count
 // on a mutually-authenticated listener is somebody presenting tickets they do not hold.
+//
+// EVERY REFUSAL BELOW IS COUNTED BEFORE IT IS ANSWERED, and that order is deliberate. These counters are
+// the only evidence a refusal happened at all — the connection is closed and the client is gone — so a
+// count made after the reply leaves anyone who reacts to the refusal and then reads the count (a test, a
+// probe, an operator reproducing the case with the dashboard open) reading a number that is wrong for as
+// long as this goroutine is not scheduled. Counting first costs nothing and makes the count sound: a peer
+// cannot hold the answer without the count already being made. The CONNECT tunnel beside this one has
+// always counted first; SOCKS was the deviation, and it was found as an intermittently red CI run.
 type socksCounters struct {
 	Refused    atomic.Int64
 	Revoked    atomic.Int64
@@ -130,8 +138,9 @@ func (p *AccessProxy) handleSOCKS(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if err := socksNegotiateMethod(conn); err != nil {
-		p.socks.Refused.Add(1)
+	// socksNegotiateMethod counts its OWN refusals: it writes the "no acceptable method" answer itself,
+	// so a caller counting afterwards could not put the count before the write.
+	if err := socksNegotiateMethod(conn, &p.socks); err != nil {
 		return
 	}
 	tok, err := socksReadUserPass(conn)
@@ -142,8 +151,8 @@ func (p *AccessProxy) handleSOCKS(ctx context.Context, conn net.Conn) {
 	userSubject, userRole, rerr := p.tickets.Redeem(tok, deviceSubject)
 	if rerr != nil {
 		// The RFC 1929 failure status, so a client reports "authentication failed" rather than hanging.
-		_, _ = conn.Write([]byte{authVersion, 0x01})
 		p.socks.Refused.Add(1)
+		_, _ = conn.Write([]byte{authVersion, 0x01})
 		p.logger.Warn("gateway: SOCKS ticket refused", "device", deviceSubject)
 		return
 	}
@@ -160,8 +169,8 @@ func (p *AccessProxy) handleSOCKS(ctx context.Context, conn net.Conn) {
 		// BIND asks the gateway to open a listening socket into the protected network on a client's
 		// say-so; UDP ASSOCIATE is a second data path with its own decision points. Both are refused
 		// with the protocol's own code, so a client is told rather than left to time out.
-		_ = socksReply(conn, repCommandNotSupported)
 		p.socks.Refused.Add(1)
+		_ = socksReply(conn, repCommandNotSupported)
 		p.logger.Info("gateway: SOCKS command refused (only CONNECT is supported)",
 			"cmd", cmd, "device", deviceSubject)
 		return
@@ -172,8 +181,8 @@ func (p *AccessProxy) handleSOCKS(ctx context.Context, conn net.Conn) {
 	// constrain the name and leave the address free: an open relay wearing a catalogue.
 	svc, ok := p.catalog.Resolve(host)
 	if !ok || svc.tcpAddr == "" {
-		_ = socksReply(conn, repNotAllowed)
 		p.socks.Refused.Add(1)
+		_ = socksReply(conn, repNotAllowed)
 		p.logger.Info("gateway: SOCKS target is not a catalogued tcp service",
 			"host", host, "device", deviceSubject)
 		return
@@ -193,22 +202,22 @@ func (p *AccessProxy) handleSOCKS(ctx context.Context, conn net.Conn) {
 	dec, derr := decide(ctx)
 	if derr != nil || dec == nil {
 		// FAIL CLOSED, like every access decision (D87).
-		_ = socksReply(conn, repGeneralFailure)
 		p.socks.Refused.Add(1)
+		_ = socksReply(conn, repGeneralFailure)
 		p.logger.Error("gateway: SOCKS decision failed, denying (fail-closed)", "err", derr,
 			"service", svc.name)
 		return
 	}
 	if dec.GetAction() != corev1.Action_ACTION_ALLOW {
-		_ = socksReply(conn, repNotAllowed)
 		p.socks.Refused.Add(1)
+		_ = socksReply(conn, repNotAllowed)
 		return
 	}
 
 	upstream, uerr := net.DialTimeout("tcp", svc.tcpAddr, tunnelDialTimeout)
 	if uerr != nil {
-		_ = socksReply(conn, repHostUnreachable)
 		p.socks.DialFailed.Add(1)
+		_ = socksReply(conn, repHostUnreachable)
 		p.logger.Error("gateway: SOCKS dial failed", "service", svc.name, "err", uerr)
 		return
 	}
@@ -301,24 +310,37 @@ func socksDeviceSubject(conn net.Conn) (string, error) {
 // It REFUSES a client that does not offer it, rather than falling back to "no authentication". A SOCKS
 // proxy into a protected network that accepts unauthenticated clients is an open relay, and the fallback
 // is the one a permissive default would take.
-func socksNegotiateMethod(conn net.Conn) error {
+//
+// IT COUNTS ITS OWN REFUSALS rather than returning an error for the caller to count, and that is not
+// tidiness — it is the only place the count can be made BEFORE the answer. This function writes the
+// "no acceptable method" byte itself, so a caller counting on the way out of it necessarily counts after
+// the client already has the refusal. The caller therefore counts NONE of these; counting in both places
+// would double every refused negotiation.
+func socksNegotiateMethod(conn net.Conn, c *socksCounters) error {
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(conn, head); err != nil {
+		c.Refused.Add(1)
 		return err
 	}
 	if head[0] != socksVersion {
+		c.Refused.Add(1)
 		return fmt.Errorf("gateway: SOCKS version %d, want 5", head[0])
 	}
 	methods := make([]byte, int(head[1]))
 	if _, err := io.ReadFull(conn, methods); err != nil {
+		c.Refused.Add(1)
 		return err
 	}
 	for _, m := range methods {
 		if m == methodUserPass {
-			_, err := conn.Write([]byte{socksVersion, methodUserPass})
-			return err
+			if _, err := conn.Write([]byte{socksVersion, methodUserPass}); err != nil {
+				c.Refused.Add(1) // the negotiation did not complete; no session was opened
+				return err
+			}
+			return nil
 		}
 	}
+	c.Refused.Add(1)
 	_, _ = conn.Write([]byte{socksVersion, methodRefused})
 	return errors.New("gateway: the client offered no username/password method")
 }

@@ -158,9 +158,28 @@ func TestATicketDoesNotWorkFromAnotherDevice(t *testing.T) {
 		t.Fatalf("a ticket issued to one device was redeemed by another (reply 0x%02x) — the binding "+
 			"is the only thing that makes a bearer credential safe to hand out", rep)
 	}
-	if ap.SOCKSRefused() < 1 {
-		t.Error("the refusal was not counted — a rising refusal count on a mutually-authenticated " +
-			"listener is somebody presenting tickets they do not hold")
+	assertCountedRefusal(t, ap, 0, "the ticket refusal")
+}
+
+// assertCountedRefusal asserts that a refusal the client has ALREADY READ is already in the counter.
+//
+// IT DOES NOT POLL, and that is the assertion. Waiting for the counter would only ever prove the count
+// arrives eventually, which is not the property under test: these counters are the only trace a refusal
+// leaves — the connection is closed and the client is gone — so a count made after the reply is one that
+// nobody reacting to the refusal can rely on. Reading it once, immediately, is what "counted before it
+// was answered" means from outside the process.
+//
+// This is also the assertion that went intermittently red in CI before the handler was fixed, and its
+// weakness is worth stating: with the increment back after the write it catches the fault only
+// SOMETIMES, because the window is microseconds wide. The guarantee therefore lives in the handler's
+// ordering; this only witnesses it.
+func assertCountedRefusal(t *testing.T, ap *gateway.AccessProxy, before int64, what string) {
+	t.Helper()
+	if got := ap.SOCKSRefused(); got <= before {
+		t.Errorf("%s left the refusal count at %d (was %d) — the count is made BEFORE the reply is "+
+			"written, so a client holding the refusal must already be counted; a rising refusal count "+
+			"on a mutually-authenticated listener is somebody presenting tickets they do not hold",
+			what, got, before)
 	}
 }
 
@@ -232,10 +251,13 @@ func TestBindAndUDPAssociateAreRefused(t *testing.T) {
 	for name, cmd := range map[string]byte{"BIND": 0x02, "UDP ASSOCIATE": 0x03} {
 		c, cmd := name, cmd
 		t.Run(c, func(t *testing.T) {
+			before := ap.SOCKSRefused()
 			if _, rep := socksDial(t, addr, cert, ca, tok, "db", cmd); rep != 0x07 {
 				t.Fatalf("%s got reply 0x%02x, want 0x07 (command not supported) — BIND would be a "+
 					"listening socket into the protected network on a client's say-so", c, rep)
 			}
+			// The SAME ordering rule as the ticket refusal: this is the class, not that one instance.
+			assertCountedRefusal(t, ap, before, "the refused "+c)
 		})
 	}
 }
@@ -269,11 +291,13 @@ func TestASocksTargetMustBeACataloguedTCPService(t *testing.T) {
 	tok, _ := store.Issue(certSubject(t, cert), "user:alice", "finance")
 
 	for _, target := range []string{"nowhere", "wiki"} {
+		before := ap.SOCKSRefused()
 		if _, rep := socksDial(t, ln.Addr().String(), cert, ca, tok, target, 0x01); rep == 0x00 {
 			t.Fatalf("target %q was tunnelled to — the gateway is an allow-list of TCP services, and "+
 				"an HTTP-catalogued one would double as a pivot to whatever its upstream listens on",
 				target)
 		}
+		assertCountedRefusal(t, ap, before, "the refused target "+target)
 	}
 }
 
@@ -326,6 +350,9 @@ func TestAClientOfferingNoAuthenticationIsRefused(t *testing.T) {
 			"a SOCKS proxy into a protected network that accepts unauthenticated clients is an open "+
 			"relay", sel[1])
 	}
+	// This refusal is written inside socksNegotiateMethod, which is why THAT function counts it: a
+	// caller cannot put a count before a write it does not perform.
+	assertCountedRefusal(t, ap, 0, "the refused method negotiation")
 }
 
 // mustURL parses a URL for the catalogue fixtures.

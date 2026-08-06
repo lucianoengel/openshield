@@ -579,6 +579,16 @@ the surfaces, then the two exit-criteria tickets.*
   `t.Cleanup(pool.Close)` and increments it. CONSOLE-6b touches neither, but its new schema-dropping
   tests shift the timing window, so **expect intermittent CI red** until a follow-up resets the counter
   per test and joins that loop. Recorded as a decision rather than a silence.
+  ✅ **FIXED in D485** — the loop is JOINED, not reset: the follow-up's own note about resetting the
+  counter was wrong, because a reset would have hidden the next leak instead of fixing this one.
+- **Two flaky counter tests (no ticket)** — ✅ **FIXED (D485).** Both were counters read across a
+  goroutine boundary, neither a product defect, and a flaky CI is how a team learns to ignore red.
+  `TestATicketDoesNotWorkFromAnotherDevice` (`internal/gateway/socks_test.go`, red on `2a5b167`) read
+  `SOCKSRefused()` after the client had the RFC 1929 refusal, and every refusal path in `handleSOCKS`
+  answered first and counted second — the CONNECT tunnel beside it has always done the opposite. Fixed
+  as a class: nine paths, plus the `0xFF` written inside `socksNegotiateMethod`, which now counts its
+  own refusals because a caller cannot count before a write it does not perform.
+  `TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest` is the entry above.
 - **CONSOLE-7 · Operator-tier `/health`** — ✅ **SHIPPED (D472).** `GET /health` at analyst tier: leader
   held, broker connected, PLAT-10 ingest repairs, database reachable, PLAT-9 schema skew, last external
   anchor — each read at request time. **A REPORT, NOT A LIVENESS PROBE:** always 200, because a follower
@@ -1689,6 +1699,34 @@ decisions made to unblock — the owner may override any.** The frozen-core disc
   meaningless.
 
 ---
+
+### ⚠️ FOUND BY REVIEW OF D485, NOT FIXED THERE — the stop-exemption is in ONE of six leader loops
+
+`RunCorrelationLoop` now exempts its own cancellation from `correlation_failures_total`. **Five sibling
+loops under the same `leaderCtx` still count and log on cancellation**, so a demotion or restart still
+lights up their counters and the metric family is inconsistent with nothing saying so:
+
+| Loop | Counter |
+|---|---|
+| `beaconing.go:166` | `BeaconFailures` |
+| `playbook.go:254` | `PlaybookFailures` |
+| `escalate.go:221` | `EscalationFailures` |
+| `cases_http.go:330` | `ApprovalExpiryFailures` (counted with **no log at all**) |
+| `itsm.go:172` | `ITSMFailures` — the worst: `SyncITSM` makes outbound HTTP, so a shutdown mid-sync aborts a live request and books it as "the incident has no ticket where responders are looking" |
+
+An operator comparing `correlation_failures_total` against its neighbours during an incident will read the
+difference as signal. **Leaving them inconsistent is a worse answer than either uniform choice** — decide
+explicitly rather than by omission.
+
+Two further review findings, recorded rather than fixed:
+- **`startCorrelationLoop`'s ordering is convention, not construction.** It relies on `t.Cleanup` LIFO
+  putting the join before `pool.Close`, which holds only if it is called after `requireDB` on the same
+  `*testing.T`. It takes a `*Server`, not the pool, so it cannot see the resource whose lifetime it
+  orders against. Taking the pool (or returning a `stop()` to defer) would make it structural.
+- **The new `e2e-verification` SHALL is violated by `internal/controlplane` today**: `nips6_test.go:197`
+  and `soar4_test.go:584,:594,:604` leak loops against a `requireDB` pool. The counter half is not armed
+  in those tests, but `nips6_test.go:197` runs real queries every 20ms into the *next* test's
+  `DROP TABLE … CASCADE` + `Migrate` — a DDL/DML collision, not just a counter.
 
 ## Reference — design rationale (rarely changes)
 

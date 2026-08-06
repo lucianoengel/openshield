@@ -252,3 +252,9 @@ func rawCursorPayload(t interface{ Fatalf(string, ...any) }, encoded string) str
 	}
 	return string(raw)
 }
+
+// IsLoopStopForTest exposes the correlation loop's stop predicate. It is asserted directly because the
+// case that matters — a real database error arriving in the same window as the leader's cancellation —
+// is not reachable through the loop: DynamicLoop re-checks the context and returns before calling the
+// work function, so the conjunction can only be exercised as a predicate.
+func IsLoopStopForTest(ctx context.Context, err error) bool { return isLoopStop(ctx, err) }

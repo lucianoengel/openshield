@@ -3,6 +3,7 @@ package controlplane_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"testing"
@@ -77,6 +78,44 @@ func embeddedNATS(t *testing.T) string {
 	}
 	t.Cleanup(srv.Shutdown)
 	return srv.ClientURL()
+}
+
+// startCorrelationLoop runs the scheduled correlation loop for the duration of one test and — the part
+// that matters — WAITS FOR IT TO HAVE STOPPED before the test's pool is closed.
+//
+// `go srv.RunCorrelationLoop(...)` with a `defer cancel()` looks like it stops the loop and only ASKS
+// it to: cancel returns while the goroutine may still be inside a query, and Go runs a test's deferred
+// calls before its t.Cleanup functions — so `t.Cleanup(pool.Close)` from requireDB could and did fire
+// first. The next tick then failed against a closed pool and incremented `CorrelationFailures`, which
+// is a PACKAGE-LEVEL counter, so the test that paid for the leak was a different one in a different
+// file (TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest, ~2 runs in 6). A loop still running
+// after its test finished is the defect; resetting the counter it writes to would only hide it.
+//
+// Registering the cleanup HERE — after requireDB has registered pool.Close — is what orders the two:
+// cleanups run last-in-first-out, so the join happens strictly before the pool closes.
+func startCorrelationLoop(t *testing.T, srv *controlplane.Server, interval func() time.Duration,
+	rules func() (controlplane.CorrelationRule, controlplane.CrossDomainRule),
+	hunts func() []controlplane.CrossDomainRule) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.RunCorrelationLoop(ctx, interval, rules, hunts,
+			slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			// Bounded, and a FAILURE rather than a hang: a loop that will not stop is exactly the
+			// thing this helper exists to catch, and blocking forever would report it as a timeout in
+			// whichever test the harness happened to be in.
+			t.Error("the correlation loop did not stop within 10s of its context being cancelled — it " +
+				"is about to run against a closed pool and count failures against another test")
+		}
+	})
 }
 
 func waitFor(t *testing.T, cond func() bool) {
