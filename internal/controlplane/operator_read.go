@@ -200,12 +200,19 @@ func (s *Server) OperatorReadHandler() http.Handler {
 			http.Error(w, "bad filter: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		events, err := s.SearchTelemetry(r.Context(), f)
+		// CONSOLE-6: a PAGE, not a bare list — rows plus whether more exist plus where to continue.
+		//
+		// AUTHORITY IS RE-DERIVED PER PAGE and never read from the cursor. The tier gate ran on THIS
+		// request with THIS credential before the handler was reached (D470 puts the principal on the
+		// context), so a cursor lifted from another operator's session yields that operator's POSITION
+		// and the lifter's AUTHORITY. That is the CONSOLE-1 inherited requirement, and it holds because
+		// the cursor carries a position and nothing else — not because anything here checks it.
+		page, err := s.SearchTelemetryPage(r.Context(), f)
 		if err != nil {
 			http.Error(w, "read failed", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, events)
+		writeJSON(w, page)
 	})
 
 	mux.HandleFunc("/logs", s.externalLogsHandler)

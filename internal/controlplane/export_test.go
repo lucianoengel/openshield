@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -155,4 +156,15 @@ func (s *Server) RecordFleetControlForTest(t interface{ Fatalf(string, ...any) }
 	if err := s.recordFleetControl(context.Background(), id, verb, seq, issued, expires, reason); err != nil {
 		t.Fatalf("recording fleet control %s: %v", id, err)
 	}
+}
+
+// DecodeCursorForTest exposes the decoded cursor so a test can assert what it does NOT contain — the
+// CONSOLE-1 inherited requirement that a cursor carries a position and never authority. Asserting on the
+// opaque form would pass against any encoding that merely looked scrambled.
+func DecodeCursorForTest(t interface{ Fatalf(string, ...any) }, encoded string) string {
+	c, err := decodeEventCursor(encoded)
+	if err != nil {
+		t.Fatalf("decoding cursor %q: %v", encoded, err)
+	}
+	return fmt.Sprintf("%d:%d", c.ReceivedAt.UnixNano(), c.ID)
 }

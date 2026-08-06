@@ -378,7 +378,7 @@ neither.
 | CONSOLE-3 | Browser session auth | 0 | 1 | L |
 | CONSOLE-4 | Incidents queue + timeline detail *(slice 1)* | 1 | 1, 3 | L |
 | CONSOLE-5 | View-audit repair + `investigation_views` retention | 2 | 1 | M |
-| CONSOLE-6 | Keyset pagination | 2 | — | M |
+| CONSOLE-6 | Keyset pagination ✅ | 2 | — | M |
 | CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
 | CONSOLE-8 | Fleet inventory + break-glass surface 🟡 | 2 | 7 | M |
 | CONSOLE-9 | Entity surface over HTTP ✅ | 2 | — | M |
@@ -508,7 +508,7 @@ the surfaces, then the two exit-criteria tickets.*
   evidence-bearing read, recorded **before** the response, residual stated for every route left unaudited.
   Plus: migration `007_investigation_views.sql` has **no TTL, no purge and no DSAR path** while storing raw
   non-pseudonymised operator identities — a console makes it one of the largest tables in the database.
-- **CONSOLE-6 · Keyset pagination** — new work · M. `maxSearchLimit = 1000` (`operator_read.go:281`), no
+- **CONSOLE-6 · Keyset pagination** — ✅ **SHIPPED (D481).** `GET /events` returns rows + `has_more` + `next_cursor`; the walk resumes at `(received_at, id) < (…)`. The cursor carries a POSITION ONLY and authority is re-derived per page, so the CONSOLE-1 inherited requirement holds by construction. Was: `maxSearchLimit = 1000` (`operator_read.go:281`), no
   cursor, no `has_more`. Hunt cannot be built on "top 1000 rows, no row 1001" against 90-day retention; the
   existing `ORDER BY received_at DESC, id DESC` is already a usable cursor.
   **⚠️ REQUIREMENT INHERITED FROM CONSOLE-1: A CURSOR MUST NEVER BE A BEARER OF AUTHORIZATION.** Resolve
