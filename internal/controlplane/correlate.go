@@ -132,13 +132,6 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rule.MinRisk = x
 	}
-	// SIEM-11b: materialize the current correlation (an idempotent upsert of each subject's open
-	// incident) so incidents carry a stable id + state, then return the stored set. This makes the
-	// list acknowledgeable/case-linkable as units rather than a recomputed-every-GET view.
-	if _, err := s.MaterializeIncidents(r.Context(), rule, time.Now()); err != nil {
-		http.Error(w, "read failed", http.StatusInternalServerError)
-		return
-	}
 	// SEC-8: a malformed limit is a 400, not a silent default — a silently-ignored bad limit returns a
 	// truncated/defaulted list that looks authoritative (the same rule the correlation params above use).
 	limit, err := intParam(q, "limit", 100)
@@ -146,12 +139,46 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad limit: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	incidents, err := s.RecentIncidents(r.Context(), limit)
+	// CONSOLE-6b: the incident list is WALKABLE. The cursor is validated here so an unreadable one — or
+	// one minted for another surface, which encodes the same shape and would otherwise be honoured
+	// against the wrong table — is a 400 at the edge rather than a 500 from the query layer or, worse,
+	// a wrong-but-plausible page.
+	cursor := strings.TrimSpace(q.Get("cursor"))
+	if cursor != "" {
+		if _, cerr := decodeIncidentCursor(cursor); cerr != nil {
+			http.Error(w, "bad cursor: "+cerr.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// ⚠️ EVERY PARAMETER IS VALIDATED BEFORE THE WRITE. MaterializeIncidents can INSERT an incident and
+	// PAGE the SOC, so running it ahead of the limit/cursor checks meant a request that then 400'd had
+	// already mutated the database and possibly woken someone — a rejected request that had effects.
+	// That ordering was pre-existing for `limit`; the CONSOLE-6b cursor check inherited it, and this
+	// moves both checks in front. Nothing downstream depends on the write having happened first: the
+	// read below is a plain SELECT over the same table.
+	//
+	// SIEM-11b: materialize the current correlation (an idempotent upsert of each subject's open
+	// incident) so incidents carry a stable id + state, then return the stored set. This makes the
+	// list acknowledgeable/case-linkable as units rather than a recomputed-every-GET view.
+	//
+	// It runs UNCONDITIONALLY, not only on the first page. Gating it on an empty cursor would make page 2
+	// stop reflecting a rule the client changed between requests while page 1 applied it — the same
+	// "quietly changes meaning mid-walk" problem in a form we inflicted on ourselves — and would buy
+	// nothing, since the leader's correlation loop mutates the same rows anyway. It is also cheaper than
+	// it looks: the upsert writes `last_seen = max(detected_at)` per subject, NOT now(), so a pass that
+	// finds no new alerts writes the same value it already stored and moves nothing. Re-materializing on
+	// every page therefore only bumps incidents that genuinely absorbed a new alert — the mid-walk
+	// residual is bounded by new detections, not by the number of pages.
+	if _, err := s.MaterializeIncidents(r.Context(), rule, time.Now()); err != nil {
+		http.Error(w, "read failed", http.StatusInternalServerError)
+		return
+	}
+	page, err := s.RecentIncidentsPage(r.Context(), limit, cursor)
 	if err != nil {
 		http.Error(w, "read failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, incidents)
+	writeJSON(w, page)
 }
 
 // crossDomainIncidents serves the XDR-4 entity-keyed rule on GET /incidents?rule=cross_domain. It
@@ -161,7 +188,24 @@ func (s *Server) incidentsHandler(w http.ResponseWriter, r *http.Request) {
 // Every parameter is fail-loud (SEC-8): a malformed window, domain minimum or sequence is a 400, never a
 // silent fall-back — a silently-widened rule returns incidents that look authoritative but answer a
 // different question than the operator asked.
+//
+// NOT PAGINATED, and `?cursor=` here is a 400 (CONSOLE-6b). CorrelateCrossDomain is a live GROUP BY over
+// a rolling window, computed fresh per call: "the row after this one" is not defined across a result set
+// that is re-aggregated on every request, so a cursor into it would be a position in something that no
+// longer exists. Offering one would be worse than offering none, because a client would walk it and
+// believe the walk meant something.
+//
+// It is REFUSED rather than ignored, which is the correction this branch needed: ignoring it answered 200
+// with page 1 to a client that believed it was continuing a walk, on the same route and the same
+// parameter that the burst branch 400s — one URL with two behaviours, and the fail-loud rule this
+// function's own comment states, broken by the one parameter it did not check.
 func (s *Server) crossDomainIncidents(w http.ResponseWriter, r *http.Request, q url.Values) {
+	if strings.TrimSpace(q.Get("cursor")) != "" {
+		http.Error(w, "bad cursor: this rule is recomputed on every call and offers no continuation; "+
+			"a position in it would be a position in a result set that no longer exists",
+			http.StatusBadRequest)
+		return
+	}
 	var rule CrossDomainRule
 	var err error
 	if rule.MinDomains, err = intParam(q, "min_domains", 2); err != nil {
@@ -219,7 +263,26 @@ func (s *Server) crossDomainIncidents(w http.ResponseWriter, r *http.Request, q 
 		http.Error(w, "read failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, incidents)
+	// ONE ROUTE, ONE ENVELOPE. This branch used to answer a bare array while the burst branch answered
+	// an object, so a console decoding `body.rows` got `undefined` on `?rule=cross_domain` and rendered
+	// an empty list while incidents existed — a wrong answer that looks complete, on the very surface
+	// this change exists to make honest. Go turns that into a loud unmarshal error; the browser PLAT-1
+	// is being built for does not.
+	//
+	// `has_more` is structurally false rather than a claim: CorrelateCrossDomain applies no cap, so every
+	// group the rule matched is here. There is no `next_cursor` FIELD at all — a read with no walk order
+	// must not be able to emit one even by accident, which is stronger than emitting an empty one.
+	if incidents == nil {
+		incidents = []CrossDomainIncident{} // never `null`: an empty result and a failed read must not look alike
+	}
+	writeJSON(w, CrossDomainPage{Rows: incidents, HasMore: false})
+}
+
+// CrossDomainPage is the `?rule=cross_domain` response, in the same envelope as the walkable branch so a
+// console has one shape to decode from one route. It deliberately has no NextCursor field.
+type CrossDomainPage struct {
+	Rows    []CrossDomainIncident `json:"rows"`
+	HasMore bool                  `json:"has_more"`
 }
 
 // knownDomain reports whether a sequence step names a domain the platform actually emits (the D241

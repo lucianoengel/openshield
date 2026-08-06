@@ -31,9 +31,10 @@ func TestOperatorReadAPI(t *testing.T) {
 
 	// Operator: /alerts returns the alert.
 	op := clientWith(t, ca, "alice", "operator")
-	var alerts []controlplane.PeerAlert
+	// CONSOLE-6b: /alerts serves a PAGE (rows + has_more + next_cursor) rather than a bare array.
+	var alerts controlplane.AlertPage
 	getJSON(t, op, "https://"+addr+"/alerts", &alerts)
-	if len(alerts) != 1 || alerts[0].SubjectID != "sub_abc" || alerts[0].RiskScore < 0.9 {
+	if len(alerts.Rows) != 1 || alerts.Rows[0].SubjectID != "sub_abc" || alerts.Rows[0].RiskScore < 0.9 {
 		t.Fatalf("/alerts = %+v, want the seeded peer alert", alerts)
 	}
 
@@ -51,9 +52,9 @@ func TestOperatorReadAPI(t *testing.T) {
 	}
 
 	// Operator: /search with a min_risk filter returns the high-risk alert.
-	var searched []controlplane.PeerAlert
+	var searched controlplane.AlertPage
 	getJSON(t, op, "https://"+addr+"/search?min_risk=0.9", &searched)
-	if len(searched) != 1 || searched[0].SubjectID != "sub_abc" {
+	if len(searched.Rows) != 1 || searched.Rows[0].SubjectID != "sub_abc" {
 		t.Fatalf("/search?min_risk=0.9 = %+v, want the seeded high-risk alert", searched)
 	}
 

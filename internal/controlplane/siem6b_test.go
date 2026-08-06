@@ -23,12 +23,14 @@ func TestPeerAlertLifecycleFields(t *testing.T) {
 		t.Fatalf("recordPeerAlert: %v", err)
 	}
 
-	alerts, err := srv.RecentPeerAlerts(ctx, 10)
+	// CONSOLE-6b: reads through the paginated view, which is the only one /alerts has. The unpaginated
+	// RecentPeerAlerts this used to call was deleted with its last route.
+	alerts, err := srv.SearchPeerAlertsPage(ctx, controlplane.AlertFilter{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got controlplane.PeerAlert
-	for _, a := range alerts {
+	for _, a := range alerts.Rows {
 		if a.SubjectID == "sub_x" {
 			got = a
 		}
@@ -51,11 +53,11 @@ func TestPeerAlertLifecycleFields(t *testing.T) {
 	if err != nil || !newly {
 		t.Fatalf("acknowledge: newly=%v err=%v", newly, err)
 	}
-	after, err := srv.RecentPeerAlerts(ctx, 10)
+	after, err := srv.SearchPeerAlertsPage(ctx, controlplane.AlertFilter{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range after {
+	for _, a := range after.Rows {
 		if a.ID == got.ID {
 			if a.Status != "triaged" {
 				t.Errorf("after ack, status = %q, want triaged (the lifecycle advanced)", a.Status)

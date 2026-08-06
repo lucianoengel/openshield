@@ -2,7 +2,7 @@ package controlplane
 
 import (
 	"context"
-	"fmt"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"sort"
@@ -207,9 +207,48 @@ func ViewQueryTruncatedForTest() string { return viewQueryTruncated }
 // CONSOLE-1 inherited requirement that a cursor carries a position and never authority. Asserting on the
 // opaque form would pass against any encoding that merely looked scrambled.
 func DecodeCursorForTest(t interface{ Fatalf(string, ...any) }, encoded string) string {
-	c, err := decodeEventCursor(encoded)
-	if err != nil {
+	if _, err := decodeEventCursor(encoded); err != nil {
 		t.Fatalf("decoding cursor %q: %v", encoded, err)
 	}
-	return fmt.Sprintf("%d:%d", c.ReceivedAt.UnixNano(), c.ID)
+	// THE RAW PAYLOAD, NOT A RECONSTRUCTION — and D481 got this wrong.
+	//
+	// This used to return fmt.Sprintf("%d:%d", c.ReceivedAt.UnixNano(), c.ID): a string rebuilt from the
+	// struct's two fields, which STRUCTURALLY CANNOT contain a leaked role whatever the encoder writes.
+	// The D481 mutation appeared to kill only because it also added a field to eventCursor and threaded
+	// it through this helper — mutating the test infrastructure so the test could see the defect, which
+	// is not a kill at all. Encoding a role in the ENCODER ALONE passed.
+	//
+	// Found by the CONSOLE-6b author hitting the same trap in its own first draft and checking whether
+	// the shipped one shared it. It did.
+	return rawCursorPayload(t, encoded)
+}
+
+// DecodeAlertCursorForTest and DecodeIncidentCursorForTest do the same for the CONSOLE-6b siblings, and
+// they return the RAW DECODED PAYLOAD rather than the parsed struct's fields reformatted.
+//
+// That distinction is the difference between a real assertion and a vacuous one: a string rebuilt from
+// `c.DetectedAt` and `c.ID` cannot contain a role no matter what the encoder wrote, so a test asserting
+// on it would pass against a cursor that carried the caller's role in a fourth field. It is the bytes a
+// client holds that must be free of authority, so it is the bytes that get asserted on. The cursor is
+// still parsed first, so the payload examined is one the production decoder accepts.
+func DecodeAlertCursorForTest(t interface{ Fatalf(string, ...any) }, encoded string) string {
+	if _, err := decodeAlertCursor(encoded); err != nil {
+		t.Fatalf("decoding alert cursor %q: %v", encoded, err)
+	}
+	return rawCursorPayload(t, encoded)
+}
+
+func DecodeIncidentCursorForTest(t interface{ Fatalf(string, ...any) }, encoded string) string {
+	if _, err := decodeIncidentCursor(encoded); err != nil {
+		t.Fatalf("decoding incident cursor %q: %v", encoded, err)
+	}
+	return rawCursorPayload(t, encoded)
+}
+
+func rawCursorPayload(t interface{ Fatalf(string, ...any) }, encoded string) string {
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("cursor %q is not base64url: %v", encoded, err)
+	}
+	return string(raw)
 }

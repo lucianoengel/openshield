@@ -78,3 +78,96 @@ func decodeEventCursor(s string) (eventCursor, error) {
 	}
 	return eventCursor{ReceivedAt: time.Unix(0, nanos).UTC(), ID: id}, nil
 }
+
+// SIBLING CURSORS FOR /alerts, /search AND /incidents (CONSOLE-6b).
+//
+// `peer_alerts` and `incidents` both carry `id BIGSERIAL PRIMARY KEY`, so `(detected_at, id)` and
+// `(last_seen, id)` are already unique and monotone — the same property `(received_at, id)` supplies for
+// /events. No migration and no new tiebreaker column: the walk boundary is exact rather than approximate
+// because two rows sharing a timestamp are still ordered by id.
+//
+// ⚠️ THE VERSION TAG IS ALSO A NAMESPACE, AND THAT IS THE POINT. All three cursors encode an identical
+// shape (timestamp + int64, colon-joined, base64url). With no discriminator, an /alerts cursor — a
+// position in the peer_alerts id space — presented to /incidents DECODES SUCCESSFULLY and serves a page
+// that is wrong but entirely plausible: row-identity corruption dressed as a normal result. The tag makes
+// that a refusal instead, in the same error class and with the same 400 a malformed cursor already gets.
+//
+// THIS IS NOT THE AUTHORITY REQUIREMENT and must not be read as one — see the eventCursor block above,
+// which still governs. The tag says "this position belongs to the alerts walk"; it never says who may
+// walk it. Nothing about the caller is encoded, and authority is re-derived per page from the credential.
+const (
+	alertCursorVersion    = "a1"
+	incidentCursorVersion = "i1"
+)
+
+// alertCursor is a position in the `(detected_at DESC, id DESC)` ordering over peer_alerts.
+type alertCursor struct {
+	DetectedAt time.Time
+	ID         int64
+}
+
+func (c alertCursor) encode() string { return encodeKeyset(alertCursorVersion, c.DetectedAt, c.ID) }
+
+// decodeAlertCursor parses a client-supplied /alerts or /search cursor. A cursor minted by another
+// surface fails here, rather than being honoured against the wrong table.
+func decodeAlertCursor(s string) (alertCursor, error) {
+	at, id, err := decodeKeyset(alertCursorVersion, s)
+	if err != nil {
+		return alertCursor{}, err
+	}
+	return alertCursor{DetectedAt: at, ID: id}, nil
+}
+
+// incidentCursor is a position in the `(last_seen DESC, id DESC)` ordering over incidents.
+type incidentCursor struct {
+	LastSeen time.Time
+	ID       int64
+}
+
+func (c incidentCursor) encode() string { return encodeKeyset(incidentCursorVersion, c.LastSeen, c.ID) }
+
+// decodeIncidentCursor parses a client-supplied /incidents cursor.
+func decodeIncidentCursor(s string) (incidentCursor, error) {
+	at, id, err := decodeKeyset(incidentCursorVersion, s)
+	if err != nil {
+		return incidentCursor{}, err
+	}
+	return incidentCursor{LastSeen: at, ID: id}, nil
+}
+
+// encodeKeyset / decodeKeyset are the shared codec for the two cursors added here. They exist so the two
+// cannot drift apart in what they accept, which is exactly the kind of divergence that would let one
+// surface honour bytes the other refuses.
+//
+// decodeEventCursor deliberately does NOT route through them. Its wire format and its error strings are
+// shipped and asserted, and rewriting a working codec for tidiness spends blast radius on the one surface
+// that proves the mechanism works. The formats are byte-identical by construction, not by sharing code.
+func encodeKeyset(version string, at time.Time, id int64) string {
+	raw := fmt.Sprintf("%s:%d:%d", version, at.UTC().UnixNano(), id)
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeKeyset(version, s string) (time.Time, int64, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(s))
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("%w: not base64url", ErrCursor)
+	}
+	parts := strings.Split(string(raw), ":")
+	if len(parts) != 3 {
+		return time.Time{}, 0, fmt.Errorf("%w: wrong shape", ErrCursor)
+	}
+	if parts[0] != version {
+		// A well-formed cursor for ANOTHER surface lands here, and so does a cursor from an older
+		// encoding. Both are the same answer: these bytes are not a position in this walk.
+		return time.Time{}, 0, fmt.Errorf("%w: unknown version %q", ErrCursor, parts[0])
+	}
+	nanos, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("%w: bad timestamp", ErrCursor)
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("%w: bad row id", ErrCursor)
+	}
+	return time.Unix(0, nanos).UTC(), id, nil
+}

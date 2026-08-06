@@ -198,11 +198,13 @@ func TestAnOperatorCanHuntByTechniqueOverHTTP(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("GET technique_sequence=%s = %d, want 200", seq, resp.StatusCode)
 		}
-		var out []controlplane.CrossDomainIncident
+		// CONSOLE-6b: one route, one envelope — this branch answers {rows, has_more} like the walkable
+		// one, so a console has a single shape to decode from /incidents.
+		var out controlplane.CrossDomainPage
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		return out
+		return out.Rows
 	}
 
 	inc, ok := techIncidentFor(t, hunt(t, "T1552,T1567.002"), entity)

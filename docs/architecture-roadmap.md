@@ -378,7 +378,7 @@ neither.
 | CONSOLE-3 | Browser session auth | 0 | 1 | L |
 | CONSOLE-4 | Incidents queue + timeline detail *(slice 1)* | 1 | 1, 3 | L |
 | CONSOLE-5 | View-audit repair + `investigation_views` retention ✅ | 2 | 1 | M |
-| CONSOLE-6 | Keyset pagination ✅ | 2 | — | M |
+| CONSOLE-6 | Keyset pagination ✅ *(+6b: `/alerts`, `/search`, `/incidents`)* | 2 | — | M |
 | CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
 | CONSOLE-8 | Fleet inventory + break-glass surface 🟡 | 2 | 7 | M |
 | CONSOLE-9 | Entity surface over HTTP ✅ | 2 | — | M |
@@ -541,6 +541,44 @@ the surfaces, then the two exit-criteria tickets.*
   principal is already on the request context, so any scope is derivable there when tenancy is designed,
   and a constant that always says "all" is unwired code by construction (see the CONSOLE-1 tasks
   deviation). *Residual:* no stable snapshot across pages while ingest is live.
+  **CONSOLE-6b — `/alerts`, `/search`, `/incidents`** — ✅ **SHIPPED (D484).** All three return
+  `{rows, has_more, next_cursor?}`; the walks resume at `(detected_at, id) < (…)` and
+  `(last_seen, id) < (…)`. **D481's "mechanical now the shape is settled" was right about the shape and
+  wrong about the work, and this entry corrects it.** The mechanism did port in about forty lines per
+  surface with no migration — both tables already had `id BIGSERIAL PRIMARY KEY`, so the feared missing
+  tiebreaker never existed. But three questions `/events` never had to answer had to be decided: the
+  version tag had to become a **namespace** (`a1`/`i1`), because otherwise an `/alerts` cursor decodes
+  cleanly on `/incidents` and serves a wrong-but-plausible page — the D481 failure moved from row-count to
+  row-identity; a **tie fixture** was needed, because a walk over distinct timestamps passes against a
+  boundary that ignores the row id; and `/incidents` **is not append-only**, so an unvisited open incident
+  can be bumped ahead of the walk and be absent from the rest of it. A future "just extend it to the next
+  surface" should budget for the same three questions rather than for a copy.
+  **Two reviews of the working tree then found a fourth question none of the three anticipated: what the
+  new parameter does to everything that STORES a query.** A saved search could capture a `cursor=` and
+  freeze itself forever — on the alerts surface this change touched AND on the events surface D481 shipped
+  — so the hunt goes on returning rows while permanently excluding everything newer, which is the failure
+  saved searches exist to prevent. Refused at save and at run. The reviews also found `/incidents`
+  answering two envelope shapes from one route (`?rule=cross_domain` served a bare array, so a console
+  decoding `rows` renders empty while incidents exist) and answering **200 and page 1** to a cursor on a
+  route whose other branch 400s; a read that WROTE before validating its parameters, so a request that
+  then 400'd had already correlated and possibly paged the SOC; the one new requirement with no test; a
+  now-unreachable `RecentPeerAlerts` carrying the exact untiebroken `ORDER BY` this change argued against;
+  and two false comments about `last_seen` whose correction makes the accepted residual NARROWER than the
+  design claimed (the upsert writes `max(detected_at)`, not `now()`, so re-materializing with no new
+  alerts moves nothing). All fixed in D484.
+  *Residuals:* open incidents mutating mid-walk (bounded to `state='open'` AND to live detection rather
+  than walk depth, pinned by two tests, no snapshot built); **`/searches/run` still returns bare capped
+  arrays with no `has_more`** while the live endpoints return pages — blocked on `/logs` having no page
+  function, since paging two of three surfaces would make `results` mean a different shape per surface;
+  `peer_alerts` still has no index on `detected_at` — a deep walk is a sort over a full scan either way,
+  and an index is a follow-up rather than something quietly matched here.
+  *Found by the same reviews, NOT caused by this change and deliberately not fixed in it:*
+  `TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest` (`soar2_test.go`) failed once in four
+  runs. `CorrelationFailures` (`soar2.go`) is a package global that no test resets, and
+  `hunt_collision_test.go` leaks a `RunCorrelationLoop` goroutine whose next tick lands after
+  `t.Cleanup(pool.Close)` and increments it. CONSOLE-6b touches neither, but its new schema-dropping
+  tests shift the timing window, so **expect intermittent CI red** until a follow-up resets the counter
+  per test and joins that loop. Recorded as a decision rather than a silence.
 - **CONSOLE-7 · Operator-tier `/health`** — ✅ **SHIPPED (D472).** `GET /health` at analyst tier: leader
   held, broker connected, PLAT-10 ingest repairs, database reachable, PLAT-9 schema skew, last external
   anchor — each read at request time. **A REPORT, NOT A LIVENESS PROBE:** always 200, because a follower

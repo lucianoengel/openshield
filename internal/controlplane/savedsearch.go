@@ -46,6 +46,42 @@ var (
 	ErrNoSuchSearch = errors.New("controlplane: no such saved search")
 )
 
+// rejectStoredCursor refuses a saved query that carries a continuation cursor.
+//
+// ⚠️ A SAVED SEARCH THAT CAPTURES A CURSOR FREEZES ITSELF FOREVER. `parseAlertFilter` and
+// `parseEventFilter` both read `cursor=` and both are the parsers this file validates and runs through,
+// so `POST /searches/save?surface=alerts&query=subject%3DX%26cursor%3D<valid>` was accepted, persisted,
+// and applied on EVERY later run. Cursors do not expire, so the boundary is the instant the hunt was
+// saved: the search goes on returning rows and permanently excludes everything newer, which is precisely
+// the outcome RunSavedSearch's doc comment calls "the worst outcome available" — a hunt that quietly
+// stopped covering what it used to cover, still producing results, with no reason for anyone to look.
+//
+// It is checked at BOTH ends, deliberately:
+//   - at SAVE, so the analyst is standing there and is told (a 400 carrying this message);
+//   - at RUN, because searches saved before this check exists are already in the table, and they are the
+//     ones that have been silently frozen. Failing loudly (409, "fix the stored search") is the contract
+//     this file already has for a stored search that is no longer runnable. STRIPPING the cursor and
+//     running the search anyway was rejected: it repairs the result while leaving the stored query
+//     wrong, so the hunt keeps being wrong on every other path that reads it and nobody is ever told.
+//
+// The check is surface-independent even though /logs has no cursor today. A saved log search carrying
+// `cursor=` is meaningless now, and the day /logs gains a walk it would become the same freeze — the
+// point of refusing here is that a stored query is a thing that outlives the parser it was written for.
+func rejectStoredCursor(query string) error {
+	v, err := url.ParseQuery(query)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBadSavedSearch, err)
+	}
+	// A bare `cursor=` with no value constrains nothing and every surface's parser already ignores it;
+	// refusing it would make this validator stricter than the live endpoint for no gain.
+	if strings.TrimSpace(v.Get("cursor")) != "" {
+		return fmt.Errorf("%w: a saved search must not carry a continuation cursor — `cursor=` is a "+
+			"position in one walk at one instant, and a stored one would exclude everything newer on "+
+			"every future run", ErrBadSavedSearch)
+	}
+	return nil
+}
+
 // SavedSearch is one named hunt.
 type SavedSearch struct {
 	Name        string    `json:"name"`
@@ -67,6 +103,10 @@ type SavedSearch struct {
 func validateSearch(surface, query string) error {
 	if _, err := url.ParseQuery(query); err != nil {
 		return fmt.Errorf("%w: %v", ErrBadSavedSearch, err)
+	}
+	// Before the surface's parser, because the surface's parser ACCEPTS a cursor — that is the defect.
+	if err := rejectStoredCursor(query); err != nil {
+		return err
 	}
 	req, err := http.NewRequest(http.MethodGet, "/?"+query, nil)
 	if err != nil {
@@ -165,7 +205,17 @@ func (s *Server) DeleteSavedSearch(ctx context.Context, name string) error {
 // RunSavedSearch executes a saved search and returns its results.
 //
 // It re-parses the stored query with the surface's own parser and calls the same Search* the live
-// endpoint calls, so a saved search and the equivalent typed query cannot diverge in what they return.
+// endpoint calls, so a saved search and the equivalent typed query SELECT the same rows.
+//
+// ⚠️ THEY DO NOT REPORT THE SAME THING, and the earlier claim that they "cannot diverge" was false.
+// Since CONSOLE-6/6b the live endpoints answer `{rows, has_more, next_cursor?}`; this returns the bare,
+// capped slice. `/search?subject=X` says `has_more:true` where `/searches/run?name=X` returns 100 rows
+// and says nothing — the same silent truncation on the saved-hunt path that pagination exists to remove.
+// It is NOT fixed here: /logs has no page function, so fixing two of three surfaces would make `results`
+// mean a different shape depending on `surface`, which is a worse answer for the console than a uniform
+// one. Recorded as a CONSOLE-6b residual with the fix (page all three, envelope `results` uniformly)
+// scoped to the ticket that gives /logs a walk. Bounded today by there being no scheduled runner: every
+// caller is a human on GET /searches/run who can re-ask with a `limit`.
 //
 // A search saved against a surface whose parser has since become stricter FAILS LOUDLY here rather than
 // silently returning something narrower. A hunt that quietly stopped covering what it used to cover is
@@ -185,6 +235,12 @@ func (s *Server) RunSavedSearch(ctx context.Context, name string) (string, any, 
 // the evidence; the alerts, events and logs it selects are, and none of those is read until after the
 // record is written — so record-then-serve still holds.
 func (s *Server) runResolvedSearch(ctx context.Context, sv SavedSearch) (string, any, error) {
+	// A search stored BEFORE the save-time check existed can still carry a frozen cursor. Refusing it
+	// here is the same fail-loud rule as a parser that has since become stricter: the hunt is broken and
+	// the operator is told, rather than being handed a truncated answer that reads as complete.
+	if err := rejectStoredCursor(sv.Query); err != nil {
+		return sv.Surface, nil, err
+	}
 	req, err := http.NewRequest(http.MethodGet, "/?"+sv.Query, nil)
 	if err != nil {
 		return sv.Surface, nil, fmt.Errorf("%w: %v", ErrBadSavedSearch, err)

@@ -250,3 +250,95 @@ func TestTheSavedSearchEndpointsAreMountedAndTiered(t *testing.T) {
 			"found nothing'", resp.StatusCode)
 	}
 }
+
+// TestASavedSearchCannotCaptureAContinuationCursor — CONSOLE-6b, and the defect this test exists for is
+// a FREEZE, not a bad parameter.
+//
+// `parseAlertFilter` and `parseEventFilter` both read `cursor=`, and both are the parsers `validateSearch`
+// accepts a saved search with and `runResolvedSearch` executes it through. So
+// `POST /searches/save?surface=alerts&query=subject%3DX%26cursor%3D<valid>` was ACCEPTED and PERSISTED,
+// and every later run applied a boundary from the instant the hunt was saved. Cursors do not expire, so
+// it never self-heals: the hunt permanently excludes everything newer, keeps returning rows, and returns
+// a truncated result as the answer. That is exactly the outcome RunSavedSearch's own doc comment calls
+// "the worst outcome available".
+//
+// The EVENTS half is a PRE-EXISTING defect shipped in D481 (event_search.go sets f.Cursor and
+// SurfaceEvents dispatches to it); the ALERTS half is one CONSOLE-6b would have introduced. Both are
+// fixed here and both are asserted, because a fix on the surface the author happened to be editing is
+// how the other half survives.
+//
+// Mutation: drop the rejectStoredCursor call from validateSearch → the save halves return nil → FAILS.
+// Mutation: drop it from runResolvedSearch → the already-stored search runs frozen → the run half FAILS.
+// Mutation: refuse `cursor` unconditionally in rejectStoredCursor rather than only when non-empty → the
+// POSITIVE halves below FAIL, so a blanket refusal cannot pass this test.
+func TestASavedSearchCannotCaptureAContinuationCursor(t *testing.T) {
+	pool := requireDB(t)
+	srv := controlplane.New(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	subject := fmt.Sprintf("sub_frozen_%d", now.UnixNano())
+
+	// Real cursors, minted by the real walks — a MALFORMED one is already refused by the surface
+	// parsers, so a test using one would pass without this fix and prove nothing.
+	seedAlerts(t, pool, subject, 4, now.Add(-time.Hour))
+	alertCur := alertPage(t, srv, controlplane.AlertFilter{SubjectID: subject, Limit: 2}).NextCursor
+	agent := fmt.Sprintf("agent-frozen-%d", now.UnixNano())
+	for i := 0; i < 4; i++ {
+		srv.InsertFleetTelemetryForTest(t, agent, fmt.Sprintf("frozen-ev-%d", i), []byte("x"), true)
+	}
+	eventCur := eventsPage(t, srv, agent, "", 2).NextCursor
+	if alertCur == "" || eventCur == "" {
+		t.Fatalf("no cursor to freeze with (alerts=%q events=%q)", alertCur, eventCur)
+	}
+
+	// 1. THE POSITIVE HALF FIRST: the same hunts, without a cursor, save fine. Without this a blanket
+	// refusal of everything would satisfy the assertions below.
+	for _, ok := range []struct{ name, surface, query string }{
+		{"live-alerts", controlplane.SurfaceAlerts, "subject=" + subject + "&min_risk=0.1"},
+		{"live-events", controlplane.SurfaceEvents, "agent=" + agent},
+	} {
+		if err := srv.SaveSearch(ctx, controlplane.SavedSearch{
+			Name: ok.name, Surface: ok.surface, Query: ok.query,
+		}, "cert:alice"); err != nil {
+			t.Fatalf("saving the cursor-free %s hunt failed: %v — the refusals below would then hold "+
+				"for queries that simply do not save", ok.surface, err)
+		}
+	}
+
+	// 2. THE REFUSAL, ON BOTH SURFACES.
+	for _, frozen := range []struct{ name, surface, query string }{
+		{"frozen-alerts", controlplane.SurfaceAlerts, "subject=" + subject + "&cursor=" + alertCur},
+		{"frozen-events", controlplane.SurfaceEvents, "agent=" + agent + "&cursor=" + eventCur},
+	} {
+		err := srv.SaveSearch(ctx, controlplane.SavedSearch{
+			Name: frozen.name, Surface: frozen.surface, Query: frozen.query,
+		}, "cert:alice")
+		if !errors.Is(err, controlplane.ErrBadSavedSearch) {
+			t.Errorf("saving a %s hunt carrying a valid cursor returned %v, want ErrBadSavedSearch — a "+
+				"stored cursor freezes the hunt at the instant it was saved, forever, silently",
+				frozen.surface, err)
+		}
+		if _, err := srv.SavedSearchByName(ctx, frozen.name); !errors.Is(err, controlplane.ErrNoSuchSearch) {
+			t.Errorf("the refused %s hunt was persisted anyway (%v)", frozen.surface, err)
+		}
+	}
+
+	// 3. AND A SEARCH ALREADY IN THE TABLE — one written before this check existed, which is the
+	// population that has actually been frozen — FAILS LOUDLY when it is run, rather than quietly
+	// serving the boundary it captured. Inserted directly, because SaveSearch now refuses it.
+	execSQL(t, pool,
+		`INSERT INTO saved_searches (name, surface, query, description, created_by, updated_by)
+		 VALUES ('legacy-frozen', $1, $2, '', 'cert:legacy', 'cert:legacy')`,
+		controlplane.SurfaceAlerts, "subject="+subject+"&cursor="+alertCur)
+	if _, _, err := srv.RunSavedSearch(ctx, "legacy-frozen"); !errors.Is(err, controlplane.ErrBadSavedSearch) {
+		t.Errorf("running a stored search that carries a cursor returned %v, want ErrBadSavedSearch — "+
+			"it would otherwise go on answering with everything older than the moment it was saved, "+
+			"and the truncation is the part nobody sees", err)
+	}
+	// The same search with the cursor removed runs, so the failure above is the cursor and not the row.
+	execSQL(t, pool, `UPDATE saved_searches SET query = $1 WHERE name = 'legacy-frozen'`,
+		"subject="+subject)
+	if _, _, err := srv.RunSavedSearch(ctx, "legacy-frozen"); err != nil {
+		t.Errorf("the same stored search without its cursor failed to run: %v", err)
+	}
+}

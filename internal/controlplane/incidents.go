@@ -130,21 +130,89 @@ func recurrenceSuffix(rec Recurrence) string {
 		rec.Count, rec.Of, rec.Since.Round(time.Minute))
 }
 
+// IncidentPage is one page of a keyset walk over incidents.
+type IncidentPage struct {
+	Rows    []StoredIncident `json:"rows"`
+	HasMore bool             `json:"has_more"`
+	// NextCursor is ABSENT on the last page, never empty — a value a client could mistake for a usable
+	// one must be absent, or it will be sent back and an empty page rendered as a real one.
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
 // RecentIncidents returns materialized incidents, most recently active first.
+//
+// Kept as the un-paginated view for callers that want the first page and nothing else, so they are
+// unchanged and the two views cannot disagree about what a page contains.
 func (s *Server) RecentIncidents(ctx context.Context, limit int) ([]StoredIncident, error) {
+	page, err := s.RecentIncidentsPage(ctx, limit, "")
+	if err != nil {
+		return nil, err
+	}
+	return page.Rows, nil
+}
+
+// RecentIncidentsPage is the paginated read (CONSOLE-6b): the same list, plus whether more incidents
+// exist and where to continue from.
+//
+// Bare parameters rather than a one-field IncidentFilter struct: AlertFilter and EventFilter exist
+// because they already carried several constraints each, and a struct wrapping one int and one string
+// is a type that only makes the call site longer.
+//
+// ⚠️ INCIDENTS ARE NOT APPEND-ONLY, and this walk is therefore weaker than the /events one in a way that
+// is accepted and stated rather than hidden. MaterializeIncidents upserts an OPEN incident's last_seen,
+// from this route's own handler and from the leader's background correlation loop. An open incident not
+// yet reached can have its last_seen pushed ahead of the walk boundary, and a keyset walk only moves one
+// direction from a fixed point — so that row is absent from the rest of THIS walk and resurfaces at the
+// top of a fresh one.
+//
+// ⚠️ NARROWER THAN IT FIRST LOOKS, because the upsert is IDEMPOTENT. `last_seen = EXCLUDED.last_seen` is
+// `max(detected_at)` over the subject's alerts in the window — no writer of this column ever uses now().
+// So re-running MaterializeIncidents with no new alerts rewrites the value it already stored and moves
+// nothing. The unconditional materialization on every page of the walk therefore does NOT push every open
+// incident above the boundary each time it is called; only an incident that actually absorbed a new alert
+// moves. The residual is bounded by live detection, not by how deep the walk is — which is what makes
+// accepting it reasonable rather than merely convenient.
+//
+// Bounded to state='open' as well: once acknowledged, the upsert's WHERE state='open'
+// conflict target stops matching and a later burst opens a NEW row, so triaged history — which is what a
+// deep walk exists to read — behaves exactly like /events. A snapshot is deliberately not built here;
+// CONSOLE-6 ruled one out of scope for all keyset pagination, and building one only for incidents would
+// contradict the precedent this extends.
+func (s *Server) RecentIncidentsPage(ctx context.Context, limit int, cursor string) (IncidentPage, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > maxSearchLimit {
 		limit = maxSearchLimit
 	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen,
-		        acknowledged_by, acknowledged_at, COALESCE(recurrence_of, 0), recurrence_count,
-		        kind, rule_name
-		   FROM incidents ORDER BY last_seen DESC LIMIT $1`, limit)
+	q := `SELECT id, subject_id, state, alert_count, max_risk, host_count, first_seen, last_seen,
+	             acknowledged_by, acknowledged_at, COALESCE(recurrence_of, 0), recurrence_count,
+	             kind, rule_name
+	        FROM incidents`
+	args := []any{}
+	// THE KEYSET BOUNDARY. Row-wise comparison against the exact ORDER BY tuple. `id` is half the key
+	// because last_seen alone is not unique: it is `max(detected_at)` over the subject's alerts, so any
+	// two subjects whose newest alert landed in the same detector pass tie exactly. A boundary on the
+	// timestamp alone would step past the whole tied group and lose every row in it for the rest of the
+	// walk. (An earlier version of this comment said a materialization pass stamps `now()` on every row
+	// it touches. It does not — see RecentIncidentsPage's note. The tiebreaker is required either way,
+	// and the tie fixture in the tests is a real tie, but the reason had to be the true one.)
+	if cursor != "" {
+		c, err := decodeIncidentCursor(cursor)
+		if err != nil {
+			return IncidentPage{}, err
+		}
+		args = append(args, c.LastSeen, c.ID)
+		q += " WHERE (last_seen, id) < ($1, $2)"
+	}
+	// OVER-READ BY ONE to learn whether another page exists, rather than a second COUNT(*) pass that
+	// would already be stale by the time the page rendered.
+	args = append(args, limit+1)
+	q += fmt.Sprintf(" ORDER BY last_seen DESC, id DESC LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return IncidentPage{}, err
 	}
 	defer rows.Close()
 	var out []StoredIncident
@@ -153,12 +221,28 @@ func (s *Server) RecentIncidents(ctx context.Context, limit int) ([]StoredIncide
 		if err := rows.Scan(&i.ID, &i.SubjectID, &i.State, &i.AlertCount, &i.MaxRisk, &i.HostCount,
 			&i.FirstSeen, &i.LastSeen, &i.AcknowledgedBy, &i.AcknowledgedAt,
 			&i.RecurrenceOf, &i.RecurrenceCount, &i.Kind, &i.RuleName); err != nil {
-			return nil, err
+			return IncidentPage{}, err
 		}
 		i.Severity = Severity(i.MaxRisk)
 		out = append(out, i)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return IncidentPage{}, err
+	}
+
+	page := IncidentPage{Rows: out}
+	if len(out) > limit {
+		// The probe row is DISCARDED so `limit` means what it says, and the cursor comes from the last
+		// RETURNED row — from the probe it would skip that row on the next page.
+		page.Rows = out[:limit]
+		page.HasMore = true
+		last := page.Rows[limit-1]
+		page.NextCursor = incidentCursor{LastSeen: last.LastSeen, ID: last.ID}.encode()
+	}
+	if page.Rows == nil {
+		page.Rows = []StoredIncident{} // never `null`: an empty page and a failed read must not look alike
+	}
+	return page, nil
 }
 
 // AcknowledgeIncident marks an incident acknowledged by the (verified) operator. First-ack-wins (the

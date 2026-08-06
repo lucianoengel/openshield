@@ -41,27 +41,13 @@ func scanPeerAlert(rows interface{ Scan(...any) error }) (PeerAlert, error) {
 	return a, nil
 }
 
-// RecentPeerAlerts returns the most recent peer alerts, newest first.
-func (s *Server) RecentPeerAlerts(ctx context.Context, limit int) ([]PeerAlert, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+peerAlertColumns+` FROM peer_alerts ORDER BY detected_at DESC LIMIT $1`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []PeerAlert
-	for rows.Next() {
-		a, err := scanPeerAlert(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
+// RecentPeerAlerts WAS HERE AND IS DELETED (CONSOLE-6b). /alerts was its only route, and that route now
+// reads through SearchPeerAlertsPage. What was left was an exported unpaginated read carrying
+// `ORDER BY detected_at DESC` with NO id tiebreaker and no maximum — the exact defect this change argued
+// against and built a tie fixture to catch — sitting in the package as the obvious thing the next
+// /alerts-shaped route would reach for. Kept "just for tests" it would have gone on compiling forever and
+// eventually acquired a caller. An unfiltered newest-first read is `SearchPeerAlertsPage` with an empty
+// AlertFilter; there is nothing this offered that that does not.
 
 // AlertFilter is a search query over the fleet's peer alerts (Phase F1). Every field is
 // optional; a zero field is "no constraint". The filter is applied as PARAMETERIZED SQL —
@@ -75,13 +61,41 @@ type AlertFilter struct {
 	Since              time.Time // only alerts at or after this time (zero = no lower bound)
 	Until              time.Time // only alerts at or before this time (zero = no upper bound)
 	Limit              int       // max rows (default 100)
+	// Cursor continues from a previous page (CONSOLE-6b). Empty starts at the newest alert. It is a
+	// POSITION ONLY — the caller's authority is re-derived from their credential on every page, never
+	// read from here, because a cursor honoured as authority is a cursor another operator can replay.
+	Cursor string
+}
+
+// AlertPage is one page of a keyset walk over peer_alerts.
+type AlertPage struct {
+	Rows    []PeerAlert `json:"rows"`
+	HasMore bool        `json:"has_more"`
+	// NextCursor is ABSENT on the last page, never empty: a value a client could mistake for a usable
+	// one must be absent, or it will be sent back and an empty page rendered as a real one.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // SearchPeerAlerts returns peer alerts matching the filter, newest first. It builds the
 // WHERE clause from only the constraints that are set, binding each as a placeholder — the
 // operator's values are DATA, never SQL. This is the F1 search over the fleet aggregate,
 // the substrate a SIEM UI queries.
+//
+// Kept as the un-paginated view for callers that want the first page and nothing else (the saved-search
+// runner, and every test that just wants the rows), so those callers are unchanged and the two views
+// cannot disagree about what a page contains.
 func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAlert, error) {
+	page, err := s.SearchPeerAlertsPage(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return page.Rows, nil
+}
+
+// SearchPeerAlertsPage is the paginated read (CONSOLE-6b): the same search, plus whether more rows exist
+// and where to continue. Both /alerts and /search read through it, so the alert queue and the filtered
+// hunt cannot end up with different ideas of what a page is.
+func (s *Server) SearchPeerAlertsPage(ctx context.Context, f AlertFilter) (AlertPage, error) {
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
@@ -120,26 +134,60 @@ func (s *Server) SearchPeerAlerts(ctx context.Context, f AlertFilter) ([]PeerAle
 	if !f.Until.IsZero() {
 		add("detected_at <= $%d", f.Until)
 	}
+	// THE KEYSET BOUNDARY, appended after every other constraint. Row-wise comparison against the exact
+	// ORDER BY tuple, so the walk resumes at the row after the last one returned — no offset, and no
+	// dependence on rows written since. `id` is half the key and not decoration: a detector pass writes
+	// several alerts sharing one detected_at, and a boundary on the timestamp alone would step past the
+	// whole tied group, losing every row in it for the rest of the walk.
+	if f.Cursor != "" {
+		c, cerr := decodeAlertCursor(f.Cursor)
+		if cerr != nil {
+			return AlertPage{}, cerr
+		}
+		args = append(args, c.DetectedAt, c.ID)
+		conds = append(conds, fmt.Sprintf("(detected_at, id) < ($%d, $%d)", len(args)-1, len(args)))
+	}
 	if len(conds) > 0 {
 		q += " WHERE " + strings.Join(conds, " AND ")
 	}
-	args = append(args, limit)
-	q += fmt.Sprintf(" ORDER BY detected_at DESC LIMIT $%d", len(args))
+	// OVER-READ BY ONE to learn whether another page exists. A separate COUNT(*) is a second scan of the
+	// same predicate, and under live detection it answers a different question than "is there another
+	// page" — the count is already stale by the time the page renders.
+	args = append(args, limit+1)
+	q += fmt.Sprintf(" ORDER BY detected_at DESC, id DESC LIMIT $%d", len(args))
 
 	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return AlertPage{}, err
 	}
 	defer rows.Close()
 	var out []PeerAlert
 	for rows.Next() {
 		a, err := scanPeerAlert(rows)
 		if err != nil {
-			return nil, err
+			return AlertPage{}, err
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return AlertPage{}, err
+	}
+
+	page := AlertPage{Rows: out}
+	if len(out) > limit {
+		// THE EXTRA ROW IS DISCARDED, never returned, so `limit` means what it says. The cursor comes
+		// from the LAST RETURNED row and not the probe row — taking it from the probe would skip that
+		// row on the next page. PeerAlert already carries its id, so unlike the event walk there is no
+		// parallel id slice to keep in step.
+		page.Rows = out[:limit]
+		page.HasMore = true
+		last := page.Rows[limit-1]
+		page.NextCursor = alertCursor{DetectedAt: last.DetectedAt, ID: last.ID}.encode()
+	}
+	if page.Rows == nil {
+		page.Rows = []PeerAlert{} // never `null`: an empty page and a failed read must not look alike
+	}
+	return page, nil
 }
 
 // OperatorReadHandler serves the operator's read surface over the fleet: recent peer
@@ -159,12 +207,27 @@ func (s *Server) OperatorReadHandler() http.Handler {
 			http.Error(w, "bad limit: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		alerts, err := s.RecentPeerAlerts(r.Context(), limit)
+		// CONSOLE-6b: the queue is WALKABLE. It reads through the same page function /search uses, so
+		// the two surfaces cannot disagree about what a page is, and a client that has paged one has
+		// paged the other. Authority is re-derived per page from the credential the tier gate already
+		// checked on THIS request (D470) — the cursor carries a position and nothing else.
+		f := AlertFilter{Limit: limit}
+		if v := strings.TrimSpace(r.URL.Query().Get("cursor")); v != "" {
+			// Validated at the edge so an unreadable cursor is a 400 here rather than an error surfacing
+			// from the query layer as a 500. Refused, never ignored: silently serving page 1 to a client
+			// that believes it is deeper makes it render duplicates and conclude the data changed under it.
+			if _, cerr := decodeAlertCursor(v); cerr != nil {
+				http.Error(w, "bad cursor: "+cerr.Error(), http.StatusBadRequest)
+				return
+			}
+			f.Cursor = v
+		}
+		page, err := s.SearchPeerAlertsPage(r.Context(), f)
 		if err != nil {
 			http.Error(w, "read failed", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, alerts)
+		writeJSON(w, page)
 	})
 
 	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
@@ -180,12 +243,14 @@ func (s *Server) OperatorReadHandler() http.Handler {
 			http.Error(w, "bad filter: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		alerts, err := s.SearchPeerAlerts(r.Context(), f)
+		// CONSOLE-6b: a PAGE, not a bare list. The filtered hunt was the surface most likely to hit the
+		// 1000-row cap and the one least able to survive doing so silently.
+		page, err := s.SearchPeerAlertsPage(r.Context(), f)
 		if err != nil {
 			http.Error(w, "read failed", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, alerts)
+		writeJSON(w, page)
 	})
 
 	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +402,17 @@ func parseAlertFilter(r *http.Request) (AlertFilter, error) {
 			return AlertFilter{}, fmt.Errorf("unacknowledged %q is not a boolean", v)
 		}
 		f.UnacknowledgedOnly = b
+	}
+	// CONSOLE-6b: the continuation cursor, DECODED HERE ONLY TO VALIDATE IT — the encoded form is what
+	// the query layer carries, so this is a check and not a parse whose result is used. A malformed one
+	// is then a 400 at the edge like every other bad param on this surface, and a cursor minted for
+	// another walk (an /events or /incidents position) fails the same check rather than being honoured
+	// against peer_alerts, where it would serve a wrong-but-plausible page.
+	if v := strings.TrimSpace(q.Get("cursor")); v != "" {
+		if _, err := decodeAlertCursor(v); err != nil {
+			return AlertFilter{}, err
+		}
+		f.Cursor = v
 	}
 	return f, nil
 }
