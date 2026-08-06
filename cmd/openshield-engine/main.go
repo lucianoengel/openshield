@@ -20,6 +20,7 @@ import (
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/connectors/dns"
 	"github.com/lucianoengel/openshield/internal/connectors/execaudit"
+	"github.com/lucianoengel/openshield/internal/transport/queue"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
 	"log/slog"
@@ -235,6 +236,18 @@ func main() {
 		if err := natsx.EnableDurableIfDefault(pub); err != nil {
 			fatal(log, "durable telemetry ingest", err)
 		}
+		// CONSOLE-8c: THE DURABLE OFFLINE SPOOL (D40/D67/T-024), which this binary never had.
+		//
+		// Only the fleet SIMULATOR called SetSpool, so a real endpoint DROPPED its telemetry for the
+		// whole of any broker outage — and nothing ever backfilled it. The endpoint's own hash-chained
+		// ledger still held every decision (D30), so this was never evidence loss; what was lost was the
+		// FLEET's copy, permanently. Correlation, XDR, incidents and peer-UEBA all have a hole for the
+		// outage window and no path exists to fill it.
+		//
+		// All three spool-drain integration scenarios exercised the simulator, so the capability was
+		// demonstrated and never shipped — the same shape as the heartbeat (D474) and durable ingest
+		// (PLAT-2) before it.
+		attachSpool(ctx, pub, agentID, log)
 		eng.SetTelemetry(pub)
 		log.Info("engine: fleet telemetry ENABLED — real detections project to the control plane (D80)",
 			slog.String("agent_id", agentID), slog.Bool("durable_ingest", natsx.JetStreamEnabled()))
@@ -1423,6 +1436,70 @@ func startHeartbeat(ctx context.Context, eng *engine.Engine, pub *natsx.SignedPu
 					// when the record is the only thing at stake.
 					log.Warn("engine: heartbeat publish failed — this endpoint will look silent until it "+
 						"succeeds", slog.String("err", err.Error()))
+				}
+			}
+		}
+	}()
+}
+
+// attachSpool gives the endpoint a durable store-and-forward queue and a drain loop.
+//
+// UNCONFIGURED IS LOUD (D31). A spool is a deployment choice — an endpoint with plenty of broker uptime
+// may not want the disk — but "your telemetry is discarded during an outage" is not something an operator
+// should have to infer from an absent environment variable. The old behaviour is unchanged when it is
+// unset; only the silence is.
+func attachSpool(ctx context.Context, pub *natsx.SignedPublisher, agentID string, log *slog.Logger) {
+	qdir := os.Getenv("OPENSHIELD_QUEUE_DIR")
+	if qdir == "" {
+		log.Warn("engine: NO OFFLINE SPOOL (set OPENSHIELD_QUEUE_DIR) — while the broker is unreachable " +
+			"this endpoint's telemetry is DROPPED and never backfilled. Decisions are still recorded in " +
+			"the local ledger, so evidence survives; the fleet's view of this host does not")
+		return
+	}
+	max := envInt("OPENSHIELD_QUEUE_MAX", 10000)
+	q, err := queue.Open(qdir, max, func(seq uint64) {
+		// AN EVICTION IS SAID OUT LOUD. Past the ceiling the spool is dropping the very records it
+		// exists to protect, and a drop nobody records is the silent loss the queue is for (D31).
+		log.Error("engine: SPOOL OVERFLOW — a spooled record was dropped, so the fleet's view of this "+
+			"host now has a hole that nothing will fill",
+			slog.Uint64("seq", seq), slog.Int("ceiling", max))
+	})
+	if err != nil {
+		fatal(log, "offline queue", err)
+	}
+	pub.SetSpool(q)
+	log.Info("engine: offline spool ACTIVE — telemetry produced while the broker is unreachable is "+
+		"queued in order and re-sent on reconnect",
+		slog.String("dir", qdir), slog.Int("ceiling", max))
+
+	// A DRAIN LOOP OF ITS OWN, deliberately not folded into the heartbeat ticker beside it. The
+	// heartbeat can be turned off (OPENSHIELD_HEARTBEAT_INTERVAL<=0) and turning off the liveness
+	// signal must not also stop the spool draining — a coupling like that is invisible until the day
+	// both matter, which is the same day.
+	interval := envDuration("OPENSHIELD_QUEUE_FLUSH_INTERVAL", 15*time.Second)
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				n, ferr := pub.Flush()
+				if ferr != nil {
+					// STOPPING PART-WAY IS NORMAL during an outage: Drain halts at the first failure to
+					// preserve FIFO order, and the next tick resumes. Logged at INFO with the count so a
+					// depth that never falls is visible, rather than as an error that trains an operator
+					// to ignore it.
+					log.Info("engine: spool drain stopped early (broker still unreachable?)",
+						slog.Int("sent", n), slog.String("err", ferr.Error()))
+					continue
+				}
+				if n > 0 {
+					log.Info("engine: spool drained to the control plane", slog.Int("sent", n))
 				}
 			}
 		}

@@ -29,9 +29,14 @@ func (e *Engine) SetTelemetry(t Projector) { e.telemetry = t }
 // redacts the URL path because a URL path is content-like (D77). The Decision is
 // schema-guarded to carry no content (D14).
 //
-// Best-effort — a publish error is logged, never fatal: the decision is already
-// durably recorded in the local ledger (D30) and the publisher offline-queues (D67),
-// so a lost telemetry copy degrades the fleet VIEW, not the audit trail.
+// Best-effort — a publish error is logged, never fatal: the decision is already durably recorded in the
+// local ledger (D30), so a lost telemetry copy degrades the fleet VIEW, not the audit trail.
+//
+// THIS COMMENT USED TO ALSO CLAIM "and the publisher offline-queues (D67)", WHICH WAS NOT TRUE OF THE
+// ENGINE. Only the fleet simulator attached a spool, so on a real endpoint a publish error meant the
+// record was gone — permanently, with no backfill path anywhere. The claim is now earned rather than
+// asserted (CONSOLE-8c wires the spool in cmd/openshield-engine), but ONLY when the deployment
+// configures one; an endpoint with no OPENSHIELD_QUEUE_DIR still drops, and says so at startup.
 func (e *Engine) projectTelemetry(ctx context.Context, ev *corev1.Event, dec *corev1.Decision) {
 	if e.telemetry == nil {
 		return

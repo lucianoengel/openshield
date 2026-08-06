@@ -549,7 +549,7 @@ the surfaces, then the two exit-criteria tickets.*
   |---|---|---|---|
   | `PublishHeartbeat` | T-018/D16, PLAT-9 | idle endpoint ≡ dead endpoint; acknowledgement table empty | ✅ D474 |
   | version stamp | PLAT-6 | every shipped binary carries no version | ✅ D474 |
-  | `SetSpool`/`queue.Open` | D40/D67/T-024 | **a broker outage loses endpoint telemetry outright** — all three spool-drain integration tests exercise the simulator | ❌ `CONSOLE-8c` |
+  | `SetSpool`/`queue.Open` | D40/D67/T-024 | a broker outage lost endpoint telemetry outright (fleet view, not evidence — the local ledger held) | ✅ D475 |
   | `posture.Publish` | D92/D85, HON-4 | no endpoint publishes posture, so the D85 tamper-lockout has no input | ❌ `CONSOLE-8d` |
   | `attest` + `binaryIntegrity` | ZT-1/D190, PLAT-6 | no real endpoint attests or reports binary integrity | ❌ `CONSOLE-8e` |
 
