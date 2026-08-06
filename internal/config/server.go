@@ -156,6 +156,13 @@ var ServerFields = []Field{
 	{Key: "OPENSHIELD_NOTIFY_DEDUPE_RETENTION", Scope: ScopeDynamic, Kind: KindDuration, Default: "24h",
 		Description: "How long durable notify-dedupe ids are kept (SIEM-12).",
 		Sensitivity: LoweringWeakens},
+	{Key: "OPENSHIELD_VIEW_AUDIT_RETENTION", Scope: ScopeDynamic, Kind: KindDuration, Default: "8760h",
+		Description: "How long the record of WHO LOOKED at what is kept before purge (CONSOLE-5). The " +
+			"table stores raw, non-pseudonymised operator identities, so it is the one store here that " +
+			"needs a window for privacy rather than for disk. Keep it LONGER than " +
+			"OPENSHIELD_FLEET_RETENTION: an accountability record that expires before the evidence it " +
+			"describes leaves nothing to check a disputed read against. Nothing cross-checks the two.",
+		Sensitivity: LoweringWeakens},
 	{Key: "OPENSHIELD_PEER_UEBA_THRESHOLD", Scope: ScopeDynamic, Kind: KindUnitInterval, Default: "",
 		Description: "Peer-UEBA risk threshold above which an alert is recorded (D54). The score is a z-score SQUASHED to [0,1), so a threshold of 1 or more can never fire — that is refused rather than silently disabling the detector. Typical: 0.9.",
 		Sensitivity: RaisingWeakens},

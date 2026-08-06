@@ -182,9 +182,12 @@ func TestEveryDetectionFieldDeclaresItsDirection(t *testing.T) {
 		"OPENSHIELD_RETENTION_INTERVAL":      config.RaisingWeakens,
 		"OPENSHIELD_FLEET_RETENTION":         config.LoweringWeakens,
 		"OPENSHIELD_NOTIFY_DEDUPE_RETENTION": config.LoweringWeakens,
-		"OPENSHIELD_PEER_UEBA_THRESHOLD":     config.RaisingWeakens,
-		"OPENSHIELD_PEER_UEBA_COOLDOWN":      config.RaisingWeakens,
-		"OPENSHIELD_ALERT_ROUTES":            config.AnyChangeWeakens,
+		// CONSOLE-5: lowering it shortens how long the record of who looked survives, which is a
+		// weakening of an accountability control and not merely a storage decision.
+		"OPENSHIELD_VIEW_AUDIT_RETENTION": config.LoweringWeakens,
+		"OPENSHIELD_PEER_UEBA_THRESHOLD":  config.RaisingWeakens,
+		"OPENSHIELD_PEER_UEBA_COOLDOWN":   config.RaisingWeakens,
+		"OPENSHIELD_ALERT_ROUTES":         config.AnyChangeWeakens,
 		// Not a detection knob but an AUTHENTICATION posture one, and it belongs here for the same
 		// reason: turning it on stops the listener refusing a certificate-less peer at the handshake
 		// (CONSOLE-1). What is presented afterwards is verified just as strictly, so this is a narrow

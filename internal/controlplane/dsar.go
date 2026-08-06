@@ -22,10 +22,19 @@ import (
 
 // SubjectReport is the compiled answer to "what does the platform hold about this subject?"
 type SubjectReport struct {
-	SubjectID      string    `json:"subject_id"`
-	AuditEntries   SpanCount `json:"audit_entries"`
-	PeerAlerts     AlertSpan `json:"peer_alerts"`
-	Cases          []Case    `json:"cases"`
+	SubjectID    string    `json:"subject_id"`
+	AuditEntries SpanCount `json:"audit_entries"`
+	PeerAlerts   AlertSpan `json:"peer_alerts"`
+	Cases        []Case    `json:"cases"`
+	// ViewsOfSubject is who has been LOOKING at this subject (CONSOLE-5). The report compiled every
+	// other subject-keyed store and omitted the one that answers the question a data-subject request
+	// most obviously asks of a view audit.
+	//
+	// It covers reads that NAMED the subject. A fleet-wide search that happened to include them is
+	// recorded as a fleet-wide search, not as a view of them, and this count does not claim otherwise —
+	// the alternative would be to guess which broad searches returned a row about this person, which is
+	// a claim the record cannot support.
+	ViewsOfSubject SpanCount `json:"views_of_subject"`
 	UnderLegalHold bool      `json:"under_legal_hold"`
 	GeneratedAt    time.Time `json:"generated_at"`
 }
@@ -66,6 +75,16 @@ func (s *Server) SubjectAccessReport(ctx context.Context, subjectID string) (Sub
 		return SubjectReport{}, fmt.Errorf("controlplane: DSAR alerts: %w", err)
 	}
 	rep.PeerAlerts.MaxSeverity = Severity(rep.PeerAlerts.MaxRisk)
+
+	// CONSOLE-5: who looked at this subject. Counted, not listed — the operator identities in that
+	// table are other people's personal data, and a DSAR that answered "here are the names of the four
+	// analysts who read your file" would resolve one person's access right by disclosing another's.
+	// The privacy officer can list them at /views; the subject learns that it happened and when.
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*), min(viewed_at), max(viewed_at) FROM investigation_views WHERE subject_filter = $1`,
+		subjectID).Scan(&rep.ViewsOfSubject.Count, &rep.ViewsOfSubject.FirstAt, &rep.ViewsOfSubject.LastAt); err != nil {
+		return SubjectReport{}, fmt.Errorf("controlplane: DSAR views: %w", err)
+	}
 
 	cases, err := s.casesForSubject(ctx, subjectID)
 	if err != nil {

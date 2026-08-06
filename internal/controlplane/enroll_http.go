@@ -94,7 +94,15 @@ func (s *Server) serve(ctx context.Context, addr string, tlsCfg *tls.Config) err
 		// analyst deactivate an admin.
 		mux.Handle(scimUsers, s.ScimHandler())
 		mux.Handle(scimUsers+"/", s.ScimHandler())
-		opRead := s.OperatorReadHandler() // one inner mux; the outer mount applies the tier gate per route
+		// One inner mux; the outer mount applies the tier gate per route.
+		//
+		// CONSOLE-5: and the view audit wraps it ONCE, inside every tier gate below. Recording used to
+		// be written by hand in each handler, so eleven handlers written after the invariant recorded
+		// nothing — including every primary read a console renders. Wrapping here inverts the default:
+		// a route added to the inner mux is audited unless somebody names it in viewAuditExempt with
+		// the residual it accepts. It must stay INSIDE requireTier/requirePrivacyOfficer, which is what
+		// puts the authenticated principal on the context for it to attribute the read to.
+		opRead := s.viewAudited(s.OperatorReadHandler())
 		mux.Handle("/alerts", s.requireTier(RoleAnalyst, opRead))
 		mux.Handle("/alerts/ack", s.requireTier(RoleResponder, opRead)) // SIEM-6: acknowledge an alert (POST)
 		mux.Handle("/search", s.requireTier(RoleAnalyst, opRead))

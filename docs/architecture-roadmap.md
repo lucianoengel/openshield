@@ -377,7 +377,7 @@ neither.
 | CONSOLE-2 | Toolchain, dependency budget, reproducible bundle | 0 | — | M |
 | CONSOLE-3 | Browser session auth | 0 | 1 | L |
 | CONSOLE-4 | Incidents queue + timeline detail *(slice 1)* | 1 | 1, 3 | L |
-| CONSOLE-5 | View-audit repair + `investigation_views` retention | 2 | 1 | M |
+| CONSOLE-5 | View-audit repair + `investigation_views` retention ✅ | 2 | 1 | M |
 | CONSOLE-6 | Keyset pagination ✅ | 2 | — | M |
 | CONSOLE-7 | Operator-tier `/health` | 2 | — | S |
 | CONSOLE-8 | Fleet inventory + break-glass surface 🟡 | 2 | 7 | M |
@@ -497,17 +497,23 @@ stated in its entry.
 *Read models first, then the security primitives the console's own threat model forces, then tuning, then
 the surfaces, then the two exit-criteria tickets.*
 
-- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — CONSOLE-1 · M. 🟡 **The READER
-  landed with D470** (`GET /views?event=|viewer=`, privacy-officer tier, and reading it is itself
-  recorded). What remains is the RECORDING gap and retention, below. **A console WEAKENS
-  a documented trust boundary unless this lands.** `RecordView` has four call sites (`views.go:47`,
-  `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`); `/alerts`, `/search`, `/events`, `/logs`,
-  `/incidents`, `/overdue`, `/subject`, `/searches/run` record nothing — and those are the console's primary
-  reads. `docs/threat-model.md:184` bounds the malicious-operator insider with "who LOOKED is recorded"; a
-  UI turns that task into "scroll the fleet and leave nothing". Per-route decision on what is an
-  evidence-bearing read, recorded **before** the response, residual stated for every route left unaudited.
-  Plus: migration `007_investigation_views.sql` has **no TTL, no purge and no DSAR path** while storing raw
-  non-pseudonymised operator identities — a console makes it one of the largest tables in the database.
+- **CONSOLE-5 · View-audit repair + `investigation_views` retention** — ✅ **SHIPPED (D482).** The reader
+  landed with D470; the RECORDING half and retention land here. Recording moved from eight-more-handlers
+  to ONE wrapper around the operator read mux that records **by default** — `/alerts`, `/search`,
+  `/events`, `/logs`, `/searches/run`, `/incidents`, `/incidents/recurrences` and `/entities` are now
+  audited, and *not* recording is what costs somebody a named exemption with its residual
+  (`viewAuditExempt`). The record carries the ROUTE and the canonicalised, bounded FILTER, so a dashboard
+  refresh is distinguishable from a search for one named endpoint. `OPENSHIELD_VIEW_AUDIT_RETENTION`
+  (8760h, longer than the fleet window) purges the table on the leader's retention loop and records the
+  compliance event; the subject's DSAR now counts the views that named them, and `/views?viewer=` is the
+  operator's own access path. *Residual, stated:* `/fleet`, `/overdue` and the `/config` reads stay
+  unaudited — the first two are a target list of dark endpoints, the third is "which detections are
+  disabled" — and a read implemented as `POST` would escape the wrapper (there is none today). Archived
+  `2026-08-06-console-5-view-audit`, specs synced. Was: `RecordView` had four call sites (`views.go:47`,
+  `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`) while `docs/threat-model.md` bounded the
+  malicious-operator insider with "who LOOKED is recorded" — a UI turns that into "scroll the fleet and
+  leave nothing" — and migration `007_investigation_views.sql` had no TTL, no purge and no DSAR path while
+  storing raw non-pseudonymised operator identities.
 - **CONSOLE-6 · Keyset pagination** — ✅ **SHIPPED (D481).** `GET /events` returns rows + `has_more` + `next_cursor`; the walk resumes at `(received_at, id) < (…)`. The cursor carries a POSITION ONLY and authority is re-derived per page, so the CONSOLE-1 inherited requirement holds by construction. Was: `maxSearchLimit = 1000` (`operator_read.go:281`), no
   cursor, no `has_more`. Hunt cannot be built on "top 1000 rows, no row 1001" against 90-day retention; the
   existing `ORDER BY received_at DESC, id DESC` is already a usable cursor.

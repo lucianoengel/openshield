@@ -239,6 +239,30 @@ And the record is now READABLE, which it was not until CONSOLE-1: `Views`/`Views
 anywhere, so every view since D20 was written to a table nothing could query. An accountability record
 nobody can read accounts to nobody.
 
+**And it now covers the reads a console actually makes (CONSOLE-5).** The sentence above was true of four
+routes and false of the primary ones: `/alerts`, `/search`, `/events`, `/logs`, `/searches/run`,
+`/incidents`, `/incidents/recurrences` and `/entities` recorded nothing, so scrolling the fleet aggregate
+for a named host left an empty table. Recording is no longer written by hand in each handler — one
+wrapper sits inside every operator gate and records by default, so a read surface added later is audited
+unless somebody exempts it by name with the reason. The record now also carries the ROUTE and the FILTER,
+because "an operator read the event search" does not distinguish a dashboard refresh from a search for
+one named endpoint, and that distinction is the whole of what this section defends.
+
+**Residual: the exempt routes, stated rather than argued away.** `/health`, `/logs/fields`,
+`/compliance/retention`, `/report/response`, `/searches`, `/approvals`, `/fleet`, `/fleet/controls`,
+`/overdue` and the `/config` reads are NOT recorded — they return the platform's own state, not what is
+held about a person. Two of those leave real exposure: a list of which endpoints are dark or not
+enforcing (`/fleet`, `/overdue`) is a target list, and reading which detections are disabled (`/config`)
+is reconnaissance. Both are unrecorded, deliberately, and the reasons live beside the routes in
+`viewAuditExempt`. A read implemented as `POST` would also escape the wrapper; there is none today.
+
+**And the record itself is now bounded.** `investigation_views` had no TTL and no purge while storing raw,
+non-pseudonymised operator identities — the one subject-adjacent store here that grew forever.
+`OPENSHIELD_VIEW_AUDIT_RETENTION` (one year by default, longer than the fleet window so the record
+outlives the evidence it describes) purges it on the leader's retention loop, recorded as a compliance
+event like every other purge. An operator is a data subject of that table: what is held about them is
+readable at `/views?viewer=`, by the privacy officer, and erased by the window.
+
 **Separately: the administrator is not the auditor.** `admin` used to mean "can change configuration"
 AND "can read everything held about a named human" — the subject report, the legal hold, and (had it been
 reachable) the view record. Those are one grant no longer: `privacy-officer` is a second axis that no

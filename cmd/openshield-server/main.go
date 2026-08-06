@@ -505,6 +505,26 @@ func main() {
 				}
 				srv.RecordRetentionEvent(ctx, "notify_dedupe", d, ddCutoff, ddPolicy)
 			}
+			// CONSOLE-5: purge the view audit. Migration 007 shipped `investigation_views` with no TTL
+			// and no purge while storing RAW, NON-PSEUDONYMISED operator identities — the one
+			// subject-adjacent store in this product that grew forever, and the one a console makes the
+			// largest table in the database. The window defaults LONGER than the fleet window on
+			// purpose: an accountability record that expires before the evidence it describes leaves
+			// nothing to check a disputed read against.
+			//
+			// The policy string is built from the value ACTUALLY USED (D333), not from a literal — a
+			// compliance record citing a setting nobody read is worse than one that omits it.
+			vaRetention := cfg.Duration("OPENSHIELD_VIEW_AUDIT_RETENTION")
+			vaCutoff := time.Now().Add(-vaRetention)
+			vaPolicy := fmt.Sprintf("OPENSHIELD_VIEW_AUDIT_RETENTION=%s", vaRetention)
+			if v, verr := srv.PurgeViewsOlderThan(ctx, vaCutoff); verr != nil {
+				fmt.Fprintf(os.Stderr, "openshield-server: view-audit purge failed: %v\n", verr)
+			} else {
+				if v > 0 {
+					fmt.Fprintf(os.Stderr, "openshield-server: purged %d recorded investigation views\n", v)
+				}
+				srv.RecordRetentionEvent(ctx, "investigation_views", v, vaCutoff, vaPolicy)
+			}
 		})
 
 		// SIEM-4: when OPENSHIELD_CEF_SYSLOG_LISTEN is set, receive CEF-over-syslog from the estate and

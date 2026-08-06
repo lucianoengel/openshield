@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -157,6 +158,50 @@ func (s *Server) RecordFleetControlForTest(t interface{ Fatalf(string, ...any) }
 		t.Fatalf("recording fleet control %s: %v", id, err)
 	}
 }
+
+// ViewAuditedForTest wraps a handler in the CONSOLE-5 view audit, so a test can assert the two things
+// that matter about it — that the record exists BEFORE the wrapped handler runs, and that the handler
+// does not run at all when the record fails. Asserting on a row after the response would pass equally
+// against a wrapper that recorded afterwards, which is the ordering the whole invariant is about.
+func ViewAuditedForTest(s *Server, h http.Handler) http.Handler { return s.viewAudited(h) }
+
+// ViewAuditedAsForTest mounts the view audit behind a stub that attaches an already-authenticated
+// certificate principal, standing in for the tier gate.
+//
+// It exists for ONE case and the reason is worth stating: proving that a read whose record fails is not
+// served requires a database that refuses writes, and the real tier gate resolves the operator's grant
+// against that same database. Driven through the gate, a dead pool is refused by the gate and the
+// handler never runs — so the assertion "the handler did not run" would pass without the recording
+// layer doing anything at all. That is a vacuous test, and this removes the gate from the path so the
+// refusal under test is the one the audit makes.
+func ViewAuditedAsForTest(s *Server, cn string, h http.Handler) http.Handler {
+	p, err := certPrincipal(cn)
+	if err != nil {
+		panic("ViewAuditedAsForTest: " + err.Error())
+	}
+	audited := s.viewAudited(h)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		audited.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
+	})
+}
+
+// ViewAuditExemptForTest and ViewAuditedInHandlerForTest expose the two route-decision tables. They are
+// separate maps on purpose — "audited by its own handler" and "deliberately not audited" are different
+// claims, and a test asserts they stay disjoint, because collapsing them is how a stated residual would
+// silently become an exemption nobody wrote down.
+func ViewAuditExemptForTest() map[string]string      { return viewAuditExempt }
+func ViewAuditedInHandlerForTest() map[string]string { return viewAuditedInHandler }
+
+// CanonicalViewQueryForTest exposes the recorded-query rendering: sorted parameters, bounded length,
+// truncation marked in the value.
+func CanonicalViewQueryForTest(v url.Values) string { return canonicalViewQuery(v) }
+
+// MaxViewQueryLenForTest is the bound, so the truncation test derives its input from the code rather
+// than from a number copied into the test that would stop meaning anything if the bound moved.
+func MaxViewQueryLenForTest() int { return maxViewQueryLen }
+
+// ViewQueryTruncatedForTest is the marker appended to a query that did not fit.
+func ViewQueryTruncatedForTest() string { return viewQueryTruncated }
 
 // DecodeCursorForTest exposes the decoded cursor so a test can assert what it does NOT contain — the
 // CONSOLE-1 inherited requirement that a cursor carries a position and never authority. Asserting on the

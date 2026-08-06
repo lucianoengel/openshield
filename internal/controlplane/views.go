@@ -15,10 +15,17 @@ import (
 var ErrNoViewer = errors.New("controlplane: view requires a viewer identity")
 
 // ViewRecord is one recorded investigation view.
+//
+// Route and Query arrived with CONSOLE-5 (migration 053). They are what makes the record answer "what
+// did they look at" rather than only "they looked": a row that says an operator read the event search
+// does not distinguish a dashboard refresh from a search for one named endpoint, and that distinction
+// is the whole of what the malicious-insider boundary defends.
 type ViewRecord struct {
 	Viewer        string
 	SubjectFilter string
 	EventID       string
+	Route         string // the path served ("" for views recorded before CONSOLE-5)
+	Query         string // canonicalised, length-bounded filter (see canonicalViewQuery)
 	ViewedAt      time.Time
 }
 
@@ -26,13 +33,24 @@ type ViewRecord struct {
 // identity — callers pass "unauthenticated:<os-user>" until operator
 // authentication exists, so a self-asserted OS identity is never mistaken for a
 // verified operator. It is NOT the evidentiary ledger (D41-style caveat).
+//
+// It kept its four-argument signature when CONSOLE-5 widened the record: the four handlers that record
+// a view they alone can describe (a case's subject, a DSAR's subject id, an incident's number) pass
+// exactly what they always did, and the route-aware fields are the wrapper's business.
 func (s *Server) RecordView(ctx context.Context, viewer, subjectFilter, eventID string) error {
-	if viewer == "" {
+	return s.recordViewDetail(ctx, ViewRecord{Viewer: viewer, SubjectFilter: subjectFilter, EventID: eventID})
+}
+
+// recordViewDetail writes a full view record. An empty viewer is refused here rather than at each
+// caller, so no unattributable view can be recorded through any path (D20).
+func (s *Server) recordViewDetail(ctx context.Context, v ViewRecord) error {
+	if v.Viewer == "" {
 		return ErrNoViewer
 	}
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO investigation_views (viewer, subject_filter, event_id) VALUES ($1,$2,$3)`,
-		viewer, subjectFilter, eventID)
+		`INSERT INTO investigation_views (viewer, subject_filter, event_id, route, query)
+		 VALUES ($1,$2,$3,$4,$5)`,
+		v.Viewer, v.SubjectFilter, v.EventID, v.Route, v.Query)
 	return err
 }
 
@@ -308,22 +326,51 @@ func (s *Server) viewAuditHandler(w http.ResponseWriter, r *http.Request) {
 	for _, v := range records {
 		out = append(out, map[string]any{
 			"viewer": v.Viewer, "subject_filter": v.SubjectFilter,
-			"event_id": v.EventID, "viewed_at": v.ViewedAt.UTC().Format(time.RFC3339Nano),
+			"event_id": v.EventID, "route": v.Route, "query": v.Query,
+			"viewed_at": v.ViewedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
 	writeJSON(w, map[string]any{"rows": out})
 }
 
+// viewColumns is the shared SELECT list, so both reads return the same shape and the scan below stays
+// in lockstep with it.
+const viewColumns = `viewer, subject_filter, event_id, route, query, viewed_at`
+
 // Views returns recorded views for an event, oldest first.
 func (s *Server) Views(ctx context.Context, eventID string) ([]ViewRecord, error) {
-	return s.viewQuery(ctx, `SELECT viewer, subject_filter, event_id, viewed_at
+	return s.viewQuery(ctx, `SELECT `+viewColumns+`
 		FROM investigation_views WHERE event_id = $1 ORDER BY id ASC`, eventID)
 }
 
 // ViewsBy returns recorded views by a viewer, oldest first.
+//
+// THIS IS ALSO THE OPERATOR'S OWN DSAR PATH (CONSOLE-5). The view audit stores raw operator identities,
+// which makes an operator a data subject of this table; "what do you hold about my reading" is answered
+// here, by the privacy officer, and erased by the retention window (PurgeViewsOlderThan). It is
+// deliberately NOT a self-service route: an operator who could read their own record would learn
+// exactly when their reading started being examined.
 func (s *Server) ViewsBy(ctx context.Context, viewer string) ([]ViewRecord, error) {
-	return s.viewQuery(ctx, `SELECT viewer, subject_filter, event_id, viewed_at
+	return s.viewQuery(ctx, `SELECT `+viewColumns+`
 		FROM investigation_views WHERE viewer = $1 ORDER BY id ASC`, viewer)
+}
+
+// PurgeViewsOlderThan deletes recorded views past the retention window, returning the rows removed
+// (CONSOLE-5). Migration 007 shipped this table with no TTL and no purge while storing raw,
+// non-pseudonymised operator identities — the one subject-adjacent store in the product that grew
+// forever, and the one a console makes the largest table in the database.
+//
+// A HARD DELETE, like the fleet aggregate's purge and for the same reason: this is not the
+// forward-secure ledger (which tombstones to stay chain-verifiable), and nothing here is chained. The
+// caller records the run as a retention compliance event, so the erasure is provable to the same
+// auditor as every other purge.
+func (s *Server) PurgeViewsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM investigation_views WHERE viewed_at < $1`, cutoff.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("controlplane: purge investigation_views: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *Server) viewQuery(ctx context.Context, sql, arg string) ([]ViewRecord, error) {
@@ -335,7 +382,7 @@ func (s *Server) viewQuery(ctx context.Context, sql, arg string) ([]ViewRecord, 
 	var out []ViewRecord
 	for rows.Next() {
 		var v ViewRecord
-		if err := rows.Scan(&v.Viewer, &v.SubjectFilter, &v.EventID, &v.ViewedAt); err != nil {
+		if err := rows.Scan(&v.Viewer, &v.SubjectFilter, &v.EventID, &v.Route, &v.Query, &v.ViewedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
