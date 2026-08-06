@@ -509,7 +509,23 @@ the surfaces, then the two exit-criteria tickets.*
   operator's own access path. *Residual, stated:* `/fleet`, `/overdue` and the `/config` reads stay
   unaudited — the first two are a target list of dark endpoints, the third is "which detections are
   disabled" — and a read implemented as `POST` would escape the wrapper (there is none today). Archived
-  `2026-08-06-console-5-view-audit`, specs synced. Was: `RecordView` had four call sites (`views.go:47`,
+  `2026-08-06-console-5-view-audit`, specs synced.
+  **HARDENED (D483)** after two independent reviews of the shipped commit found the control defeatable and
+  unfalsifiable in six places: `OPENSHIELD_VIEW_AUDIT_RETENTION` had **no floor**, so an administrator —
+  the party the table records — could set `0s` with a one-minute interval and erase the whole
+  accountability record through the product's own sanctioned delete path, filing a compliance event
+  saying it was policy (`OPENSHIELD_FLEET_RETENTION` had the same hole at exactly zero, found while
+  fixing this one); the five in-handler recorders wrote `route=''`, which migration `053` declares means
+  *recorded before CONSOLE-5*, so the five highest-sensitivity reads were indistinguishable from legacy
+  rows; the fail-closed branch **discarded its error**, and `/health` — exempt from recording — reported
+  healthy while every other operator route answered 500; **nothing verified** that the in-handler routes
+  still record (delete the call from `dsarHandler` and the DSAR is unaudited with the suite green) or
+  that a new mount passes `opRead`, which is what `CONSOLE-28` walks into; and `subject_filter`, the
+  DSAR's join column, had no index on the table this change makes the largest. Also: the retention tick's
+  three purges were coupled so a fleet failure skipped the other two; `/searches/run` recorded a mutable
+  name instead of the filter; the 512-byte bound was asserted only against itself; and the DSAR counted
+  its own access with no breakdown. Archived `2026-08-06-console-5-view-audit-hardening`.
+  Was: `RecordView` had four call sites (`views.go:47`,
   `timeline.go:197`, `dsar.go:127`, `cases_http.go:126`) while `docs/threat-model.md` bounded the
   malicious-operator insider with "who LOOKED is recorded" — a UI turns that into "scroll the fleet and
   leave nothing" — and migration `007_investigation_views.sql` had no TTL, no purge and no DSAR path while

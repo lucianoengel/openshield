@@ -35,8 +35,21 @@ type SubjectReport struct {
 	// the alternative would be to guess which broad searches returned a row about this person, which is
 	// a claim the record cannot support.
 	ViewsOfSubject SpanCount `json:"views_of_subject"`
-	UnderLegalHold bool      `json:"under_legal_hold"`
-	GeneratedAt    time.Time `json:"generated_at"`
+	// ViewsThatWereAccessRequests is how many of the above were subject access requests — this report
+	// being compiled, on this occasion and previous ones (D483).
+	//
+	// COMPILING THIS REPORT IS ITSELF A RECORDED READ OF THE SUBJECT, written before the report is built
+	// (see subjectHandler), so it appears in its own total. Without the breakdown a subject who asks
+	// twice watches the number rise and cannot tell their own requests from an investigator's — the
+	// count is then wrong in both directions with nothing to correct it by.
+	//
+	// NOT SUBTRACTED. An access request IS an operator reading the subject's file, and quietly dropping
+	// it would hide a real access to make the number less confusing. "Seven, of which three were your
+	// own requests" is the honest answer.
+	ViewsThatWereAccessRequests int  `json:"views_that_were_access_requests"`
+	UnderLegalHold              bool `json:"under_legal_hold"`
+
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 // SpanCount is a count of records and the time span they cover (nil bounds when count is 0).
@@ -80,9 +93,14 @@ func (s *Server) SubjectAccessReport(ctx context.Context, subjectID string) (Sub
 	// table are other people's personal data, and a DSAR that answered "here are the names of the four
 	// analysts who read your file" would resolve one person's access right by disclosing another's.
 	// The privacy officer can list them at /views; the subject learns that it happened and when.
+	//
+	// The `dsar` event id is the subject's OWN access requests, broken out rather than netted off — see
+	// ViewsThatWereAccessRequests. It is the id subjectHandler records this very read under.
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*), min(viewed_at), max(viewed_at) FROM investigation_views WHERE subject_filter = $1`,
-		subjectID).Scan(&rep.ViewsOfSubject.Count, &rep.ViewsOfSubject.FirstAt, &rep.ViewsOfSubject.LastAt); err != nil {
+		`SELECT count(*), count(*) FILTER (WHERE event_id = 'dsar'), min(viewed_at), max(viewed_at)
+		   FROM investigation_views WHERE subject_filter = $1`,
+		subjectID).Scan(&rep.ViewsOfSubject.Count, &rep.ViewsThatWereAccessRequests,
+		&rep.ViewsOfSubject.FirstAt, &rep.ViewsOfSubject.LastAt); err != nil {
 		return SubjectReport{}, fmt.Errorf("controlplane: DSAR views: %w", err)
 	}
 
@@ -143,7 +161,9 @@ func (s *Server) subjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Record the DSAR access FIRST (like /view) — an attempted access is worth recording even if
 	// the read then fails.
-	if err := s.RecordView(r.Context(), operator, subjectID, "dsar"); err != nil {
+	if err := s.recordRequestView(r, ViewRecord{
+		Viewer: operator, SubjectFilter: subjectID, EventID: "dsar",
+	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

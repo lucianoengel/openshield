@@ -1,8 +1,10 @@
 package controlplane
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 )
@@ -45,6 +47,8 @@ var viewAuditedInHandler = map[string]string{
 	"/subject":            "records the DSAR against the subject id (PLAT-8)",
 	"/cases":              "records the case's subject, known only after the case is loaded (D20)",
 	"/incidents/timeline": "records incident:<id> as the subject filter (XDR-5)",
+	"/searches/run": "records the RESOLVED filter and its subject, not the mutable name in the URL " +
+		"(D483)",
 }
 
 // viewAuditExempt are read paths deliberately NOT recorded, each with its reason and the residual it
@@ -116,9 +120,25 @@ func canonicalViewQuery(v url.Values) string {
 	}
 	q := b.String()
 	if len(q) > maxViewQueryLen {
-		return q[:maxViewQueryLen] + viewQueryTruncated
+		return q[:escapeBoundary(q, maxViewQueryLen)] + viewQueryTruncated
 	}
 	return q
+}
+
+// escapeBoundary backs `n` off any incomplete `%XX` escape, so a truncated query still DECODES.
+//
+// Every byte in the rendered query came out of url.QueryEscape, so the only multi-byte token is a
+// three-byte percent escape. Cutting at an arbitrary offset can leave "%" or "%4" at the end, and a
+// reader that URL-decodes the stored value then gets an error rather than a partial query — which is not
+// a bounded record, it is an unreadable one, in the column whose entire job is to say what was searched
+// for. At most two bytes are given up.
+func escapeBoundary(q string, n int) int {
+	for back := 1; back <= 2 && n-back >= 0; back++ {
+		if q[n-back] == '%' {
+			return n - back
+		}
+	}
+	return n
 }
 
 // viewAudited wraps the operator read mux so a read is recorded BEFORE it is served.
@@ -149,6 +169,8 @@ func (s *Server) viewAudited(h http.Handler) http.Handler {
 			// here without a principal means this wrapper was mounted outside requireGrant, which is a
 			// wiring bug and not an authorization outcome (see principalFrom). Serving the read anyway
 			// would be an unaudited read caused by a mistake in a file nobody edits.
+			s.viewAuditRefused("no authenticated principal on the request — this wrapper is mounted "+
+				"OUTSIDE requireGrant", r.URL.Path, nil)
 			http.Error(w, "internal error: read reached the view audit with no authenticated principal",
 				http.StatusInternalServerError)
 			return
@@ -161,18 +183,50 @@ func (s *Server) viewAudited(h http.Handler) http.Handler {
 		// have made since D20.
 		if err := s.recordViewDetail(r.Context(), ViewRecord{
 			Viewer: viewer,
-			// The subject a search NAMED, where the surface has one. It is what the DSAR joins on, so
-			// only a genuine subject id in the DSAR's namespace belongs here — an agent id or an entity
-			// alias goes in the query, where it cannot produce a false match.
+			// The subject a search NAMED, where the surface has one — this is what the DSAR joins on.
+			//
+			// FOUR NAMESPACES LIVE IN THIS COLUMN, and the comment here used to claim one, which is how
+			// somebody adds a fifth that collides (D483). They are: pseudonymous subject ids (here,
+			// /subject, /cases, /searches/run), `incident:<id>` (/incidents/timeline), and operator
+			// principals (/views?viewer=, which records WHOSE record the officer read). They cannot
+			// produce a false DSAR match because a subject id is a pseudonym and neither `incident:` nor
+			// a principal's `cert:`/`oidc:` prefix is one. Anything that is NOT distinguishable from a
+			// subject id — an agent id, an entity alias — goes in the query instead.
 			SubjectFilter: strings.TrimSpace(r.URL.Query().Get("subject")),
 			EventID:       strings.TrimSpace(r.URL.Query().Get("event")),
 			Route:         r.URL.Path,
 			Query:         canonicalViewQuery(r.URL.Query()),
 		}); err != nil {
+			s.viewAuditRefused("the view could not be recorded", r.URL.Path, err)
 			http.Error(w, "recording the view failed; refusing to serve the read",
 				http.StatusInternalServerError)
 			return
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// viewAuditRefused logs and counts a read this wrapper refused (D483).
+//
+// BOTH BRANCHES USED TO DISCARD EVERYTHING. They wrote a 500 and returned: the error was dropped, no
+// counter moved, and the process's stderr said nothing. The refusal is right — an unrecordable read must
+// not be served — but it takes the WHOLE operator read surface down at once, and `/health` is exempt
+// from recording, so it went on answering 200 with `degraded: false` while every other route answered
+// 500. The one surface built to tell an operator whether the process works was the one surface that
+// could not see the outage.
+//
+// One counter for two branches, deliberately. As a number they are one condition — audited reads are
+// being refused and the console is dark — which is what a health tile and an alert need. As a log line
+// they send someone to completely different places, which is why the message is a parameter: a database
+// that cannot accept the INSERT, versus a wrapper mounted outside the tier gate.
+//
+// The pattern is RecordRetentionEvent's (retention_report.go): count it, say it, on the class of failure
+// where the thing happened and the evidence of it did not.
+func (s *Server) viewAuditRefused(what, path string, err error) {
+	s.ViewAuditFailures.Add(1)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openshield-server: REFUSING %s — %s: %v\n", path, what, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "openshield-server: REFUSING %s — %s\n", path, what)
 }

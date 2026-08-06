@@ -43,8 +43,18 @@ func TestTheValuesThatNeuterTheProductAreRefused(t *testing.T) {
 				"only thing that reports it"},
 		{"OPENSHIELD_FLEET_RETENTION", "1h",
 			"evidence is purged through a SANCTIONED delete path the ledger's hash chain does not cover"},
+		// ZERO, not just "short". A retention WINDOW is subtracted from now() to form the cutoff, so 0s
+		// is `WHERE received_at < now()` — every row. The generic atLeast helper waved 0 through because
+		// for an INTERVAL zero is a documented off switch; for a window it is the most destructive value
+		// in the range, and it was accepted on the field this repo cites as the model bound (D483).
+		{"OPENSHIELD_FLEET_RETENTION", "0s",
+			"a window of zero is a cutoff of now(), which purges the entire fleet aggregate on the next tick"},
 		{"OPENSHIELD_RETENTION_INTERVAL", "1s",
 			"a purge running every second is a shredder pointed at the evidence store"},
+		{"OPENSHIELD_VIEW_AUDIT_RETENTION", "0s",
+			"the administrator who can set this is recorded in the table it purges: 0s with a one-minute " +
+				"retention interval erases every record of who looked, including their own, through the " +
+				"product's own sanctioned delete path — and files a compliance event saying it was policy"},
 		{"OPENSHIELD_BEACON_MIN_CONTACTS", "2",
 			"two contacts give one interval, and one interval is always perfectly regular"},
 	} {
@@ -77,6 +87,10 @@ func TestOrdinaryValuesAreStillAccepted(t *testing.T) {
 		{"OPENSHIELD_FLEET_RETENTION", "2160h"},
 		{"OPENSHIELD_FLEET_RETENTION", "24h"},
 		{"OPENSHIELD_RETENTION_INTERVAL", "24h"},
+		// A deployment that genuinely wants a short window for the record of who looked can have one
+		// day. The floor removes the destructive end of the range; it does not pick the privacy policy.
+		{"OPENSHIELD_VIEW_AUDIT_RETENTION", "24h"},
+		{"OPENSHIELD_VIEW_AUDIT_RETENTION", "8760h"},
 		{"OPENSHIELD_BEACON_MIN_CONTACTS", "8"},
 	} {
 		t.Run(tc.key+"="+tc.value, func(t *testing.T) {

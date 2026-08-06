@@ -150,7 +150,7 @@ var ServerFields = []Field{
 	{Key: "OPENSHIELD_FLEET_RETENTION", Scope: ScopeDynamic, Kind: KindDuration, Default: "2160h",
 		Description: "How long fleet-aggregate telemetry is kept before purge (D81/D20).",
 		Sensitivity: LoweringWeakens,
-		Bound: atLeast(24*time.Hour, "the purge is a SANCTIONED delete path, and the ledger's hash "+
+		Bound: retentionAtLeast(24*time.Hour, "the purge is a SANCTIONED delete path, and the ledger's hash "+
 			"chain does not cover it — shortening this destroys evidence without leaving the tamper "+
 			"trace that deleting rows directly would")},
 	{Key: "OPENSHIELD_NOTIFY_DEDUPE_RETENTION", Scope: ScopeDynamic, Kind: KindDuration, Default: "24h",
@@ -162,7 +162,18 @@ var ServerFields = []Field{
 			"needs a window for privacy rather than for disk. Keep it LONGER than " +
 			"OPENSHIELD_FLEET_RETENTION: an accountability record that expires before the evidence it " +
 			"describes leaves nothing to check a disputed read against. Nothing cross-checks the two.",
-		Sensitivity: LoweringWeakens},
+		Sensitivity: LoweringWeakens,
+		// THE FLOOR IS THE POINT, and it was missing when this shipped (D483). The sibling fleet window
+		// carries the same rationale word for word, and it applies here harder: this is the table that
+		// records the reads of the very administrator who can set this value, `/config` is admin tier
+		// with no four-eyes, and OPENSHIELD_RETENTION_INTERVAL can be a minute. `0s` plus `1m` is
+		// "DELETE FROM investigation_views" inside a minute, filed as a compliance event so the erasure
+		// reads as policy. LoweringWeakens alone records the DIRECTION of that change — into the table
+		// that is about to be purged.
+		Bound: retentionAtLeast(24*time.Hour, "this is the record of WHO LOOKED, and the purge is a SANCTIONED "+
+			"delete path the ledger's hash chain does not cover — shortening this erases the "+
+			"accountability record of the people who can shorten it, without leaving the tamper trace "+
+			"that deleting the rows directly would")},
 	{Key: "OPENSHIELD_PEER_UEBA_THRESHOLD", Scope: ScopeDynamic, Kind: KindUnitInterval, Default: "",
 		Description: "Peer-UEBA risk threshold above which an alert is recorded (D54). The score is a z-score SQUASHED to [0,1), so a threshold of 1 or more can never fire — that is refused rather than silently disabling the detector. Typical: 0.9.",
 		Sensitivity: RaisingWeakens},

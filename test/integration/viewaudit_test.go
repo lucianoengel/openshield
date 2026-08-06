@@ -138,25 +138,41 @@ func TestTheConsolesPrimaryReadsAreRecordedByTheShippedServer(t *testing.T) {
 // forever — and a console makes it the largest table in the database.
 //
 // The purge's only writer is cmd/openshield-server's leader-only retention loop, so a package test
-// cannot prove it runs. This drives the real binary with a one-minute window through the real config
-// table, exactly as the sibling notify-dedupe case does.
+// cannot prove it runs. This drives the real binary through the real config table, exactly as the
+// sibling notify-dedupe case does.
 //
-// Mutation: remove the PurgeViewsOlderThan block from the retention loop in main.go → the stale row
+// THE WINDOW IS 24h, NOT 1m (D483). Two reasons, and both were defects in this test:
+//
+//  1. 1m is now REFUSED. The setting has a floor, because it purges the record of the reads of the very
+//     administrator who sets it, at admin tier with no four-eyes — `0s` plus a one-minute interval was
+//     "erase the audit", expressed as retention policy and filed as a compliance event.
+//  2. The "fresh" row was inserted BEFORE startup under a 1m window, so a boot slower than 60 seconds
+//     aged it out and failed the honesty half spuriously. A false FAILURE rather than a false pass, but
+//     a test that fails when the machine is loaded is a test somebody deletes.
+//
+// The stale row is 48 hours old, which is what keeps the case honest: it SURVIVES the 8760h default and
+// dies under the configured 24h, so its removal proves the operator's value was read rather than a
+// constant.
+//
+// Mutation: remove the investigation_views job from runRetentionSweep in main.go → the stale row
 // survives and this FAILS. (Verified.)
 func TestTheViewAuditIsPurgedToTheConfiguredRetention(t *testing.T) {
 	stack := StartStack(t)
 	migrateStack(t, stack)
 	pool := openPool(t, stack.DSN)
 
-	// One view old enough to fall outside a one-minute window, one just recorded.
+	// One view old enough to fall outside a 24-hour window, one just recorded.
 	if _, err := pool.Exec(Ctx(t),
 		`INSERT INTO investigation_views (viewer, subject_filter, event_id, route, query, viewed_at)
-		 VALUES ('cert:stale-reader','s1','', '/events','', now() - interval '10 minutes'),
+		 VALUES ('cert:stale-reader','s1','', '/events','', now() - interval '48 hours'),
 		        ('cert:fresh-reader','s2','', '/events','', now())`); err != nil {
 		t.Fatal(err)
 	}
 
-	setDynamic(t, stack, "OPENSHIELD_VIEW_AUDIT_RETENTION", "1m")
+	// setDynamic writes straight to config_settings, so it does NOT go through the bound — the floor's
+	// enforcement point is POST /config (SaveSettings), asserted in internal/config. That is why the
+	// one-second interval below is usable here and would be refused from the console.
+	setDynamic(t, stack, "OPENSHIELD_VIEW_AUDIT_RETENTION", "24h")
 	setDynamic(t, stack, "OPENSHIELD_RETENTION_INTERVAL", "1s")
 	srv := Start(t, "openshield-server", []string{
 		"OPENSHIELD_DSN=" + stack.DSN,
@@ -175,7 +191,7 @@ func TestTheViewAuditIsPurgedToTheConfiguredRetention(t *testing.T) {
 	Eventually(t, 90*time.Second, "the stale view record to be purged at the CONFIGURED retention", func() bool {
 		return remaining("cert:stale-reader") == 0
 	})
-	// A ten-minute-old row survives the 8760h default and not a 1m one, so its removal is what proves
+	// A 48-hour-old row survives the 8760h default and not a 24h one, so its removal is what proves
 	// the operator's value was read rather than a constant.
 	if n := remaining("cert:fresh-reader"); n != 1 {
 		t.Errorf("a view recorded just now was purged under a 1m retention (%d rows) — an accountability "+
@@ -192,8 +208,8 @@ func TestTheViewAuditIsPurgedToTheConfiguredRetention(t *testing.T) {
 		 ORDER BY id DESC LIMIT 1`).Scan(&rows, &policy); err != nil {
 		t.Fatalf("the view-audit purge recorded no compliance event: %v", err)
 	}
-	if !contains(policy, "1m") {
-		t.Errorf("the retention event records policy %q while the operator configured 1m — a compliance "+
+	if !contains(policy, "24h") {
+		t.Errorf("the retention event records policy %q while the operator configured 24h — a compliance "+
 			"record naming a setting while asserting a value nobody applied is evidence of a policy that "+
 			"never ran (D333)", policy)
 	}

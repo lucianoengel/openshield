@@ -123,7 +123,7 @@ func (s *Server) casesHandler(w http.ResponseWriter, r *http.Request) {
 	// D20: WHO VIEWED an investigation is auditable, not only who acted on one. Recorded before the
 	// evidence is returned, which is the View invariant — a read that fails to record must not have
 	// happened.
-	if err := s.RecordView(r.Context(), op, c.SubjectID, ""); err != nil {
+	if err := s.recordRequestView(r, ViewRecord{Viewer: op, SubjectFilter: c.SubjectID}); err != nil {
 		http.Error(w, "recording the view failed; refusing to return the investigation", http.StatusInternalServerError)
 		return
 	}

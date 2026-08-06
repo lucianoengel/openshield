@@ -203,7 +203,9 @@ func TestTheViewAuditIsReadableAtLast(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM investigation_views WHERE subject_filter = $1`, subject)
 	})
 	// An analyst looked at this subject's case. That is the fact the officer must be able to find.
-	if err := s.RecordView(ctx, "cert:curious-analyst", subject, ""); err != nil {
+	if err := s.RecordView(ctx, controlplane.ViewRecord{
+		Viewer: "cert:curious-analyst", SubjectFilter: subject, Route: "/cases",
+	}); err != nil {
 		t.Fatal(err)
 	}
 

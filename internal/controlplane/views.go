@@ -7,12 +7,27 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 // ErrNoViewer is returned when a view is recorded without an identity — no
 // unattributable view may be silently recorded (D20).
 var ErrNoViewer = errors.New("controlplane: view requires a viewer identity")
+
+// ErrNoRoute is returned when a view is recorded without the route it recorded (D483).
+//
+// The empty route is not spare capacity. Migration 053 declares that `route=”` means "recorded before
+// CONSOLE-5, no route because none was captured" — so a LIVE handler writing ” makes its reads
+// indistinguishable from historic rows and `WHERE route='/cases'` answers nothing forever. That is what
+// the five in-handler recorders did for the whole of D482, and they are the five HIGHEST-sensitivity
+// reads on the surface, because recording in the handler is what a route does when it knows a subject
+// the URL cannot carry.
+//
+// Refused here rather than fixed at the five call sites, for the same reason ErrNoViewer is: fixing the
+// call sites fixes today's five, and refusing makes the sixth — written next month, by someone with no
+// reason to know what ” means — fail loudly instead of quietly writing a row that reads as historic.
+var ErrNoRoute = errors.New("controlplane: view requires the route it recorded")
 
 // ViewRecord is one recorded investigation view.
 //
@@ -34,18 +49,40 @@ type ViewRecord struct {
 // authentication exists, so a self-asserted OS identity is never mistaken for a
 // verified operator. It is NOT the evidentiary ledger (D41-style caveat).
 //
-// It kept its four-argument signature when CONSOLE-5 widened the record: the four handlers that record
-// a view they alone can describe (a case's subject, a DSAR's subject id, an incident's number) pass
-// exactly what they always did, and the route-aware fields are the wrapper's business.
-func (s *Server) RecordView(ctx context.Context, viewer, subjectFilter, eventID string) error {
-	return s.recordViewDetail(ctx, ViewRecord{Viewer: viewer, SubjectFilter: subjectFilter, EventID: eventID})
+// IT TAKES THE RECORD, NOT FOUR POSITIONAL STRINGS (D483). The four-argument form kept the pre-CONSOLE-5
+// call sites untouched, which is exactly how all five of them went on writing `route=”` after the
+// column existed to say otherwise. A struct makes the route a field the call site must name, and the
+// signature change made the compiler find every caller rather than leaving the omission to review.
+func (s *Server) RecordView(ctx context.Context, v ViewRecord) error {
+	return s.recordViewDetail(ctx, v)
+}
+
+// recordRequestView records a view for the request the HANDLER is serving, filling the route and the
+// query from that request (D483).
+//
+// This is what the five in-handler recorders use. They record in the handler because each knows a
+// subject the URL does not carry — a case's subject id is only known once the row is loaded — and they
+// had the request in hand the whole time; nothing but the absence of a helper made them drop the route.
+//
+// A caller may pre-set Query to override the request's own (see savedSearchRunHandler, where the URL
+// carries a mutable NAME and the filter that selected the rows is what the audit needs).
+func (s *Server) recordRequestView(r *http.Request, v ViewRecord) error {
+	v.Route = r.URL.Path
+	if v.Query == "" {
+		v.Query = canonicalViewQuery(r.URL.Query())
+	}
+	return s.recordViewDetail(r.Context(), v)
 }
 
 // recordViewDetail writes a full view record. An empty viewer is refused here rather than at each
-// caller, so no unattributable view can be recorded through any path (D20).
+// caller, so no unattributable view can be recorded through any path (D20); an empty route likewise, so
+// no live read can produce a row that reads as pre-CONSOLE-5 history (D483, see ErrNoRoute).
 func (s *Server) recordViewDetail(ctx context.Context, v ViewRecord) error {
 	if v.Viewer == "" {
 		return ErrNoViewer
+	}
+	if v.Route == "" {
+		return ErrNoRoute
 	}
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO investigation_views (viewer, subject_filter, event_id, route, query)
@@ -53,6 +90,13 @@ func (s *Server) recordViewDetail(ctx context.Context, v ViewRecord) error {
 		v.Viewer, v.SubjectFilter, v.EventID, v.Route, v.Query)
 	return err
 }
+
+// routeView is the path ViewHandler serves, and the route View records.
+//
+// View is not a general-purpose telemetry read that happens to log — it IS the implementation of
+// GET /view (D56), which is why it may name that route without being handed one. Every other recorder
+// takes its route from the request it is serving.
+const routeView = "/view"
 
 // View serves an investigation AND records the view in one call, so a caller
 // cannot obtain the evidence without leaving a record. The view is recorded
@@ -62,7 +106,13 @@ func (s *Server) View(ctx context.Context, viewer, eventID string) ([]TelemetryR
 	if viewer == "" {
 		return nil, ErrNoViewer
 	}
-	if err := s.RecordView(ctx, viewer, "", eventID); err != nil {
+	// The query is rendered through the SAME canonicaliser the wrapper uses, rather than spelled out
+	// here: /view takes exactly one parameter, and a second hand-written rendering of it is a second
+	// thing to drift.
+	if err := s.RecordView(ctx, ViewRecord{
+		Viewer: viewer, EventID: eventID, Route: routeView,
+		Query: canonicalViewQuery(url.Values{"event": {eventID}}),
+	}); err != nil {
 		return nil, fmt.Errorf("controlplane: recording view: %w", err)
 	}
 	return s.TelemetryForEvent(ctx, eventID)
@@ -305,7 +355,7 @@ func (s *Server) viewAuditHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "give exactly one of ?event= or ?viewer=", http.StatusBadRequest)
 		return
 	}
-	if err := s.RecordView(r.Context(), officer, viewer, event); err != nil {
+	if err := s.recordRequestView(r, ViewRecord{Viewer: officer, SubjectFilter: viewer, EventID: event}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

@@ -67,6 +67,13 @@ type HealthReport struct {
 	SchemaEmbedded int `json:"schema_embedded"`
 	SchemaApplied  int `json:"schema_applied"`
 	SchemaSkew     int `json:"schema_skew"`
+	// ViewAuditFailures / RetentionPurgeFailures are D483's accountability counters, and they are on the
+	// HEALTH report and not only on /metrics for one specific reason: /metrics sits behind a separate
+	// listener and a separate bearer token an operator session cannot reach (PLAT-4b), and `/health` is
+	// EXEMPT from view recording — so when the view audit starts refusing, this endpoint is the one
+	// route still answering 200, and it was reporting "not degraded" while the console was dark.
+	ViewAuditFailures      int64 `json:"view_audit_failures"`
+	RetentionPurgeFailures int64 `json:"retention_purge_failures"`
 	// LastAnchorAt / LastAnchorSequence describe the newest witnessed ledger checkpoint (T-019/D64).
 	// ZERO MEANS NEVER ANCHORED, which is a real and common state — anchoring is optional — and the
 	// problem list says what it costs rather than the field pretending to a number.
@@ -91,12 +98,14 @@ func (s *Server) Health(ctx context.Context) HealthReport {
 	s.mu.Unlock()
 
 	r := HealthReport{
-		Leader:               leaderHeld.Load(),
-		BrokerConfigured:     conn != nil,
-		BrokerConnected:      conn != nil && conn.IsConnected(),
-		IngestRepairs:        s.ingest.repairs.Load(),
-		IngestRepairFailures: s.ingest.failed.Load(),
-		Problems:             []string{},
+		Leader:                 leaderHeld.Load(),
+		BrokerConfigured:       conn != nil,
+		BrokerConnected:        conn != nil && conn.IsConnected(),
+		IngestRepairs:          s.ingest.repairs.Load(),
+		IngestRepairFailures:   s.ingest.failed.Load(),
+		ViewAuditFailures:      s.ViewAuditFailures.Load(),
+		RetentionPurgeFailures: s.RetentionPurgeFailures.Load(),
+		Problems:               []string{},
 	}
 
 	if pool != nil {
@@ -162,6 +171,17 @@ func healthProblems(r HealthReport) []string {
 		out = append(out, "the durable telemetry consumer has been rebuilt — this process recovered, but "+
 			"the broker lost its stream, and records published into the gap were REFUSED rather than "+
 			"buffered (PLAT-10)")
+	}
+	if r.ViewAuditFailures > 0 {
+		out = append(out, "operator reads are being REFUSED because the view audit cannot record them "+
+			"(D483) — every audited console route is answering 500, and this endpoint is exempt from "+
+			"recording, which is why it is the only one still answering at all; the read is refused "+
+			"rather than served unaudited, so the console is down until the record can be written")
+	}
+	if r.RetentionPurgeFailures > 0 {
+		out = append(out, "a retention purge has FAILED — personal-adjacent data past its window is "+
+			"still stored, and the compliance report shows no event for it, which looks identical to a "+
+			"purge that was never due (D483)")
 	}
 	if r.LastAnchorAt == nil {
 		out = append(out, "the audit ledger has never been externally anchored — forward integrity holds "+

@@ -175,6 +175,16 @@ func (s *Server) RunSavedSearch(ctx context.Context, name string) (string, any, 
 	if err != nil {
 		return "", nil, err
 	}
+	return s.runResolvedSearch(ctx, sv)
+}
+
+// runResolvedSearch executes an ALREADY-RESOLVED saved search.
+//
+// Split out of RunSavedSearch so the HTTP handler can resolve the name, record what the search actually
+// filters on, and only then touch the stores the results come from (D483). The saved-search row is not
+// the evidence; the alerts, events and logs it selects are, and none of those is read until after the
+// record is written — so record-then-serve still holds.
+func (s *Server) runResolvedSearch(ctx context.Context, sv SavedSearch) (string, any, error) {
 	req, err := http.NewRequest(http.MethodGet, "/?"+sv.Query, nil)
 	if err != nil {
 		return sv.Surface, nil, fmt.Errorf("%w: %v", ErrBadSavedSearch, err)
@@ -255,6 +265,17 @@ func (s *Server) savedSearchSaveHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 // savedSearchRunHandler serves GET /searches/run?name=N.
+//
+// IT RECORDS ITS OWN VIEW (D483), which is why `/searches/run` is in viewAuditedInHandler rather than
+// left to the wrapper. The wrapper can only see the URL, and this URL carries a NAME: a mutable,
+// deletable pointer. `SaveSearch` is upsert-on-name and `/searches/delete` is a hard delete, both at
+// RESPONDER tier — so an audit row saying "they ran team-hunt" can be made to mean anything, or nothing,
+// by a colleague afterwards, at a lower tier than the one that reviews the audit. Migration 053 says the
+// query column is "the filter that selected the rows"; for this route the name is not that.
+//
+// It also lifts the saved search's own `subject=` into subject_filter, for the same reason /search does.
+// Without it, saving a subject-naming search and running it by name is a way to read someone's file
+// without appearing in that person's access report — a launder, not an audit.
 func (s *Server) savedSearchRunHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -265,7 +286,42 @@ func (s *Server) savedSearchRunHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing name", http.StatusBadRequest)
 		return
 	}
-	surface, results, err := s.RunSavedSearch(r.Context(), name)
+	viewer := operatorIdentity(r.Context())
+	if viewer == "" {
+		// Impossible past the tier gate; reaching here means this route was mounted outside it. Same
+		// reasoning as viewAudited's own branch — a wiring fault, not an authorization outcome.
+		http.Error(w, "internal error: read reached the view audit with no authenticated principal",
+			http.StatusInternalServerError)
+		return
+	}
+
+	// RESOLVE, RECORD, THEN RUN. A name that does not resolve is still recorded, with the name and
+	// nothing else: an attempted read of an investigation is worth recording whether or not it found
+	// anything, which is what the 404 cases below already assume.
+	sv, resolveErr := s.SavedSearchByName(r.Context(), name)
+	rec := ViewRecord{Viewer: viewer, Query: canonicalViewQuery(url.Values{"name": {name}})}
+	if resolveErr == nil {
+		rec.Query = canonicalViewQuery(url.Values{
+			"name": {name}, "surface": {sv.Surface}, "query": {sv.Query},
+		})
+		if stored, perr := url.ParseQuery(sv.Query); perr == nil {
+			rec.SubjectFilter = strings.TrimSpace(stored.Get("subject"))
+		}
+	}
+	if err := s.recordRequestView(r, rec); err != nil {
+		http.Error(w, "recording the view failed; refusing to run the search",
+			http.StatusInternalServerError)
+		return
+	}
+
+	var (
+		surface string
+		results any
+		err     = resolveErr
+	)
+	if resolveErr == nil {
+		surface, results, err = s.runResolvedSearch(r.Context(), sv)
+	}
 	switch {
 	case err == nil:
 		writeJSON(w, map[string]any{"name": name, "surface": surface, "results": results})

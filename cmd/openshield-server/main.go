@@ -474,19 +474,20 @@ func main() {
 		retInterval := cfg.Duration("OPENSHIELD_RETENTION_INTERVAL")
 		fleetRetention := cfg.Duration("OPENSHIELD_FLEET_RETENTION")
 		fleetPolicy := fmt.Sprintf("OPENSHIELD_FLEET_RETENTION=%s", fleetRetention)
+		// EACH PURGE RUNS AND FAILS ON ITS OWN (D483). This used to be one straight-line closure in
+		// which a failed fleet purge `return`ed — so a single unavailable table stopped the
+		// notify-dedupe prune and the view-audit purge from running AT ALL, silently, and the one line
+		// on stderr named the fleet purge. Three independent retention obligations, on three unrelated
+		// tables, are not one operation, and coupling them means the failure of the first hides the
+		// non-enforcement of the other two.
+		//
+		// A FAILURE IS COUNTED, not only logged. The compliance report records purges that RAN; a purge
+		// that keeps failing therefore looks exactly like one that was never due, because both are an
+		// absence. RetentionPurgeFailures is what tells those apart, and /health names it.
 		go retain.Loop(leaderCtx, retInterval, func(ctx context.Context) {
-			fleetCutoff := time.Now().Add(-fleetRetention)
-			n, err := srv.PurgeOlderThan(ctx, fleetCutoff)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: retention purge failed: %v\n", err)
-				return
-			}
-			fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d fleet-aggregate rows\n", n)
-			// SIEM-10: record the purge as a queryable compliance event (best-effort — the purge already
-			// happened; a recording failure is counted, never undoes or blocks it).
-			srv.RecordRetentionEvent(ctx, "fleet_telemetry", n, fleetCutoff, fleetPolicy)
-			// SIEM-12/R34-13: prune the durable notify-dedupe ledger. An id only needs to outlive its
-			// dedup window, so the retention is several windows rather than one.
+			now := time.Now()
+			// SIEM-12/R34-13: the durable notify-dedupe ledger. An id only needs to outlive its dedup
+			// window, so the retention is several windows rather than one.
 			//
 			// THE CUTOFF COMES FROM THE SETTING, and the recorded policy is built from the value actually
 			// used (D333). It used to be a hardcoded 24h while the compliance event recorded the literal
@@ -495,36 +496,24 @@ func main() {
 			// A compliance record citing a setting nobody read is worse than one that omits it: it is
 			// evidence of a policy that was never applied.
 			ddRetention := cfg.Duration("OPENSHIELD_NOTIFY_DEDUPE_RETENTION")
-			ddCutoff := time.Now().Add(-ddRetention)
-			ddPolicy := fmt.Sprintf("OPENSHIELD_NOTIFY_DEDUPE_RETENTION=%s", ddRetention)
-			if d, derr := srv.PruneNotifyDedupe(ctx, ddCutoff); derr != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: notify-dedupe prune failed: %v\n", derr)
-			} else {
-				if d > 0 {
-					fmt.Fprintf(os.Stderr, "openshield-server: pruned %d durable notify-dedupe ids\n", d)
-				}
-				srv.RecordRetentionEvent(ctx, "notify_dedupe", d, ddCutoff, ddPolicy)
-			}
-			// CONSOLE-5: purge the view audit. Migration 007 shipped `investigation_views` with no TTL
-			// and no purge while storing RAW, NON-PSEUDONYMISED operator identities — the one
-			// subject-adjacent store in this product that grew forever, and the one a console makes the
-			// largest table in the database. The window defaults LONGER than the fleet window on
-			// purpose: an accountability record that expires before the evidence it describes leaves
-			// nothing to check a disputed read against.
-			//
-			// The policy string is built from the value ACTUALLY USED (D333), not from a literal — a
-			// compliance record citing a setting nobody read is worse than one that omits it.
+			// CONSOLE-5: the view audit. Migration 007 shipped `investigation_views` with no TTL and no
+			// purge while storing RAW, NON-PSEUDONYMISED operator identities — the one subject-adjacent
+			// store in this product that grew forever, and the one a console makes the largest table in
+			// the database. The window defaults LONGER than the fleet window on purpose: an
+			// accountability record that expires before the evidence it describes leaves nothing to
+			// check a disputed read against, and it has a FLOOR (D483) so the administrator this table
+			// records cannot express "erase it" as a retention setting.
 			vaRetention := cfg.Duration("OPENSHIELD_VIEW_AUDIT_RETENTION")
-			vaCutoff := time.Now().Add(-vaRetention)
-			vaPolicy := fmt.Sprintf("OPENSHIELD_VIEW_AUDIT_RETENTION=%s", vaRetention)
-			if v, verr := srv.PurgeViewsOlderThan(ctx, vaCutoff); verr != nil {
-				fmt.Fprintf(os.Stderr, "openshield-server: view-audit purge failed: %v\n", verr)
-			} else {
-				if v > 0 {
-					fmt.Fprintf(os.Stderr, "openshield-server: purged %d recorded investigation views\n", v)
-				}
-				srv.RecordRetentionEvent(ctx, "investigation_views", v, vaCutoff, vaPolicy)
-			}
+			runRetentionSweep(ctx, []retentionJob{
+				{"fleet_telemetry", "fleet-aggregate rows", fleetPolicy,
+					now.Add(-fleetRetention), srv.PurgeOlderThan},
+				{"notify_dedupe", "durable notify-dedupe ids",
+					fmt.Sprintf("OPENSHIELD_NOTIFY_DEDUPE_RETENTION=%s", ddRetention),
+					now.Add(-ddRetention), srv.PruneNotifyDedupe},
+				{"investigation_views", "recorded investigation views",
+					fmt.Sprintf("OPENSHIELD_VIEW_AUDIT_RETENTION=%s", vaRetention),
+					now.Add(-vaRetention), srv.PurgeViewsOlderThan},
+			}, srv.RecordRetentionEvent, func() { srv.RetentionPurgeFailures.Add(1) })
 		})
 
 		// SIEM-4: when OPENSHIELD_CEF_SYSLOG_LISTEN is set, receive CEF-over-syslog from the estate and
@@ -1445,4 +1434,49 @@ func warnAboutUnreachableMachineCredentials(ctx context.Context, srv *controlpla
 		"OPENSHIELD_OPERATOR_MACHINE_TOKENS=1 to accept them (a presented certificate is still verified; "+
 		"only its ABSENCE stops being fatal), or revoke them with "+
 		"`openshield-server machine-credential revoke <name>`.\n", live)
+}
+
+// retentionJob is one retention obligation on the leader's sweep: what is being purged, the unit to say
+// it in, the policy string that becomes the compliance record, the cutoff, and the purge itself.
+type retentionJob struct {
+	target string
+	unit   string
+	policy string
+	cutoff time.Time
+	run    func(context.Context, time.Time) (int64, error)
+}
+
+// runRetentionSweep runs every retention obligation for one tick, INDEPENDENTLY (D483).
+//
+// This used to be one straight-line closure in which a failed fleet purge `return`ed. Three unrelated
+// tables, three separate legal obligations, and one unavailable table stopped the other two from being
+// enforced AT ALL — silently, with the only line on stderr naming the fleet purge. The view-audit purge
+// this change added would have been the newest and quietest casualty of that.
+//
+// A FAILURE IS COUNTED, not only logged, and that is the second half. `retention_events` records purges
+// that RAN, so a purge that has been failing for months and one that was never due are the same thing to
+// a reader of the compliance report: an absence. `onFailure` is what tells them apart, and /health names
+// it — see HealthReport.RetentionPurgeFailures.
+//
+// `record` and `onFailure` are injected rather than reached through the Server so this is testable
+// without a database: the claim being made is about CONTROL FLOW between independent jobs, and a test
+// that needed three real tables to break one of them would not be written.
+func runRetentionSweep(ctx context.Context, jobs []retentionJob,
+	record func(context.Context, string, int64, time.Time, string), onFailure func()) {
+	for _, j := range jobs {
+		n, err := j.run(ctx, j.cutoff)
+		if err != nil {
+			onFailure()
+			fmt.Fprintf(os.Stderr, "openshield-server: %s retention purge FAILED — data past its "+
+				"window is still stored: %v\n", j.target, err)
+			continue
+		}
+		if n > 0 {
+			fmt.Fprintf(os.Stderr, "openshield-server: retention purge removed %d %s\n", n, j.unit)
+		}
+		// SIEM-10: record the purge as a queryable compliance event (best-effort — the purge already
+		// happened; a recording failure is counted, never undoes or blocks it). A ZERO-row purge is
+		// recorded too, so the report proves retention is EXECUTING on schedule.
+		record(ctx, j.target, n, j.cutoff, j.policy)
+	}
 }

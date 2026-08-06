@@ -129,6 +129,13 @@ func TestAReadThatCannotBeRecordedIsRefusedAndTheHandlerNeverRuns(t *testing.T) 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("an unrecordable read answered %d, want 500", rec.Code)
 	}
+	// AND THE REFUSAL IS COUNTED (D483). It used to write the 500 and discard the error: no counter, no
+	// log line, nothing anywhere except the status the operator was staring at.
+	//
+	// Mutation: remove the viewAuditRefused call from the record-failure branch → this FAILS.
+	if n := s.ViewAuditFailures.Load(); n != 1 {
+		t.Errorf("a read refused for an unrecordable view counted %d failures, want 1", n)
+	}
 }
 
 // TestAnExemptRouteRecordsNothingAndAnAuditedOneDoes asserts BOTH halves, because the negative alone is
@@ -232,6 +239,19 @@ func TestTheRecordedQueryIsCanonicalAndBounded(t *testing.T) {
 	}
 
 	max := controlplane.MaxViewQueryLenForTest()
+	// A LITERAL CEILING (D483). Every assertion below is expressed in terms of `max`, so setting
+	// maxViewQueryLen to 1_000_000 keeps all of them green while the write amplification the bound
+	// exists to stop is gone — the value is operator-controlled text written into an audit table on
+	// every request. Stated as a range rather than an equality so an ordinary tuning does not fail a
+	// test that has nothing to say about it.
+	//
+	// Mutation: set maxViewQueryLen to 1_000_000 → this FAILS.
+	if max < 64 || max > 4096 {
+		t.Fatalf("the recorded-query bound is %d bytes. Below ~64 it truncates ordinary searches into "+
+			"uselessness; above a few KB it is not a bound — an authenticated insider controls this text "+
+			"and writes it once per request", max)
+	}
+
 	long := controlplane.CanonicalViewQueryForTest(url.Values{"q": {strings.Repeat("x", max*2)}})
 	if len(long) <= max {
 		t.Fatalf("an over-long query rendered to %d bytes, which is not the truncation path", len(long))
@@ -241,6 +261,28 @@ func TestTheRecordedQueryIsCanonicalAndBounded(t *testing.T) {
 	}
 	if len(long) != max+len(controlplane.ViewQueryTruncatedForTest()) {
 		t.Errorf("truncated length %d, want the bound plus the marker", len(long))
+	}
+
+	// AND A TRUNCATED QUERY STILL DECODES (D483). The stored form is percent-encoded, so a cut at an
+	// arbitrary byte can land inside a `%XX` escape and leave "%" or "%4" at the end — at which point a
+	// reader that URL-decodes the audit record gets an error rather than a partial query. That is not a
+	// bounded record, it is an unreadable one, in the column whose entire job is to say what was
+	// searched for.
+	//
+	// The value is built so the cut MUST land mid-escape: every character escapes to three bytes, so at
+	// least one offset in each group of three is inside one. All three offsets are exercised.
+	//
+	// Mutation: return q[:maxViewQueryLen] without escapeBoundary → at least one of these FAILS.
+	for pad := 0; pad < 3; pad++ {
+		v := url.Values{"q": {strings.Repeat("é", max)}}
+		if pad > 0 {
+			v["a"] = []string{strings.Repeat("z", pad)}
+		}
+		got := controlplane.CanonicalViewQueryForTest(v)
+		body := strings.TrimSuffix(got, controlplane.ViewQueryTruncatedForTest())
+		if _, err := url.ParseQuery(body); err != nil {
+			t.Errorf("a truncated query does not decode (pad=%d): %v — …%q", pad, err, body[len(body)-8:])
+		}
 	}
 }
 
@@ -319,10 +361,14 @@ func TestPurgeViewsOlderThanDeletesPastTheCutoffOnly(t *testing.T) {
 	ctx := context.Background()
 
 	const stale, fresh = "cert:purge-stale", "cert:purge-fresh"
-	if err := s.RecordView(ctx, stale, "subject-old", "e-old"); err != nil {
+	if err := s.RecordView(ctx, controlplane.ViewRecord{
+		Viewer: stale, SubjectFilter: "subject-old", EventID: "e-old", Route: "/cases",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordView(ctx, fresh, "subject-new", "e-new"); err != nil {
+	if err := s.RecordView(ctx, controlplane.ViewRecord{
+		Viewer: fresh, SubjectFilter: "subject-new", EventID: "e-new", Route: "/cases",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// Age the first row past the window. Backdating the row is the only way to test a window without
@@ -365,7 +411,9 @@ func TestASubjectReportCountsWhoLookedAtTheSubject(t *testing.T) {
 
 	const watched, unwatched = "subject-watched", "subject-unwatched"
 	for _, viewer := range []string{"cert:analyst-a", "cert:analyst-b"} {
-		if err := s.RecordView(ctx, viewer, watched, ""); err != nil {
+		if err := s.RecordView(ctx, controlplane.ViewRecord{
+			Viewer: viewer, SubjectFilter: watched, Route: "/cases",
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -388,5 +436,252 @@ func TestASubjectReportCountsWhoLookedAtTheSubject(t *testing.T) {
 	}
 	if rep.ViewsOfSubject.Count != 0 {
 		t.Errorf("an unviewed subject reports %d views", rep.ViewsOfSubject.Count)
+	}
+}
+
+// D483 — THE HARDENING CASES.
+//
+// Everything above proves the wrapper. These prove the five routes the wrapper deliberately does NOT
+// cover, the failure path it takes when it cannot record, and the two places the record said something
+// untrue about itself.
+
+// TestTheDSARRecordsItsOwnAccessWithItsRouteAndSubject.
+//
+// `/subject` is the single most sensitive read on the surface — it compiles everything the platform
+// holds about one named human — and it had NO test asserting that it records at all. It was covered only
+// by the fact that `RecordView` was called somewhere in its handler.
+//
+// And it wrote route=”. Migration 053 declares that value to mean "recorded before CONSOLE-5, no route
+// captured", so a query for who ran DSARs returned nothing, forever, while the rows sat in the table
+// looking like history.
+//
+// Mutation: drop `Route` from recordRequestView (or revert the handler to the 4-argument RecordView) →
+// the route assertion FAILS. Mutation: delete the recording call → the count FAILS.
+func TestTheDSARRecordsItsOwnAccessWithItsRouteAndSubject(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ca := newOneCA(t)
+
+	const cn = "dsar-officer"
+	const principal = "cert:" + cn
+	const subject = "subject-dsar-audited"
+	officer := grantOperator(t, s, ca, cn, controlplane.RolePrivacyOfficer)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM investigation_views WHERE viewer = $1`, principal)
+	})
+
+	rec := httptest.NewRecorder()
+	controlplane.RequirePrivacyOfficerForTestHandler(s, s.OperatorReadHandler()).
+		ServeHTTP(rec, officer("/subject?id="+subject))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /subject = %d %q", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+
+	got := viewsFor(t, s, principal)
+	if len(got) != 1 {
+		t.Fatalf("the DSAR recorded %d views, want exactly 1 — a dossier compiled on a named individual "+
+			"that leaves no trace of who compiled it is the read this whole control exists for", len(got))
+	}
+	if got[0].Route != "/subject" {
+		t.Errorf("the DSAR recorded route %q. Migration 053 says '' means 'recorded before CONSOLE-5, no "+
+			"route captured', so a live handler writing it makes today's dossier reads indistinguishable "+
+			"from legacy rows and `WHERE route='/subject'` answers nothing", got[0].Route)
+	}
+	if got[0].SubjectFilter != subject || got[0].EventID != "dsar" {
+		t.Errorf("the DSAR recorded subject=%q event=%q, want %q/dsar — the subject is the whole reason "+
+			"this route records in its own handler rather than in the wrapper",
+			got[0].SubjectFilter, got[0].EventID, subject)
+	}
+}
+
+// TestARefusedAuditedReadIsCountedAndNamedByTheHealthReport.
+//
+// The refusal is correct and it takes the WHOLE console read surface down at once. Both failure branches
+// used to write a 500 and return: the error was discarded, no counter moved, stderr said nothing. And
+// `/health` is EXEMPT from recording, so it went on answering 200 with `degraded: false` — the one
+// surface built to say whether the process works was the only one that could not see the outage.
+//
+// DRIVEN THROUGH THE NO-PRINCIPAL BRANCH, over a database that is perfectly REACHABLE. That is the
+// point: every other fact on the report is fine and the console is still dark. Failing the record by
+// closing the pool would make `degraded` true through the unreachable-database problem instead, and the
+// case would prove nothing about the view audit. (The pool-failure branch's counter is asserted in
+// TestAReadThatCannotBeRecordedIsRefusedAndTheHandlerNeverRuns, which already has a broken pool.)
+//
+// Mutation: remove the viewAuditRefused call from the no-principal branch → the counter half FAILS.
+// Mutation: delete the ViewAuditFailures branch from healthProblems → the health half FAILS.
+func TestARefusedAuditedReadIsCountedAndNamedByTheHealthReport(t *testing.T) {
+	s := controlplane.New(requireDB(t))
+
+	var handlerRan bool
+	rec := httptest.NewRecorder()
+	controlplane.ViewAuditedForTest(s, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerRan = true
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/events", nil))
+	if handlerRan || rec.Code != http.StatusInternalServerError {
+		t.Fatalf("the fixture did not reach the refusal branch: %d, handler ran=%v", rec.Code, handlerRan)
+	}
+	if n := s.ViewAuditFailures.Load(); n != 1 {
+		t.Errorf("a refused read incremented the failure counter %d times, want 1 — without it the only "+
+			"evidence of a dark console is the 500 the operator happens to be looking at", n)
+	}
+
+	got := healthVia(t, s)
+	if !got.DatabaseReachable {
+		t.Fatal("this fixture needs a reachable database, or `degraded` proves nothing about the audit")
+	}
+	if got.ViewAuditFailures == 0 || !got.Degraded {
+		t.Fatalf("health reports view_audit_failures=%d degraded=%v while audited reads are being "+
+			"refused", got.ViewAuditFailures, got.Degraded)
+	}
+	// `Degraded` is the weak half and is checked only as a sanity condition: this fixture's ledger has
+	// never been anchored, so the report is degraded either way. THE NAMING IS THE CLAIM — a tile that
+	// goes red without saying why sends an operator to look at the database.
+	var named bool
+	for _, p := range got.Problems {
+		if strings.Contains(p, "view audit") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("the health report is degraded and no problem names the view audit: %v — a tile that "+
+			"goes red without saying why sends an operator to look at the database", got.Problems)
+	}
+}
+
+// TestRunningASavedSearchRecordsTheFilterNotTheName.
+//
+// `/searches/run?name=team-hunt` was audited by the wrapper, so the recorded query was `name=team-hunt`.
+// That name is a MUTABLE, DELETABLE pointer — SaveSearch is upsert-on-name and /searches/delete is a
+// hard delete, both at RESPONDER tier, which is below the tier that reviews the audit. An audit row
+// whose meaning a colleague can rewrite afterwards bounds nothing.
+//
+// The subject half is the sharper one: without lifting the saved search's own `subject=`, saving a
+// subject-naming search and running it by name is a way to read someone's file WITHOUT appearing in that
+// person's access report.
+//
+// Mutation: move /searches/run back out of viewAuditedInHandler, or drop the resolved-query branch →
+// the query assertions FAIL. Drop the SubjectFilter lift → the DSAR-join assertion FAILS.
+func TestRunningASavedSearchRecordsTheFilterNotTheName(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ca := newOneCA(t)
+	ctx := context.Background()
+
+	const cn = "saved-runner"
+	const principal = "cert:" + cn
+	const name = "hunt-d483"
+	const subject = "subject-saved-search"
+	grantOperator(t, s, ca, cn, controlplane.RoleAnalyst)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM investigation_views WHERE viewer = $1`, principal)
+		_, _ = pool.Exec(ctx, `DELETE FROM saved_searches WHERE name = $1`, name)
+	})
+	if err := s.SaveSearch(ctx, controlplane.SavedSearch{
+		Name: name, Surface: controlplane.SurfaceAlerts, Query: "subject=" + subject + "&limit=5",
+	}, principal); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	controlplane.RequireTierForTestHandler(s, controlplane.RoleAnalyst, s.OperatorReadHandler()).
+		ServeHTTP(rec, certReq(t, ca, http.MethodGet, "/searches/run?name="+name, cn, "agent"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /searches/run = %d %q", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+
+	got := viewsFor(t, s, principal)
+	if len(got) != 1 {
+		t.Fatalf("running a saved search recorded %d views, want exactly 1", len(got))
+	}
+	if got[0].Route != "/searches/run" {
+		t.Errorf("recorded route %q", got[0].Route)
+	}
+	if !strings.Contains(got[0].Query, "subject%3D"+subject) {
+		t.Errorf("the recorded query is %q and does not carry the filter that selected the rows — "+
+			"migration 053 says this column IS that filter, and a name a responder can redefine or "+
+			"delete is not it", got[0].Query)
+	}
+	if !strings.Contains(got[0].Query, "surface=alerts") {
+		t.Errorf("the recorded query %q does not say which store was read", got[0].Query)
+	}
+	if got[0].SubjectFilter != subject {
+		t.Errorf("the recorded subject is %q, want %q — otherwise saving a subject-naming search and "+
+			"running it by name reads someone's file without appearing in their access report",
+			got[0].SubjectFilter, subject)
+	}
+}
+
+// TestAnUnresolvableSavedSearchIsStillRecorded. The attempt is what is worth recording; whether it found
+// anything is not the audit's business. The 404 path is the one an operator probing names would take.
+//
+// Mutation: move the recording after the resolve error is returned → this FAILS.
+func TestAnUnresolvableSavedSearchIsStillRecorded(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ca := newOneCA(t)
+
+	const cn = "saved-prober"
+	const principal = "cert:" + cn
+	grantOperator(t, s, ca, cn, controlplane.RoleAnalyst)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM investigation_views WHERE viewer = $1`, principal)
+	})
+
+	rec := httptest.NewRecorder()
+	controlplane.RequireTierForTestHandler(s, controlplane.RoleAnalyst, s.OperatorReadHandler()).
+		ServeHTTP(rec, certReq(t, ca, http.MethodGet, "/searches/run?name=never-saved", cn, "agent"))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /searches/run on a missing name = %d, want 404", rec.Code)
+	}
+	got := viewsFor(t, s, principal)
+	if len(got) != 1 || got[0].Route != "/searches/run" {
+		t.Fatalf("probing saved-search names recorded %d views (%+v) — an operator enumerating the "+
+			"team's hunts by guessing names would leave nothing behind", len(got), got)
+	}
+}
+
+// TestASubjectReportSeparatesTheSubjectsOwnAccessRequests.
+//
+// `/subject` records its own access BEFORE compiling the report, so the DSAR counts itself: ask twice
+// and the number grows by one each time, with no way to tell your own requests from an investigator's.
+//
+// The breakdown, not a subtraction: an access request IS an operator reading the subject's file, and
+// quietly dropping it would hide a real access to make a number less confusing.
+//
+// Mutation: delete the FILTER clause from the DSAR views query → the breakdown reads 0 and this FAILS.
+func TestASubjectReportSeparatesTheSubjectsOwnAccessRequests(t *testing.T) {
+	pool := requireDB(t)
+	s := controlplane.New(pool)
+	ctx := context.Background()
+
+	const subject = "subject-dsar-breakdown"
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM investigation_views WHERE subject_filter = $1`, subject)
+	})
+	// Two investigators looked; one access request was made.
+	for _, v := range []controlplane.ViewRecord{
+		{Viewer: "cert:analyst-x", SubjectFilter: subject, Route: "/cases"},
+		{Viewer: "cert:analyst-y", SubjectFilter: subject, Route: "/search"},
+		{Viewer: "cert:officer-z", SubjectFilter: subject, Route: "/subject", EventID: "dsar"},
+	} {
+		if err := s.RecordView(ctx, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rep, err := s.SubjectAccessReport(ctx, subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ViewsOfSubject.Count != 3 {
+		t.Errorf("the report counts %d views, want 3", rep.ViewsOfSubject.Count)
+	}
+	if rep.ViewsThatWereAccessRequests != 1 {
+		t.Errorf("the report attributes %d of those to the subject's own access requests, want 1 — "+
+			"without the split, asking twice makes the number rise and the subject cannot tell their own "+
+			"requests from an investigator's", rep.ViewsThatWereAccessRequests)
 	}
 }

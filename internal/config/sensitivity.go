@@ -188,6 +188,32 @@ func atLeast(min time.Duration, why string) *Bound {
 	}
 }
 
+// retentionAtLeast bounds a RETENTION WINDOW below. It differs from atLeast in one place, and that place
+// is the whole reason it exists: ZERO IS NOT "DISABLED" HERE, IT IS "DELETE EVERYTHING".
+//
+// atLeast lets 0 through because for an INTERVAL that is a documented off switch — OPENSHIELD_CORRELATE_INTERVAL=0s
+// means "do not sweep". A retention WINDOW is subtracted from now() to make a cutoff, so 0 yields
+// `WHERE <ts> < now()`, which matches every row that exists. So the one value a floor is there to refuse
+// was the one value atLeast waved through, on OPENSHIELD_FLEET_RETENTION as well (found while adding the
+// missing bound to the view audit, D483 — the field held up as the model had the same hole).
+func retentionAtLeast(min time.Duration, why string) *Bound {
+	return &Bound{
+		Range: ">= " + min.String(),
+		Why:   why,
+		Check: func(raw string) error {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				return nil // parseability is the Kind's job; do not report it twice
+			}
+			if d < min {
+				return fmt.Errorf("%s is below the %s minimum: %s (a retention window of zero is not "+
+					"'disabled' — it is a cutoff of now(), which matches every row in the table)", raw, min, why)
+			}
+			return nil
+		},
+	}
+}
+
 // atMost bounds a duration above.
 func atMost(max time.Duration, why string) *Bound {
 	return &Bound{

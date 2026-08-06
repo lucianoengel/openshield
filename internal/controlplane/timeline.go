@@ -194,7 +194,9 @@ func (s *Server) incidentTimelineHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// Record first, then read.
-	if err := s.RecordView(r.Context(), viewer, "incident:"+strconv.FormatInt(id, 10), ""); err != nil {
+	if err := s.recordRequestView(r, ViewRecord{
+		Viewer: viewer, SubjectFilter: "incident:" + strconv.FormatInt(id, 10),
+	}); err != nil {
 		http.Error(w, "view could not be recorded", http.StatusInternalServerError)
 		return
 	}

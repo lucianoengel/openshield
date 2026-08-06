@@ -1,0 +1,16 @@
+-- D483: index the view audit by the column the DSAR joins on.
+--
+-- `SubjectAccessReport` runs `WHERE subject_filter = $1` against `investigation_views`. Migration 007
+-- indexed `viewer` and `event_id`; 053 added `viewed_at` for the purge. This predicate — an equality on
+-- one column — was the one left to a sequential scan, and CONSOLE-5 is what makes that matter: before
+-- it, four handlers wrote to this table; after it, every operator read does, so it becomes the largest
+-- table in the deployment and grows with console traffic rather than with investigations.
+--
+-- The route it slows is the one with a statutory clock on it. A data-subject access request has a legal
+-- response deadline, and "who has been looking at me" is the question it most obviously asks of a view
+-- audit — so the query that degrades as the console gets busier is the one that is not allowed to.
+--
+-- A NEW MIGRATION rather than amending 053, which has shipped and been applied: an applied migration is
+-- history, and editing it means a deployment that ran the old text and one that ran the new text both
+-- report the same version while holding different schemas.
+CREATE INDEX IF NOT EXISTS investigation_views_subject_idx ON investigation_views (subject_filter);

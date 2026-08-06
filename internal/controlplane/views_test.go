@@ -52,13 +52,28 @@ func TestEmptyViewerRejected(t *testing.T) {
 	if _, err := srv.View(ctx, "", "ev-x"); !errors.Is(err, controlplane.ErrNoViewer) {
 		t.Errorf("View with empty viewer err = %v, want ErrNoViewer", err)
 	}
-	if err := srv.RecordView(ctx, "", "", "ev-x"); !errors.Is(err, controlplane.ErrNoViewer) {
+	if err := srv.RecordView(ctx, controlplane.ViewRecord{
+		EventID: "ev-x", Route: "/view",
+	}); !errors.Is(err, controlplane.ErrNoViewer) {
 		t.Errorf("RecordView with empty viewer err = %v, want ErrNoViewer", err)
 	}
-	// Nothing was recorded.
+	// AND AN EMPTY ROUTE IS REFUSED THE SAME WAY (D483). Migration 053 declares route='' to mean
+	// "recorded before CONSOLE-5, no route captured", so a live handler writing '' makes its reads
+	// indistinguishable from history and `WHERE route='/cases'` answers nothing forever. That is what
+	// all five in-handler recorders did for the whole of D482.
+	//
+	// Mutation: delete the ErrNoRoute branch from recordViewDetail → this FAILS.
+	if err := srv.RecordView(ctx, controlplane.ViewRecord{
+		Viewer: "unauthenticated:alice", EventID: "ev-x",
+	}); !errors.Is(err, controlplane.ErrNoRoute) {
+		t.Errorf("RecordView with no route err = %v, want ErrNoRoute — a routeless row from a live "+
+			"handler is one a reader cannot tell from a pre-CONSOLE-5 record", err)
+	}
+	// Nothing was recorded — by EITHER refusal. Without this the two cases above are satisfied by a
+	// function that returns the right error and writes the row anyway.
 	views, _ := srv.Views(ctx, "ev-x")
 	if len(views) != 0 {
-		t.Errorf("an empty-viewer view was recorded: %v", views)
+		t.Errorf("a refused view was recorded: %v", views)
 	}
 }
 
@@ -67,7 +82,9 @@ func TestViewerLabelled(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
 	ctx := context.Background()
-	if err := srv.RecordView(ctx, "unauthenticated:bob", "subject:s1", ""); err != nil {
+	if err := srv.RecordView(ctx, controlplane.ViewRecord{
+		Viewer: "unauthenticated:bob", SubjectFilter: "subject:s1", Route: "/cases",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	views, _ := srv.ViewsBy(ctx, "unauthenticated:bob")

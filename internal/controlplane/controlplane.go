@@ -213,6 +213,17 @@ type Server struct {
 	// the purge still happened, so a recording failure is counted (the report gap is observable), not
 	// fatal.
 	RetentionRecordFailures atomic.Int64
+
+	// ViewAuditFailures counts operator reads REFUSED because the view could not be recorded (D483).
+	// Non-zero means the console's read surface is down — the refusal is correct, and without this the
+	// only evidence of it was a 500 the operator saw and nobody else did.
+	ViewAuditFailures atomic.Int64
+
+	// RetentionPurgeFailures counts retention purges that failed outright (D483). Distinct from
+	// RetentionRecordFailures, which is a purge that RAN and could not be written down: this one is
+	// data past its window that is still there. Without it a purge failing for months is
+	// indistinguishable from one that was never due — the compliance report shows an absence either way.
+	RetentionPurgeFailures atomic.Int64
 }
 
 // New creates a server over an existing pool.
