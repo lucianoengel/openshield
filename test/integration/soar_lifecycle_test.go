@@ -155,13 +155,34 @@ func TestTroubleThatReturnsIsLinkedAndPagesDifferently(t *testing.T) {
 	// The same trouble returns. A fresh burst, because the correlation window is still open.
 	seedBurst(t, stack, subject, 4, 0.96)
 
+	// TWO WAITS, NOT ONE, and the split is load-bearing.
+	//
+	// The incident is INSERTed and then linked by a SEPARATE statement (incidents.go: link before
+	// paging, so the page can say "this is the third time"). The row is therefore briefly visible with
+	// recurrence_of still NULL. Waiting only for the row to EXIST and then asserting on a column written
+	// afterwards is a race the reader loses whenever the machine is loaded — it failed exactly once, in
+	// CI, reporting "links to 0", which is the NULL rather than a wrong link.
+	//
+	// DO NOT "FIX" THIS BY MAKING THE INSERT AND THE LINK ATOMIC. The link is deliberately best-effort:
+	// a link failure degrades to an unlinked incident, and folding it into the insert's transaction
+	// would mean a failed link discards the INCIDENT — losing the trouble is far worse than losing the
+	// note that it is the second time.
+	//
+	// Each stage keeps its own diagnostic, so "no second incident at all" and "a second incident that
+	// never linked" stay distinguishable — they have completely different causes.
 	var second, recurrenceOf int64
 	var recurrenceCount int
-	Eventually(t, 90*time.Second, "a SECOND incident linked to the first", func() bool {
+	Eventually(t, 90*time.Second, "a SECOND incident for this subject", func() bool {
 		return scanRow(t, pool,
 			`SELECT id, coalesce(recurrence_of,0), recurrence_count FROM incidents
 			  WHERE subject_id=$1 AND state='open' AND id <> $2`,
 			[]any{subject, first}, &second, &recurrenceOf, &recurrenceCount)
+	})
+	Eventually(t, 30*time.Second, "the second incident to be LINKED to the first", func() bool {
+		return scanRow(t, pool,
+			`SELECT id, coalesce(recurrence_of,0), recurrence_count FROM incidents
+			  WHERE subject_id=$1 AND state='open' AND id=$2 AND recurrence_of IS NOT NULL`,
+			[]any{subject, second}, &second, &recurrenceOf, &recurrenceCount)
 	})
 	if recurrenceOf != first {
 		t.Fatalf("incident %d links to %d, want %d — without it an operator cannot tell new trouble "+
