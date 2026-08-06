@@ -20,6 +20,8 @@ import (
 	"github.com/lucianoengel/openshield/internal/config"
 	"github.com/lucianoengel/openshield/internal/connectors/dns"
 	"github.com/lucianoengel/openshield/internal/connectors/execaudit"
+	"github.com/lucianoengel/openshield/internal/posture"
+	"github.com/lucianoengel/openshield/internal/pseudonym"
 	"github.com/lucianoengel/openshield/internal/transport/queue"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
@@ -248,6 +250,7 @@ func main() {
 		// demonstrated and never shipped — the same shape as the heartbeat (D474) and durable ingest
 		// (PLAT-2) before it.
 		attachSpool(ctx, pub, agentID, log)
+		startPostureReporting(ctx, conn, agentID, log)
 		eng.SetTelemetry(pub)
 		log.Info("engine: fleet telemetry ENABLED — real detections project to the control plane (D80)",
 			slog.String("agent_id", agentID), slog.Bool("durable_ingest", natsx.JetStreamEnabled()))
@@ -1504,4 +1507,103 @@ func attachSpool(ctx context.Context, pub *natsx.SignedPublisher, agentID string
 			}
 		}
 	}()
+}
+
+// startPostureReporting publishes this endpoint's SIGNED device posture (D92/HON-4), which the real
+// endpoint agent never did.
+//
+// Only the fleet simulator published posture, so the gateway's PostureStore was fed exclusively by
+// simulated hosts. D85's tamper-lockout — "a device with NO posture published is UNTRUSTED, so a killed
+// or tampered endpoint is denied at the gateway" — therefore denied every REAL endpoint in a deployment
+// that turned it on, and admitted only the simulation. A control that refuses everything is as useless as
+// one that refuses nothing, and it fails in the direction that gets it switched off.
+//
+// It carries BINARY INTEGRITY (PLAT-6 inc 3) from the same check `selfVerify` already runs at startup.
+// That check only ever wrote a log line — on the host that may itself be compromised. Riding it on the
+// posture report is what turns "am I the binary that was published?" into a fleet-wide question and an
+// access decision made somewhere the compromised endpoint does not get a vote.
+//
+// OPT-IN, like the simulator's: without a per-agent signing key there is nothing to sign with, and an
+// UNSIGNED posture claim is never applied (SEC-12) — publishing one would be noise that looks like
+// coverage.
+func startPostureReporting(ctx context.Context, conn *nats.Conn, agentID string, log *slog.Logger) {
+	keyPath := os.Getenv("OPENSHIELD_POSTURE_SIGNING_KEY")
+	if keyPath == "" {
+		log.Info("engine: device-posture reporting OFF (set OPENSHIELD_POSTURE_SIGNING_KEY) — a gateway " +
+			"policy that requires posture will DENY this endpoint, because absent posture is untrusted " +
+			"by design (D85)")
+		return
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil || len(key) != ed25519.PrivateKeySize {
+		// FATAL, not degraded. A posture key that is configured and unusable is an operator who believes
+		// this endpoint is reporting; starting anyway would let the gateway deny it for "no posture" and
+		// give nobody a reason why.
+		fatal(log, "posture signing key", fmt.Errorf("%v (want a %d-byte ed25519 key)", err, ed25519.PrivateKeySize))
+	}
+	subject := pseudonym.Of(agentID)
+	interval := envDuration("OPENSHIELD_POSTURE_INTERVAL", 60*time.Second)
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	log.Info("engine: SIGNED device-posture reporting ACTIVE (D92/HON-4)",
+		slog.String("subject", subject), slog.Duration("interval", interval))
+
+	publish := func() {
+		rep := posture.Detect()
+		// RE-CHECKED EVERY REPORT rather than cached at startup: a binary can be replaced while the
+		// agent runs, and a cached answer would keep vouching for it.
+		rep.Binaries = engineBinaryIntegrity(log)
+		if err := posture.Publish(conn, subject, rep, ed25519.PrivateKey(key)); err != nil {
+			log.Warn("engine: posture publish failed — a gateway requiring posture will deny this "+
+				"endpoint until it succeeds", slog.String("err", err.Error()))
+		}
+	}
+	publish() // immediately, so a starting endpoint is not denied for a whole interval
+
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				publish()
+			}
+		}
+	}()
+}
+
+// engineBinaryIntegrity answers "are my installed files the ones that were published?" as one of THREE
+// states.
+//
+// "I did not check" must never be storable as either verified or mismatched: the first would let an
+// unconfigured endpoint satisfy a policy requiring integrity, and the second would deny every endpoint
+// that simply has not been configured for it. Every failure path below returns UNCHECKED rather than
+// guessing.
+func engineBinaryIntegrity(log *slog.Logger) core.BinaryIntegrity {
+	keyPath := env("OPENSHIELD_RELEASE_PUBKEY", "")
+	if keyPath == "" {
+		return core.BinariesUnchecked
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		log.Warn("engine: release public key unusable — reporting binary integrity as UNCHECKED rather "+
+			"than guessing", slog.String("key", keyPath))
+		return core.BinariesUnchecked
+	}
+	rep, err := debpkg.VerifyInstalled(env("OPENSHIELD_INSTALL_PREFIX", "/"), ed25519.PublicKey(key))
+	if err != nil {
+		log.Warn("engine: binary verification could not run — reporting UNCHECKED",
+			slog.String("err", err.Error()))
+		return core.BinariesUnchecked
+	}
+	if !rep.OK() {
+		log.Error("engine: THIS INSTALLATION DOES NOT MATCH ITS RELEASE — reporting MISMATCH to the "+
+			"fleet, so an access policy can refuse this host where it cannot tamper with the answer",
+			slog.String("detail", rep.Error()))
+		return core.BinariesMismatch
+	}
+	return core.BinariesVerified
 }
