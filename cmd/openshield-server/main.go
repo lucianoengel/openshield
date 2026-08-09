@@ -11,6 +11,7 @@ import (
 	"crypto/ed25519"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -165,6 +166,18 @@ func main() {
 
 	srv := controlplane.New(pool)
 
+	// A REAL LOGGER FOR THE SCHEDULED LEADER LOOPS, which this binary did not have.
+	//
+	// Every loop below takes a *slog.Logger and every one of them used to be handed a literal `nil` —
+	// this file did not import log/slog at all. So the "a failing tick is logged even when it is not
+	// counted" half of the stop rule (D485) had never emitted a single line from the shipped binary: the
+	// requirement was satisfied by a parameter that production never populated. The pattern is
+	// cmd/openshield-engine/main.go's and cmd/openshield-fleet-agent/main.go's.
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// Also the process-wide default, so controlplane.NoteTickErr's nil fallback lands in the same place
+	// as everything else rather than in slog's built-in handler.
+	slog.SetDefault(log)
+
 	// PLAT-5b: dynamic settings come from the DATABASE, and a watcher keeps them current in this process
 	// so a saved change applies without a restart. Bootstrap fields still come from env/file — they have
 	// to reach the process before the database does.
@@ -240,51 +253,13 @@ func main() {
 			controlplane.SetLeaderHeld(false)
 		}()
 
-		// SOAR-2: correlate on a CLOCK, not only when an operator asks. Before this, both materializers
-		// were called from exactly one place — the GET /incidents handler — so an incident existed only if
-		// a human happened to look, and SOAR-1's automatic page (D220) followed someone else's request.
-		//
-		// LEADER-ONLY (leaderCtx): every replica correlating would multiply materializations, and
-		// materialization pages. The context is cancelled the moment leadership is lost, so a demoted
-		// instance stops immediately rather than at the next tick.
-		// PLAT-5b: the interval and both rules are read PER TICK from the live resolver, so a
-		// configuration change applies to this running server without a restart. The loop always runs;
-		// an interval of 0 means "not configured" and it simply does no work until one is set — so
-		// turning correlation ON no longer requires a restart either.
-		go srv.RunCorrelationLoop(leaderCtx,
-			func() time.Duration { return cfg.Duration("OPENSHIELD_CORRELATE_INTERVAL") },
-			func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
-				window := cfg.Duration("OPENSHIELD_CORRELATE_WINDOW")
-				recur := cfg.Duration("OPENSHIELD_INCIDENT_RECURRENCE_WINDOW")
-				return controlplane.CorrelationRule{
-						Window:           window,
-						MinAlerts:        cfg.Int("OPENSHIELD_CORRELATE_MIN_ALERTS"),
-						RecurrenceWindow: recur,
-					}, controlplane.CrossDomainRule{
-						Window:           window,
-						MinDomains:       cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
-						RecurrenceWindow: recur,
-					}
-			},
-			// XDR-4c: the NARRATIVE rules, read per tick from the hunt file. Before this, XDR-4's
-			// ordered-sequence rule was reachable only from the GET /incidents query parser: the
-			// platform could answer "did this chain happen?" for an operator who already suspected it,
-			// and could never tell anyone. A hunt file that fails to parse leaves hunts OFF and counts
-			// it — substituting a default would raise incidents against a narrative nobody wrote.
-			func() []controlplane.CrossDomainRule {
-				p := cfg.String("OPENSHIELD_CORRELATION_HUNTS")
-				if p == "" {
-					return nil // not configured: the breadth rule alone, exactly as before
-				}
-				h, err := loadHuntsFile(p)
-				if err != nil {
-					controlplane.CorrelationFailures.Add(1)
-					return nil
-				}
-				return h.Rules(cfg.Duration("OPENSHIELD_CORRELATE_WINDOW"),
-					cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
-					cfg.Duration("OPENSHIELD_INCIDENT_RECURRENCE_WINDOW"))
-			}, nil)
+		// THE SEVEN SCHEDULED LEADER LOOPS ARE STARTED IN ONE PLACE, by startLeaderLoops at the end of
+		// this block. `deps` collects the values they need that are built below from configuration
+		// (the ITSM connector, the alert-sink order) — a nil connector or `escalation == false` means
+		// that integration is not configured and its loop is not started, exactly as when the starts
+		// were inline here.
+		var deps leaderDeps
+
 		fmt.Fprintf(os.Stderr, "openshield-server: scheduled correlation loop ACTIVE (interval read live "+
 			"from configuration; 0 = idle, no restart needed to change it)\n")
 		// Say at startup whether the narrative rules are on, and NAME a broken hunt file. A hunt that
@@ -302,23 +277,6 @@ func main() {
 				"run on every correlation tick alongside the breadth rule)\n", p, len(h.Hunts))
 		}
 
-		// NIPS-6: sweep for beaconing on its OWN schedule. A 24h rhythm window on a 1h correlation tick
-		// would either re-scan a day of telemetry every tick or measure rhythm over an hour, and neither
-		// is the job. Interval and thresholds are read PER TICK, so retuning needs no restart.
-		go srv.RunBeaconLoop(leaderCtx,
-			func() time.Duration { return cfg.Duration("OPENSHIELD_BEACON_INTERVAL") },
-			func() controlplane.BeaconRule {
-				reg, _ := strconv.ParseFloat(cfg.String("OPENSHIELD_BEACON_MIN_REGULARITY"), 64)
-				return controlplane.BeaconRule{
-					Window: cfg.Duration("OPENSHIELD_BEACON_WINDOW"),
-					Options: beacon.Options{
-						MinContacts:   cfg.Int("OPENSHIELD_BEACON_MIN_CONTACTS"),
-						MinRegularity: reg,
-						MinInterval:   5 * time.Second,
-					},
-					Allowlist: splitCSV(cfg.String("OPENSHIELD_BEACON_ALLOWLIST")),
-				}
-			}, nil)
 		fmt.Fprintf(os.Stderr, "openshield-server: beaconing sweep loop ACTIVE (interval read live; "+
 			"0 = idle). Most beacons on a real network are legitimate — it raises MEDIUM alerts with "+
 			"their evidence and enforces nothing.\n")
@@ -331,52 +289,6 @@ func main() {
 			srv.SetIntentBlastRadius(cfg.Int("OPENSHIELD_INTENT_BLAST_RADIUS"))
 		})
 		srv.SetIntentBlastRadius(cfg.Int("OPENSHIELD_INTENT_BLAST_RADIUS"))
-
-		// SOAR-3/D290: relabel timed-out four-eyes requests so the approval queue shows what can still
-		// be actioned. LEADER-ONLY like the other maintenance loops.
-		go srv.RunApprovalExpiryLoop(leaderCtx,
-			func() time.Duration { return cfg.Duration("OPENSHIELD_APPROVAL_EXPIRY_INTERVAL") })
-
-		// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
-		// is — every replica running playbooks would multiply notifications, cases and legal holds.
-		//
-		// The file is re-read PER TICK (D292). It used to be loaded once at leader startup, which made
-		// OPENSHIELD_PLAYBOOKS a dynamic setting that silently required a restart — an operator enabling
-		// orchestration in the console would have watched their saved change do nothing.
-		//
-		// A parse or validation failure is FATAL TO THE FEATURE, not to the process: a playbook naming an
-		// unknown step must never partially load, but orchestration being misconfigured must not take
-		// detection down with it. The failure is announced ONCE PER DISTINCT ERROR rather than every
-		// tick, because a loop that logs the same failure every second is one whose output gets muted.
-		var lastPlaybookNote string
-		notePlaybooks := func(format string, args ...any) {
-			msg := fmt.Sprintf(format, args...)
-			if msg != lastPlaybookNote {
-				lastPlaybookNote = msg
-				fmt.Fprint(os.Stderr, msg)
-			}
-		}
-		go srv.RunPlaybookLoop(leaderCtx,
-			func() time.Duration { return cfg.Duration("OPENSHIELD_PLAYBOOK_INTERVAL") },
-			func() []controlplane.Playbook {
-				path := cfg.String("OPENSHIELD_PLAYBOOKS")
-				if path == "" {
-					return nil
-				}
-				pbs, err := loadPlaybookFile(path)
-				switch {
-				case err != nil:
-					notePlaybooks("openshield-server: playbooks NOT loaded from %s: %v — orchestration is "+
-						"OFF (detection and paging are unaffected)\n", path, err)
-					return nil
-				case len(pbs) == 0:
-					notePlaybooks("openshield-server: %s defines no playbooks — orchestration is OFF\n", path)
-					return nil
-				}
-				notePlaybooks("openshield-server: playbook orchestration ACTIVE — %d playbook(s) from %s, "+
-					"Tier-1 only (no actuation) (leader only)\n", len(pbs), path)
-				return pbs
-			}, nil)
 
 		// SOAR-5: keep the IOC store fresh without a human. LEADER-ONLY — every replica re-ingesting
 		// the same snapshot would be redundant writes, not a correctness problem, but the leader lease
@@ -461,60 +373,11 @@ func main() {
 				Timeout:        cfg.Duration("OPENSHIELD_ITSM_TIMEOUT"),
 			}
 			si := cfg.Duration("OPENSHIELD_ITSM_INTERVAL")
-			go srv.RunITSMLoop(leaderCtx, si, itsm, nil)
+			deps.itsm, deps.itsmInterval = itsm, si
 			fmt.Fprintf(os.Stderr, "openshield-server: ITSM sync ACTIVE every %s against %s — a ticket "+
 				"reaching %v closes its incident; any OTHER status is ignored, never assumed closed "+
 				"(leader only)\n", si, ep, statuses)
 		}
-
-		// Enforce the fleet-aggregate retention window (D81): purge received telemetry
-		// and derived peer alerts older than the window, on a timer. The aggregate is a
-		// derived view, so this is a hard delete (the evidentiary ledger tombstones
-		// instead). Without it, personal-adjacent telemetry accrues forever (D20).
-		retInterval := cfg.Duration("OPENSHIELD_RETENTION_INTERVAL")
-		fleetRetention := cfg.Duration("OPENSHIELD_FLEET_RETENTION")
-		fleetPolicy := fmt.Sprintf("OPENSHIELD_FLEET_RETENTION=%s", fleetRetention)
-		// EACH PURGE RUNS AND FAILS ON ITS OWN (D483). This used to be one straight-line closure in
-		// which a failed fleet purge `return`ed — so a single unavailable table stopped the
-		// notify-dedupe prune and the view-audit purge from running AT ALL, silently, and the one line
-		// on stderr named the fleet purge. Three independent retention obligations, on three unrelated
-		// tables, are not one operation, and coupling them means the failure of the first hides the
-		// non-enforcement of the other two.
-		//
-		// A FAILURE IS COUNTED, not only logged. The compliance report records purges that RAN; a purge
-		// that keeps failing therefore looks exactly like one that was never due, because both are an
-		// absence. RetentionPurgeFailures is what tells those apart, and /health names it.
-		go retain.Loop(leaderCtx, retInterval, func(ctx context.Context) {
-			now := time.Now()
-			// SIEM-12/R34-13: the durable notify-dedupe ledger. An id only needs to outlive its dedup
-			// window, so the retention is several windows rather than one.
-			//
-			// THE CUTOFF COMES FROM THE SETTING, and the recorded policy is built from the value actually
-			// used (D333). It used to be a hardcoded 24h while the compliance event recorded the literal
-			// string "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h" — so an operator who set 7d had their value
-			// ignored AND got a retention record naming their knob while asserting someone else's value.
-			// A compliance record citing a setting nobody read is worse than one that omits it: it is
-			// evidence of a policy that was never applied.
-			ddRetention := cfg.Duration("OPENSHIELD_NOTIFY_DEDUPE_RETENTION")
-			// CONSOLE-5: the view audit. Migration 007 shipped `investigation_views` with no TTL and no
-			// purge while storing RAW, NON-PSEUDONYMISED operator identities — the one subject-adjacent
-			// store in this product that grew forever, and the one a console makes the largest table in
-			// the database. The window defaults LONGER than the fleet window on purpose: an
-			// accountability record that expires before the evidence it describes leaves nothing to
-			// check a disputed read against, and it has a FLOOR (D483) so the administrator this table
-			// records cannot express "erase it" as a retention setting.
-			vaRetention := cfg.Duration("OPENSHIELD_VIEW_AUDIT_RETENTION")
-			runRetentionSweep(ctx, []retentionJob{
-				{"fleet_telemetry", "fleet-aggregate rows", fleetPolicy,
-					now.Add(-fleetRetention), srv.PurgeOlderThan},
-				{"notify_dedupe", "durable notify-dedupe ids",
-					fmt.Sprintf("OPENSHIELD_NOTIFY_DEDUPE_RETENTION=%s", ddRetention),
-					now.Add(-ddRetention), srv.PruneNotifyDedupe},
-				{"investigation_views", "recorded investigation views",
-					fmt.Sprintf("OPENSHIELD_VIEW_AUDIT_RETENTION=%s", vaRetention),
-					now.Add(-vaRetention), srv.PurgeViewsOlderThan},
-			}, srv.RecordRetentionEvent, func() { srv.RetentionPurgeFailures.Add(1) })
-		})
 
 		// SIEM-4: when OPENSHIELD_CEF_SYSLOG_LISTEN is set, receive CEF-over-syslog from the estate and
 		// persist each parsed event as a searchable external log — OpenShield ingesting third-party
@@ -681,26 +544,10 @@ func main() {
 				fmt.Fprintf(os.Stderr, "openshield-server: incident escalation ACTIVE from %s "+
 					"(acknowledging an incident stops its ladder)\n", p)
 			}
-			// The loop ALWAYS runs and reads path + ladder per tick, so both enabling escalation and
-			// editing the ladder apply to a running server. Gating the goroutine on the value read at
-			// start would make "dynamic" mean "dynamic once you restart", which is the shape PLAT-5b
-			// exists to refuse.
-			go srv.RunEscalationLoop(leaderCtx,
-				func() time.Duration { return cfg.Duration("OPENSHIELD_ESCALATION_INTERVAL") },
-				func() controlplane.Ladder {
-					p := cfg.String("OPENSHIELD_ESCALATION_LADDER")
-					if p == "" {
-						return controlplane.Ladder{} // not configured: no rungs, nothing fires
-					}
-					l, err := loadLadderFile(p, sinkOrder)
-					if err != nil {
-						// A file edited into an invalid state must not silently disable escalation:
-						// count it where the operator already looks.
-						controlplane.EscalationFailures.Add(1)
-						return controlplane.Ladder{}
-					}
-					return l
-				}, nil)
+			// The loop itself is started by startLeaderLoops with the other six; what this block owns is
+			// the sink order the ladder resolves names against, and the fact that alert delivery is
+			// configured at all — which is the gate the loop start had inline here.
+			deps.escalation, deps.sinkOrder = true, sinkOrder
 
 			overdueThreshold := cfg.Duration("OPENSHIELD_OVERDUE_THRESHOLD")
 			overdueInterval := cfg.Duration("OPENSHIELD_OVERDUE_INTERVAL")
@@ -821,6 +668,12 @@ func main() {
 			}()
 			go func() { <-leaderCtx.Done(); _ = msrv.Close() }()
 		}
+
+		// ALL SEVEN SCHEDULED LEADER LOOPS, in one place, each handed the real logger. They start here
+		// rather than where each one's configuration is read because that is what makes the wiring
+		// testable in-process — see startLeaderLoops. Everything above this point either builds what
+		// they need or fails the process outright, and srv.Run below blocks for the rest of the term.
+		startLeaderLoops(leaderCtx, srv, cfg, log, deps)
 
 		fmt.Fprintf(os.Stderr, "openshield-server: subscribing to telemetry on %s\n", natsURL)
 		if err := srv.Run(leaderCtx, natsURL); err != nil && leaderCtx.Err() == nil {
@@ -1446,6 +1299,272 @@ type retentionJob struct {
 	run    func(context.Context, time.Time) (int64, error)
 }
 
+// leaderDeps carries the values the leader loops need that are built in `onElected` from configuration
+// this function does not read — the ITSM connector, the alert-sink order the escalation ladder resolves
+// names against. Both are constructed inside conditional blocks, so a nil connector or a false
+// `escalation` means "that integration is not configured" and its loop is not started, exactly as before.
+type leaderDeps struct {
+	itsm         *runner.ITSMConnector
+	itsmInterval time.Duration
+	// escalation is separate from sinkOrder being non-empty: the escalation loop runs only when alert
+	// delivery is configured at all, which is the gate it had inline.
+	escalation bool
+	sinkOrder  []string
+}
+
+// startLeaderLoops starts every scheduled loop that runs under the leader lease, in ONE place.
+//
+// IT IS FACTORED OUT SO THE WIRING IS TESTABLE. These seven starts used to be inline in `main()`'s
+// `onElected` closure, spread across ~500 lines and interleaved with NATS, TLS and listener setup — not
+// drivable in-process, so a test that wanted to assert "every loop is handed a real logger" could only
+// parse this file for `nil` literals, which asserts source text rather than behaviour. That mattered here
+// because the defect being fixed was exactly that: seven call sites all passing `nil`, compiling
+// perfectly, and silently turning the logging half of the stop rule into a no-op. The equivalent seam in
+// cmd/openshield-engine (`registerEnforcers`) is why its wiring test is real.
+//
+// `log` is passed to all seven. Passing nil compiles — that is the failure this seam exists to prevent,
+// and TestServerWiresALoggerIntoEveryLeaderLoop is what notices.
+//
+// THE LOOPS NOW START LATER THAN THEY USED TO, AND THAT IS DELIBERATE. Extracting them moved all seven
+// starts to AFTER `SetNotifier`, `SetIntentResponder` and `SetIntentBlastRadius` run. That direction is
+// strictly safer than the old one: the previous inline order could run a playbook tick — which notifies,
+// opens cases and places legal holds — before the notifier was installed, so an early page went nowhere.
+// Nothing here depends on starting before those, and `srv.Run` blocks for the rest of the leader term
+// immediately after this call, so the loops still cover the whole term.
+func startLeaderLoops(leaderCtx context.Context, srv *controlplane.Server, cfg *config.Resolver,
+	log *slog.Logger, deps leaderDeps) {
+	// SOAR-2: correlate on a CLOCK, not only when an operator asks. Before this, both materializers
+	// were called from exactly one place — the GET /incidents handler — so an incident existed only if
+	// a human happened to look, and SOAR-1's automatic page (D220) followed someone else's request.
+	//
+	// LEADER-ONLY (leaderCtx): every replica correlating would multiply materializations, and
+	// materialization pages. The context is cancelled the moment leadership is lost, so a demoted
+	// instance stops immediately rather than at the next tick.
+	// PLAT-5b: the interval and both rules are read PER TICK from the live resolver, so a
+	// configuration change applies to this running server without a restart. The loop always runs;
+	// an interval of 0 means "not configured" and it simply does no work until one is set — so
+	// turning correlation ON no longer requires a restart either.
+	go srv.RunCorrelationLoop(leaderCtx,
+		func() time.Duration { return cfg.Duration("OPENSHIELD_CORRELATE_INTERVAL") },
+		func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
+			window := cfg.Duration("OPENSHIELD_CORRELATE_WINDOW")
+			recur := cfg.Duration("OPENSHIELD_INCIDENT_RECURRENCE_WINDOW")
+			return controlplane.CorrelationRule{
+					Window:           window,
+					MinAlerts:        cfg.Int("OPENSHIELD_CORRELATE_MIN_ALERTS"),
+					RecurrenceWindow: recur,
+				}, controlplane.CrossDomainRule{
+					Window:           window,
+					MinDomains:       cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
+					RecurrenceWindow: recur,
+				}
+		},
+		// XDR-4c: the NARRATIVE rules, read per tick from the hunt file. Before this, XDR-4's
+		// ordered-sequence rule was reachable only from the GET /incidents query parser: the
+		// platform could answer "did this chain happen?" for an operator who already suspected it,
+		// and could never tell anyone. A hunt file that fails to parse leaves hunts OFF and counts
+		// it — substituting a default would raise incidents against a narrative nobody wrote.
+		func() []controlplane.CrossDomainRule {
+			p := cfg.String("OPENSHIELD_CORRELATION_HUNTS")
+			if p == "" {
+				return nil // not configured: the breadth rule alone, exactly as before
+			}
+			h, err := loadHuntsFile(p)
+			if err != nil {
+				// NOT A TICK, and deliberately still counted here rather than routed through
+				// NoteTickErr: this is a configuration provider, and an operator file edited into
+				// an invalid state must not silently disable detection. It does mean
+				// CorrelationFailures is not purely "ticks that failed" — recorded in the spec.
+				controlplane.CorrelationFailures.Add(1)
+				return nil
+			}
+			return h.Rules(cfg.Duration("OPENSHIELD_CORRELATE_WINDOW"),
+				cfg.Int("OPENSHIELD_CORRELATE_MIN_DOMAINS"),
+				cfg.Duration("OPENSHIELD_INCIDENT_RECURRENCE_WINDOW"))
+		}, log)
+
+	// NIPS-6: sweep for beaconing on its OWN schedule. A 24h rhythm window on a 1h correlation tick
+	// would either re-scan a day of telemetry every tick or measure rhythm over an hour, and neither
+	// is the job. Interval and thresholds are read PER TICK, so retuning needs no restart.
+	go srv.RunBeaconLoop(leaderCtx,
+		func() time.Duration { return cfg.Duration("OPENSHIELD_BEACON_INTERVAL") },
+		func() controlplane.BeaconRule {
+			reg, _ := strconv.ParseFloat(cfg.String("OPENSHIELD_BEACON_MIN_REGULARITY"), 64)
+			return controlplane.BeaconRule{
+				Window: cfg.Duration("OPENSHIELD_BEACON_WINDOW"),
+				Options: beacon.Options{
+					MinContacts:   cfg.Int("OPENSHIELD_BEACON_MIN_CONTACTS"),
+					MinRegularity: reg,
+					MinInterval:   5 * time.Second,
+				},
+				Allowlist: splitCSV(cfg.String("OPENSHIELD_BEACON_ALLOWLIST")),
+			}
+		}, log)
+
+	// SOAR-3/D290: relabel timed-out four-eyes requests so the approval queue shows what can still
+	// be actioned. LEADER-ONLY like the other maintenance loops.
+	go srv.RunApprovalExpiryLoop(leaderCtx,
+		func() time.Duration { return cfg.Duration("OPENSHIELD_APPROVAL_EXPIRY_INTERVAL") }, log)
+
+	// SOAR-4: run playbooks against matching incidents. LEADER-ONLY for the same reason correlation
+	// is — every replica running playbooks would multiply notifications, cases and legal holds.
+	//
+	// The file is re-read PER TICK (D292). It used to be loaded once at leader startup, which made
+	// OPENSHIELD_PLAYBOOKS a dynamic setting that silently required a restart — an operator enabling
+	// orchestration in the console would have watched their saved change do nothing.
+	//
+	// A parse or validation failure is FATAL TO THE FEATURE, not to the process: a playbook naming an
+	// unknown step must never partially load, but orchestration being misconfigured must not take
+	// detection down with it. The failure is announced ONCE PER DISTINCT ERROR rather than every
+	// tick, because a loop that logs the same failure every second is one whose output gets muted.
+	var lastPlaybookNote string
+	notePlaybooks := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		if msg != lastPlaybookNote {
+			lastPlaybookNote = msg
+			fmt.Fprint(os.Stderr, msg)
+		}
+	}
+	go srv.RunPlaybookLoop(leaderCtx,
+		func() time.Duration { return cfg.Duration("OPENSHIELD_PLAYBOOK_INTERVAL") },
+		func() []controlplane.Playbook {
+			path := cfg.String("OPENSHIELD_PLAYBOOKS")
+			if path == "" {
+				return nil
+			}
+			pbs, err := loadPlaybookFile(path)
+			switch {
+			case err != nil:
+				notePlaybooks("openshield-server: playbooks NOT loaded from %s: %v — orchestration is "+
+					"OFF (detection and paging are unaffected)\n", path, err)
+				return nil
+			case len(pbs) == 0:
+				notePlaybooks("openshield-server: %s defines no playbooks — orchestration is OFF\n", path)
+				return nil
+			}
+			notePlaybooks("openshield-server: playbook orchestration ACTIVE — %d playbook(s) from %s, "+
+				"Tier-1 only (no actuation) (leader only)\n", len(pbs), path)
+			return pbs
+		}, log)
+
+	// SOAR-8(a): incident ⇄ ticket sync, when a connector is configured.
+	if deps.itsm != nil {
+		go srv.RunITSMLoop(leaderCtx, deps.itsmInterval, deps.itsm, log)
+	}
+
+	// SOAR-9b: escalate incidents nobody acknowledges. Read PER TICK so a ladder change applies
+	// without a restart, and leader-only so replicas do not multiply the page.
+	//
+	// The loop ALWAYS runs (when alert delivery is configured) and reads path + ladder per tick, so both
+	// enabling escalation and editing the ladder apply to a running server. Gating the goroutine on the
+	// value read at start would make "dynamic" mean "dynamic once you restart", which is the shape
+	// PLAT-5b exists to refuse.
+	if deps.escalation {
+		sinkOrder := deps.sinkOrder
+		go srv.RunEscalationLoop(leaderCtx,
+			func() time.Duration { return cfg.Duration("OPENSHIELD_ESCALATION_INTERVAL") },
+			func() controlplane.Ladder {
+				p := cfg.String("OPENSHIELD_ESCALATION_LADDER")
+				if p == "" {
+					return controlplane.Ladder{} // not configured: no rungs, nothing fires
+				}
+				l, err := loadLadderFile(p, sinkOrder)
+				if err != nil {
+					// A file edited into an invalid state must not silently disable escalation:
+					// count it where the operator already looks. Like the hunts provider above this
+					// is a CONFIGURATION failure, not a tick, and stays counted here.
+					controlplane.EscalationFailures.Add(1)
+					return controlplane.Ladder{}
+				}
+				return l
+			}, log)
+	}
+
+	// Enforce the fleet-aggregate retention window (D81): purge received telemetry
+	// and derived peer alerts older than the window, on a timer. The aggregate is a
+	// derived view, so this is a hard delete (the evidentiary ledger tombstones
+	// instead). Without it, personal-adjacent telemetry accrues forever (D20).
+	retInterval := cfg.Duration("OPENSHIELD_RETENTION_INTERVAL")
+	fleetRetention := cfg.Duration("OPENSHIELD_FLEET_RETENTION")
+	fleetPolicy := fmt.Sprintf("OPENSHIELD_FLEET_RETENTION=%s", fleetRetention)
+	// EACH PURGE RUNS AND FAILS ON ITS OWN (D483). This used to be one straight-line closure in
+	// which a failed fleet purge `return`ed — so a single unavailable table stopped the
+	// notify-dedupe prune and the view-audit purge from running AT ALL, silently, and the one line
+	// on stderr named the fleet purge. Three independent retention obligations, on three unrelated
+	// tables, are not one operation, and coupling them means the failure of the first hides the
+	// non-enforcement of the other two.
+	//
+	// A FAILURE IS COUNTED, not only logged. The compliance report records purges that RAN, so a purge
+	// that keeps failing therefore looks exactly like one that was never due, because both are an
+	// absence. RetentionPurgeFailures is what tells those apart, and /health names it — but a STOP is
+	// not a failure, which is why both the purge and the record path go through NoteTickErr with the
+	// leader context rather than incrementing directly.
+	record, onFailure := retentionCallbacks(leaderCtx, srv, log)
+	go retain.Loop(leaderCtx, retInterval, func(ctx context.Context) {
+		now := time.Now()
+		// SIEM-12/R34-13: the durable notify-dedupe ledger. An id only needs to outlive its dedup
+		// window, so the retention is several windows rather than one.
+		//
+		// THE CUTOFF COMES FROM THE SETTING, and the recorded policy is built from the value actually
+		// used (D333). It used to be a hardcoded 24h while the compliance event recorded the literal
+		// string "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h" — so an operator who set 7d had their value
+		// ignored AND got a retention record naming their knob while asserting someone else's value.
+		// A compliance record citing a setting nobody read is worse than one that omits it: it is
+		// evidence of a policy that was never applied.
+		ddRetention := cfg.Duration("OPENSHIELD_NOTIFY_DEDUPE_RETENTION")
+		// CONSOLE-5: the view audit. Migration 007 shipped `investigation_views` with no TTL and no
+		// purge while storing RAW, NON-PSEUDONYMISED operator identities — the one subject-adjacent
+		// store in this product that grew forever, and the one a console makes the largest table in
+		// the database. The window defaults LONGER than the fleet window on purpose: an
+		// accountability record that expires before the evidence it describes leaves nothing to
+		// check a disputed read against, and it has a FLOOR (D483) so the administrator this table
+		// records cannot express "erase it" as a retention setting.
+		vaRetention := cfg.Duration("OPENSHIELD_VIEW_AUDIT_RETENTION")
+		runRetentionSweep(ctx, []retentionJob{
+			{"fleet_telemetry", "fleet-aggregate rows", fleetPolicy,
+				now.Add(-fleetRetention), srv.PurgeOlderThan},
+			{"notify_dedupe", "durable notify-dedupe ids",
+				fmt.Sprintf("OPENSHIELD_NOTIFY_DEDUPE_RETENTION=%s", ddRetention),
+				now.Add(-ddRetention), srv.PruneNotifyDedupe},
+			{"investigation_views", "recorded investigation views",
+				fmt.Sprintf("OPENSHIELD_VIEW_AUDIT_RETENTION=%s", vaRetention),
+				now.Add(-vaRetention), srv.PurgeViewsOlderThan},
+		}, record, onFailure)
+	})
+}
+
+// retentionCallbacks builds the retention sweep's two reporting halves.
+//
+// FACTORED OUT SO BOTH ARE TESTABLE. The sweep's `record` and `onFailure` are injected precisely so the
+// control flow can be tested without a database (see runRetentionSweep), but while these two closures
+// lived inline in a `retain.Loop` literal, the LOGGER each one carries was reachable only by running the
+// whole loop — and against a dead pool the record path never runs at all, because a purge has to succeed
+// before anything is recorded. So reverting `log` to `nil` inside the record half would have passed the
+// wiring test. This is the EIGHTH logger site and it is now asserted like the other seven.
+//
+// Both close over `leaderCtx` — the context the loop was STARTED with, not the per-tick one. That is the
+// context the stop exemption is keyed on, and naming it here is the whole point of NoteTickErr taking it
+// as an explicit argument.
+func retentionCallbacks(leaderCtx context.Context, srv *controlplane.Server, log *slog.Logger) (
+	record func(context.Context, string, int64, time.Time, string),
+	onFailure func(target string, err error)) {
+	record = func(_ context.Context, target string, rows int64, cutoff time.Time, policy string) {
+		// The RECORD path counts RetentionRecordFailures, and it is reached from inside the loop literal
+		// — so on a stop mid-sweep its Exec fails with context.Canceled and that counter moved for a
+		// routine event too. It takes the same logger and the same leader context; the per-tick context
+		// the sweep offers is deliberately ignored in favour of the one the exemption is keyed on.
+		srv.RecordRetentionEvent(leaderCtx, log, target, rows, cutoff, policy)
+	}
+	onFailure = func(target string, err error) {
+		// THE PURGE path — and the ONLY report of a failed purge, since runRetentionSweep no longer
+		// prints one itself.
+		controlplane.NoteTickErr(leaderCtx, log,
+			"retention purge FAILED — data past its window is still stored",
+			&srv.RetentionPurgeFailures, err, slog.String("target", target))
+	}
+	return record, onFailure
+}
+
 // runRetentionSweep runs every retention obligation for one tick, INDEPENDENTLY (D483).
 //
 // This used to be one straight-line closure in which a failed fleet purge `return`ed. Three unrelated
@@ -1461,14 +1580,23 @@ type retentionJob struct {
 // `record` and `onFailure` are injected rather than reached through the Server so this is testable
 // without a database: the claim being made is about CONTROL FLOW between independent jobs, and a test
 // that needed three real tables to break one of them would not be written.
+// `onFailure` TAKES THE TARGET AND THE ERROR, not a bare signal. It used to be `func()` and the caller
+// could therefore only bump a counter — which is precisely how this loop came to count its own shutdown
+// as a retention failure, with nothing able to tell the two apart. The caller now routes it through
+// controlplane.NoteTickErr with the leader context, so a demotion mid-sweep is logged and not counted
+// while a genuine purge failure counts exactly as before.
+//
+// **`onFailure` IS THE ONLY REPORT OF A FAILED PURGE.** This function no longer writes one itself: the
+// stderr line it used to print said "data past its window is still stored", which is a lie during a
+// shutdown, and printing it alongside the caller's structured line would double-report every real
+// failure. A caller passing a callback that does not record something makes a failed purge silent — the
+// one outcome a retention obligation must never have.
 func runRetentionSweep(ctx context.Context, jobs []retentionJob,
-	record func(context.Context, string, int64, time.Time, string), onFailure func()) {
+	record func(context.Context, string, int64, time.Time, string), onFailure func(target string, err error)) {
 	for _, j := range jobs {
 		n, err := j.run(ctx, j.cutoff)
 		if err != nil {
-			onFailure()
-			fmt.Fprintf(os.Stderr, "openshield-server: %s retention purge FAILED — data past its "+
-				"window is still stored: %v\n", j.target, err)
+			onFailure(j.target, err)
 			continue
 		}
 		if n > 0 {

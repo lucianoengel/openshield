@@ -1700,33 +1700,123 @@ decisions made to unblock — the owner may override any.** The frozen-core disc
 
 ---
 
-### ⚠️ FOUND BY REVIEW OF D485, NOT FIXED THERE — the stop-exemption is in ONE of six leader loops
+### ✅ RESOLVED (D486) — the stop-exemption now covers every leader loop
 
-`RunCorrelationLoop` now exempts its own cancellation from `correlation_failures_total`. **Five sibling
-loops under the same `leaderCtx` still count and log on cancellation**, so a demotion or restart still
-lights up their counters and the metric family is inconsistent with nothing saying so:
+*Left as a resolution rather than deleted: a closed fork with no record gets reopened by someone who did
+not see it close.*
 
-| Loop | Counter |
-|---|---|
-| `beaconing.go:166` | `BeaconFailures` |
-| `playbook.go:254` | `PlaybookFailures` |
-| `escalate.go:221` | `EscalationFailures` |
-| `cases_http.go:330` | `ApprovalExpiryFailures` (counted with **no log at all**) |
-| `itsm.go:172` | `ITSMFailures` — the worst: `SyncITSM` makes outbound HTTP, so a shutdown mid-sync aborts a live request and books it as "the incident has no ticket where responders are looking" |
+**What this section said**: `RunCorrelationLoop` exempted its own cancellation from
+`correlation_failures_total` while five sibling loops under the same `leaderCtx` still counted theirs, so
+a demotion or a restart lit up their counters and the metric family was inconsistent with nothing saying
+so.
 
-An operator comparing `correlation_failures_total` against its neighbours during an incident will read the
-difference as signal. **Leaving them inconsistent is a worse answer than either uniform choice** — decide
-explicitly rather than by omission.
+**The count was wrong in two ways, and the old table's line numbers pointed somewhere else.**
 
-Two further review findings, recorded rather than fixed:
-- **`startCorrelationLoop`'s ordering is convention, not construction.** It relies on `t.Cleanup` LIFO
-  putting the join before `pool.Close`, which holds only if it is called after `requireDB` on the same
-  `*testing.T`. It takes a `*Server`, not the pool, so it cannot see the resource whose lifetime it
-  orders against. Taking the pool (or returning a `stop()` to defer) would make it structural.
-- **The new `e2e-verification` SHALL is violated by `internal/controlplane` today**: `nips6_test.go:197`
-  and `soar4_test.go:584,:594,:604` leak loops against a `requireDB` pool. The counter half is not armed
-  in those tests, but `nips6_test.go:197` runs real queries every 20ms into the *next* test's
-  `DROP TABLE … CASCADE` + `Migrate` — a DDL/DML collision, not just a counter.
+- **Six leader loops, not five — and the sixth is in `cmd/`.** `cmd/openshield-server/main.go`'s retention
+  sweep runs `retain.Loop(leaderCtx, …)` and counted its own cancellation as `RetentionPurgeFailures`. A
+  package-scoped guard would have reported green while the universal requirement was violated on the day
+  it landed. That same loop literal ALSO reaches `RetentionRecordFailures` through
+  `RecordRetentionEvent`, so **seven counters** were in scope, not five.
+- **Five leaked test loops, not four.** The old table named `nips6_test.go:197`,
+  `soar4_test.go:584/:594/:604`. It missed `nips6_test.go:226`
+  (`TestAZeroIntervalLeavesTheSweepIdle`). D485's commit message said five and was right.
+- **The line numbers pointed at the `retain.*` call lines**; this change's references point at the `func`
+  declarations, which is what survives an edit inside the body.
+
+**And a larger problem the review found underneath it: the logging half had never run at all.**
+`cmd/openshield-server/main.go` did not import `log/slog`. Every loop was handed a literal `nil`, and
+every log call in every loop body was wrapped in `if log != nil` — so D485's own `LOGGED EVEN WHEN NOT
+COUNTED` block had never emitted a line from the shipped binary, and a requirement written against the
+function signature would have shipped as a no-op.
+
+**Resolution (D486):** one exported helper, `controlplane.NoteTickErr(ctx, log, msg, counter, err, attrs…)`,
+owns the decision for all seven loops — it always logs, stamps whether the loop was stopping, and counts
+only when the error is not the stop. `RunApprovalExpiryLoop` gained the `*slog.Logger` it never had. The
+server command builds a real logger and starts all seven loops through an extracted `startLeaderLoops`
+seam, asserted by a wiring test that fails naming any call site reverted to `nil`. A repo-wide lexical
+guard (`internal/controlplane/loop_guard_test.go`) now rejects any `*Failures.Add` inside a
+`retain.Loop`/`retain.DynamicLoop` literal anywhere in the tree. All five leaked test loops are joined by
+a `startLoop` helper whose `stop()` is idempotent and cleanup-registered.
+
+The two secondary findings recorded here are also resolved: `startCorrelationLoop` now takes the pool and
+delegates to `startLoop` (a guardrail, not a proof — see the open item below), and the
+`e2e-verification` SHALL is no longer violated by `internal/controlplane`.
+
+### Open items left by D486 (recorded, not fixed)
+
+- **`RunITSMLoop` captures its interval once at leader startup.** It uses `retain.Loop`, not
+  `DynamicLoop`, so `OPENSHIELD_ITSM_INTERVAL` is a stored, console-editable setting that silently needs
+  a restart to take effect — exactly the defect D292 fixed for playbooks. Out of scope for D486
+  deliberately, so the stop-semantics change did not also become a behaviour change to a live setting.
+- **ITSM ticket creation is not idempotent across a leader handover.** `itsm.go` POSTs to create the
+  ticket and only then writes the local link row. A stop landing between the remote 2xx and the `INSERT`
+  leaves a real ticket in someone else's queue with no local record, and the next tick's `NOT EXISTS`
+  re-selects the incident and opens a SECOND one. `ON CONFLICT DO NOTHING` protects the local table, not
+  the remote system, and the comment claiming "a failed attempt simply retries with no duplicate risk" is
+  true only for a failure INSIDE `CreateTicket`. D486 makes the loop SAY this happened
+  (`ErrTicketUnlinked`, and a line naming the unreconciled remote record) but does not fix it. The fix is
+  a keyed create — an idempotency key, or writing an intent row before the POST.
+
+  **D486 widened the reporting and left one gap open.** All THREE orphaning branches now raise
+  `ErrTicketUnlinked` (a failed INSERT after a good create, a 2xx whose body will not decode, and a 2xx
+  carrying no reference), and a transport failure after the request was sent is reported separately as
+  genuinely ambiguous. But when the orphan window is hit DURING A STOP — which is exactly when it is most
+  likely, since a demotion is what interrupts the sequence — `stopping` is true, so `ITSMFailures` does
+  not move and the only trace is a log line written seconds before the process tears down.
+  `remote_state_unreconciled` is a PERSISTENT DATA DIVERGENCE, not a tick outcome, and it is the one fact
+  here that outlives the process. The recommendation is a separate counter incremented REGARDLESS of
+  `stopping` — the stop exemption is about not paging on routine restarts, and an orphaned remote ticket
+  is not routine. That is a new published metric, so it needs its own requirement and did not belong in
+  D486.
+- **`requireDB` returning a bare `*pgxpool.Pool` means loop-join ordering can only ever be a guardrail.**
+  Taking the pool as a parameter makes the common mistake harder, but does not prove the close was
+  scheduled: `leader_test.go` builds a pool released by `defer pool2.Close()` (which runs BEFORE any
+  `t.Cleanup`) and `signed_test.go`'s `mustPoolCP` registers no release at all. The real guarantee is a
+  fixture owning both the pool and loop startup, so no pool lacking a close is reachable — deferred on
+  blast radius, since `requireDB` returns `*pgxpool.Pool` to ~285 call sites in one package.
+- **Two counters mix ticks with configuration parses.** `CorrelationFailures` is also incremented when
+  the hunts file fails to parse, and `EscalationFailures` when the escalation ladder does — from the
+  configuration providers, not from a tick. Both increments are CORRECT (a file edited into an invalid
+  state must not silently disable detection or escalation) and are deliberately left alone, but they mean
+  those two series are not purely "ticks that failed" and are not directly comparable with their five
+  siblings. Recorded so nobody reads a parse-failure spike as a tick failure.
+- **The listener-failure reporting guards are still the unsafe construct.**
+  `cmd/openshield-server/main.go` gates whether to REPORT a listener failure on
+  `err != nil && leaderCtx.Err() == nil` at four sites — the context-only guard D485 declared unsafe,
+  applied to the logging half rather than the counting half. A genuine listener failure during a shutdown
+  is therefore silent, which is D31's failure mode. Assessed and excluded from D486 on scope: these are
+  listeners, not counted scheduled loops, and folding them in would widen a change that already grew from
+  six loops to seven plus a logger rewire. It is a two-line change per site.
+- **The build-time guard is not exhaustive, by construction.** It sees a counter incremented inside a
+  loop's work function; an increment inside a method CALLED FROM that function is equally bound by the
+  requirement and invisible to any lexical rule. `RecordRetentionEvent` is exactly that case and was
+  found by review, not by the guard. The obligation is universal; the check is not, and the spec says so.
+  Review of D486 then found four more of the same class and they ARE fixed there — `RecordUnifiedAlert`
+  (reached from the beacon sweep, and the worst of them: `DetectBeaconing` swallowed the error with a
+  bare `continue`, so a cancellation during alert recording produced no line at all while
+  `openshield_unified_alert_failures_total` rose once per detected beacon on every handover) and
+  `linkRecurrence`'s two call sites inside the correlation tick, which counted unconditionally with no
+  log call whatsoever. The lesson for the next loop added: the guard tells you nothing about what your
+  tick CALLS, and a reviewer has to walk it by hand.
+
+- **`stopping=true` conflates two causes that need opposite responses.** A graceful shutdown and "the
+  lease was lost because the database ping failed" (`leader.go:135-137`) produce identical lines. The
+  first is routine and the second is an outage, and a reader trained by the first to skim past
+  `stopping=true` will skim past the second — which recreates, in the log, precisely the alarm-fatigue
+  failure the counter exemption exists to prevent. Needs either a cause attribute on the line (why the
+  context was cancelled: shutdown signal vs demotion vs ping failure) or a demotions counter that makes
+  the distinction visible in metrics. Design work, not a mechanical change, so it is recorded rather than
+  bolted on.
+
+- **The log family is less uniform than the counter family.** Three leader-context loops in `onElected`
+  still report with a raw `fmt.Fprintf(os.Stderr, "…failed: %v")` and no `stopping` stamp: the IOC-feed
+  refresh, the overdue-agent notifier and the peer-UEBA baseline persist. On every demotion each prints
+  `context canceled` as though something broke. Metrics are unaffected — none of them has a failure
+  counter, which is exactly why D486 did not reach them. The reason they were not simply converted:
+  `NoteTickErr` REQUIRES a counter by design (it is loud when handed nil, because a nil counter is how a
+  real failure gets silently dropped), so these need a log-only sibling helper. Adding one is an API
+  decision about how many ways this codebase records a failing tick, which is a question worth answering
+  deliberately rather than as a footnote to a stop-semantics change.
 
 ## Reference — design rationale (rarely changes)
 

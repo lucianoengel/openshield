@@ -80,6 +80,59 @@ func embeddedNATS(t *testing.T) string {
 	return srv.ClientURL()
 }
 
+// startLoop runs a background loop for a test and JOINS it — waits for the goroutine to have RETURNED,
+// not merely asked it to stop.
+//
+// Cancelling a context is a request. It returns while the goroutine may still be inside a query, and Go
+// runs a test's deferred calls before its t.Cleanup functions — so a `defer cancel()` next to
+// `go srv.RunXLoop(...)` looks like a stop and is not one. A loop still running after its test finished
+// writes into whatever it was given: a closed pool, a package-level counter, or — the worst of them — the
+// NEXT test's schema, because requireDB's `DROP TABLE … CASCADE` plus Migrate is DDL and a 20ms sweep is
+// DML against the same tables. The test that breaks is not the test that leaked it, which makes this the
+// only defect class in this suite whose blast radius is another file.
+//
+// THE RETURNED stop IS IDEMPOTENT AND IS ALSO REGISTERED FOR CLEANUP. Some scenarios must stop a loop
+// PARTWAY THROUGH in order to assert on what happens afterwards (soar4_test.go's demotion phase). A
+// helper that could only stop at cleanup would silently convert those into tests that run a loop against
+// the database for the remainder of the test — changing what they prove while appearing to preserve them.
+// So: call it or do not, once or twice; the loop is joined exactly once either way.
+//
+// `pool` IS A GUARDRAIL, NOT A PROOF, and the distinction is not pedantry. For a pool from requireDB it
+// works: requireDB registers t.Cleanup(pool.Close) BEFORE returning, cleanups run last-in-first-out, so a
+// join registered here necessarily runs first. But possessing a pool does not prove its close was
+// scheduled at all, let alone scheduled earlier — leader_test.go builds one released by `defer
+// pool2.Close()` (which runs BEFORE any cleanup) and signed_test.go's mustPoolCP registers no release
+// whatsoever. The parameter makes the common ordering mistake harder; it does not make it impossible, and
+// the ordering is verified by an actual leak test rather than inferred from this signature.
+func startLoop(t *testing.T, pool *pgxpool.Pool, name string, run func(context.Context)) (stop func()) {
+	t.Helper()
+	_ = pool // see the guardrail note above: held to order this cleanup after the pool's, not read.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		run(ctx)
+	}()
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				// Bounded, and a FAILURE rather than a hang: a loop that will not stop is exactly what
+				// this helper exists to catch, and blocking forever would report it as a timeout in
+				// whichever test the harness happened to be in.
+				t.Errorf("the %s loop did not stop within 10s of its context being cancelled — it is "+
+					"about to run against a closed pool, count failures against another test, or "+
+					"collide with the next test's schema migration", name)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
+}
+
 // startCorrelationLoop runs the scheduled correlation loop for the duration of one test and — the part
 // that matters — WAITS FOR IT TO HAVE STOPPED before the test's pool is closed.
 //
@@ -93,28 +146,15 @@ func embeddedNATS(t *testing.T) string {
 //
 // Registering the cleanup HERE — after requireDB has registered pool.Close — is what orders the two:
 // cleanups run last-in-first-out, so the join happens strictly before the pool closes.
-func startCorrelationLoop(t *testing.T, srv *controlplane.Server, interval func() time.Duration,
+// The join itself is startLoop's now — this wrapper only supplies the correlation loop's arguments.
+func startCorrelationLoop(t *testing.T, pool *pgxpool.Pool, srv *controlplane.Server,
+	interval func() time.Duration,
 	rules func() (controlplane.CorrelationRule, controlplane.CrossDomainRule),
 	hunts func() []controlplane.CrossDomainRule) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	startLoop(t, pool, "correlation", func(ctx context.Context) {
 		srv.RunCorrelationLoop(ctx, interval, rules, hunts,
 			slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			// Bounded, and a FAILURE rather than a hang: a loop that will not stop is exactly the
-			// thing this helper exists to catch, and blocking forever would report it as a timeout in
-			// whichever test the harness happened to be in.
-			t.Error("the correlation loop did not stop within 10s of its context being cancelled — it " +
-				"is about to run against a closed pool and count failures against another test")
-		}
 	})
 }
 

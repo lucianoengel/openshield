@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -258,3 +259,9 @@ func rawCursorPayload(t interface{ Fatalf(string, ...any) }, encoded string) str
 // is not reachable through the loop: DynamicLoop re-checks the context and returns before calling the
 // work function, so the conjunction can only be exercised as a predicate.
 func IsLoopStopForTest(ctx context.Context, err error) bool { return isLoopStop(ctx, err) }
+
+// ITSMPhaseForTest exposes the ITSM phase classifier. It is asserted directly because the ordering of
+// its cases is load-bearing: every specific case is ALSO wrapped in ErrTicketOpening, so testing the
+// general one first would collapse an orphaned remote ticket into the bland "opening_tickets" label
+// whose documented meaning is that nothing was left behind.
+func ITSMPhaseForTest(err error) []slog.Attr { return itsmPhase(err) }

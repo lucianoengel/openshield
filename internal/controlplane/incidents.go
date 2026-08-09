@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -86,12 +87,18 @@ func (s *Server) MaterializeIncidents(ctx context.Context, rule CorrelationRule,
 				continue
 			}
 			// SOAR-2b: link to the predecessor BEFORE paging, so the page can say "this is the third
-			// time" rather than leaving the operator to discover it. A link failure is logged by the
-			// caller of MaterializeIncidents via the returned error path only if it is a DB failure;
-			// here it degrades to an unlinked incident, which is strictly what we had before.
+			// time" rather than leaving the operator to discover it. A link failure degrades to an
+			// unlinked incident and the materialization continues — strictly what we had before.
+			//
+			// COUNTED THROUGH THE SHARED HELPER, because this runs inside RunCorrelationLoop's tick with
+			// the loop's context: a clean rolling restart used to raise
+			// `openshield_recurrence_link_failures_total`, whose published meaning is that an incident
+			// "pages as first-time trouble when it is the fourth return of something a responder already
+			// closed". It also had no log call at all, so the number moved with nothing explaining it.
 			rec, err := s.linkRecurrence(ctx, id, "ueba_burst", inc.SubjectID, nil, rule.RecurrenceWindow, now)
 			if err != nil {
-				RecurrenceLinkFailures.Add(1)
+				NoteTickErr(ctx, nil, "linking an incident to the one it recurs from failed",
+					&RecurrenceLinkFailures, err, slog.String("kind", "ueba_burst"))
 			}
 			s.notifyIncident(ctx, id, inc, now, rec)
 		}

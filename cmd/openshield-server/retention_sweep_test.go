@@ -42,7 +42,7 @@ func TestOneFailingPurgeDoesNotStopTheOthers(t *testing.T) {
 		job("investigation_views", 7, nil),
 	}, func(_ context.Context, target string, _ int64, _ time.Time, _ string) {
 		recorded = append(recorded, target)
-	}, func() { failures++ })
+	}, func(string, error) { failures++ })
 
 	if len(ran) != 3 {
 		t.Errorf("only %v ran. One retention obligation failing must not stop the others: they are "+
@@ -69,7 +69,7 @@ func TestASuccessfulSweepCountsNoFailures(t *testing.T) {
 		target: "investigation_views", cutoff: time.Now(),
 		run: func(context.Context, time.Time) (int64, error) { return 0, nil },
 	}}, func(context.Context, string, int64, time.Time, string) { recorded++ },
-		func() { failures++ })
+		func(string, error) { failures++ })
 
 	if failures != 0 {
 		t.Errorf("a clean sweep counted %d failures", failures)

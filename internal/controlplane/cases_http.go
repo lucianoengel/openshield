@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -327,10 +328,13 @@ func (s *Server) approvalResolveHandler(w http.ResponseWriter, r *http.Request) 
 //
 // Leader-only, like the other maintenance loops: several replicas relabelling the same rows is
 // harmless but pointless.
-func (s *Server) RunApprovalExpiryLoop(ctx context.Context, interval func() time.Duration) {
+// It TAKES A LOGGER, which it did not before. This loop counted ApprovalExpiryFailures with no log call
+// at all, so a failing sweep left a number and no explanation of it — and on a stop it left a number that
+// was not even a failure. Both halves are now the shared helper's.
+func (s *Server) RunApprovalExpiryLoop(ctx context.Context, interval func() time.Duration, log *slog.Logger) {
 	retain.DynamicLoop(ctx, interval, func(c context.Context) {
 		if _, err := s.ExpirePendingApprovals(c); err != nil {
-			ApprovalExpiryFailures.Add(1)
+			NoteTickErr(ctx, log, "approval expiry sweep failed", &ApprovalExpiryFailures, err)
 		}
 	})
 }

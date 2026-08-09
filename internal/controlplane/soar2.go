@@ -129,6 +129,79 @@ func isLoopStop(ctx context.Context, err error) bool {
 	return ctx.Err() != nil && errors.Is(err, context.Canceled)
 }
 
+// NoteTickErr records a failing tick of a scheduled leader loop: it ALWAYS logs, and counts only when the
+// error is not this loop's own stop.
+//
+// EXPORTED ON PURPOSE. The seventh loop that must obey this rule is the retention sweep in
+// `cmd/openshield-server`, which is `package main` and cannot see an unexported helper — and that loop is
+// the whole reason the guard went repo-wide. A free function rather than a method, because most call
+// sites have no receiver to hang it on.
+//
+// `ctx` is the LOOP'S OWN context and is passed explicitly at every call site, never re-derived here. The
+// exemption is keyed on the context the loop was started with, not on the per-tick context handed to the
+// work function; those are the same value today (`retain.DynamicLoop` passes `ctx` straight through), and
+// a helper that re-derived one from the other would be wrong the moment they diverged. Naming it in the
+// argument list is what makes the keying visible at the call site.
+//
+// WHY THE CONJUNCTION (D485). Exempting on the cancelled context ALONE was the first version of this
+// guard, and it was wrong: `leader.go:135-137` cancels `leaderCtx` when its Postgres ping fails, so a
+// database outage produces a genuine pgx error AND a cancellation inside the same window. A context-only
+// test therefore discards exactly the failure the counter exists to report. Requiring the error to BE the
+// cancellation keeps schema skew, deadlocks, pool exhaustion, a malformed operator-authored input and an
+// aborted outbound request counted. The error alone is not sufficient either — a cancellation arriving
+// while this loop's context is still live belongs to somebody else's abandoned work and is a real fault.
+//
+// WHY THE LOG IS UNCONDITIONAL (D31). Not counting is about not paging; not RECORDING is a different
+// decision, and conflating the two is a defect this project has already shipped once — the first version
+// put the log inside the counting branch, so an outage arriving during a shutdown produced no count and
+// no line at all. Every failing tick leaves a line, stamped with whether the loop was stopping, so a
+// reader can tell an exempted tick from a counted one without inferring it from the counter.
+//
+// A nil `log` falls back to `slog.Default()` rather than skipping the record: a requirement satisfied
+// only by a parameter production never populates is one that ships as a no-op, which is precisely what
+// happened here — `cmd/openshield-server` handed every loop a literal `nil` and D485's "logged even when
+// not counted" block had never emitted a line from the shipped binary.
+//
+// NON-LOOP CALLERS INHERIT LOOP SEMANTICS, and should read this before using it. `MaterializeIncidents`
+// and `MaterializeCrossDomainIncidents` route their `RecurrenceLinkFailures` writes through here, and
+// both are ALSO reached from HTTP handlers carrying `r.Context()`. On that path a client disconnecting
+// mid-request cancels the context, so the line is stamped `stopping=true` when nothing is stopping, and
+// the increment is skipped — client aborts slightly under-count. The record still exists and is still
+// stamped, so no failure goes silent; what is inaccurate is the word, not the presence. Anything reached
+// from both a tick and a request should expect that, and a caller that needs the two told apart must
+// pass a context that distinguishes them rather than hoping this helper can.
+func NoteTickErr(ctx context.Context, log *slog.Logger, msg string, c *atomic.Int64, err error, attrs ...slog.Attr) {
+	if log == nil {
+		log = slog.Default()
+	}
+	stopping := isLoopStop(ctx, err)
+	// LogAttrs, never log.Error: Error's variadic is `...any`, so slog.Attr values passed to it degrade
+	// silently to `!BADKEY` and the `stopping` stamp becomes unreadable.
+	//
+	// WithoutCancel, because the ONLY lines whose context is dead are the exempted ones. slog passes the
+	// context to the handler; TextHandler ignores it, but a buffered, network or OTel-aware handler is
+	// entitled to honour a cancelled context by dropping the record — which would silently delete exactly
+	// the lines the exemption depends on existing, and leave the counter's absence unexplained. That is
+	// the same structural shape as the `if log != nil` bug this change exists to fix: a record that
+	// disappears precisely when it is the only evidence.
+	log.LogAttrs(context.WithoutCancel(ctx), slog.LevelError, msg,
+		append([]slog.Attr{slog.Bool("stopping", stopping), slog.Any("err", err)}, attrs...)...)
+	if stopping {
+		return
+	}
+	if c == nil {
+		// LOUD, never a silent drop. A nil counter here is a programming error at the call site, and
+		// swallowing it would lose a real failure in exactly the way this helper exists to prevent. It
+		// does not panic: taking the control plane down from inside a logging helper would be a worse
+		// outcome than a loud line, and every current call site passes a real counter.
+		log.LogAttrs(context.WithoutCancel(ctx), slog.LevelError,
+			"BUG: NoteTickErr was given no counter, so a real failure went uncounted",
+			slog.String("uncounted_msg", msg), slog.Any("err", err))
+		return
+	}
+	c.Add(1)
+}
+
 func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Duration,
 	rules func() (CorrelationRule, CrossDomainRule), hunts func() []CrossDomainRule, log *slog.Logger) {
 	// STOPPING IS NOT FAILING — BUT ONLY THE STOP ITSELF IS EXEMPT.
@@ -140,39 +213,21 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Du
 	// clean restart would raise that alarm every time the stop landed mid-tick, and a counter that fires on
 	// an ordinary shutdown is one an operator learns to ignore — costing exactly the signal it carries.
 	//
-	// THE CONJUNCTION IS LOAD-BEARING, and the first version of this guard got it wrong by testing the
-	// context alone. `leader.go` CANCELS THE LEADER CONTEXT WHEN ITS POSTGRES PING FAILS, so a database
-	// outage produces both a real pgx error ("conn closed") and a cancellation in the same window. A guard
-	// keyed on the context alone then discards a genuine correlation failure — the exact event the metric
-	// exists for — and, because the log lived inside the same branch, discarded the log with it. No count,
-	// no line, nothing. Requiring the error to BE the cancellation keeps every other failure counted.
+	// The decision itself now lives in NoteTickErr — the reasoning above is why it is a conjunction, and
+	// its doc comment carries the rest. Every failing branch below routes through it with the LOOP's
+	// context (`ctx`), never the per-tick `c`.
 	//
 	// The tick IS retried: `leader.Run` re-acquires after a demotion and calls onElected again in the same
 	// process, so nothing is permanently lost — but that is a reason the exemption is safe, not a reason to
 	// widen it.
-	stopping := func(err error) bool { return isLoopStop(ctx, err) }
 	retain.DynamicLoop(ctx, interval, func(c context.Context) {
 		burst, cross := rules()
 		now := s.now()
 		if _, err := s.MaterializeIncidents(c, burst, now); err != nil {
-			// LOGGED EVEN WHEN NOT COUNTED: not counting is about not paging; not recording is a
-			// different decision, and an aborted tick that leaves no trace is unexplainable later.
-			if log != nil {
-				log.Error("scheduled correlation (burst rule) failed", slog.Any("err", err), slog.Bool("stopping", stopping(err)))
-			}
-			if !stopping(err) {
-				CorrelationFailures.Add(1)
-			}
+			NoteTickErr(ctx, log, "scheduled correlation (burst rule) failed", &CorrelationFailures, err)
 		}
 		if _, err := s.MaterializeCrossDomainIncidents(c, cross, now); err != nil {
-			// LOGGED EVEN WHEN NOT COUNTED: not counting is about not paging; not recording is a
-			// different decision, and an aborted tick that leaves no trace is unexplainable later.
-			if log != nil {
-				log.Error("scheduled correlation (cross-domain rule) failed", slog.Any("err", err), slog.Bool("stopping", stopping(err)))
-			}
-			if !stopping(err) {
-				CorrelationFailures.Add(1)
-			}
+			NoteTickErr(ctx, log, "scheduled correlation (cross-domain rule) failed", &CorrelationFailures, err)
 		}
 		// XDR-4c: every configured hunt, on the same tick and the same window as the breadth rule
 		// unless it says otherwise. A hunt that fails is counted and NAMED, then the next one runs —
@@ -182,16 +237,11 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Du
 			for _, h := range hunts() {
 				if _, err := s.MaterializeCrossDomainIncidents(c, h, now); err != nil {
 					// A BROKEN HUNT IS OPERATOR INPUT, and its failure is the only signal that a hunt
-					// matches nothing because it is malformed rather than because nothing happened. It
-					// is logged whatever the loop is doing.
-					if log != nil {
-						log.Error("scheduled correlation (hunt) failed",
-							slog.String("hunt", h.Name), slog.Any("err", err),
-							slog.Bool("stopping", stopping(err)))
-					}
-					if !stopping(err) {
-						CorrelationFailures.Add(1)
-					}
+					// matches nothing because it is malformed rather than because nothing happened. The
+					// hunt NAME travels with the line: "correlation failed" is not actionable when
+					// several hunts are configured.
+					NoteTickErr(ctx, log, "scheduled correlation (hunt) failed", &CorrelationFailures, err,
+						slog.String("hunt", h.Name))
 				}
 			}
 		}
@@ -199,14 +249,7 @@ func (s *Server) RunCorrelationLoop(ctx context.Context, interval func() time.Du
 		// risk the access proxy applies to that asset's next request — the T2 loop (D89/D91) closed ACROSS
 		// domains rather than within peer-UEBA alone.
 		if _, err := s.PublishEntityRisk(c, cross.Window, now); err != nil {
-			// LOGGED EVEN WHEN NOT COUNTED: not counting is about not paging; not recording is a
-			// different decision, and an aborted tick that leaves no trace is unexplainable later.
-			if log != nil {
-				log.Error("scheduled entity-risk publication failed", slog.Any("err", err), slog.Bool("stopping", stopping(err)))
-			}
-			if !stopping(err) {
-				CorrelationFailures.Add(1)
-			}
+			NoteTickErr(ctx, log, "scheduled entity-risk publication failed", &CorrelationFailures, err)
 		}
 	})
 }

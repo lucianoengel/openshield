@@ -35,7 +35,7 @@ func TestScheduledCorrelationRaisesAndPagesWithNoOperatorRequest(t *testing.T) {
 	// PLAT-5b: the interval and rules are read PER TICK from providers, so a configuration change reaches
 	// a running loop without a restart. The helper is what STOPS the loop before the pool closes — see
 	// its comment, and the assertion on CorrelationFailures at the end of this test.
-	startCorrelationLoop(t, srv,
+	startCorrelationLoop(t, pool, srv,
 		func() time.Duration { return 50 * time.Millisecond },
 		func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
 			return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},
@@ -109,6 +109,13 @@ func TestStoppingTheCorrelationLoopIsNotAFailure(t *testing.T) {
 	// what this test is about — that THIS stop counted nothing — without touching what anyone else sees.
 	before := controlplane.CorrelationFailures.Load()
 
+	// DELIBERATELY NOT startLoop, and this is not an oversight for a later cleanup to "unify".
+	//
+	// The seam this test needs is a cancel from INSIDE the per-tick provider — cancelling from outside
+	// is vacuous, because DynamicLoop re-checks ctx.Err() before invoking the work function and so almost
+	// never lands mid-tick. That requires the loop's own cancel func here, in the provider's closure,
+	// which startLoop deliberately does not hand out. The explicit join below is the same discipline
+	// startLoop applies; it is written out because the seam is.
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	var ticks int
@@ -269,6 +276,15 @@ func TestTransitionEndpointOutcomes(t *testing.T) {
 // outage produces a genuine pgx error AND a cancelled context in the same window. A context-only guard
 // then discards the very failure `openshield_correlation_failures_total` exists to report — and, because
 // the log call sat inside the same branch, discarded the log with it. No count, no line, nothing.
+//
+// ITS COVERAGE CLAIM IS NOW SEVEN LOOPS WIDE, not one. `isLoopStop` used to be reached from
+// RunCorrelationLoop alone; it is now the predicate inside NoteTickErr, which every scheduled leader loop
+// calls — RunCorrelationLoop, RunBeaconLoop, RunPlaybookLoop, RunEscalationLoop, RunApprovalExpiryLoop,
+// RunITSMLoop and the retention sweep in cmd/openshield-server (both RetentionPurgeFailures and, via
+// RecordRetentionEvent, RetentionRecordFailures). A mutation to this predicate therefore changes what
+// SEVEN counters mean, which is the reason it is asserted directly here rather than only through a loop.
+// TestNoteTickErrCountsAndLogsIndependently covers the helper's other half — that the log is not
+// conditional on the counting decision.
 //
 // Mutation: widen isLoopStop back to `ctx.Err() != nil` → the "real error while stopping" case FAILS.
 // Mutation: narrow it to `errors.Is(err, context.Canceled)` alone → the "cancelled but live ctx" case

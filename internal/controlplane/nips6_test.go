@@ -186,17 +186,22 @@ func TestAFleetIsNotABeacon(t *testing.T) {
 func TestBeaconLoopSweepsOnItsOwnSchedule(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	now := time.Now().UTC()
 
 	for i := 0; i < 20; i++ {
 		seedFlow(t, srv, "subject-loop", "c2.loop.example", now.Add(-time.Duration(20-i)*time.Minute), true)
 	}
 
-	go srv.RunBeaconLoop(ctx,
-		func() time.Duration { return 20 * time.Millisecond },
-		func() controlplane.BeaconRule { return controlplane.BeaconRule{Window: 2 * time.Hour} }, nil)
+	// JOINED, not merely cancelled. This one sweeps every 20ms against the shared database, so a
+	// `defer cancel()` — which returns while the goroutine may still be mid-query, and runs BEFORE
+	// t.Cleanup(pool.Close) — left it running real queries into the NEXT test's `DROP TABLE … CASCADE`
+	// and Migrate. That is a DDL/DML collision, and it surfaced as an unrelated test failing on a
+	// missing relation.
+	startLoop(t, pool, "beacon sweep", func(ctx context.Context) {
+		srv.RunBeaconLoop(ctx,
+			func() time.Duration { return 20 * time.Millisecond },
+			func() controlplane.BeaconRule { return controlplane.BeaconRule{Window: 2 * time.Hour} }, nil)
+	})
 
 	waitFor(t, func() bool {
 		return countRows(t, pool, `SELECT count(*) FROM unified_alerts WHERE domain='nips'`) == 1
@@ -217,15 +222,17 @@ func TestBeaconLoopSweepsOnItsOwnSchedule(t *testing.T) {
 func TestAZeroIntervalLeavesTheSweepIdle(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	now := time.Now().UTC()
 	for i := 0; i < 20; i++ {
 		seedFlow(t, srv, "subject-idle", "c2.idle.example", now.Add(-time.Duration(20-i)*time.Minute), true)
 	}
-	go srv.RunBeaconLoop(ctx,
-		func() time.Duration { return 0 }, // not configured
-		func() controlplane.BeaconRule { return controlplane.BeaconRule{Window: 2 * time.Hour} }, nil)
+	// Joined for the same reason as the sweep above. An idle loop still has to be gone before the pool
+	// is: "does no work" is about the interval, not about the goroutine having returned.
+	startLoop(t, pool, "idle beacon sweep", func(ctx context.Context) {
+		srv.RunBeaconLoop(ctx,
+			func() time.Duration { return 0 }, // not configured
+			func() controlplane.BeaconRule { return controlplane.BeaconRule{Window: 2 * time.Hour} }, nil)
+	})
 	// Sleep PAST the loop's idle beat. A shorter wait cannot distinguish "idle by design" from "has not
 	// ticked yet", which is how a fixture silently stops testing the thing it names.
 	time.Sleep(1500 * time.Millisecond)

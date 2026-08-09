@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -363,7 +364,12 @@ func (s *Server) MaterializeCrossDomainIncidents(ctx context.Context, rule Cross
 			rec, err := s.linkRecurrence(ctx, id, "cross_domain", inc.SubjectID, &entity,
 				rule.RecurrenceWindow, now)
 			if err != nil {
-				RecurrenceLinkFailures.Add(1)
+				// Same stop rule as the burst path above, and this one runs ONCE PER CONFIGURED HUNT per
+				// tick — so on a demotion the old unconditional increment moved the counter by the
+				// number of hunts, silently.
+				NoteTickErr(ctx, nil, "linking an incident to the one it recurs from failed",
+					&RecurrenceLinkFailures, err, slog.String("kind", "cross_domain"),
+					slog.String("rule", rule.Name))
 			}
 			s.notifyCrossDomainIncident(ctx, id, rule.Name, inc, now, rec)
 		}

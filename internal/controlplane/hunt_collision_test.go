@@ -177,7 +177,7 @@ func TestTheScheduledLoopRaisesANarrativeIncidentAndNamesTheHunt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	startCorrelationLoop(t, srv,
+	startCorrelationLoop(t, pool, srv,
 		func() time.Duration { return 50 * time.Millisecond },
 		func() (controlplane.CorrelationRule, controlplane.CrossDomainRule) {
 			return controlplane.CorrelationRule{Window: 30 * time.Minute, MinAlerts: 3},

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/lucianoengel/openshield/internal/xdr"
@@ -58,15 +59,27 @@ type AlertRecord struct {
 // knows, making cross-domain grouping an entity JOIN rather than a string match — then inserts,
 // deduplicated by DedupKey. An alert whose subject cannot be resolved is NOT written as an unkeyed row
 // (it would be uncorrelatable): the failure is counted and the caller's own recording is unaffected.
+//
+// ITS COUNTER IS A LEADER LOOP'S COUNTER, because this is reached from RunBeaconLoop's tick (via
+// DetectBeaconing) with the loop's context threaded down. So on a demotion or a shutdown these Execs fail
+// with context.Canceled, and counting them made `openshield_unified_alert_failures_total` — published as
+// "projections that could not be recorded" — jump by one per detected beacon on every leader handover,
+// with nothing in the log to explain it. Routing through NoteTickErr fixes BOTH halves at the source: the
+// stop is not counted, and every failure now leaves a line whether it was counted or not. The nil logger
+// resolves to slog.Default(), which the server sets to the same handler it gives the loops.
 func (s *Server) RecordUnifiedAlert(ctx context.Context, a AlertRecord) error {
 	if s.graph == nil {
-		s.UnifiedAlertFailures.Add(1)
-		return fmt.Errorf("unified alert: no entity graph")
+		err := fmt.Errorf("unified alert: no entity graph")
+		NoteTickErr(ctx, nil, "recording a unified alert failed", &s.UnifiedAlertFailures, err,
+			slog.String("domain", a.Domain))
+		return err
 	}
 	entityID, err := s.entityForSubject(ctx, a.SubjectKind, a.Subject)
 	if err != nil {
-		s.UnifiedAlertFailures.Add(1)
-		return fmt.Errorf("unified alert: resolving entity for %s %q: %w", a.SubjectKind, a.Subject, err)
+		err = fmt.Errorf("unified alert: resolving entity for %s %q: %w", a.SubjectKind, a.Subject, err)
+		NoteTickErr(ctx, nil, "recording a unified alert failed", &s.UnifiedAlertFailures, err,
+			slog.String("domain", a.Domain))
+		return err
 	}
 	at := a.DetectedAt
 	if at.IsZero() {
@@ -86,8 +99,10 @@ func (s *Server) RecordUnifiedAlert(ctx context.Context, a AlertRecord) error {
 		entityID, a.Domain, a.Subject, a.Severity, a.Title, a.DedupKey, at.UTC(), a.EventID, a.DecisionID,
 		nilIfEmpty(a.Techniques))
 	if err != nil {
-		s.UnifiedAlertFailures.Add(1)
-		return fmt.Errorf("unified alert: insert: %w", err)
+		err = fmt.Errorf("unified alert: insert: %w", err)
+		NoteTickErr(ctx, nil, "recording a unified alert failed", &s.UnifiedAlertFailures, err,
+			slog.String("domain", a.Domain))
+		return err
 	}
 	return nil
 }

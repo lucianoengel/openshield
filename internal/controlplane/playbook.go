@@ -257,10 +257,7 @@ func (s *Server) RunPlaybookLoop(ctx context.Context, interval func() time.Durat
 			return
 		}
 		if err := s.RunPlaybooksOnce(c, pbs); err != nil {
-			PlaybookFailures.Add(1)
-			if log != nil {
-				log.Error("playbook tick failed", slog.Any("err", err))
-			}
+			NoteTickErr(ctx, log, "playbook tick failed", &PlaybookFailures, err)
 		}
 	})
 }

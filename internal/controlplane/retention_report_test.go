@@ -21,8 +21,8 @@ func TestRetentionReportRecordsAndQueries(t *testing.T) {
 	ctx := context.Background()
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 
-	srv.RecordRetentionEvent(ctx, "fleet_telemetry", 42, cutoff, "OPENSHIELD_FLEET_RETENTION=2160h")
-	srv.RecordRetentionEvent(ctx, "notify_dedupe", 0, cutoff, "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h") // zero-row, still recorded
+	srv.RecordRetentionEvent(ctx, nil, "fleet_telemetry", 42, cutoff, "OPENSHIELD_FLEET_RETENTION=2160h")
+	srv.RecordRetentionEvent(ctx, nil, "notify_dedupe", 0, cutoff, "OPENSHIELD_NOTIFY_DEDUPE_RETENTION=24h") // zero-row, still recorded
 	if srv.RetentionRecordFailures.Load() != 0 {
 		t.Fatalf("record failures = %d, want 0", srv.RetentionRecordFailures.Load())
 	}
@@ -61,7 +61,7 @@ func TestComplianceRetentionEndpoint(t *testing.T) {
 	pool := requireDB(t)
 	srv := controlplane.New(pool)
 	ctx := context.Background()
-	srv.RecordRetentionEvent(ctx, "fleet_telemetry", 7, time.Now(), "OPENSHIELD_FLEET_RETENTION=2160h")
+	srv.RecordRetentionEvent(ctx, nil, "fleet_telemetry", 7, time.Now(), "OPENSHIELD_FLEET_RETENTION=2160h")
 
 	h := srv.OperatorReadHandler()
 

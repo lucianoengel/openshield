@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -72,8 +73,29 @@ type Ticket struct {
 	URL string `json:"url"`
 }
 
+// WHETHER A FAILED CREATE LEFT A TICKET BEHIND IS THREE DIFFERENT ANSWERS, and the caller cannot act
+// sensibly on one undifferentiated error.
+//
+// Creation is driven by a "no ticket yet" query, so the SAFE cases simply retry on the next tick with no
+// duplicate risk. But once the remote system has answered 2xx the ticket EXISTS, and every later failure
+// in this function leaves it existing with nothing locally pointing at it — the next tick re-selects the
+// same incident and opens a second one, forever. That is a different operational fact and it is reported
+// as one.
+var (
+	// ErrTicketCreatedUnknownRef: the remote system ACCEPTED the create (2xx) and the response could not
+	// be turned into a usable reference. The ticket DEFINITELY exists and definitely cannot be linked.
+	ErrTicketCreatedUnknownRef = errors.New("runner: the ticketing system accepted the create but its " +
+		"response carried no usable reference")
+	// ErrTicketCreateAmbiguous: the request failed in TRANSPORT after the body was sent, so the remote
+	// system may or may not have committed it. Reported as genuinely unknown — claiming either certainty
+	// would be worse than saying so, because the two answers call for opposite responses.
+	ErrTicketCreateAmbiguous = errors.New("runner: the ticket create failed in transport; the ticketing " +
+		"system may or may not have created it")
+)
+
 // CreateTicket opens a ticket. Retry IS appropriate for this connector (unlike the IdP one): creating is
-// driven by a "no ticket yet" query, so a failed attempt simply retries on the next tick.
+// driven by a "no ticket yet" query, so a failed attempt before the remote system commits simply retries
+// on the next tick. See the sentinels above for the cases where that is NOT true.
 func (c *ITSMConnector) CreateTicket(ctx context.Context, req TicketRequest) (Ticket, error) {
 	var t Ticket
 	body, err := json.Marshal(req)
@@ -82,18 +104,23 @@ func (c *ITSMConnector) CreateTicket(ctx context.Context, req TicketRequest) (Ti
 	}
 	resp, err := c.do(ctx, http.MethodPost, c.Endpoint, body)
 	if err != nil {
-		return t, err
+		// The body was already on the wire. A cancellation, a timeout or a reset here says nothing about
+		// whether the far side committed — %w keeps the underlying cause (including context.Canceled, on
+		// which the loop's stop exemption depends) reachable.
+		return t, fmt.Errorf("%w: %w", ErrTicketCreateAmbiguous, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// NOT ambiguous by this product's convention: a non-2xx is the remote system declining. If a
+		// system returns 5xx after committing, that is a divergence only it can report.
 		return t, fmt.Errorf("runner: %s create returned %s", c.Name, resp.Status)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&t); err != nil {
-		return t, fmt.Errorf("runner: %s create response: %w", c.Name, err)
+		return t, fmt.Errorf("%w: %s create response: %w", ErrTicketCreatedUnknownRef, c.Name, err)
 	}
 	if t.Ref == "" {
-		return t, fmt.Errorf("runner: %s returned no ticket reference — the incident and the ticket could "+
-			"not be linked", c.Name)
+		return t, fmt.Errorf("%w: %s returned no ticket reference — the incident and the ticket cannot "+
+			"be linked", ErrTicketCreatedUnknownRef, c.Name)
 	}
 	return t, nil
 }

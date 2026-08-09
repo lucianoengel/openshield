@@ -570,7 +570,6 @@ func TestStepRegistryIsClosedAndNonActuating(t *testing.T) {
 // not end orchestration for the process lifetime.
 func TestPlaybookLoopStopsWithLeadershipAndSurvivesAFailingTick(t *testing.T) {
 	pool := requireDB(t)
-	ctx := context.Background()
 	srv := controlplane.New(pool)
 	pb := firstResponse()
 	incID := seedIncident(t, pool, "cross_domain", "subject-soar4-loop", 0.96, []string{"dlp"})
@@ -580,29 +579,39 @@ func TestPlaybookLoopStopsWithLeadershipAndSurvivesAFailingTick(t *testing.T) {
 	bad := pb
 	bad.Name = "bad-trigger"
 	bad.Trigger.MinSeverity = "not-a-severity"
-	loopCtx, cancel := context.WithCancel(ctx)
-	go srv.RunPlaybookLoop(loopCtx, func() time.Duration { return 20 * time.Millisecond },
-		func() []controlplane.Playbook { return []controlplane.Playbook{bad} }, nil)
+	// THE MID-TEST STOP IS DELIBERATE, which is why startLoop returns one: this loop has to be gone
+	// before the demotion and live-context phases below, or it keeps hammering the pool through both and
+	// the failure counts it produces belong to no phase in particular. `stop` is idempotent and is also
+	// registered for cleanup, so calling it here does not double-join at the end.
+	stopBad := startLoop(t, pool, "failing-tick playbook", func(loopCtx context.Context) {
+		srv.RunPlaybookLoop(loopCtx, func() time.Duration { return 20 * time.Millisecond },
+			func() []controlplane.Playbook { return []controlplane.Playbook{bad} }, nil)
+	})
 	waitFor(t, func() bool { return controlplane.PlaybookFailures.Load() > before })
 	failed := controlplane.PlaybookFailures.Load()
 	waitFor(t, func() bool { return controlplane.PlaybookFailures.Load() > failed })
-	cancel()
+	stopBad()
 
 	// Losing leadership stops execution: a good playbook under a cancelled context runs nothing.
-	dead, deadCancel := context.WithCancel(ctx)
-	deadCancel()
-	go srv.RunPlaybookLoop(dead, func() time.Duration { return 20 * time.Millisecond },
-		func() []controlplane.Playbook { return []controlplane.Playbook{pb} }, nil)
+	// The cancellation stays INSIDE the loop's own function so the loop still starts on an
+	// already-cancelled context — that is what this phase asserts. startLoop joins it for uniformity;
+	// this one could not leak, since DynamicLoop returns on its first select.
+	startLoop(t, pool, "demoted playbook", func(loopCtx context.Context) {
+		dead, deadCancel := context.WithCancel(loopCtx)
+		deadCancel()
+		srv.RunPlaybookLoop(dead, func() time.Duration { return 20 * time.Millisecond },
+			func() []controlplane.Playbook { return []controlplane.Playbook{pb} }, nil)
+	})
 	time.Sleep(200 * time.Millisecond)
 	if n := countRows(t, pool, `SELECT count(*) FROM playbook_runs WHERE incident_id=$1`, incID); n != 0 {
 		t.Errorf("a demoted instance started %d run(s) — playbook execution must be leader-only", n)
 	}
 
 	// And under a live context the same playbook does run, so the assertion above is not vacuous.
-	liveCtx, liveCancel := context.WithCancel(ctx)
-	defer liveCancel()
-	go srv.RunPlaybookLoop(liveCtx, func() time.Duration { return 20 * time.Millisecond },
-		func() []controlplane.Playbook { return []controlplane.Playbook{pb} }, nil)
+	startLoop(t, pool, "live playbook", func(liveCtx context.Context) {
+		srv.RunPlaybookLoop(liveCtx, func() time.Duration { return 20 * time.Millisecond },
+			func() []controlplane.Playbook { return []controlplane.Playbook{pb} }, nil)
+	})
 	waitFor(t, func() bool {
 		return countRows(t, pool, `SELECT count(*) FROM playbook_runs WHERE incident_id=$1`, incID) == 1
 	})

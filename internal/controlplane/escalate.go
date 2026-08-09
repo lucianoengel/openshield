@@ -220,10 +220,7 @@ func (s *Server) RunEscalationLoop(ctx context.Context, interval func() time.Dur
 	ladder func() Ladder, log *slog.Logger) {
 	retain.DynamicLoop(ctx, interval, func(c context.Context) {
 		if _, err := s.Escalate(c, ladder(), s.now()); err != nil {
-			EscalationFailures.Add(1)
-			if log != nil {
-				log.Error("incident escalation sweep failed", slog.Any("err", err))
-			}
+			NoteTickErr(ctx, log, "incident escalation sweep failed", &EscalationFailures, err)
 		}
 	})
 }

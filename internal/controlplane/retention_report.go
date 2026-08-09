@@ -3,8 +3,8 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,16 +24,32 @@ type RetentionEvent struct {
 // failure is counted (RetentionRecordFailures) and logged, never returned — the purge already happened
 // (it cannot be un-done), and failing the retention loop would be worse. A zero-row purge is recorded
 // too, so the report proves retention is EXECUTING on schedule, not only that rows were deleted.
-func (s *Server) RecordRetentionEvent(ctx context.Context, target string, rows int64, cutoff time.Time, policy string) {
+//
+// IT IS CALLED FROM THE RETENTION LOOP, so its counter is a leader loop's counter and is bound by the
+// same stop rule as the six in this package: on a demotion or a shutdown this Exec fails with
+// `context.Canceled` and `openshield_retention_record_failures_total` moved for a routine event.
+//
+// `loopCtx` MUST BE THE LOOP'S OWN CONTEXT, and this is the one site in the seven that cannot verify it
+// locally — the other six name `ctx` in their own loop function, while this one is handed whatever
+// `runRetentionSweep` was given. Today that IS the loop context, because `retain.Loop` passes its ctx
+// straight through to the work function and the work function passes it straight to the sweep. If a
+// future change gives the sweep a DERIVED per-tick context (a per-tick timeout, say), this parameter
+// silently becomes the wrong one while the other six keep working — the stop would then be counted here
+// and nowhere else. The parameter is named for what it must be so that change is visible when it is made.
+//
+// NOTE FOR THE GUARD: this increment lives in a method CALLED FROM the loop literal, not inside it, so
+// the lexical check in loop_guard_test.go cannot see it. It was found and fixed by review. The obligation
+// is universal; the build-time check is not, and the spec says so rather than implying otherwise.
+func (s *Server) RecordRetentionEvent(loopCtx context.Context, log *slog.Logger, target string, rows int64, cutoff time.Time, policy string) {
 	var cut interface{}
 	if !cutoff.IsZero() {
 		cut = cutoff.UTC()
 	}
-	if _, err := s.pool.Exec(ctx,
+	if _, err := s.pool.Exec(loopCtx,
 		`INSERT INTO retention_events (target, rows_affected, cutoff, policy) VALUES ($1,$2,$3,$4)`,
 		target, rows, cut, policy); err != nil {
-		s.RetentionRecordFailures.Add(1)
-		fmt.Fprintf(os.Stderr, "openshield-server: recording retention event failed (purge still happened): %v\n", err)
+		NoteTickErr(loopCtx, log, "recording retention event failed (the purge still happened)",
+			&s.RetentionRecordFailures, err, slog.String("target", target))
 	}
 }
 

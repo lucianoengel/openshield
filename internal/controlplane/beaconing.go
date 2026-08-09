@@ -140,7 +140,14 @@ func (s *Server) DetectBeaconing(ctx context.Context, rule BeaconRule, now time.
 				DetectedAt: f.Last,
 			})
 			if err != nil {
-				continue // RecordUnifiedAlert counts its own failures
+				// KEEP GOING, but no longer silently. One unrecordable finding must not abandon the rest
+				// of the sweep, so this still continues and DetectBeaconing still returns nil — which
+				// used to mean a cancellation during alert recording reached NoteTickErr nowhere at all:
+				// BeaconFailures correctly did not move, no line was emitted, and
+				// UnifiedAlertFailures rose once per detected beacon on every leader handover.
+				// RecordUnifiedAlert now routes its own failures through NoteTickErr with this same
+				// context, so the stop is exempt AND every drop leaves a line. Nothing is counted twice.
+				continue
 			}
 			recorded++
 		}
@@ -166,10 +173,9 @@ func (s *Server) RunBeaconLoop(ctx context.Context, interval func() time.Duratio
 	retain.DynamicLoop(ctx, interval, func(c context.Context) {
 		n, err := s.DetectBeaconing(c, rule(), s.now())
 		if err != nil {
-			BeaconFailures.Add(1)
-			if log != nil {
-				log.Error("beaconing sweep failed", slog.Any("err", err))
-			}
+			// The stop/count/log decision lives in NoteTickErr, keyed on the LOOP's context (`ctx`),
+			// not the per-tick one — see its doc comment.
+			NoteTickErr(ctx, log, "beaconing sweep failed", &BeaconFailures, err)
 			return
 		}
 		if n > 0 && log != nil {
